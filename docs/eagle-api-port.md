@@ -608,8 +608,8 @@ Decisions:
 - Backfill state: every project is re-pushed on test (377 of 377, 0 failed) and prod (365 of 365, 0 failed). Prod leaves out 4 nameless Eagle projects DEMI never held and 1 hidden notification carrying a Track project id.
 - eagle-admin v2.5.35 or later needs DEMI prod on a tag containing 47412c65 and the prod re-push above. Prod meets both from v0.230.0. Without them, project edit pages show the load-failed toast.
 
-eagle-admin project writes (`project.service.ts`, v2.5.41):
-- Edit save: `ProjectService.save` reads the row fresh, then `PUT /projects/:id` with the form's fields; an unchanged List pick, type, date, stage or default point, and a cleared field outside the saving tab, are left out, so DEMI keeps the stored value. `publish` and `unPublish` call `PUT /projects/:id/level` (level 4 with `confirm`, `reason` and the project's `legislationYear`; level 2).
+eagle-admin project writes (`project.service.ts`, v2.5.42):
+- Edit save: `ProjectService.save` reads the row fresh, compares the form with the row it was built from, then sends `PUT /projects/:id` holding only the fields the user changed, so DEMI keeps every other stored value; a cleared field outside the saving tab is left out, and a cleared value is sent as null. `intake` goes as the stored intake with the changed keys laid over it, because DEMI's PUT replaces `intake` whole. When nothing changed, no PUT is sent. `publish` and `unPublish` call `PUT /projects/:id/level` (level 4 with `confirm`, `reason` and the project's `legislationYear`; level 2).
 - Create: `ProjectService.add` makes four calls in order:
   1. `POST /projects` with name, description, sector, region, `projectState` and centroid.
   2. `PUT /projects/:id/level` at 2.
@@ -713,7 +713,7 @@ Retire: eagle-api topic and vc routes removed in R1 (681b483). The models stay b
 
 Status: todo
 
-eagle-admin v2.5.41 calls eagle-api for these writes, which DEMI already serves. Move them with their objects, or as one task:
+eagle-admin v2.5.42 calls eagle-api for these writes, which DEMI already serves. Move them with their objects, or as one task:
 - Document create, update, delete, publish, unpublish, feature, unfeature (`document.service.ts:91-140`).
 - Document fetch URLs built from eagle-api (`document.service.ts:18-20`, used in `update-images.ts:42`, `update-image-picker.component.ts:29`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`).
 - eagle-demi-admin `src/api/eagle.ts:22` shows the eagle-api report URL; DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
