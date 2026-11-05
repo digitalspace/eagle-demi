@@ -4,7 +4,7 @@ Goal: DEMI owns every EPIC object with its own create, read, update and delete r
 
 Scope: DEMI is the EAO platform API. It will serve every EAO application and future projects, not only eagle-public and eagle-admin. Design each object and route for any consumer: no field names, filters or response shapes that exist only because one screen wants them, no consumer-specific endpoints, public and staff behaviour decided by role and visibility rather than by which app is calling.
 
-Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the local checkout on that date) and eagle-admin `origin/develop` 593e910ec. Local checkouts were stale; recheck upstream before trusting a `file:line` here. The Caller lines describe eagle-admin `develop` f37e1b55c.
+Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the local checkout on that date) and eagle-admin `origin/develop` 593e910ec. Local checkouts were stale; recheck upstream before trusting a `file:line` here. The Caller lines describe eagle-admin tag v2.5.39 (ec301d7b6).
 
 ## How to work this file
 
@@ -28,7 +28,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | id | objects | owns (main files) | after | size | status |
 |---|---|---|---|---|---|
 | 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
-| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); staff-only; publish/unpublish added (86c68044) |
+| 1 | Organizations + pins | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); staff-only; publish/unpublish added (86c68044) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); staff-only |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); staff-only |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); staff-only |
@@ -42,22 +42,24 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | done (eagle-notify e1c389b, eagle-demi 05ffdb67); Dark: staff-only, no caller; both deployed to test; key rotated 2026-10-19, member-remove proven on test |
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | done (591f9cf9) |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af) |
-| A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
+| A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half merged (PR 995, tag v2.5.38); v2.5.38 runs on test, not on prod (measured 2026-11-05) |
-| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | DEMI half built (4529a818); eagle-admin half merged on `develop` (PR 1005), not deployed; flip not live |
-| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | DEMI half built (83912121); eagle-admin half merged on `develop` (PR 1002), not deployed; flip not live |
-| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `user.service.ts` and project groups components | 4, F8 | - | DEMI half built (1980d570); eagle-admin half merged on `develop` (PRs 1000, 1004), not deployed; flip not live |
-| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half merged on `develop` (PR 1003), not deployed; flip not live |
-| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half merged on `develop` (PR 1001), not deployed; flip not live |
-| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half merged on `develop` (PR 1000), not deployed; flip not live |
-| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half merged on `develop` (PRs 1006, 1007), not deployed; flip not live |
-| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half merged on `develop` (PRs 1006, 1008 to 1010), not deployed; flip not live |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half in v2.5.39 (PR 995); flip live on test, not on prod |
+| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | DEMI half built (4529a818); eagle-admin half in v2.5.39 (PR 1005); flip live on test, not on prod |
+| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | DEMI half built (83912121); eagle-admin half in v2.5.39 (PR 1002); flip live on test, not on prod |
+| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `user.service.ts` and project groups components | 4, F8 | - | DEMI half built (1980d570); eagle-admin half in v2.5.39 (PRs 1000, 1004); flip live on test, not on prod |
+| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half in v2.5.39 (PR 1003); flip live on test, not on prod |
+| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half in v2.5.39 (PR 1001); flip live on test, not on prod |
+| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half in v2.5.39 (PR 1000); flip live on test, not on prod |
+| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half in v2.5.39 (PRs 1006, 1007); flip live on test, not on prod |
+| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half in v2.5.39 (PRs 1006, 1008 to 1010); flip live on test, not on prod |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
 | F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | done (530bf0cc); no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
-| R2 | Retire in eagle-api: per object | the write routes listed under "Retire in eagle-api" | the object's Flip live on test (retire tag: live on prod) | - | todo |
+| R2 | Retire in eagle-api: per object | the write methods listed under "Retire in eagle-api" | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
+
+Deployed state (measured 2026-11-05): eagle-admin v2.5.39 (PRs 1000 to 1011) runs on test, and prod runs v2.5.32. The staging API workflow deployed eagle-demi 0f260317, which holds every DEMI half above, to test. A flip is live on test when both halves run there.
 
 ### Decisions
 
@@ -261,7 +263,7 @@ Caller: eagle-admin `ProjectService` pins methods (add, delete, publish, unpubli
 
 ### Comment periods
 
-Status: done (ab0292ec), Dark
+Status: done (ab0292ec)
 
 Today: reads at `routes.js:293-295`; mirror writes at `routes.js:249` (Eagle) and `routes.js:266` (ENGAGE ingest, ENGAGE-sourced periods only). Dark: the five write routes are served under the `port: comment-periods` anchor (`routes.js:367`), rules in `src/domain/comment-periods.js`, handlers in `src/controllers/native/comment-periods-write.js` (apart from the reads because the summary read answers `res` itself). DEMI's own `src/sync-out/eagle.js:190,199,206,245` calls eagle-api `GET`, `PUT`, `DELETE` and `POST /commentperiod` to write back into Eagle.
 
@@ -287,7 +289,7 @@ Decisions:
 - Publishing above the project's level is a 409, as for documents (`document.js:1300`), rather than a silent cap.
 - Ownership: a DEMI update, publish, unpublish or delete of an Eagle-mirrored period sets `sourceSystem: 'demi'` and stores the period's own read in `sources.demi.read`. The project ACL cascade derives the row from that read, and the stored read stays capped under the project's.
 - Eagle push onto a DEMI-owned period (`eagleOwnedOnto` in `controllers/nosql/comment-period.js`): 200, and only `eagleId`, `sources.eagle`, Eagle's staff-side fields other than `metURLAdmin`, `milestone` and `dateUpdated`, and a higher `commentIdCount` change. Fields DEMI writes stay as DEMI wrote them.
-- Until sync-out first sends a taken-over period, Eagle's publish, unpublish and delete echoes apply to it and raise `syncVersion`, as they do when eagle-admin writes the period in eagle-api. After the first send, echoes change none of them.
+- Before sync-out first sends a taken-over period, an Eagle publish, unpublish or delete echo applies to it and raises `syncVersion` (`takenOverUnsent`, `echoedRead`). Only eagle-api writes produce an echo. After the first send, echoes change none of them.
 - Sync-out sends the period's own level as `isPublished`. A period under a notification parent, or whose project row is gone, takes its Eagle parent id from `sources.eagle.project`.
 - Accepted gap: sends of DEMI rows need `SYNC_OUT_EAGLE_NATIVE_ENABLED`, which is `false` on prod. A taken-over or DEMI-created period stays unsent while it is off, so DEMI edits do not reach Eagle. Eagle text edits to a taken-over period stop landing on it.
 - `nextCommentId(periodId, projectId?)` in `repositories/comment-periods.js` is the atomic counter slice 3 calls: a Cosmos patch increment conditioned on `commentIdCount` being a number, else a set to 1 conditioned on it not being one, retried three times. It answers the count after the increment, as eagle-api's `$inc` does (`comment.js:380`).
@@ -296,9 +298,9 @@ Caller: eagle-admin `CommentPeriodService` (`add`, `save`, `delete`, `publish`, 
 
 ### Comments
 
-Status: done (b3ebe499), Dark
+Status: done (b3ebe499)
 
-Today: reads at `routes.js:296-297`, export at `routes.js:309`. Mirror writes at `routes.js:250` (Eagle). Dark: the three write routes are served under the `port: comments` anchor (`routes.js:376`), rules in `src/domain/comments.js`, handlers in `src/controllers/native/comments-write.js`. `POST /public/comment` has no caller and is not ported.
+Today: reads at `routes.js:296-297`, export at `routes.js:309`; mirror writes at `routes.js:250` (Eagle). Dark: the three write routes are served under the `port: comments` anchor (`routes.js:376`), rules in `src/domain/comments.js`, handlers in `src/controllers/native/comments-write.js`. `POST /public/comment` has no caller and is not ported.
 
 Target routes: `POST /comments`, `PUT /comments/:id`, `PUT /comments/:id/status`.
 
@@ -329,7 +331,7 @@ Caller: eagle-admin `CommentService`. `add` uploads attachments to eagle-api, th
 
 ### Project groups
 
-Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6).
+Status: done (5ccd2bf3). DEMI half of F4 built (8b926aa6).
 
 Today: `GET /groups`, `GET /groups/:id` (`routes.js:275-276`), Eagle mirror at `routes.js:254`. Dark: the six routes are served under the `port: groups` anchor (`routes.js:381`), rules in `src/domain/groups.js`, write handlers in `src/controllers/native/groups-write.js`, the members read in `src/controllers/native/groups.js`.
 
@@ -359,7 +361,7 @@ Caller: eagle-admin `UserService` (`addGroup`, `renameGroup`, `deleteGroup`, `ad
 
 ### Updates (recent activity)
 
-Status: done (dda7c901), Dark
+Status: done (dda7c901)
 
 Today: reads at `routes.js:301-303`, Eagle mirror at `routes.js:245`. Dark: the three write routes are served under the `port: updates` anchor, rules in `src/domain/updates.js`, handlers in `src/controllers/native/updates-write.js`. Guards: `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]`, eagle-api's scope (`swagger.yaml:3142,3191,3222`) plus `sysadmin` and `staff`.
 
@@ -385,7 +387,7 @@ Caller: eagle-admin `RecentActivityService` in `recent-activity.ts` (`add`, `sav
 
 ### Project notifications
 
-Status: done (251ab222), Dark
+Status: done (251ab222)
 
 Today: `GET /notifications`, `/notifications/:id` (`routes.js:304-305`), Eagle mirror at `routes.js:252`. Dark: the four write routes are served under the `port: notifications` anchor (`routes.js:394`), rules in `src/domain/notifications.js`, write handlers in `src/controllers/native/notifications-write.js`.
 
@@ -409,7 +411,7 @@ Decisions:
 - `notificationThresholdValue` must be a number and `centroid` at most two numbers or strings (Number and Mixed array in the model); any key not in the model is a 400.
 - Ownership: a DEMI PUT, publish or unpublish of an Eagle-mirrored notification sets `sourceSystem: 'demi'`. A later Eagle push (`upsertKeepingDemiRows` in `controllers/nosql/notification.js`) changes only `eagleId` and `sources.eagle`, so DEMI's fields stay.
 - The nightly reconcile leaves a DEMI-owned notification out of the ACL check, because DEMI sets its read.
-- Accepted gap: `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` is `false`, so a DEMI notification write never reaches Eagle. An eagle-admin build that saves notifications to eagle-api keeps its saves out of the DEMI row.
+- Accepted gap: `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` is `false`, so a DEMI notification write never reaches Eagle. After a DEMI write, a save through eagle-api stays out of the DEMI row (`upsertKeepingDemiRows`).
 
 Questioned:
 - PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. DEMI does not port this: the PUT keeps any field the body leaves out, so a save from eagle-admin never blanks the comment-period fields DEMI owns. A field sent empty still goes to its default, and there is no separate endpoint.
@@ -418,7 +420,7 @@ Caller: eagle-admin `NotificationProjectService` (`save`, `add`, `publish`, `unp
 
 ### Organizations
 
-Status: done (b9e4685f), Dark; publish/unpublish added (86c68044)
+Status: done (b9e4685f); publish/unpublish added (86c68044)
 
 Today: `GET /organizations`, `/organizations/:id` (`routes.js:288-289`), mirror at `routes.js:248`. Dark: `POST /organizations`, `PUT /organizations/:id`, and its publish and unpublish are served under the `port: organizations` anchor in `routes.js`, rules in `src/domain/organizations.js`.
 
@@ -456,7 +458,7 @@ Caller: eagle-admin `OrgService.save` and `add`.
 
 ### Users
 
-Status: done (b506a134), Dark
+Status: done (b506a134)
 
 Today: `GET /users`, `/users/:id` (`routes.js:273-274`), `GET /me` (`routes.js:116`), mirror at `routes.js:253`. Dark: `POST /users` and `PUT /users/:id` are served under the `port: users` anchor in `routes.js`, rules in `src/domain/users.js`, write handlers in `src/controllers/native/users.js` (the reads stay with the mirror in `controllers/nosql/user.js`).
 
@@ -545,7 +547,7 @@ Decisions:
 - The lists are project-wide, not per Act: a `/level` year switch keeps them. eagle-api keeps one pair per `legislation_<year>` block (`helpers/models/project.js:81-82`).
 - The merged `legislation_<year>` blocks hold neither list (`pickEagleBlocks` in `src/merge/project.js`), and each extension write drops both from stored blocks; `sources.eagle` keeps Eagle's.
 - `PUT /projects/:id` ignores both lists (`PUT_IGNORED_FIELDS`), so only these routes move them.
-- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer sends only projects DEMI created. No client shows them from eagle-api: eagle-public on `react` and `develop` never reads them, and eagle-admin's `getForEdit` requests both lists, but no view shows them.
+- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer does not send them. No client shows them from eagle-api: eagle-public on `react` and `develop` never reads them.
 
 Questioned:
 - Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
@@ -560,7 +562,7 @@ Caller: eagle-admin `ProjectService` (`addExtension`, `editExtension`, `deleteEx
 
 ### Project
 
-Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done. DEMI half of F9 built (8e724347, f30f6b8e, 5ceb0912).
+Status: done (47412c65). PUT lock, publish year switch and every block on reads done. DEMI half of F9 built (8e724347, f30f6b8e, 5ceb0912).
 
 Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. Rules in `src/domain/project-legislation.js`, applied by `updateProject` and `setLevel` in `src/controllers/nosql/project.js`.
 
@@ -597,7 +599,7 @@ Decisions:
 - Two kinds of row are never taken over. One is the `eagle-<id>` twin beside a Track row, because sync-out would send two rows to one Eagle project. The other is a row with no stored Eagle record, because its send would blank Eagle's fields.
 - The Track sync's relink removes `demiOwnedAt` and the sync-out state from the twin when the Track row takes them.
 - A taken-over row is versioned and queued for sync-out like a DEMI-created one. A PUT that changes `eagleId` on an Eagle-mirrored or owned row answers 409, because sync-out would write this project's values to another Eagle project. `POST /projects` over an owned row answers 409.
-- Sync-out: the project consumer PUTs an owned row that holds an `eagleId`, then calls `syncLevel`. It never creates the project.
+- Sync-out: the project consumer PUTs an owned row that holds an `eagleId`, then calls `syncLevel`. It POSTs a DEMI-created row under a minted id once `SYNC_OUT_EAGLE_NATIVE_ENABLED` is on, and never creates a taken-over project.
 - eagle-api's PUT clears every field the body leaves out. So the sync-out body takes a field the row lacks from the current block of its Eagle copy. The body carries the `[lng, lat]` centroid mirrored rows store, because eagle-api clears a centroid the PUT leaves out.
 - A `/level` year switch on an owned row keeps Eagle's real year on the row's Eagle copy. Sync-out sees the year move and skips the row with a warn line for as long as the years differ, because Eagle's PUT cannot carry a year. A deleted owned row is not sent.
 - Existing rows get their blocks on their next Eagle push, which sends every block (`demiPush.js`). No DEMI backfill script: DEMI has no other source for the blocks, as the seed feed hoists only the current one. Until a row is re-pushed, a switch to another year is a 409 (no content), never a wrong write.
@@ -605,7 +607,7 @@ Decisions:
 - Backfill state: every project is re-pushed on test (377 of 377, 0 failed) and prod (365 of 365, 0 failed). Prod leaves out 4 nameless Eagle projects DEMI never held and 1 hidden notification carrying a Track project id.
 - eagle-admin v2.5.35 or later needs DEMI prod on a tag containing 47412c65 and the prod re-push above. Prod meets both from v0.230.0. Without them, project edit pages show the load-failed toast.
 
-eagle-admin project writes (`project.service.ts`, `develop`):
+eagle-admin project writes (`project.service.ts`, v2.5.39):
 - Edit save: `ProjectService.save` reads the row fresh, then `PUT /projects/:id` with the form's fields. `publish` and `unPublish` call `PUT /projects/:id/level` (level 4 with `confirm`, `reason` and the project's `legislationYear`; level 2).
 - Create: `ProjectService.add` makes four calls in order:
   1. `POST /projects` with name, description, sector, region, `projectState` and centroid.
@@ -710,7 +712,7 @@ Retire: eagle-api topic and vc routes removed in R1 (681b483). The models stay b
 
 Status: todo
 
-eagle-admin `develop` still calls eagle-api for writes that DEMI already serves. Move these with their objects, or as one task:
+eagle-admin v2.5.39 calls eagle-api for these writes, which DEMI already serves. Move them with their objects, or as one task:
 - Document create, update, delete, publish, unpublish, feature, unfeature (`document.service.ts:91-140`).
 - Document fetch URLs built from eagle-api (`document.service.ts:18-20`, used in `update-images.ts:42`, `update-image-picker.component.ts:29`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`).
 - eagle-demi-admin `src/api/eagle.ts:22` shows the eagle-api report URL; DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
@@ -733,14 +735,14 @@ Dead now, no caller found in any repo (external callers unverified where noted):
 - `login` (`POST /login/token`): not dead, kept in R1 (681b483) because eagle-admin uses it for local login when Keycloak is off
 - `pin` routes under `/project/:id/pin*` and `/public/project/:id/pin`, with the project flip
 
-Retire after their object above is done: the write routes of each family below (`swagger.yaml` on eagle-api `origin/develop`).
-- Pins: `/project/{projId}/pin`, `/pin/publish`, `/pin/unpublish`, `/pin/{pinId}`.
-- Extensions: `/project/{projId}/extension`.
-- Groups: `/project/{projId}/group`, `/group/{groupId}`, `/group/{groupId}/members`, `/members/{memberId}`.
-- Project: `/project`, `/project/{projId}`, `/publish`, `/unpublish`.
-- Comment periods: `/commentperiod`, `/commentperiod/{id}`, `/publish`, `/unpublish`.
-- Comments: `/comment`, `/comment/{commentId}`, `/status`.
-- Updates: `/recentActivity`, `/recentActivity/{id}`.
-- Notifications: `/projectNotification`, `/projectNotification/{id}`.
-- Organizations: `/organization`, `/organization/{orgId}`, `/publish`, `/unpublish`.
-- Users: `/user`, `/user/{userId}`.
+Retire an object's routes once its Flip is live on test (rule 7). Each line lists the write methods in `swagger.yaml` on eagle-api `origin/develop`; the GET methods on the same paths stay.
+- Pins: POST `/project/{projId}/pin`; PUT `/project/{projId}/pin/publish` and `/pin/unpublish`; DELETE `/project/{projId}/pin/{pinId}`.
+- Extensions: POST, PUT and DELETE `/project/{projId}/extension`.
+- Groups: POST `/project/{projId}/group`; PUT and DELETE `/project/{projId}/group/{groupId}`; POST `/group/{groupId}/members`; DELETE `/group/{groupId}/members/{memberId}`.
+- Project: POST `/project`; PUT and DELETE `/project/{projId}`; PUT `/project/{projId}/publish` and `/project/{projId}/unpublish`.
+- Comment periods: POST `/commentperiod`; PUT and DELETE `/commentperiod/{commentPeriodId}`; PUT `/commentperiod/{commentPeriodId}/publish` and `/unpublish`.
+- Comments: POST `/comment`; PUT `/comment/{commentId}` and `/comment/{commentId}/status`.
+- Updates: POST `/recentActivity`; PUT and DELETE `/recentActivity/{recentActivityId}`.
+- Notifications: POST `/projectNotification`; PUT `/projectNotification/{projectNotificationId}`.
+- Organizations: POST `/organization`; PUT `/organization/{orgId}`, `/organization/{orgId}/publish` and `/unpublish`.
+- Users: POST `/user`; PUT `/user/{userId}`.
