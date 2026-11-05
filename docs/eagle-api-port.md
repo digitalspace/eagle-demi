@@ -355,7 +355,7 @@ Decisions:
 - Sync-out: none. Neither eagle-public line (`react`, `develop`) reads groups, and eagle-admin reads them from DEMI.
 - Tests: `test/controllers/nosql/eagle-new-kinds-push.test.js` (push leaves DEMI fields, DEMI write then a later Eagle push keeps members), `test/domain/groups.test.js` (takeover, flagged delete), `test/scripts/reconcile-eagle.test.js` (taken-over group read).
 
-Caller: eagle-admin `UserService` (`addGroup`, `renameGroup`, `deleteGroup`, `addGroupMembers`, `removeGroupMember`), called from the project groups screens. Member adds go in bodies of at most `DEMI_MAX_IDS` (100) ids, one after another. `ProjectService` still holds group methods that write to eagle-api; no screen calls them.
+Caller: eagle-admin `UserService` (`addGroup`, `renameGroup`, `deleteGroup`, `addGroupMembers`, `removeGroupMember`), called from the project groups screens. Member adds go in bodies of at most `DEMI_MAX_IDS` (100) ids, one after another.
 
 ### Updates (recent activity)
 
