@@ -26,16 +26,13 @@ Not scheduled. Added 2026-08-26.
   Key Vault through `deploy-infra.sh` (ARM writes), because human logins hold no Key Vault data-plane
   role (`demi-kv-prod` answers Forbidden). Target: Secrets Officer for the operators, secrets born in
   Key Vault, scripts read Key Vault first. Folds into the key manager below.
-- **Key manager / rotator.** Today rotation is a hand sequence across holders that nothing
-  records together: `ADMIN_API_KEY` lives in OpenShift `demi-app-secrets` (source of truth),
-  the App Service setting, and the GPU box env file; the Eagle push key in `demi-push-secret`;
-  eagle-api's `SMOKE_API_KEY`; MinIO and OpenShift tokens rotate at their issuers. The 2026-08-25
-  rotation showed the failure modes: a holder skipped is a silent revert on the next infra
-  deploy, App Service needs stop/start before the new value serves, and single-key auth means a
-  window. Target: one place that knows every credential, its holders, age and expiry (registry
-  keys already carry `expiresAt`), can mint the next value, write it to every holder in the safe
-  order, verify with a real call, and alert before expiry. Dual-key acceptance (`*_NEXT`) on the
-  readers would remove the window. Same admin surface as the API-key/role manager above.
+- **Key manager / rotator:** The hourly rotator (README, "Secret rotator") rotates the four edge
+  and gateway secrets and renews the expiry of the other Key Vault secrets. Still hand-rotated
+  across holders nothing records together: `ADMIN_API_KEY` (OpenShift `demi-app-secrets`, Key
+  Vault `admin-api-key`, GPU box env file), the Eagle push key in `demi-push-secret`, eagle-api's
+  `SMOKE_API_KEY`, and the MinIO and OpenShift tokens at their issuers. Target: put these under the
+  rotator with dual-key acceptance (`*_NEXT`) on the readers and one view of each credential's
+  holders, age and expiry on the API-key/role manager's admin surface above.
 - **Stop re-logging in (`az`, `oc`).** `oc`: dev/test already use ServiceAccount tokens in the
   kube contexts (`eagle-automation`, no expiry); only prod still needs Daniel's own login, by
   choice. `az`: a user login cannot be auto-renewed — `AADSTS50173` is the tenant revoking the
