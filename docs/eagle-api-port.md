@@ -35,13 +35,13 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | done (b506a134); Dark: staff-only, no caller |
-| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | done (99c9045c); Dark: staff-only, no caller |
+| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | done (99c9045c); staff-only; eagle-admin caller merged on `develop`, not deployed |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js`, `vis/catalog/projects.js` | 0 | M | done (47412c65); Dark: `setLevel` year switch staff-guarded; blocks stored and returned on reads |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | done (591f9cf9); 10b (`robots.txt`) code done, not merged |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | code done, not merged: eagle-public #985 (`develop`, e0ace912) and #986 (`react`, d3a06031), both draft; Front Door rewrite live on test; prod order under Sitemap |
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | done (eagle-notify e1c389b, eagle-demi 05ffdb67); Dark: staff-only, no caller; both deployed to test; key rotated 2026-10-19, member-remove proven on test |
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | done (591f9cf9) |
-| A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
+| A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af) |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
 | F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half todo |
@@ -51,8 +51,8 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half todo |
 | F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half todo |
 | F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half todo |
-| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half todo |
-| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half todo |
+| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half merged on `develop` (PR 1007), not deployed; flip not live |
+| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half merged on `develop` (PRs 1006, 1008 to 1010), not deployed; flip not live |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
 | F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | done (530bf0cc); no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
@@ -517,9 +517,9 @@ Ownership:
 
 ### Extensions
 
-Status: done (99c9045c). DEMI half of F8 built (1ef05689, ac66bb8c); the eagle-admin half is todo.
+Status: done (99c9045c). DEMI half of F8 built (1ef05689, ac66bb8c). The eagle-admin half is merged on eagle-admin `develop` (PR 1007), not deployed.
 
-Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project, in `DEMI_ONLY_FIELDS` (`src/ownership/project.js`). The four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
+Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project, in `DEMI_ONLY_FIELDS` (`src/ownership/project.js`). The four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. The eagle-admin extension screen writes to them on `develop`; eagle-api's routes stay until the flip is live.
 
 Target routes: `GET` and `POST /projects/:id/extensions`, `PUT` and `DELETE /projects/:id/extensions/:extId`.
 
@@ -532,7 +532,7 @@ Business rules (eagle-api `api/controllers/project.js:486-575`):
 - A project id that is not an ObjectId is 400 (`:492-494,518-520,545-547`). DEMI takes its own project ids, so any unknown project is 404.
 - An unknown project, or an item not found, is 404 (`:502-503,529-531,559-561`); so is any thrown error, a bad `item` JSON included (`:509-511`).
 - Each write records an action (`Post`, `Delete`, `Put`, kind `Extension`; `:506,533,571`). DEMI writes `extension.create`, `.update` and `.delete`, with `detail` `{ list, extensionId }`, on the project.
-- The block field is `Mixed` (`helpers/models/project.js:81-82`), but the routes write a top-level path. eagle-admin sends `type`, `appliedTo`, `start`, `end` (`extension.component.ts:105-110`).
+- The block field is `Mixed` (`helpers/models/project.js:81-82`), but the routes write a top-level path. eagle-admin sends `type`, `appliedTo`, `start`, `end` (`extension.component.ts` `onSubmit`).
 
 Decisions:
 - DEMI gives each item an `id`: a UUID for an item DEMI adds, kept across a PUT. An Eagle item carries none (eagle-api matched the whole object, `:525-528`), so its id is a hash of its content, the same on every read; equal items share an id, and a delete removes them all, as `$pull` did. DEMI never stamps an id onto an untouched Eagle item, so the nightly parity check sees no change it did not make.
@@ -551,11 +551,11 @@ Questioned:
 - Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
 - A `type` other than `Extension` lands in `reviewSuspensions` with that type (`:490`). Ported as is; eagle-admin only sends `Extension` and `Suspension`.
 
-Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. No edit is lost between the DEMI tag and the eagle-admin tag, because eagle-api stores none. Its routes write a top-level path its strict schema lacks, so Mongoose sends no update. On test, a POST and a DELETE each answered 200 `{"acknowledged":false}` and changed nothing (measured 2026-11-03).
+Caller: eagle-admin `ProjectService` (`addExtension`, `editExtension`, `deleteExtension` in `project.service.ts`), called from `extension.component.ts`. Each reads the project fresh, then writes under `projects/<demi id>/extensions` with only `type`, `appliedTo`, `start` and `end`. The route id may be a DEMI or an Eagle id. No screen links to the extension routes (`edit/add-extension`, `edit/edit-extension` and the suspension pair in `app-routing.module.ts`). No edit is lost between the DEMI tag and the eagle-admin tag, because eagle-api stores none. Its routes write a top-level path its strict schema lacks, so Mongoose sends no update. On test, a POST and a DELETE each answered 200 `{"acknowledged":false}` and changed nothing (measured 2026-11-03).
 
 ### Project
 
-Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done. DEMI half of F9 built (8e724347, f30f6b8e, 5ceb0912); the eagle-admin half is todo.
+Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done. DEMI half of F9 built (8e724347, f30f6b8e, 5ceb0912). The eagle-admin half is merged on eagle-admin `develop` (PRs 1006, 1008 to 1010), not deployed; eagle-api keeps running and no sync-out flag has changed.
 
 Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. Rules in `src/domain/project-legislation.js`, applied by `updateProject` and `setLevel` in `src/controllers/nosql/project.js`.
 
@@ -599,6 +599,13 @@ Decisions:
 - To fill all at once, run eagle-api `scripts/demi-repush.js --kind project --concurrency 1 --ids-file <ids> --state <state> --live --rate 60` from the eagle-api pod with `LOG_LEVEL=info`. Dry run without `--state`, `--live` and `--rate`. The eagle-dev-guides wiki page `Eagle-DEMI-Re-Push-And-Backfill` lists the flags and the ids to remove from the id file first.
 - Backfill state: every project is re-pushed on test (377 of 377, 0 failed) and prod (365 of 365, 0 failed). Prod leaves out 4 nameless Eagle projects DEMI never held and 1 hidden notification carrying a Track project id.
 - eagle-admin v2.5.35 or later needs DEMI prod on a tag containing 47412c65 and the prod re-push above. Prod meets both from v0.230.0. Without them, project edit pages show the load-failed toast.
+
+eagle-admin project writes (`project.service.ts`, `develop`):
+- Edit save: `ProjectService.save` reads the row fresh, then `PUT /projects/:id` with the form's fields. `publish` and `unPublish` call `PUT /projects/:id/level` (level 4 with `confirm`, `reason` and the project's `legislationYear`; level 2).
+- Create: `ProjectService.add` sends `POST /projects` (name, description, sector, region, `projectState`, centroid), then `PUT /projects/:id/level` at 2, then `PUT /projects/:id` with the full form, then level 4 when the user publishes. DEMI mints the id, so a new project needs no Track id. A failed later step raises `ProjectCreatedPartlyError` naming the new id; a 5xx on the POST is reported as possibly made.
+- Edit tabs key on the route project id, a DEMI or Eagle id, not on `eagleId`, which Track-only and DEMI-created rows lack. The resolver loads any row from `GET /projects/:id`, including rows with no stored legislation blocks.
+- Save and Publish on an edit tab for the Act the project is not under are refused with a toast and send nothing, because DEMI's PUT writes the current Act's fields only. Moving a project from the 2002 Act to the 2018 Act has no write path.
+- Documents stay on eagle-api.
 
 Questioned:
 - eagle-api's PUT 404s a year outside the registry (`:646-655`); DEMI's PUT takes any four-digit year. Not ported: only the lock was in scope, and the machine writer also calls this PUT.
