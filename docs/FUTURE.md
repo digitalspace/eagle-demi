@@ -28,8 +28,8 @@ Not scheduled. Added 2026-08-26.
   Key Vault, scripts read Key Vault first. Folds into the key manager below.
 - **Key manager / rotator:** The hourly rotator (README, "Secret rotator") rotates the four edge
   and gateway secrets and renews the expiry of the other Key Vault secrets. Still hand-rotated
-  across holders nothing records together: `ADMIN_API_KEY` (OpenShift `demi-app-secrets`, App
-  Service setting, GPU box env file), the Eagle push key in `demi-push-secret`, eagle-api's
+  across holders nothing records together: `ADMIN_API_KEY` (OpenShift `demi-app-secrets`, Key
+  Vault `admin-api-key`, GPU box env file), the Eagle push key in `demi-push-secret`, eagle-api's
   `SMOKE_API_KEY`, and the MinIO and OpenShift tokens at their issuers. Target: put these under the
   rotator with dual-key acceptance (`*_NEXT`) on the readers and one view of each credential's
   holders, age and expiry on the API-key/role manager's admin surface above.
