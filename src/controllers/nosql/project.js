@@ -24,7 +24,7 @@ const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, clearDeleted,
   deleteStands, deletedBy, TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject,
-  eagleOnlyProjectId, isEagleOnlyProjectId
+  eagleOnlyProjectId, isEagleOnlyProjectId, validCoordinates
 } = require('../../merge/project');
 const {
   LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
@@ -92,6 +92,28 @@ const eagleFields = (row) => (row.sources && row.sources.track
 
 /** A non-native row mirroring an Eagle project. */
 const eagleMirrored = (row) => hasValue(row.eagleId) && !isNativeProject(row);
+
+/** Exactly the GeoJSON point `validCoordinates` makes of it: a swapped, flipped or string pair is not. */
+const validPoint = (centroid) => Array.isArray(centroid?.coordinates) &&
+  isDeepStrictEqual(validCoordinates(...centroid.coordinates), centroid);
+
+function staffMove(key, stored, sent) {
+  if (!hasValue(stored) && !hasValue(sent)) return false;
+  // A stamped bad point would beat Track's coordinates on every merge.
+  if (key === 'centroid' && !validPoint(sent)) return false;
+  // eagle-admin escapes newlines on save and never unescapes on load.
+  if (key === 'description' && typeof sent === 'string' && sent.replaceAll('\\n', '\n') === stored) return false;
+  return !isDeepStrictEqual(stored, sent);
+}
+
+/** The `STAFF_HELD_FIELDS` a staff write of `sent` moves off `current`; the merges then keep them. */
+const staffMoved = (current, sent) =>
+  STAFF_HELD_FIELDS.filter(key => Object.hasOwn(sent, key) && staffMove(key, current[key], sent[key]));
+
+/** `current`'s stamps with each of `fields` stamped `now`, or `{}` when there are none. */
+const staffStamps = (current, fields, now) => (fields.length ? {
+  [STAFF_EDITED_AT]: { ...current[STAFF_EDITED_AT], ...Object.fromEntries(fields.map(key => [key, now])) }
+} : {});
 
 /**
  * `{ demiOwnedAt: now }` when `current` mirrors an Eagle project DEMI does not own yet, else `{}`.
@@ -431,7 +453,7 @@ exports.getProjects = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    // DEMI ids are Track integers or `eagle-<ObjectId>`, so a 24-hex `:id` can only be Eagle's.
+    // DEMI ids are Track integers, `eagle-<ObjectId>` or a UUID, so a 24-hex `:id` can only be Eagle's.
     // getById gates its point read itself, which bypasses the query predicate getByEagleId carries.
     const project = projects.EAGLE_OBJECT_ID.test(req.params.id)
       ? await projects.getByEagleId(access, req.params.id)
@@ -503,6 +525,9 @@ exports.createProject = async (req, res) => {
       // eagle-public prints this as "Last updated".
       dateUpdated: now
     });
+    // Only what the body sent: a field it left out holds a blank default, which is no edit.
+    const sent = (key) => Object.hasOwn(req.body, key) || (key === 'projectState' && Object.hasOwn(req.body, 'status'));
+    const posted = Object.fromEntries(Object.entries(row).filter(([key]) => sent(key)));
     // A row already under this id keeps its printed codes, PUT-only tags and `eagleId` (null would
     // split a relinked Track row from its twin); guarded so a PUT landing in between survives.
     const written = await writeGuarded({
@@ -513,10 +538,15 @@ exports.createProject = async (req, res) => {
         // The upsert would hand an owned row's held fields back as if the body had sent them.
         if (isDemiOwnedProject(current)) return { status: 'owned' };
         const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
+        // Stamped as a PUT would be, so `holdStaffEdits` keeps the posted values, not the stored ones.
+        const stamped = current ? staffMoved(current, posted) : [];
+        const held = stamped.length
+          ? { ...current, ...Object.fromEntries(stamped.map(key => [key, posted[key]])), ...staffStamps(current, stamped, now) }
+          : current;
         return {
           status: 'saved',
           saved: await projects.upsert(
-            versioned(carryDemiOnlyFields(carryShortLink(kept, current), current), current),
+            versioned(carryDemiOnlyFields(carryShortLink(kept, current), held), current),
             current ? { etag: current._etag } : { create: true })
         };
       },
@@ -632,15 +662,12 @@ exports.updateProject = async (req, res) => {
         const edited = syncsOut({ ...current, ...owner }) &&
           ((native && Object.keys(pinned.changes).length > 0) ||
             Object.keys(changes).some(key => (native || !DEMI_ONLY_FIELDS.includes(key)) && moved(key)));
-        const stamped = STAFF_HELD_FIELDS.filter(key => Object.hasOwn(changes, key) && moved(key));
         const row = {
           ...current,
           ...changes,
           ...pinned.changes,
           ...owner,
-          ...(stamped.length && {
-            [STAFF_EDITED_AT]: { ...current[STAFF_EDITED_AT], ...Object.fromEntries(stamped.map(key => [key, now])) }
-          }),
+          ...staffStamps(current, staffMoved(current, changes), now),
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: now,

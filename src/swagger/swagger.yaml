@@ -967,7 +967,10 @@ paths:
         DEMI makes a UUID id and stores `trackProjectId: null` and `sourceSystem: "demi"`. The
         project is admitted at level 1 (team only): `isPublished` and `read` in the body are
         ignored, not refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row
-        gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
+        gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle. Over a stored
+        project, each of `name`, `description`, `projectState` (or `status`) and `centroid` the
+        body sends and changes is stamped in `staffEditedAt` by the same rule as
+        `PUT /api/projects/{id}`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1300,7 +1303,10 @@ paths:
         A body that changes `centroid` or a Track field (`name`, `description`, `projectType`,
         `projectSubType`, `proponentName`, `projectState`, `abbreviation`, `address`, `isActive`,
         `eaCertificate`, `eacSigned`, `eacExpires`) stamps it in `staffEditedAt`; Track syncs and
-        Eagle pushes then keep the saved value. `staffEditedAt` in the body is ignored.
+        Eagle pushes then keep the saved value. Nothing is stamped for an empty value sent for a
+        field the project has no value in, a `description` that differs only by newlines sent
+        as the two characters `\n`, or a `centroid` that is not a GeoJSON point in BC.
+        `staffEditedAt` in the body is ignored.
         On a project created in DEMI or taken over, a body that changes a stored value sets
         `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a
         taken-over project, `tags` and `pins` alone are not such a change. Once project sync-out
