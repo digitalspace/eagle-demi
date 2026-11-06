@@ -599,6 +599,7 @@ Decisions:
 - A PUT stamps nothing for an empty value sent for a field the row lacks. It stamps nothing for a `description` that differs only by escaped newlines.
 - A PUT stamps nothing for a `centroid` that is not a valid point. Clearing a stored valid `centroid` is stamped.
 - A stamped field keeps its stored value, an absent one included, on every push, seed and Track sync, owned row or not. No route clears a stamp, and a `staffEditedAt` in the body is ignored.
+- One exception: a re-seed that unlinks a row from its Eagle project drops the Eagle reference fields, and a stamped `phaseHistory` goes with them. No other held field is dropped.
 - A `POST /projects` over a stored row stamps again only fields that are already stamped, and stamps no other field.
 - `src/scripts/backfill-eac-number.js` skips a row whose `eaCertificate` is stamped.
 - A `PUT /projects/:id` that changes an Eagle field takes the project over, and so do `DELETE /projects/:id` and the restore of a project Eagle deleted. An Eagle field is any field only Eagle supplies, such as `sector`, `region`, `eaStatus` and the lead and EPD contacts. On a row with no Track record, `name`, `description`, `projectType`, `abbreviation`, `address`, `proponentName`, `projectState`, `isActive` and `centroid` count too.
