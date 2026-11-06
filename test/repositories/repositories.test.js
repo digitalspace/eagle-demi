@@ -691,7 +691,6 @@ test('single-row cross-partition lookups drain rather than sample', async (t) =>
   }
 
   const LOOKUPS = [
-    ['projects.getByEagleId', (a) => projects.getByEagleId(a, '5d0d212c7d50161b92a80eed'), 'projects'],
     ['lists.getById', (a) => lists.getById(a, 'l1'), 'lists'],
     ['comments.getById', (a) => comments.getById(a, 'c1'), 'comments'],
     ['commentPeriods.getById', (a) => commentPeriods.getById(a, 'cp1'), 'commentPeriods'],
@@ -712,13 +711,6 @@ test('single-row cross-partition lookups drain rather than sample', async (t) =>
     });
   }
 
-  await t.test('a found row comes back whole', async () => {
-    onlyQueryFirst(t, { id: 'p1', eagleId: '5d0d212c7d50161b92a80eed' });
-
-    assert.deepStrictEqual(await projects.getByEagleId(PUBLIC, '5d0d212c7d50161b92a80eed'),
-      { id: 'p1', eagleId: '5d0d212c7d50161b92a80eed' });
-  });
-
   await t.test('a typed boundary stays pinned to its partition', async () => {
     // The drain is for the unscoped call. Naming the type is still a single-partition query, and
     // losing that would fan a 281-row lookup across every partition.
@@ -727,6 +719,83 @@ test('single-row cross-partition lookups drain rather than sample', async (t) =>
     await boundaries.getByName(PUBLIC, 'Bulkley-Nechako', 'Regional District');
 
     assert.strictEqual(calls[0].options.partitionKey, 'Regional District');
+  });
+});
+
+/** A Track row and its `eagle-<id>` twin share an Eagle id; every read by that id must answer the Track row. */
+test('projects by Eagle id answer one row', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const EAGLE_ID = '5d0d212c7d50161b92a80eed';
+  const TWIN = { id: `eagle-${EAGLE_ID}`, eagleId: EAGLE_ID };
+  const TRACK = { id: '272', eagleId: EAGLE_ID, sources: { track: { id: 272 } } };
+
+  /** Serve `rows` from a drained `query`; `queryFirst` stops at one row, so it fails the test. */
+  function servesRows(t_, rows) {
+    const calls = [];
+    t_.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
+      cosmos.assertQuerySpec(spec, container);
+      calls.push({ container, spec, options });
+      return { items: rows, continuationToken: undefined, requestCharge: 0 };
+    });
+    t_.mock.method(cosmos, 'queryFirst', async () => assert.fail('queryFirst can stop at the twin'));
+    return calls;
+  }
+
+  await t.test('the Track row wins over a twin listed first', async () => {
+    servesRows(t, [TWIN, TRACK]);
+    assert.strictEqual((await projects.getByEagleId(PUBLIC, EAGLE_ID)).id, '272');
+  });
+
+  await t.test('a twin alone is the answer', async () => {
+    servesRows(t, [TWIN]);
+    assert.strictEqual((await projects.getByEagleId(PUBLIC, EAGLE_ID)).id, TWIN.id);
+  });
+
+  await t.test('no rows is null, not undefined', async () => {
+    servesRows(t, []);
+    assert.strictEqual(await projects.getByEagleId(PUBLIC, EAGLE_ID), null);
+  });
+
+  await t.test('one drained query under the ACL, and a found row comes back whole', async () => {
+    const calls = servesRows(t, [TRACK]);
+
+    assert.deepStrictEqual(await projects.getByEagleId(PUBLIC, EAGLE_ID), TRACK);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].container, 'projects');
+    assert.strictEqual(calls[0].options.maxItemCount, undefined, 'a page can end before the second row');
+    assert.match(calls[0].spec.query, /c\.read/, 'the ACL predicate still runs in the query');
+  });
+
+  await t.test('a failed query propagates instead of reading as no row', async () => {
+    t.mock.method(cosmos, 'query', async () => { throw new Error('private endpoint down'); });
+    await assert.rejects(projects.getByEagleId(PUBLIC, EAGLE_ID), /private endpoint down/);
+  });
+
+  await t.test('of two non-twins the Track one wins, in either order', () => {
+    const native = { id: '0aaa', eagleId: EAGLE_ID };
+    assert.strictEqual(projects.pickByEagleId([native, TRACK], EAGLE_ID).id, '272');
+    assert.strictEqual(projects.pickByEagleId([TRACK, native], EAGLE_ID).id, '272');
+  });
+
+  await t.test('a row with no Track source still beats the twin', () => {
+    // A UUID id that sorts after `eagle-`, so the lowest-id rule alone would pick the twin.
+    const native = { id: 'f3c1a9e0-uuid', eagleId: EAGLE_ID };
+    assert.strictEqual(projects.pickByEagleId([TWIN, native], EAGLE_ID).id, native.id);
+  });
+
+  await t.test('of two Track rows the lowest id string wins, in either order', () => {
+    // '1000' sorts before '272' as a string and after it as a number.
+    const other = { ...TRACK, id: '1000' };
+    assert.strictEqual(projects.pickByEagleId([TRACK, other], EAGLE_ID).id, '1000');
+    assert.strictEqual(projects.pickByEagleId([other, TRACK], EAGLE_ID).id, '1000');
+  });
+
+  await t.test('readByEagleId reads unfiltered and also answers the Track row', async () => {
+    const calls = servesRows(t, [TWIN, TRACK]);
+
+    assert.strictEqual((await projects.readByEagleId(EAGLE_ID)).id, '272');
+    assert.doesNotMatch(calls[0].spec.query, /c\.read/, 'a sealed parent must still be found');
   });
 });
 

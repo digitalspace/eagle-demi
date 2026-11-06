@@ -17,8 +17,10 @@ const {
   normalizeCentroid,
   validCoordinates,
   resolveProjectAcl,
+  TRACK_PRECEDENCE,
   BC_BBOX
 } = require('../../src/merge/project');
+const { SOURCE_FIRST } = require('../../src/ownership/project');
 const { redactForAccess } = require('../../src/vis/redact');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 
@@ -54,25 +56,27 @@ function eagleFor(track, overrides = {}) {
   };
 }
 
-test('field precedence — Track wins, Eagle fills gaps', async (t) => {
-  await t.test('Track values beat Eagle values', () => {
-    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS);
-    assert.strictEqual(merged.name, TRACK_207.name);
-    assert.strictEqual(merged.description, TRACK_207.description);
-    assert.strictEqual(merged.projectState, TRACK_207.project_state_name);
-    assert.strictEqual(merged.abbreviation, TRACK_207.abbreviation);
-  });
+test('field precedence — SOURCE_FIRST wins, the other source fills gaps', async (t) => {
+  const sourceValues = (target) => (target === 'isActive'
+    ? { track: true, eagle: false, empty: null }
+    : { track: `Track ${target}`, eagle: `Eagle ${target}`, empty: '   ' });
+  const bothFed = TRACK_PRECEDENCE.filter(([, , eagleField]) => eagleField);
 
-  await t.test('an EMPTY Track field falls back to Eagle instead of blanking it', () => {
-    // A spread merge would write undefined over a populated Eagle value; 12 real Track records
-    // have no abbreviation, so the real dataset takes this path.
-    const gapped = { ...TRACK_207, abbreviation: '', description: null, address: '   ' };
-    const merged = mergeTrackProject(gapped, eagleFor(TRACK_207), OPTS);
+  for (const [target, trackField, eagleField] of bothFed) {
+    const first = SOURCE_FIRST[target];
+    const other = first === 'track' ? 'eagle' : 'track';
+    const values = sourceValues(target);
+    const mergedFrom = (fed) =>
+      mergeTrackProject({ ...TRACK_207, [trackField]: fed.track }, eagleFor(TRACK_207, { [eagleField]: fed.eagle }), OPTS);
 
-    assert.strictEqual(merged.abbreviation, 'EAGLESHORT');
-    assert.strictEqual(merged.description, 'Eagle description');
-    assert.strictEqual(merged.address, 'Eagle location');
-  });
+    await t.test(`${target}: ${first} wins when both sources have a value`, () => {
+      assert.strictEqual(mergedFrom(values)[target], values[first]);
+    });
+
+    await t.test(`${target}: an empty ${first} value falls back to ${other} instead of blanking it`, () => {
+      assert.strictEqual(mergedFrom({ ...values, [first]: values.empty })[target], values[other]);
+    });
+  }
 
   await t.test('a field neither source has is simply absent, not null', () => {
     const gapped = { ...TRACK_207, abbreviation: '' };
@@ -1281,6 +1285,52 @@ test('carryDemiOnlyFields', async (t) => {
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { centroid: [-120, 50] }), OPTS);
 
     assert.deepStrictEqual(carryDemiOnlyFields(rebuilt, stored).centroid, [-125, 55]);
+  });
+
+  await t.test('a DEMI-owned project with no Track coordinates keeps its stored GeoJSON centroid', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, centroid: { type: 'Point', coordinates: [-125, 55] }, read: ['staff'] };
+    const track = { ...TRACK_207, latitude: null, longitude: null };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(track, eagleFor(TRACK_207, { centroid: [-120, 50] }), OPTS), stored);
+
+    assert.deepStrictEqual(merged.centroid, stored.centroid);
+  });
+
+  const STAMP = '2026-11-06T00:00:00.000Z';
+  const STAFF_SAVED = {
+    name: 'Staff name', description: 'Staff description', projectState: 'Staff state',
+    staffEditedAt: { name: STAMP, description: STAMP, projectState: STAMP }
+  };
+
+  for (const [kind, owner] of [['an unowned', {}], ['a DEMI-owned', { demiOwnedAt: OWNED_AT }]]) {
+    await t.test(`${kind} Track row keeps the name, description and state staff saved over both feeds`, () => {
+      const stored = { id: '207', read: ['staff', 'sysadmin'], ...owner, ...STAFF_SAVED };
+
+      const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+      assert.deepStrictEqual([merged.name, merged.description, merged.projectState],
+        ['Staff name', 'Staff description', 'Staff state']);
+    });
+  }
+
+  await t.test("a GeoJSON centroid staff saved beats Track's coordinates", () => {
+    const centroid = { type: 'Point', coordinates: [-125, 55] };
+    const stored = { id: '207', centroid, staffEditedAt: { centroid: STAMP } };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.deepStrictEqual(merged.centroid, centroid);
+  });
+
+  await t.test('a phase history staff saved still goes when the row drops it with its Eagle link', () => {
+    const stored = {
+      id: '207', demiOwnedAt: OWNED_AT, read: ['staff'], phaseHistory: [{ _id: 'p1', name: 'Pre-Application' }],
+      staffEditedAt: { phaseHistory: STAMP }
+    };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, null, OPTS), stored, undefined, { drop: ['phaseHistory'] });
+
+    assert.ok(!('phaseHistory' in merged));
   });
 
   await t.test('a DEMI-owned project Eagle deleted stays deleted when the feed lists it again', () => {

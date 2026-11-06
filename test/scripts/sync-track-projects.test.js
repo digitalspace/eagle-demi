@@ -808,6 +808,32 @@ test('a relink of a live DEMI-owned row Eagle deleted writes a live Track row', 
   assert.deepStrictEqual(written.read, readForLevel(4));
 });
 
+test('a relink keeps a value staff saved on the Eagle-only row', async () => {
+  const projects = fakeProjects([eagleOnlyProject({ name: 'Nicomen Wind', staffEditedAt: { name: NOW } })]);
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  assert.strictEqual(written.name, 'Nicomen Wind');
+});
+
+test('a field staff saved is held while the rest of the Track change lands', async (t) => {
+  const warn = t.mock.method(logger, 'warn', () => {});
+  const projects = fakeProjects([storedProject({ name: 'Nicomen Wind', staffEditedAt: { name: NOW } })], {
+    midRun: (store, find) => store({ ...find('207'), tags: ['Wind'] })
+  });
+  const moved = { ...API_PROJECT, sub_type: { name: 'Wind Farms' } };
+
+  const summary = await syncProjects([moved], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  assert.ok(warn.mock.calls.some(c => /lost its etag race/.test(c.arguments[0])), 'the premise: the write retried');
+  const [written] = projects.writes;
+  assert.strictEqual(written.projectSubType, 'Wind Farms');
+  assert.strictEqual(written.name, 'Nicomen Wind');
+  assert.deepStrictEqual([summary.held, summary.updated], [1, 1]);
+});
+
 // `tags` is DEMI's own and Track never sends it, so neither the nightly update nor a re-key may
 // rebuild the row without it.
 test('the Track sync keeps the tags DEMI set', async (t) => {
@@ -860,7 +886,7 @@ test('an empty Track column does not blank a populated row', () => {
   const stored = storedProject();
   const merged = mergeTrackProject({ ...FLAT, ea_certificate: '' }, null, { now: NOW });
 
-  assert.deepStrictEqual(trackChanges(stored, merged), {},
+  assert.deepStrictEqual(trackChanges(stored, merged).changes, {},
     'the merge omits what Track no longer supplies, so there is nothing to write');
 });
 
@@ -868,14 +894,14 @@ test('trackChanges writes legislationTransitions that differ from the stored row
   const stored = { legislationTransitions: [{ fromYear: 2002, toYear: 2018, date: null }] };
   const moved = [{ fromYear: 2002, toYear: 2018, date: '2020-01-15T00:00:00.000Z' }];
 
-  assert.deepStrictEqual(trackChanges(stored, { legislationTransitions: moved }),
+  assert.deepStrictEqual(trackChanges(stored, { legislationTransitions: moved }).changes,
     { legislationTransitions: moved });
 });
 
 test('trackChanges leaves stored works alone when the merge carries none', () => {
   const stored = { works: [{ trackWorkId: 11 }] };
 
-  assert.deepStrictEqual(trackChanges(stored, {}), {},
+  assert.deepStrictEqual(trackChanges(stored, {}).changes, {},
     'a project the works pull skipped (budget, failed read) keeps what it has');
 });
 
@@ -883,8 +909,8 @@ test('trackChanges writes a works list that differs by value', () => {
   const stored = { works: [{ trackWorkId: 11, workState: 'IN_PROGRESS' }] };
   const works = [{ trackWorkId: 11, workState: 'COMPLETED' }];
 
-  assert.deepStrictEqual(trackChanges(stored, { works }), { works });
-  assert.deepStrictEqual(trackChanges(stored, { works: structuredClone(stored.works) }), {},
+  assert.deepStrictEqual(trackChanges(stored, { works }).changes, { works });
+  assert.deepStrictEqual(trackChanges(stored, { works: structuredClone(stored.works) }).changes, {},
     'an equal copy is not a change');
 });
 
@@ -913,7 +939,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 
@@ -1228,6 +1254,28 @@ test('the projects poll', async (t) => {
 
     assert.match(info.mock.calls.at(-1).arguments[0],
       /^\[track-projects-poll\] mode=live trackProjects=1 .* failures=0$/);
+  });
+
+  await t.test('a Track name that differs from a staff-saved one writes nothing and counts as held', async (t) => {
+    const info = quiet(t);
+    const projects = fakeProjects([storedProject({ name: 'Nicomen Wind', staffEditedAt: { name: NOW } })]);
+
+    await run({ live: true, deps: { ...upstream(), projects, links: fakeLinks() } });
+
+    assert.deepStrictEqual(projects.writes, []);
+    assert.match(info.mock.calls.at(-1).arguments[0], / held=1 /);
+  });
+
+  await t.test('a dry run counts and logs an Eagle state the stored row does not have', async (t) => {
+    const info = quiet(t);
+    const base = storedProject();
+    const stored = storedProject({ sources: { ...base.sources, eagle: { _id: API_PROJECT.epic_guid, status: 'Under Review' } } });
+
+    await run({ deps: { ...upstream(), projects: fakeProjects([stored]), links: fakeLinks() } });
+
+    const lines = info.mock.calls.map(c => c.arguments[0]);
+    assert.ok(lines.includes('[track-projects] projectState moves "Closed" -> "Under Review" x1'));
+    assert.match(lines.at(-1), / stateMoved=1 /);
   });
 
   await t.test('a Track list that fails is one failure on the summary line, not a throw', async (t) => {

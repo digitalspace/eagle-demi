@@ -61,3 +61,7 @@ test('project: only DEMI sets the takeover marker, and PUT never takes it', () =
   assert.ok(project.OWNERS.demi.includes('demiOwnedAt'));
   assert.ok(project.PUT_IGNORED_FIELDS.includes('demiOwnedAt'));
 });
+
+test('project: only DEMI sets the staff edit stamps', () => {
+  assert.ok(project.OWNERS.demi.includes('staffEditedAt'));
+});

@@ -902,6 +902,18 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual([matched.demiOwnedAt, matched.sector, matched.read], [NOW, 'Mines', ['staff']]);
   });
 
+  await t.test('a Track row seeded beside its eagle-<id> twin keeps the name staff saved there', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === `eagle-${matchedGuid}`
+      ? { id: `eagle-${matchedGuid}`, eagleId: matchedGuid, name: 'Staff name', staffEditedAt: { name: NOW } }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.deepStrictEqual([matched.name, matched.staffEditedAt], ['Staff name', { name: NOW }]);
+  });
+
   await t.test('documents are grouped by project — the partition key', async () => {
     const { written, repos } = makeRepos();
     await seed(['--live', '--only', 'documents'], { sources: stubSources, repos, now: NOW });

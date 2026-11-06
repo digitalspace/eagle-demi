@@ -5,35 +5,18 @@
  * the Update's `read[]`. One rule for the push, the announce and the project cascade.
  */
 
-const cosmos = require('../db/cosmos-nosql');
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { pickParent } = require('./parent-admit');
 const { levelOfRead, capRead, isDemiSeal, noLadderToken } = require('./access-sql');
 const { eagleBaseAcl } = require('../seed/transform');
 
-/**
- * The project row carrying an Eagle id, unfiltered. Not `projects.getByEagleId(systemAccess())`:
- * systemAccess cannot see a sealed row, and a sealed parent read as missing caps nothing.
- */
-function projectByEagleId(eagleId) {
-  return cosmos.queryFirst(projects.CONTAINER, {
-    query: 'SELECT * FROM c WHERE c.eagleId = @eagleId',
-    parameters: [{ name: '@eagleId', value: String(eagleId) }]
-  }, {});
-}
-
-/**
- * The DEMI parent of an Eagle id, both rows read unfiltered: a private or sealed parent must still
- * cap its Update, and a sealed notification must still win its id over a Track project.
- *
- * @returns {Promise<{id: string, read: string[], kind: 'project'|'notification', name: string|null,
- *   doc: object}|null>} `doc` is the stored parent row, for a caller's `canRead`
- */
+// The DEMI parent of an Eagle id, `{id, read, kind, name, doc}` or null. Both rows read unfiltered: a private
+// or sealed parent must still cap its Update, and systemAccess cannot see a sealed row.
 async function readParent(eagleId) {
   if (!eagleId) return null;
   const [project, notification] = await Promise.all([
-    projectByEagleId(eagleId),
+    projects.readByEagleId(eagleId),
     notifications.readForWrite(String(eagleId))
   ]);
   const parent = pickParent(project, notification);

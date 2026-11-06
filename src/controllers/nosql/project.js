@@ -1,14 +1,6 @@
 'use strict';
 
-/**
- * Project controller — Cosmos NoSQL.
- *
- * The only project controller. The Mongo-backed pair in the parent directory went with the
- * data layer in Phase 8; the `nosql/` nesting is now just a path, not a choice.
- *
- * Controllers are thin here: the repository owns the SQL and the visibility predicate, so
- * these functions only translate HTTP to a repository call and back.
- */
+/** Project controller: the repository owns the SQL and the visibility predicate, this maps HTTP to it. */
 
 const { randomUUID } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
@@ -32,10 +24,11 @@ const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, clearDeleted,
   deleteStands, deletedBy, TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject,
-  eagleOnlyProjectId, isEagleOnlyProjectId
+  eagleOnlyProjectId, isEagleOnlyProjectId, validCoordinates
 } = require('../../merge/project');
 const {
-  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE
+  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
+  STAFF_EDITED_AT, STAFF_HELD_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
@@ -47,7 +40,7 @@ const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
 const { writeGuarded, raced } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal, refId
 } = require('./eagle-mirror');
 const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
@@ -99,6 +92,33 @@ const eagleFields = (row) => (row.sources && row.sources.track
 
 /** A non-native row mirroring an Eagle project. */
 const eagleMirrored = (row) => hasValue(row.eagleId) && !isNativeProject(row);
+
+/** Exactly the GeoJSON point `validCoordinates` makes of it: a swapped, flipped or string pair is not. */
+const validPoint = (centroid) => Array.isArray(centroid?.coordinates) &&
+  isDeepStrictEqual(validCoordinates(...centroid.coordinates), centroid);
+
+/** The phase refs eagle-admin rebuilds from its Lists on each save, so only their ids are compared. */
+const PHASE_FIELDS = ['currentPhaseName', 'phaseHistory'];
+const refIds = (value) => (Array.isArray(value) ? value.map(refId) : refId(value));
+
+function staffMove(key, stored, sent) {
+  if (!hasValue(stored) && !hasValue(sent)) return false;
+  if (PHASE_FIELDS.includes(key)) return !isDeepStrictEqual(refIds(stored), refIds(sent));
+  // A stamped bad point would beat Track's coordinates on every merge; a clear counts only over a good one.
+  if (key === 'centroid' && !validPoint(hasValue(sent) ? sent : stored)) return false;
+  // eagle-admin escapes newlines on save and never unescapes on load.
+  if (key === 'description' && typeof sent === 'string' && sent.replaceAll('\\n', '\n') === stored) return false;
+  return !isDeepStrictEqual(stored, sent);
+}
+
+/** The `STAFF_HELD_FIELDS` a staff write of `sent` moves off `current`; the merges then keep them. */
+const staffMoved = (current, sent) =>
+  STAFF_HELD_FIELDS.filter(key => Object.hasOwn(sent, key) && staffMove(key, current[key], sent[key]));
+
+/** `current`'s stamps with each of `fields` stamped `now`, or `{}` when there are none. */
+const staffStamps = (current, fields, now) => (fields.length ? {
+  [STAFF_EDITED_AT]: { ...current[STAFF_EDITED_AT], ...Object.fromEntries(fields.map(key => [key, now])) }
+} : {});
 
 /**
  * `{ demiOwnedAt: now }` when `current` mirrors an Eagle project DEMI does not own yet, else `{}`.
@@ -218,19 +238,12 @@ function cleanChanges(changes) {
 }
 
 /**
- * A project's visibility change, carried to its index row and re-derived onto its documents, its
- * comment periods and their comments.
- * Either transition, `ownRead ∩ projectRead`, systemAccess — wiki `Sync-Architecture`.
- *
+ * Carry a project's visibility to its index row and its child rows (`ownRead ∩ projectRead`); an error message, or null.
  * ponytail: documents only, not chunks — a chunk gates on its parent document at query time.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null on success.
  */
 async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = true } = {}) {
-  // The project's own index row FIRST, and outside the try: no project list or search is a live
-  // read any more (#148), so an unpublished project stayed findable BY NAME until the indexer's
-  // next PT5M pass. It goes before the cascade because the project's Cosmos write has already
-  // landed — it must narrow even if the cascade below fails.
+  // Index row first and outside the try: lists read the index, and the Cosmos write has already
+  // landed, so the row must narrow even if the cascade below fails.
   await aiSearch.writeAcls(aiSearch.indexes().projects, [
     { id: projectId, read: acl.read, isPublished: acl.isPublished }
   ]);
@@ -248,13 +261,8 @@ async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = tru
 }
 
 /**
- * The comment periods a project's visibility also governs, and their comments.
- *
- * The mirror can only apply `constrainToProject` at push time, so a period pushed while its project
- * was private stayed private after the project published — the engagement tab of a freshly
- * published project rendered empty — and a period pushed while it was public survived a takedown.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * Re-derive the comment periods' and comments' ACLs; the mirror constrains them to the project only at push time.
+ * Returns an error message the caller must 500 with, or null.
  */
 async function cascadeEngagementVisibility(projectId, read) {
   try {
@@ -340,9 +348,8 @@ async function cascadeDocumentVisibility(projectId, acl) {
   try {
     const cascade = await documents.setAclForProject(systemAccess(), projectId, acl.read);
     if (cascade.failed > 0) {
-      // The rows that DID land still go to the index, or the succeeded subset stays listable under
-      // its old ACL until the indexer's next PT5M pass. With no per-row verdicts, nothing is
-      // written rather than claiming an ACL Cosmos may not hold.
+      // Rows that landed still go to the index, else they list under the old ACL until the next
+      // indexer pass. With no per-row verdicts nothing is written.
       const failedIds = new Set(cascade.failedIds || (cascade.rows || []).map(r => r.id));
       const landed = (cascade.rows || []).filter(row => !failedIds.has(row.id));
       if (landed.length) await aiSearch.writeAcls(aiSearch.indexes().documents, landed);
@@ -365,11 +372,8 @@ async function cascadeDocumentVisibility(projectId, acl) {
 }
 
 /**
- * The projects kind spec, shared by `GET /projects` and `GET /counts?kind=projects`. `q` ranks
- * through the projects index and matches every field the index searches.
- *
- * Sort keys are the repository's SORTABLE: each has an included path in the container's index
- * policy, and upsert writes it on every row. `currentPhaseName.name` is taken as sent.
+ * The projects kind spec, shared by `GET /projects` and `GET /counts?kind=projects`; `q` ranks through the index.
+ * Sort keys are the repository's SORTABLE: each has an included index path and upsert writes it on every row.
  */
 const PROJECTS_STORE = Object.freeze({
   index: 'projects', container: 'projects', entity: 'projects', partitionField: 'id', defaultOrder: 'c.name ASC'
@@ -454,12 +458,8 @@ exports.getProjects = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    // Both id spaces on one route: eagle-public holds Eagle ObjectIds and DEMI ids are Track
-    // integers or `eagle-<ObjectId>`, so a 24-hex `:id` can only be Eagle's.
-    //
-    // getById gates the point read internally — a point read bypasses the query predicate,
-    // so without that gate a by-id fetch would return what a list hides. getByEagleId is a
-    // query and carries the same predicate.
+    // DEMI ids are Track integers, `eagle-<ObjectId>` or a UUID, so a 24-hex `:id` can only be Eagle's.
+    // getById gates its point read itself, which bypasses the query predicate getByEagleId carries.
     const project = projects.EAGLE_OBJECT_ID.test(req.params.id)
       ? await projects.getByEagleId(access, req.params.id)
       : await projects.getById(access, req.params.id);
@@ -468,9 +468,8 @@ exports.getProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
     const body = await labelled(access, redactForAccess('projects', project, access));
-    // Only the code is stored; the masthead's copy button needs the URL, and the base host is
-    // per-environment config, not a stored value that could go stale.
-    // `shortLinkUrl` is where that link lands; shown exactly where the link itself is.
+    // Only the code is stored: the base host is per-environment config, so a stored URL could go
+    // stale. `shortLinkUrl` is where that link lands.
     if (body.shortCode) {
       body.shortUrl = shortUrlFor(body.shortCode);
       body.shortLinkUrl = projectTarget(project);
@@ -523,18 +522,19 @@ exports.createProject = async (req, res) => {
       centroid,
       read,
       isPublished: false,
-      // Empty, but present: the wildfire sync patches `/sources/wildfire`, and a Cosmos patch
-      // cannot create a path recursively — without `/sources` on the document it fails the whole
-      // sync run, not just this project (sync-wildfires.js loops unguarded).
+      // The wildfire sync patches `/sources/wildfire`, and a Cosmos patch cannot create a path
+      // recursively: a missing `/sources` fails the whole sync run.
       sources: {},
       createdAt: now,
       updatedAt: now,
       // eagle-public prints this as "Last updated".
       dateUpdated: now
     });
-    // The upsert replaces a row already under this id; its codes are printed and its tags are set
-    // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
-    // Its `eagleId` too: on a relinked Track row, null would split it from its `eagle-<id>` twin.
+    // Only what the body sent: a field it left out holds a blank default, which is no edit.
+    const sent = (key) => Object.hasOwn(req.body, key) || (key === 'projectState' && Object.hasOwn(req.body, 'status'));
+    const posted = Object.fromEntries(Object.entries(row).filter(([key]) => sent(key)));
+    // A row already under this id keeps its printed codes, PUT-only tags and `eagleId` (null would
+    // split a relinked Track row from its twin); guarded so a PUT landing in between survives.
     const written = await writeGuarded({
       // A fresh UUID cannot name a stored row, so the minted path skips the point read.
       existing: minted ? null : await reread(),
@@ -543,10 +543,16 @@ exports.createProject = async (req, res) => {
         // The upsert would hand an owned row's held fields back as if the body had sent them.
         if (isDemiOwnedProject(current)) return { status: 'owned' };
         const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
+        // Only a field staff already saved is stamped again, so `holdStaffEdits` keeps the posted value.
+        // No new stamp: eagle-admin never posts over a stored row, and nothing clears a stamp.
+        const stamped = current ? staffMoved(current, posted).filter(key => hasValue(current[STAFF_EDITED_AT]?.[key])) : [];
+        const held = stamped.length
+          ? { ...current, ...Object.fromEntries(stamped.map(key => [key, posted[key]])), ...staffStamps(current, stamped, now) }
+          : current;
         return {
           status: 'saved',
           saved: await projects.upsert(
-            versioned(carryDemiOnlyFields(carryShortLink(kept, current), current), current),
+            versioned(carryDemiOnlyFields(carryShortLink(kept, current), held), current),
             current ? { etag: current._etag } : { create: true })
         };
       },
@@ -588,10 +594,8 @@ exports.updateProject = async (req, res) => {
     const pinBody = { pins: changes.pins, pinsPublished: changes.pinsPublished };
     for (const key of PUT_IGNORED_FIELDS) delete changes[key];
 
-    // Same rename as createProject, and it has to be here too: this route spreads the body in
-    // verbatim, so a caller sending `status` wrote a second field beside `projectState` and the
-    // two then disagreed on the same row. `projectState` in the body wins if both are sent —
-    // the stored name is the specific one, so honour it over the alias.
+    // Same rename as createProject: the body is spread in verbatim, so `status` would land beside
+    // `projectState`. `projectState` wins when both are sent.
     if (wireStatus !== undefined && changes.projectState === undefined) {
       changes.projectState = wireStatus;
     }
@@ -599,11 +603,8 @@ exports.updateProject = async (req, res) => {
       if (LEGISLATION_KEY.test(key)) delete changes[key];
     }
 
-    // A field the caller cannot SEE is a field they cannot set. The response is redacted, so a
-    // level 4 caller never received `complianceLead` — accepting it back would overwrite a value
-    // they were never shown, which is the hole the redaction-safe update rule closes
-    // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
-    // policy rather than content, and no route sets it yet.
+    // A field the caller cannot see is one they cannot set (docs/rbac-architecture.md §2 item 1).
+    // `vis` is refused at every level: the dial map is policy, set by its own route.
     const pinKeys = Object.fromEntries(Object.entries(pinBody).filter(([, value]) => value !== undefined));
     const refused = refusedWriteKeys('projects', { ...changes, ...pinKeys }, access, existing);
     for (const key of DERIVED_FIELDS) {
@@ -672,6 +673,7 @@ exports.updateProject = async (req, res) => {
           ...changes,
           ...pinned.changes,
           ...owner,
+          ...staffStamps(current, staffMoved(current, changes), now),
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: now,
@@ -701,11 +703,8 @@ exports.updateProject = async (req, res) => {
     const { saved, replaced, pinFields, edited } = written;
     noteTakeover(replaced, saved, 'PUT /projects/:id');
 
-    // Field NAMES, not values: an audit row records who changed what and when, and a full
-    // before/after of arbitrary request bodies would put project content into a table kept for
-    // seven years. The visibility pair is recorded too, unchanged though PUT now leaves it — a
-    // reader of this table should not have to know which route could move it.
-    // Against the row the write replaced, not the first read, and before the tag copy's own row.
+    // Field names, not values: the audit table is kept seven years. Diffed against the row the
+    // write replaced, and logged before the tag copy's own row.
     auditEvent(req, {
       action: 'project.update',
       targetType: 'project',
@@ -738,10 +737,8 @@ exports.updateProject = async (req, res) => {
 };
 
 /**
- * Move a project to a ladder level (docs/rbac-architecture.md §1, "Widening is an act").
- *
- * The ONLY route that raises a record's level: no job, no push and no merge widens anything, so
- * every widening has an actor, a time and an audit row behind it.
+ * Move a project to a ladder level (docs/rbac-architecture.md §1). The only route that widens a
+ * record, so every widening has an actor and an audit row.
  */
 exports.setLevel = async (req, res) => {
   try {
@@ -865,13 +862,8 @@ exports.setLevel = async (req, res) => {
 };
 
 /**
- * Classify a project's fields: `{ vis: { field: level } }`, `sysadmin` only.
- *
- * A dial is POLICY, not content, which is why `refusedWriteKeys` refuses `vis` on the ordinary PUT
- * and why this gate is narrower than `requireWrite`. Dials are independent of the record's own
- * level (docs/rbac-architecture.md §1) — there is no cap here beyond each field's catalog `maxVis`.
- *
- * A level of `null` REMOVES the dial; a field the body does not name keeps whatever it had.
+ * Classify a project's fields: `{ vis: { field: level } }`, `sysadmin` only, capped by each catalog `maxVis`.
+ * A level of `null` removes the dial; a field the body does not name keeps its dial.
  */
 exports.setVisibility = async (req, res) => {
   try {
@@ -944,21 +936,16 @@ exports.setVisibility = async (req, res) => {
 };
 
 /**
- * Receive one project pushed by eagle-api, keyed by its Eagle `_id`.
- *
- * The body carries the RAW Eagle record, so the merge rules stay in `merge/project.js` and this
- * route produces exactly what the seed produces — a push and a re-seed cannot disagree about the
- * same project. Identity comes from the merge too: the Track id when the project is already
- * matched, `eagle-<eagleId>` when it is not, and a DEMI-created row's own id (`isNativeProject`).
+ * Receive one raw Eagle project pushed by eagle-api; `merge/project.js` builds the row and its id,
+ * the same as the seed, so a push and a re-seed cannot disagree.
  */
 exports.upsertFromEagle = async (req, res) => {
   const push = eaglePush(req);
   if (!push) {
     return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
   }
-  // eagle-api pushes the pre-save and the saved record separately, and prod saw the two land 34 ms
-  // apart for one project. The etag guard and the `pushedAt` order are what make that safe, across
-  // instances as well as inside one.
+  // eagle-api pushes the pre-save and the saved record separately, milliseconds apart; the etag
+  // guard and the `pushedAt` order keep that safe across instances.
   return applyEaglePush(req, res, push);
 };
 
@@ -1009,9 +996,8 @@ function mergeEaglePush(doc, existing, { switchTo } = {}) {
     ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works, deleted })
     : mergeEagleOnlyProject(doc, { deleted });
 
-  // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
-  // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
-  // nothing upstream can rebuild. The same trap the seed hit.
+  // The merge rebuilds only `track`/`eagle`, and the upsert replaces the item, so other source
+  // blocks such as `sources.wildfire` are carried here.
   merged.sources = { ...(existing && existing.sources), ...merged.sources };
   if (isNativeProject(existing)) keepNativeIdentity(merged, existing);
   // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
@@ -1045,14 +1031,8 @@ function visibilityMoved(before, after) {
 }
 
 /**
- * Cascade the project's visibility, and RECORD it on the row when that fails.
- *
- * The row is already written by the time the cascade runs, so a failure here leaves the documents,
- * the periods and the index row carrying the old ACL with nothing to bring anyone back — eagle-api
- * retries the push, the visibility no longer moves against the stored row, and the cascade never
- * runs again. The marker is what the next push looks for.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * Cascade the project's visibility; on failure mark the row so the next push cascades again, since
+ * a retried push leaves visibility unmoved. Returns an error message to 500 with, or null.
  */
 async function runCascade(saved, eagleId, options) {
   let failure;
@@ -1100,10 +1080,8 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
     const read = () => projects.readForWriteByEagleId(eagleId);
     const existing = await read();
 
-    // Rebuilt per try off the row that actually stored: an unguarded upsert replaced the item from
-    // this request's snapshot, so the stale half of a pre-save/save pair landed last and left a
-    // published project private — and with `isPublished` unmoved against that same snapshot, the
-    // cascade never ran to correct the documents or the index row.
+    // Rebuilt per try off the stored row: a write from this request's snapshot could let the stale
+    // half of a pre-save/save pair land last, and the cascade would never correct it.
     const written = await writeGuarded({
       existing,
       reread: read,
@@ -1133,9 +1111,8 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
       return pushConflict(res, { label: 'Project Controller', eagleId });
     }
 
-    // `from` is the revision the winning attempt built on, not the one this request first read:
-    // after a retry the first read is already gone, and the cascade has to answer "did this write
-    // move the row it landed on".
+    // `from` is the revision the winning attempt built on: the cascade asks whether this write
+    // moved the row it landed on, not the first read.
     const { saved, existing: from } = written;
 
     auditEvent(req, {
@@ -1150,10 +1127,8 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
       }
     });
 
-    // Only against an existing row: a project DEMI has never seen has no documents to cascade onto
-    // and no index row to correct. A row still carrying `cascadePendingAt` cascades whether or not
-    // THIS push moved anything — the move it owes the cascade for happened on an earlier push, and
-    // nothing else would ever come back for it.
+    // A new project has nothing to cascade onto. A row carrying `cascadePendingAt` cascades even
+    // when this push moved nothing: it owes the cascade for an earlier push.
     const owed = Boolean(from && from.cascadePendingAt);
     let failure = null;
     if (from && (visibilityMoved(from, saved) || owed)) {
@@ -1179,11 +1154,8 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
 }
 
 /**
- * Staff set a project's short code, where it lands, or both. The previous code moves to
- * `legacyShortCodes` and its link record stays, so a printed copy still resolves; moving back to
- * one of those reuses its record. `shortCodeSource: 'staff'` keeps the nightly sync off it.
- * A new target (`url`, or null for the public page) repoints every record the project holds; the
- * public page sent as a `url` is stored as that default (null), not pinned.
+ * Staff set a project's short code, its target, or both; the old code stays in `legacyShortCodes`
+ * so printed copies resolve, and a new target repoints every record the project holds.
  */
 exports.setShortCode = async (req, res) => {
   try {
@@ -1280,9 +1252,8 @@ exports.setShortCode = async (req, res) => {
 };
 
 /**
- * Points every record the project holds at its target, then re-reads the row: a concurrent PUT that
- * stored another target in between must not be left with records at this one. The re-read target
- * gets one more pass. Null when a record moved under the repoint or the target is still moving.
+ * Point every record the project holds at its target, then one more pass at a target a concurrent
+ * PUT stored meanwhile. Null when a record moved under the repoint or the target is still moving.
  */
 async function settleLinks(id, saved, access, by) {
   let current = saved;

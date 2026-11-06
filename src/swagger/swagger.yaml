@@ -967,7 +967,11 @@ paths:
         DEMI makes a UUID id and stores `trackProjectId: null` and `sourceSystem: "demi"`. The
         project is admitted at level 1 (team only): `isPublished` and `read` in the body are
         ignored, not refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row
-        gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
+        gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle. Over a stored
+        project, a field already stamped in `staffEditedAt` that the body sends and changes
+        (`name`, `description`, `projectState` or `status`, `centroid`) takes the posted value and
+        is stamped again, by the same rule as `PUT /api/projects/{id}`. A POST adds no new stamp,
+        and a field the body leaves out keeps its stored value and stamp.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1260,7 +1264,9 @@ paths:
           description: >-
             A DEMI project id (a Track project number, or `eagle-<ObjectId>`), or the project's
             Eagle ObjectId — a 24-character hex string, which is resolved through `eagleId`.
-            The two id spaces cannot collide, and both answer under the same ACL.
+            The two id spaces cannot collide, and both answer under the same ACL. When an Eagle
+            id has both a Track project and its `eagle-<ObjectId>` copy, the hex id returns the
+            Track project.
           schema:
             type: string
       responses:
@@ -1295,6 +1301,17 @@ paths:
         takes nothing over. An `eagle-<eagleId>` copy that sits beside its Track project, or a
         project with no stored Eagle record, is never taken over. A body sent to a deleted project
         takes nothing over.
+        A body that changes `centroid`, the phase (`currentPhaseName`, `phaseHistory`) or a Track
+        field (`name`, `description`, `projectType`, `projectSubType`, `proponentName`,
+        `projectState`, `abbreviation`, `address`, `isActive`, `eaCertificate`, `eacSigned`,
+        `eacExpires`) stamps it in `staffEditedAt`; Track syncs and Eagle pushes then keep the saved
+        value on every project, taken over or not. The phase fields are compared by List id, so
+        refs sent back with the same ids stamp nothing. Nothing is stamped for an empty value sent for a
+        field the project has no value in, a `description` that differs only by newlines sent
+        as the two characters `\n`, or a `centroid` that is not a GeoJSON point in BC. A `null`
+        `centroid` is a clear, stamped only over a stored GeoJSON point in BC; the project then
+        stays without one over Track's coordinates.
+        `staffEditedAt` in the body is ignored.
         On a project created in DEMI or taken over, a body that changes a stored value sets
         `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a
         taken-over project, `tags` and `pins` alone are not such a change. Once project sync-out

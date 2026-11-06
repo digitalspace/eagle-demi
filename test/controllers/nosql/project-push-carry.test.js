@@ -101,21 +101,23 @@ test('PUT /eagle/projects/:eagleId on a project DEMI owns', async (t) => {
   });
 });
 
+/** One stored row that every write and the push read and write; `queued` is what sync-out was handed. */
+function store(t, row) {
+  const state = { row, queued: [] };
+  const read = async () => structuredClone(state.row);
+  t.mock.method(projects, 'getById', read);
+  t.mock.method(projects, 'getByEagleId', read);
+  t.mock.method(projects, 'readForWrite', async () => null);
+  t.mock.method(projects, 'upsert', async (item) => { state.row = item; return item; });
+  t.mock.method(syncOut, 'enqueue', async (item, options) => { state.queued.push({ item, options }); return ['eagle']; });
+  return state;
+}
+
+const POINT = { type: 'Point', coordinates: [-120.4, 50.6] };
+
 test('a DEMI PUT on an Eagle project', async (t) => {
   t.beforeEach(() => projectReadForWriteFromGet(t));
   t.afterEach(() => t.mock.restoreAll());
-
-  /** One stored row that the PUT and the push both read and write; `queued` is what sync-out was handed. */
-  function store(t, row) {
-    const state = { row, queued: [] };
-    const read = async () => structuredClone(state.row);
-    t.mock.method(projects, 'getById', read);
-    t.mock.method(projects, 'getByEagleId', read);
-    t.mock.method(projects, 'readForWrite', async () => null);
-    t.mock.method(projects, 'upsert', async (item) => { state.row = item; return item; });
-    t.mock.method(syncOut, 'enqueue', async (item, options) => { state.queued.push({ item, options }); return ['eagle']; });
-    return state;
-  }
 
   async function put(body, id = '207') {
     const res = mockRes();
@@ -160,6 +162,137 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.ok(!('demiOwnedAt' in state.row));
     assert.strictEqual(state.row.syncVersion, 2);
     assert.deepStrictEqual(state.queued, []);
+  });
+
+  await t.test('of a new name stamps it with the save time', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Renamed' });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('sending the stored name back beside a new description stamps the description only', async () => {
+    const state = store(t, storedEagleProject({ name: 'Nicomen Wind Energy' }));
+
+    await put({ name: 'Nicomen Wind Energy', description: 'Staff text' });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { description: state.row.updatedAt });
+  });
+
+  await t.test('ignores a staffEditedAt in the body', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Renamed', staffEditedAt: { name: '2000-01-01T00:00:00.000Z', address: '2000-01-01T00:00:00.000Z' } });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('sending null for a field the row lacks stamps nothing for it', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Renamed', address: null });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('sending back a description with its newlines escaped stamps nothing for it', async () => {
+    const state = store(t, storedEagleProject({ description: 'Line one\nLine two' }));
+
+    await put({ name: 'Renamed', description: 'Line one\\nLine two' });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('of a centroid that is not a GeoJSON point in BC stamps nothing for it', async () => {
+    const state = store(t, storedEagleProject({ centroid: POINT }));
+
+    await put({ name: 'Renamed', centroid: { type: 'Point', coordinates: [50.6, -120.4] } });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('of a new GeoJSON centroid stamps it', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ centroid: POINT });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { centroid: state.row.updatedAt });
+  });
+
+  await t.test("clearing a GeoJSON centroid stamps it and the push leaves it clear over Track's coordinates", async () => {
+    const stored = storedEagleProject({ centroid: POINT });
+    Object.assign(stored.sources.track, { longitude: -121.1, latitude: 50.2 });
+    const state = store(t, stored);
+
+    await put({ centroid: null });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }
+    }, mockRes());
+
+    assert.ok(!('demiOwnedAt' in state.row), 'the premise: the row stays Eagle\'s');
+    assert.strictEqual(state.row.centroid, null);
+    assert.ok(state.row.staffEditedAt.centroid);
+  });
+
+  await t.test('sending null for a centroid that is not a GeoJSON point stamps nothing for it', async () => {
+    const state = store(t, storedEagleProject({ centroid: [-120.4, 50.6] }));
+
+    await put({ name: 'Renamed', centroid: null });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  const phase = (id, name) => ({ _id: id, name, type: 'projectPhase', legislation: 2002 });
+  const EAGLE_PHASE = phase('5cf00c03a266b7e1877504e1', 'Pre-Application');
+  const STAFF_PHASE = phase('5cf00c03a266b7e1877504e2', 'Application Review');
+
+  await t.test('of a phase on a row Eagle cannot hand over, then an Eagle push, keeps the staff phase', async () => {
+    const stored = storedEagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] });
+    delete stored.sources.eagle;
+    const state = store(t, stored);
+
+    await put({ currentPhaseName: STAFF_PHASE, phaseHistory: [EAGLE_PHASE, STAFF_PHASE], projectState: 'Application Review' });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: eagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] }) }
+    }, mockRes());
+
+    assert.ok(!('demiOwnedAt' in state.row), 'the premise: the row stays Eagle\'s');
+    assert.deepStrictEqual([state.row.currentPhaseName, state.row.phaseHistory, state.row.projectState],
+      [STAFF_PHASE, [EAGLE_PHASE, STAFF_PHASE], 'Application Review']);
+  });
+
+  await t.test('sending the stored phases back as fresh refs stamps nothing for them', async () => {
+    const state = store(t, storedEagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] }));
+
+    await put({ name: 'Renamed', currentPhaseName: { ...EAGLE_PHASE, item: 'https://example.org' }, phaseHistory: [{ ...EAGLE_PHASE }] });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('that loses an etag race stamps against the row it read again', async () => {
+    const state = store(t, storedEagleProject());
+    projects.upsert.mock.mockImplementationOnce(async () => {
+      state.row = storedEagleProject({ name: 'Renamed' });
+      throw Object.assign(new Error('precondition'), { code: 412 });
+    });
+
+    const res = await put({ name: 'Renamed' });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(state.row.staffEditedAt, undefined, 'the name the race wrote is no staff edit');
+  });
+
+  await t.test('of name and description, then an Eagle push, keeps the staff values', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Nicomen Wind', description: 'Staff text' });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }
+    }, mockRes());
+
+    assert.deepStrictEqual([state.row.name, state.row.description], ['Nicomen Wind', 'Staff text']);
   });
 
   await t.test('/level leaves an Eagle project Eagle\'s: the next push still lands', async () => {
@@ -254,5 +387,43 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.deepStrictEqual(state.row.tags, ['wind']);
     assert.strictEqual(state.row.syncVersion, 2);
     assert.deepStrictEqual(state.queued, []);
+  });
+});
+
+test('a POST over a stored project', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const SAVED = '2026-11-01T00:00:00.000Z';
+
+  async function post(body) {
+    const res = mockRes();
+    await projectController.createProject({ query: {}, user: STAFF, body: { trackProjectId: 207, centroid: POINT, ...body } }, res);
+    assert.strictEqual(res.statusCode, 201);
+  }
+
+  await t.test('that staff saved lands the posted name and stamps it again', async () => {
+    const state = store(t, storedEagleProject({ name: 'Staff name', staffEditedAt: { name: SAVED } }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.name, 'Posted name');
+    assert.strictEqual(state.row.staffEditedAt.name, state.row.updatedAt);
+  });
+
+  await t.test('without the description staff saved keeps it and its stamp', async () => {
+    const state = store(t, storedEagleProject({ description: 'Staff text', staffEditedAt: { description: SAVED } }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.description, 'Staff text');
+    assert.deepStrictEqual(state.row.staffEditedAt, { description: SAVED });
+  });
+
+  await t.test('staff never saved adds no stamp', async () => {
+    const state = store(t, storedEagleProject({ name: 'Nicomen Wind Energy' }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.name, 'Posted name');
+    assert.ok(!('staffEditedAt' in state.row));
   });
 });
