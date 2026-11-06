@@ -282,7 +282,8 @@ async function syncProjects(apiProjects, opts = {}) {
       const native = !existing && guid ? nativeByEagleId.get(guid) : null;
       if (native) {
         summary.nativeClash++;
-        nativeClashes.push({ trackProjectId: id, nativeId: String(native.id), eagleId: guid });        continue;
+        nativeClashes.push({ trackProjectId: id, nativeId: String(native.id), eagleId: guid });
+        continue;
       }
 
       if (!existing) {
