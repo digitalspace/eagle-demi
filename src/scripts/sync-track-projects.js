@@ -11,7 +11,8 @@ const {
 } = require('../helpers/short-links');
 const { writeGuarded } = require('../helpers/etag-write');
 const {
-  TRACK_PRECEDENCE, mergeTrackProject, carryDemiOnlyFields, carryDelete, isDemiOwnedProject, isNativeProject
+  TRACK_PRECEDENCE, mergeTrackProject, carryDemiOnlyFields, carryDelete, holdStaffEdits, isDemiOwnedProject,
+  isNativeProject
 } = require('../merge/project');
 const { deriveAssessments } = require('../merge/assessments');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -32,7 +33,14 @@ const HEAL_CAP = 500;
  */
 const TRACK_ARRAY_FIELDS = ['phases', 'works', 'legislationTransitions'];
 
+/** `changes` to write, and the `held` fields staff saved that the feed disagrees with, left as stored. */
 function trackChanges(existing, merged) {
+  const changes = feedChanges(existing, holdStaffEdits({ ...merged }, existing));
+  const held = Object.keys(feedChanges(existing, merged)).filter(field => !(field in changes));
+  return { changes, held };
+}
+
+function feedChanges(existing, merged) {
   const changes = {};
   for (const field of TRACK_FIELDS) {
     if (merged[field] !== undefined && merged[field] !== existing[field]) {
@@ -99,8 +107,9 @@ async function syncProjects(apiProjects, opts = {}) {
   const summary = {
     trackProjects: rows.length,
     created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
-    shortLinks: 0, healed: 0, nativeClash: 0, failures: 0
+    shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, failures: 0
   };
+  const stateMoves = new Map();
 
   const repo = deps.projects || projectsRepository();
   if (!repo) return summary;
@@ -263,7 +272,7 @@ async function syncProjects(apiProjects, opts = {}) {
           const carried = Object.fromEntries(Object.entries(twin).filter(([k]) => !SYNC_STATE_FIELDS.includes(k)));
           const row = { ...carried, ...merged, read: twin.read, isPublished: twin.isPublished };
           // An owned twin's Eagle side and delete state are DEMI's: its Eagle copy must not replace them.
-          if (!isDemiOwnedProject(twin)) return withDerived(row, twin);
+          if (!isDemiOwnedProject(twin)) return withDerived(holdStaffEdits(row, twin), twin);
           return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS), twin);
         });
         if (inserted === 'saved') await disownTwin(relink.id);
@@ -296,9 +305,15 @@ async function syncProjects(apiProjects, opts = {}) {
       }
       await heal(existing);
 
-      const changed = Object.keys(
-        trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts))
-      ).length > 0;
+      // Counted here only, so an etag retry of the write below cannot count a row twice.
+      const { changes: found, held } = trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts));
+      if (held.length) summary.held++;
+      if ('projectState' in found) {
+        summary.stateMoved++;
+        const move = `${JSON.stringify(existing.projectState ?? null)} -> ${JSON.stringify(found.projectState)}`;
+        stateMoves.set(move, (stateMoves.get(move) || 0) + 1);
+      }
+      const changed = Object.keys(found).length > 0;
       // A row owing a slug code is written even when Track says nothing new; the migration stamps
       // `shortCodeSource`, so the next night skips it.
       if (!changed && !owes(existing)) continue;
@@ -314,7 +329,7 @@ async function syncProjects(apiProjects, opts = {}) {
       // run-start snapshot would undo a staff code set while the run was going.
       const written = await writeMinting(id, existing, async (current, mintRow) => {
         if (!current) return { status: 'missing' };
-        const changes = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
+        const { changes } = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
         const moved = Object.keys(changes).length > 0;
         if (!moved && !owes(current)) return { status: 'unchanged' };
         const row = withDerived({ ...current, ...changes, sources: { ...current.sources, track } }, current);
@@ -373,11 +388,14 @@ async function syncProjects(apiProjects, opts = {}) {
   if (healLeftOver) {
     logger.warn('[track-projects] heal cap reached, the rest wait for the next run', { cap: HEAL_CAP });
   }
+  if (stateMoves.size) {
+    logger.info(`[track-projects] projectState moves ${[...stateMoves].map(([move, n]) => `${move} x${n}`).join('; ')}`);
+  }
   return summary;
 }
 
 const POLL_FIELDS = ['trackProjects', 'created', 'updated', 'relinked', 'skippedApiRows', 'orphaned',
-  'shortLinks', 'nativeClash', 'failures'];
+  'shortLinks', 'nativeClash', 'held', 'stateMoved', 'failures'];
 
 /** The line a log alert matches. A run that failed before the mirror reports its counts as 0. */
 const pollLine = (s) => `[track-projects-poll] mode=${s.mode} ` +
