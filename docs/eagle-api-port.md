@@ -595,7 +595,12 @@ Decisions:
 - `DELETE /projects/:id` stays under `requireWrite`, the gate the hard delete had, while a level-4 takedown through `setLevel` is sysadmin only.
 - Ownership: a project row carries `demiOwnedAt` once DEMI owns it (`isDemiOwnedProject` in `src/merge/project.js`). An Eagle push or re-merge of an owned row keeps its Eagle fields, its `read` and its legislation blocks, and ignores Eagle's `isDeleted`. Eagle's copy goes to `sources.eagle`.
 - On a Track row, Track and Eagle still feed the Track fields, blanks included, except a field staff saved. Where both have a value, `SOURCE_FIRST` in `src/ownership/project.js` names the winner: Eagle for `projectState`, Track for the rest.
-- A `PUT /projects/:id` that changes a Track field or `centroid` stamps it in `staffEditedAt`, a map of field to time. A stamped field keeps its stored value, an absent one included, on every push, seed and Track sync, owned row or not. No route clears a stamp, and a `staffEditedAt` in the body is ignored.
+- A `PUT /projects/:id` stamps each held field it changes in `staffEditedAt`, a map of field to time. Held fields are the fields Track feeds, `centroid`, `currentPhaseName` and `phaseHistory`.
+- A PUT stamps nothing for an empty value sent for a field the row lacks. It stamps nothing for a `description` that differs only by escaped newlines.
+- A PUT stamps nothing for a `centroid` that is not a valid point. Clearing a stored valid `centroid` is stamped.
+- A stamped field keeps its stored value, an absent one included, on every push, seed and Track sync, owned row or not. No route clears a stamp, and a `staffEditedAt` in the body is ignored.
+- A `POST /projects` over a stored row stamps again only fields that are already stamped, and stamps no other field.
+- `src/scripts/backfill-eac-number.js` skips a row whose `eaCertificate` is stamped.
 - A `PUT /projects/:id` that changes an Eagle field takes the project over, and so do `DELETE /projects/:id` and the restore of a project Eagle deleted. An Eagle field is any field only Eagle supplies, such as `sector`, `region`, `eaStatus` and the lead and EPD contacts. On a row with no Track record, `name`, `description`, `projectType`, `abbreviation`, `address`, `proponentName`, `projectState`, `isActive` and `centroid` count too.
 - Sending a stored value back, or changing only `dateAdded`, `dateUpdated`, `tags` or `pins`, takes nothing over. `/level` takes nothing over, so Eagle narrows and eagle-admin edits keep reaching a project DEMI has only re-levelled. A PUT to a deleted project takes nothing over.
 - Two kinds of row are never taken over. One is the `eagle-<id>` twin beside a Track row, because sync-out would send two rows to one Eagle project. The other is a row with no stored Eagle record, because its send would blank Eagle's fields.
@@ -677,7 +682,13 @@ Business rules (eagle-api `api/controllers/sitemap.js`):
 - Each loc is `/p/<id>` (`:46`).
 
 Decisions:
-- Loc is `/p/<eagleId>`. Evidence: eagle-api emits the Mongo `_id` (`:46`). Both eagle-public lines route `p/:projId` (develop `app.routes.ts:115`, react `routes.tsx:118`) and read the project from DEMI `GET /projects/:id` (develop `api.ts:316-317`, react `api/project.ts:138-139`), which resolves a 24-hex id as an Eagle id and anything else as a DEMI id (`controllers/nosql/project.js:360`). The develop line also keys its comment period read on the route id (`api.ts:341`) and maps the project `_id` to `eagleId ?? id` (`api.ts:120`). DEMI short links already point at `/p/<eagleId>` (`short-links.js:81`). The Eagle id resolves on both lines and keeps every URL search engines hold.
+- Loc is `/p/<eagleId>`. The Eagle id resolves on both lines and keeps every URL search engines hold.
+  - eagle-api emits the Mongo `_id` (`:46`).
+  - Both eagle-public lines route `p/:projId` (develop `app.routes.ts:115`, react `routes.tsx:118`).
+  - Both read the project from DEMI `GET /projects/:id` (develop `api.ts:316-317`, react `api/project.ts:138-139`).
+  - `getProject` in `controllers/nosql/project.js` resolves a 24-hex id as an Eagle id and anything else as a DEMI id.
+  - The develop line also keys its comment period read on the route id (`api.ts:341`). It maps the project `_id` to `eagleId ?? id` (`api.ts:120`).
+  - DEMI short links point at `/p/<eagleId>` (`short-links.js:81`).
 - An Eagle id read answers the Track row when the id has both a Track row and its `eagle-<id>` twin (`pickByEagleId` in `src/repositories/projects.js`). The twin answers only when it is the one row.
 - A public project with no Eagle id (Track only) is not listed, as eagle-api never listed it.
 - A Track row and its `eagle-<id>` twin carry the same `eagleId` and are one entry, with the later `lastmod`.
