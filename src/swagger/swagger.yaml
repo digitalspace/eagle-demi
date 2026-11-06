@@ -1308,7 +1308,9 @@ paths:
         value on every project, taken over or not. The phase fields are compared by List id, so
         refs sent back with the same ids stamp nothing. Nothing is stamped for an empty value sent for a
         field the project has no value in, a `description` that differs only by newlines sent
-        as the two characters `\n`, or a `centroid` that is not a GeoJSON point in BC.
+        as the two characters `\n`, or a `centroid` that is not a GeoJSON point in BC. A `null`
+        `centroid` is a clear, stamped only over a stored GeoJSON point in BC; the project then
+        stays without one over Track's coordinates.
         `staffEditedAt` in the body is ignored.
         On a project created in DEMI or taken over, a body that changes a stored value sets
         `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a

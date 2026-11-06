@@ -220,6 +220,29 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.deepStrictEqual(state.row.staffEditedAt, { centroid: state.row.updatedAt });
   });
 
+  await t.test("clearing a GeoJSON centroid stamps it and the push leaves it clear over Track's coordinates", async () => {
+    const stored = storedEagleProject({ centroid: POINT });
+    Object.assign(stored.sources.track, { longitude: -121.1, latitude: 50.2 });
+    const state = store(t, stored);
+
+    await put({ centroid: null });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }
+    }, mockRes());
+
+    assert.ok(!('demiOwnedAt' in state.row), 'the premise: the row stays Eagle\'s');
+    assert.strictEqual(state.row.centroid, null);
+    assert.ok(state.row.staffEditedAt.centroid);
+  });
+
+  await t.test('sending null for a centroid that is not a GeoJSON point stamps nothing for it', async () => {
+    const state = store(t, storedEagleProject({ centroid: [-120.4, 50.6] }));
+
+    await put({ name: 'Renamed', centroid: null });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
   const phase = (id, name) => ({ _id: id, name, type: 'projectPhase', legislation: 2002 });
   const EAGLE_PHASE = phase('5cf00c03a266b7e1877504e1', 'Pre-Application');
   const STAFF_PHASE = phase('5cf00c03a266b7e1877504e2', 'Application Review');

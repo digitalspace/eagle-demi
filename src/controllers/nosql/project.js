@@ -104,8 +104,8 @@ const refIds = (value) => (Array.isArray(value) ? value.map(refId) : refId(value
 function staffMove(key, stored, sent) {
   if (!hasValue(stored) && !hasValue(sent)) return false;
   if (PHASE_FIELDS.includes(key)) return !isDeepStrictEqual(refIds(stored), refIds(sent));
-  // A stamped bad point would beat Track's coordinates on every merge.
-  if (key === 'centroid' && !validPoint(sent)) return false;
+  // A stamped bad point would beat Track's coordinates on every merge; a clear counts only over a good one.
+  if (key === 'centroid' && !validPoint(hasValue(sent) ? sent : stored)) return false;
   // eagle-admin escapes newlines on save and never unescapes on load.
   if (key === 'description' && typeof sent === 'string' && sent.replaceAll('\\n', '\n') === stored) return false;
   return !isDeepStrictEqual(stored, sent);
