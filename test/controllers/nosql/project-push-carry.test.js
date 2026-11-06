@@ -367,16 +367,40 @@ test('a DEMI PUT on an Eagle project', async (t) => {
   });
 });
 
-test('a POST over a project staff saved lands the posted name and stamps it', async (t) => {
+test('a POST over a stored project', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
-  const state = store(t, storedEagleProject({ name: 'Staff name', staffEditedAt: { name: '2026-11-01T00:00:00.000Z' } }));
-  const res = mockRes();
+  const SAVED = '2026-11-01T00:00:00.000Z';
 
-  await projectController.createProject({
-    query: {}, user: STAFF, body: { trackProjectId: 207, name: 'Posted name', centroid: POINT }
-  }, res);
+  async function post(body) {
+    const res = mockRes();
+    await projectController.createProject({ query: {}, user: STAFF, body: { trackProjectId: 207, centroid: POINT, ...body } }, res);
+    assert.strictEqual(res.statusCode, 201);
+  }
 
-  assert.strictEqual(res.statusCode, 201);
-  assert.strictEqual(state.row.name, 'Posted name');
-  assert.strictEqual(state.row.staffEditedAt.name, state.row.updatedAt);
+  await t.test('that staff saved lands the posted name and stamps it again', async () => {
+    const state = store(t, storedEagleProject({ name: 'Staff name', staffEditedAt: { name: SAVED } }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.name, 'Posted name');
+    assert.strictEqual(state.row.staffEditedAt.name, state.row.updatedAt);
+  });
+
+  await t.test('without the description staff saved keeps it and its stamp', async () => {
+    const state = store(t, storedEagleProject({ description: 'Staff text', staffEditedAt: { description: SAVED } }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.description, 'Staff text');
+    assert.deepStrictEqual(state.row.staffEditedAt, { description: SAVED });
+  });
+
+  await t.test('staff never saved adds no stamp', async () => {
+    const state = store(t, storedEagleProject({ name: 'Nicomen Wind Energy' }));
+
+    await post({ name: 'Posted name' });
+
+    assert.strictEqual(state.row.name, 'Posted name');
+    assert.ok(!('staffEditedAt' in state.row));
+  });
 });

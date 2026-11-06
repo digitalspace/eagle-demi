@@ -968,9 +968,10 @@ paths:
         project is admitted at level 1 (team only): `isPublished` and `read` in the body are
         ignored, not refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row
         gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle. Over a stored
-        project, each of `name`, `description`, `projectState` (or `status`) and `centroid` the
-        body sends and changes is stamped in `staffEditedAt` by the same rule as
-        `PUT /api/projects/{id}`.
+        project, a field already stamped in `staffEditedAt` that the body sends and changes
+        (`name`, `description`, `projectState` or `status`, `centroid`) takes the posted value and
+        is stamped again, by the same rule as `PUT /api/projects/{id}`. A POST adds no new stamp,
+        and a field the body leaves out keeps its stored value and stamp.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

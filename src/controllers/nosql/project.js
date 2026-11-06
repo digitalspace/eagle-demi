@@ -543,8 +543,9 @@ exports.createProject = async (req, res) => {
         // The upsert would hand an owned row's held fields back as if the body had sent them.
         if (isDemiOwnedProject(current)) return { status: 'owned' };
         const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
-        // Stamped as a PUT would be, so `holdStaffEdits` keeps the posted values, not the stored ones.
-        const stamped = current ? staffMoved(current, posted) : [];
+        // Only a field staff already saved is stamped again, so `holdStaffEdits` keeps the posted value.
+        // No new stamp: eagle-admin never posts over a stored row, and nothing clears a stamp.
+        const stamped = current ? staffMoved(current, posted).filter(key => hasValue(current[STAFF_EDITED_AT]?.[key])) : [];
         const held = stamped.length
           ? { ...current, ...Object.fromEntries(stamped.map(key => [key, posted[key]])), ...staffStamps(current, stamped, now) }
           : current;
