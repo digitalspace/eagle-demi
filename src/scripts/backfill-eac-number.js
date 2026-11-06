@@ -1,29 +1,8 @@
 'use strict';
 
 /**
- * Stamp `eaCertificate` onto the project rows already in Cosmos, from Track.
- *
- * Reads Track through `loadTrackProjects()`, so it takes the live feed when one is configured and
- * the checked-in export otherwise.
- *
- * WHY A SCRIPT. `merge/project.js` carries `ea_certificate` through as `eaCertificate`, but the
- * merge only runs on a re-seed, and `seed-nosql.js` rewrites the whole corpus including documents —
- * `transformDocument` resets `contentExtracted`, sending ~60,578 documents back through the GPU.
- * This touches one field on the project rows. Same argument as close-unpublished-track-projects.js.
- *
- *   node src/scripts/backfill-eac-number.js [--live]
- *
- * **DRY RUN BY DEFAULT.** `--live` is the mutating flag, matching the sibling scripts. Cosmos is
- * private-endpoint-only and keyless, so a live run executes on the devbox (`demi-devbox-<env>`)
- * via `demi-run` — see README "Running anything against the database".
- *
- * VERBATIM. Track uses the column for certificate STATE as well as numbers — "E98-05" and
- * "WD09-01", but also "Withdrawn", "In progress", "REFUSED", "N/A". Nothing here parses, filters or
- * normalises it; whatever Track says is what the row gets.
- *
- * NOT INDEXED. `eaCertificate` is not a column of the `projects` search index and is not in
- * `PROJECT_SELECT`, so this changes what `GET /api/projects/:id` and the keywordless project list
- * return, and nothing a keyword search returns.
+ * Set Track's `eaCertificate` on stored project rows without a re-seed, which re-extracts every document.
+ * Dry run unless `--live`; a row whose certificate staff saved is skipped (`held`), as a re-seed keeps it.
  */
 
 const sources = require('../seed/sources');
@@ -31,6 +10,7 @@ const projects = require('../repositories/projects');
 const cosmos = require('../db/cosmos-nosql');
 const { systemAccess } = require('../helpers/access-sql');
 const { mergeTrackProject, hasValue } = require('../merge/project');
+const { STAFF_EDITED_AT } = require('../ownership/project');
 const { logger } = require('../utils/logger');
 
 function parseArgs(argv) {
@@ -42,11 +22,7 @@ function parseArgs(argv) {
   return args;
 }
 
-/**
- * The value a re-seed would store — asked of the merge itself rather than read off the raw column,
- * so the backfill cannot write something a later re-seed then overwrites. `null` for a Track record
- * carrying no certificate.
- */
+/** What a re-seed stores on a row staff have not saved, asked of the merge so the two agree; null for none. */
 function certificateOf(track) {
   const { eaCertificate } = mergeTrackProject(track, null);
   return hasValue(eaCertificate) ? eaCertificate : null;
@@ -55,7 +31,7 @@ function certificateOf(track) {
 /** The one line an operator reads. `missingRow` is drift to look at, not a failure — see below. */
 function summaryLine(s) {
   return `[eac-backfill] mode=${s.mode} total=${s.total} withCert=${s.withCert} ` +
-    `patched=${s.patched} missingRow=${s.missingRow}`;
+    `patched=${s.patched} held=${s.held} missingRow=${s.missingRow}`;
 }
 
 /**
@@ -74,6 +50,8 @@ async function backfillEacNumbers(argv = [], deps = {}) {
   const access = systemAccess();
   const { items } = await projectsRepo.listVisible(access, {});
   const storedIds = new Set(items.map(p => String(p.id)));
+  const heldIds = new Set(items.filter(p => hasValue(p[STAFF_EDITED_AT] && p[STAFF_EDITED_AT].eaCertificate))
+    .map(p => String(p.id)));
 
   const trackProjects = await src.loadTrackProjects();
   const summary = {
@@ -81,6 +59,7 @@ async function backfillEacNumbers(argv = [], deps = {}) {
     total: trackProjects.length,
     withCert: 0,
     patched: 0,
+    held: 0,
     missingRow: 0,
     failed: 0
   };
@@ -95,6 +74,10 @@ async function backfillEacNumbers(argv = [], deps = {}) {
       // A Track project that was never seeded. Counted, not fatal: seeding it is a re-seed, and
       // this script has no business inventing a project row from one column.
       summary.missingRow++;
+      continue;
+    }
+    if (heldIds.has(id)) {
+      summary.held++;
       continue;
     }
 

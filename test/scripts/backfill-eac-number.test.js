@@ -38,7 +38,7 @@ function fakeProjects(ids) {
     async listVisible(access) {
       assert.strictEqual(access && access.tier, 'privileged',
         'the project scan must run as systemAccess(), or rows read as missing');
-      return { items: ids.map(id => ({ id })) };
+      return { items: ids.map(id => (typeof id === 'object' ? id : { id })) };
     }
   };
 }
@@ -133,6 +133,17 @@ test('backfillEacNumbers', async (t) => {
     assert.strictEqual(exitCodeFor(summary), 0, 'upstream drift is reported, not an error');
   });
 
+  await t.test('a row whose certificate staff saved is counted as held, not patched', async () => {
+    const patch = fakePatch();
+    const summary = await backfillEacNumbers(['--live'], {
+      sources: fakeSources([WITH_CERT, WITH_CERT_2]),
+      projects: fakeProjects([{ id: '207', staffEditedAt: { eaCertificate: '2026-11-01T00:00:00.000Z' } }, '208']),
+      patch: patch.fn
+    });
+
+    assert.deepStrictEqual([summary.held, patch.calls.map(c => c.id)], [1, ['208']]);
+  });
+
   await t.test('a failed patch is counted, and the run continues', async () => {
     let first = true;
     const summary = await backfillEacNumbers(['--live'], {
@@ -163,8 +174,8 @@ test('backfillEacNumbers', async (t) => {
 
 test('summaryLine carries every count the alert reads', () => {
   assert.strictEqual(
-    summaryLine({ mode: 'live', total: 382, withCert: 120, patched: 118, missingRow: 2 }),
-    '[eac-backfill] mode=live total=382 withCert=120 patched=118 missingRow=2');
+    summaryLine({ mode: 'live', total: 382, withCert: 120, patched: 117, held: 1, missingRow: 2 }),
+    '[eac-backfill] mode=live total=382 withCert=120 patched=117 held=1 missingRow=2');
 });
 
 test('parseArgs refuses anything it does not understand', () => {
