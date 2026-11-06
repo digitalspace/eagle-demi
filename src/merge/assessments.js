@@ -230,15 +230,17 @@ function phaseIdsOf(view, assessments) {
 
 /**
  * The live work with a Track id, an assessment first, then the newest; null when there is none.
- * Its phase is Eagle's current phase name, else the work's first open phase.
+ * Its phase is Eagle's current phase name when the work is under the current Act, else its first open phase.
  */
-function activeWorkOf(view, eaglePhase) {
+function activeWorkOf(view, yearOfTrack, current) {
   const [work] = worksOf(view)
     .filter(one => one.isActive === true && Number.isFinite(one.trackWorkId))
     .sort((a, b) => (b.workTypeId === ASSESSMENT_WORK_TYPE) - (a.workTypeId === ASSESSMENT_WORK_TYPE) ||
       b.trackWorkId - a.trackWorkId);
   if (!work) return null;
   const open = (Array.isArray(work.phases) ? work.phases : []).find(phase => phase && phase.isCompleted !== true);
+  const eaglePhase = current && current.currentPhase && yearOfTrack(work.eaAct) === current.legislationYear
+    ? current.currentPhase.name : null;
   return {
     trackWorkId: work.trackWorkId,
     eaAct: work.eaAct ?? null,
@@ -323,8 +325,7 @@ function deriveAssessments(row, { lists, previous } = {}) {
   }
 
   const current = assessments.find(one => one.legislationYear === currentYear);
-  const eaglePhase = current && current.currentPhase ? current.currentPhase.name : null;
-  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view, eaglePhase) };
+  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view, yearOfTrack, current) };
 }
 
 /**
