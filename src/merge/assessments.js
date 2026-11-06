@@ -7,6 +7,8 @@ const { LEGISLATIONS, EAGLE_DATE_FLOOR, isRegistryYear, yearOf } = require('../d
 const { redactForAccess } = require('../vis/redact');
 
 const ASSESSMENT_WORK_TYPE = 6;
+// Track holds only the 2018 Act.
+const TRACK_ACT_YEAR = 2018;
 /** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
 const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
@@ -120,8 +122,8 @@ function trackPhasesOf(view) {
 function actContext(view) {
   const listed = listedYears(view);
   const currentYear = listed.length ? listed[listed.length - 1] : null;
-  // Track holds only the 2018 Act, so a phase that names none belongs there.
-  const trackYear = listed.includes(2018) ? 2018 : currentYear;
+  // A phase that names no Act belongs to the Track Act, else to the current block the row has.
+  const trackYear = listed.includes(TRACK_ACT_YEAR) ? TRACK_ACT_YEAR : currentYear;
   const yearOfTrack = (actName) => actYearOf(actName) ?? trackYear;
   const trackPhases = trackPhasesOf(view);
   const blocks = ascending([...listed, ...trackPhases.map(phase => yearOfTrack(phase.eaActName))]);
@@ -232,14 +234,16 @@ function phaseIdsOf(view, assessments) {
  * The live work with a Track id, an assessment first, then the newest; null when there is none.
  * Its phase is Eagle's current phase name when the work is under the current Act, else its first open phase.
  */
-function activeWorkOf(view, yearOfTrack, current) {
+function activeWorkOf(view, current) {
   const [work] = worksOf(view)
     .filter(one => one.isActive === true && Number.isFinite(one.trackWorkId))
     .sort((a, b) => (b.workTypeId === ASSESSMENT_WORK_TYPE) - (a.workTypeId === ASSESSMENT_WORK_TYPE) ||
       b.trackWorkId - a.trackWorkId);
   if (!work) return null;
   const open = (Array.isArray(work.phases) ? work.phases : []).find(phase => phase && phase.isCompleted !== true);
-  const eaglePhase = current && current.currentPhase && yearOfTrack(work.eaAct) === current.legislationYear
+  // Not yearOfTrack: its current-block fallback would hand a work with no Act another Act's Eagle phase.
+  const workYear = actYearOf(work.eaAct) ?? TRACK_ACT_YEAR;
+  const eaglePhase = current && current.currentPhase && workYear === current.legislationYear
     ? current.currentPhase.name : null;
   return {
     trackWorkId: work.trackWorkId,
@@ -325,7 +329,7 @@ function deriveAssessments(row, { lists, previous } = {}) {
   }
 
   const current = assessments.find(one => one.legislationYear === currentYear);
-  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view, yearOfTrack, current) };
+  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view, current) };
 }
 
 /**

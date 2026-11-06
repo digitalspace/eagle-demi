@@ -184,15 +184,17 @@ test('deriveAssessments', async (t) => {
     assert.strictEqual(deriveAssessments(fx.only2018WithWorks()).activeWork.currentPhase, 'Early Engagement');
   });
 
-  await t.test('a work under another Act takes its open Track phase, not Eagle\'s current phase', () => {
-    const row = fx.only2002();
-    const current = { _id: fx.PHASES.applicationReview.id, name: 'Application Review' };
-    row.currentPhaseName = current;
-    row.legislation_2002.currentPhaseName = current;
-    row.works = [trackWorks()[1]];
-    assert.deepStrictEqual(deriveAssessments(row).activeWork,
-      { trackWorkId: 1102, eaAct: '2018 Act', workType: 'Amendment', currentPhase: 'Amendment Review' });
-  });
+  for (const eaAct of ['2018 Act', null, 'Unknown Act']) {
+    await t.test(`a work with eaAct ${eaAct} on a 2002 row takes its open Track phase, not Eagle's current phase`, () => {
+      const row = fx.only2002();
+      const current = { _id: fx.PHASES.applicationReview.id, name: 'Application Review' };
+      row.currentPhaseName = current;
+      row.legislation_2002.currentPhaseName = current;
+      row.works = [{ ...trackWorks()[1], eaAct }];
+      assert.deepStrictEqual(deriveAssessments(row).activeWork,
+        { trackWorkId: 1102, eaAct, workType: 'Amendment', currentPhase: 'Amendment Review' });
+    });
+  }
 
   await t.test('a live work with no Track id is not the active work', () => {
     const row = fx.only2018WithWorks();
