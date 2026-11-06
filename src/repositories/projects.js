@@ -90,17 +90,45 @@ async function getById(access, id) {
  */
 const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
-/** By Eagle ObjectId, for the seeders. Cross-partition, but at most one row, so a few RU, not a scan. */
+const lowerId = (a, b) => (String(b.id) < String(a.id) ? b : a);
+
+/**
+ * The one row an Eagle id names among every row carrying it: a non-twin over the `eagle-<id>` twin, among
+ * non-twins the one with a Track source, then the lowest id. Null when there is none.
+ */
+function pickByEagleId(rows, eagleId) {
+  const twinId = eagleOnlyProjectId(String(eagleId));
+  const found = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object');
+  const nonTwins = found.filter(row => row.id !== twinId);
+  if (nonTwins.length === 0) return found[0] || null;
+  const tracked = nonTwins.filter(row => row.sources && row.sources.track);
+  return (tracked.length > 0 ? tracked : nonTwins).reduce(lowerId);
+}
+
+// Every row, drained (no `maxItemCount`): a page or `queryFirst` can stop at the twin while the Track row exists.
+async function allByEagleId(spec) {
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
+const eagleIdSpec = (eagleId) => {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  return { query: `SELECT * FROM c WHERE ${clause}`, parameters: params };
+};
+
+/** By Eagle ObjectId, under the caller's access. A Track row and its `eagle-<id>` twin answer the Track row. */
 async function getByEagleId(access, eagleId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: [eq('eagleId', String(eagleId), '@eagleId')]
   });
+  return pickByEagleId(await allByEagleId(spec), eagleId);
+}
 
-  // `queryFirst`, not one page: a cross-partition page can come back empty while the row exists, and the
-  // seeder would then create a duplicate.
-  return await cosmos.queryFirst(CONTAINER, spec, {});
+/** `getByEagleId` unfiltered: for reads that must see a private or sealed row. Never throws on a duplicate. */
+async function readByEagleId(eagleId) {
+  return pickByEagleId(await allByEagleId(eagleIdSpec(eagleId)), eagleId);
 }
 
 /**
@@ -108,9 +136,7 @@ async function getByEagleId(access, eagleId) {
  * relink keeps the twin); any other pair throws with `code === DUPLICATE_ID`.
  */
 async function readForWriteByEagleId(eagleId) {
-  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
-  const { items } = await cosmos.query(CONTAINER,
-    { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+  const items = await allByEagleId(eagleIdSpec(eagleId));
   if (items.length <= 1) return items[0] || null;
   const tracked = items.filter(row => row.id !== eagleOnlyProjectId(String(eagleId)));
   if (tracked.length === 1) return tracked[0];
@@ -464,6 +490,8 @@ module.exports = {
   getById,
   EAGLE_OBJECT_ID,
   getByEagleId,
+  readByEagleId,
+  pickByEagleId,
   readForWriteByEagleId,
   readForWrite,
   listSyncPending,
