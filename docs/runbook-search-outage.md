@@ -26,10 +26,10 @@ curl -s "https://www.projects.eao.gov.bc.ca/demi-search/search?dataset=Document&
 is elsewhere.
 
 To have the missing field named for you rather than inferred, there is also a schema health check,
-available from the release that includes PR #349:
+available from the release that includes PR #349. The Function host answers it, not the edge:
 
 ```bash
-curl -s https://www.projects.eao.gov.bc.ca/demi-search/health/search-schema
+curl -s https://demi-api-fc-prod.azurewebsites.net/health/search-schema
 ```
 
 `{"ok":true}` means every committed field is in the live index. A 503 names the index and the
