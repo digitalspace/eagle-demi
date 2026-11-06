@@ -35,7 +35,8 @@ const {
   eagleOnlyProjectId, isEagleOnlyProjectId
 } = require('../../merge/project');
 const {
-  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE
+  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
+  STAFF_EDITED_AT, STAFF_HELD_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
@@ -667,11 +668,15 @@ exports.updateProject = async (req, res) => {
         const edited = syncsOut({ ...current, ...owner }) &&
           ((native && Object.keys(pinned.changes).length > 0) ||
             Object.keys(changes).some(key => (native || !DEMI_ONLY_FIELDS.includes(key)) && moved(key)));
+        const stamped = STAFF_HELD_FIELDS.filter(key => Object.hasOwn(changes, key) && moved(key));
         const row = {
           ...current,
           ...changes,
           ...pinned.changes,
           ...owner,
+          ...(stamped.length && {
+            [STAFF_EDITED_AT]: { ...current[STAFF_EDITED_AT], ...Object.fromEntries(stamped.map(key => [key, now])) }
+          }),
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: now,

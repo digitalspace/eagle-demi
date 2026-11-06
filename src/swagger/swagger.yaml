@@ -1260,7 +1260,9 @@ paths:
           description: >-
             A DEMI project id (a Track project number, or `eagle-<ObjectId>`), or the project's
             Eagle ObjectId — a 24-character hex string, which is resolved through `eagleId`.
-            The two id spaces cannot collide, and both answer under the same ACL.
+            The two id spaces cannot collide, and both answer under the same ACL. When an Eagle
+            id has both a Track project and its `eagle-<ObjectId>` copy, the hex id returns the
+            Track project.
           schema:
             type: string
       responses:
@@ -1295,6 +1297,10 @@ paths:
         takes nothing over. An `eagle-<eagleId>` copy that sits beside its Track project, or a
         project with no stored Eagle record, is never taken over. A body sent to a deleted project
         takes nothing over.
+        A body that changes `centroid` or a Track field (`name`, `description`, `projectType`,
+        `projectSubType`, `proponentName`, `projectState`, `abbreviation`, `address`, `isActive`,
+        `eaCertificate`, `eacSigned`, `eacExpires`) stamps it in `staffEditedAt`; Track syncs and
+        Eagle pushes then keep the saved value. `staffEditedAt` in the body is ignored.
         On a project created in DEMI or taken over, a body that changes a stored value sets
         `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a
         taken-over project, `tags` and `pins` alone are not such a change. Once project sync-out

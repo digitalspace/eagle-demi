@@ -162,6 +162,41 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.deepStrictEqual(state.queued, []);
   });
 
+  await t.test('of a new name stamps it with the save time', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Renamed' });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('sending the stored name back beside a new description stamps the description only', async () => {
+    const state = store(t, storedEagleProject({ name: 'Nicomen Wind Energy' }));
+
+    await put({ name: 'Nicomen Wind Energy', description: 'Staff text' });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { description: state.row.updatedAt });
+  });
+
+  await t.test('ignores a staffEditedAt in the body', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Renamed', staffEditedAt: { name: '2000-01-01T00:00:00.000Z', address: '2000-01-01T00:00:00.000Z' } });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
+  await t.test('of name and description, then an Eagle push, keeps the staff values', async () => {
+    const state = store(t, storedEagleProject());
+
+    await put({ name: 'Nicomen Wind', description: 'Staff text' });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }
+    }, mockRes());
+
+    assert.deepStrictEqual([state.row.name, state.row.description], ['Nicomen Wind', 'Staff text']);
+  });
+
   await t.test('/level leaves an Eagle project Eagle\'s: the next push still lands', async () => {
     const state = store(t, storedEagleProject({ sector: 'Energy' }));
     t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
