@@ -1,23 +1,7 @@
 'use strict';
 
-/**
- * Project merge engine — Track ⊕ Eagle.
- *
- * DEMI is the central registry, so a project is a MERGED view of two upstream systems:
- *
- *   - epic.track — authoritative for identity and the core attributes it carries
- *   - eagle      — 68 fields of EA-process history Track has none of
- *
- * The join is ONE-DIRECTIONAL: Track carries `epic_guid` (an Eagle `_id`); Eagle carries no
- * Track id. So merging is always driven from the Track side, with Eagle-only projects picked
- * up separately.
- *
- * Measured overlap (382 Track, 359 Eagle): 348 matched · 28 Track without `epic_guid` ·
- * 6 dangling `epic_guid` · ~10 Eagle-only → ~392 projects.
- *
- * Pure functions, no I/O. Merge bugs are SILENT — a wrong rule quietly corrupts the registry
- * instead of erroring — so every rule here is data, and tested as data.
- */
+// Project merge engine, Track and Eagle. Pure functions, no I/O. Only Track carries the join key
+// (`epic_guid`, an Eagle `_id`), so merging runs from the Track side and Eagle-only rows join apart.
 
 const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
@@ -116,18 +100,8 @@ function legislationTransitions(yearList, works) {
 }
 
 /**
- * Put the Eagle slot in the shape `EAGLE_ONLY_FIELDS` names, whatever fed it.
- *
- * eagle-api's push resolves `proponent` before it sends it (`api/helpers/demiPush.js`), but the
- * seed reads `/api/public/search?dataset=Project`, which returns `proponent` as a populated
- * Organization and no `proponentId`, `proponentName`, `applicableRegulation` or
- * `featuredDocuments` at all (verified against eagle-test, 369/369 rows, 2026-09-07). Without
- * this the seed writes a project whose `proponentId` is null, which is what every row in
- * demi-test held.
- *
- * Only fills what is missing, so it can never overwrite what the push already resolved.
- *
- * @param {object}   flat
+ * Fill `proponentId` and `proponentName` from a populated `proponent`, as the seed's public search
+ * sends it; the push sends them resolved. Fills only what is missing.
  */
 function normalizeEagleSlot(flat) {
   if (!flat) return flat;
@@ -268,11 +242,8 @@ function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop
 }
 
 /**
- * Carry forward the Eagle fields a re-merge could not rebuild.
- *
- * A Cosmos upsert replaces the item, so without this a re-seed run to fill `proponentId` would
- * blank the push's enrichment on every row it had already reached. Same rule the `phases` carry
- * already states — an absent feed must not blank a stored value.
+ * Carry forward the Eagle fields a re-merge could not rebuild: a Cosmos upsert replaces the item,
+ * and an absent feed must not blank a stored value.
  */
 function carryEagleOnlyFields(merged, existing) {
   if (!merged || !existing) return merged;
@@ -283,9 +254,8 @@ function carryEagleOnlyFields(merged, existing) {
 }
 
 /**
- * Normalise an Eagle project to the FLAT shape every rule below is written against: Mongo nests
- * content under `legislation_<year>`, the public search hoists it, the push does not. The block
- * wins over the top level — `region` is declared in both and the top-level copy is stale.
+ * Flatten an Eagle project's current `legislation_<year>` block to the top level, the shape every
+ * rule below reads. The block wins: `region` sits in both and the top-level copy is stale.
  */
 function flattenEagleProject(doc) {
   if (!doc) return doc;
@@ -307,9 +277,8 @@ function flattenEagleProject(doc) {
   }
 
   if (!key) {
-    // No current block and no single named block: without a top-level name the row would land
-    // nameless and published, so reject rather than guess.
-    // Copied, not returned as-is: normalising in place would rewrite the caller's own record.
+    // With no top-level name either, the row would land nameless and published: reject, never guess.
+    // Copied, so normalising never rewrites the caller's record.
     if (hasValue(doc.name) || legislationKeys.length === 0) {
       return normalizeEagleSlot({ ...doc });
     }
@@ -328,9 +297,8 @@ function flattenEagleProject(doc) {
 }
 
 /**
- * Labels stored trimmed. The index filters on them by exact match, and some Eagle rows carry a
- * trailing space ("Groundwater Extraction ") that no filter value matches. Track sends
- * `proponentName` with one too ("SECURE Waste Infrastructure Corp. ").
+ * Labels stored trimmed: the index filters on exact match, and both feeds send some with a
+ * trailing space ("Groundwater Extraction ").
  */
 const TRIMMED_FIELDS = ['sector', 'projectSubType', 'proponentName'];
 
@@ -349,9 +317,8 @@ function hasValue(v) {
 }
 
 /**
- * British Columbia's bounding box, padded. Every EA project is in BC by definition, so this is
- * a validity test, not a filter: a coordinate outside it is bad data, and plotting it would put
- * a project in another country on the map.
+ * British Columbia's bounding box, padded. A validity test, not a filter: every EA project is in
+ * BC, so a coordinate outside it is bad data.
  */
 const BC_BBOX = { minLng: -139.5, maxLng: -113.5, minLat: 47.5, maxLat: 60.5 };
 
@@ -386,13 +353,8 @@ function toDegrees(raw, axis) {
 }
 
 /**
- * Validate a coordinate pair, repairing the one error that is unambiguous.
- *
- * 7 of the 382 Track records carry a POSITIVE longitude — a dropped minus sign. BC longitude is
- * always negative, so negating is deterministic and recovers 6 of them. The 7th
- * (`Sparwood Wells #04`, lat 45.861 lng 53.354) is not recoverable: Sparwood is at ~49.7,
- * -114.9, so both values are wrong and there is no rule that fixes it. It gets NO centroid
- * rather than an invented one.
+ * A GeoJSON point in BC, or null. A positive longitude is a dropped minus sign (BC is always
+ * negative), so it is negated; a pair still outside BC gets no centroid rather than an invented one.
  */
 function validCoordinates(lngRaw, latRaw) {
   let lng = toDegrees(lngRaw, 'lng');
@@ -406,12 +368,8 @@ function validCoordinates(lngRaw, latRaw) {
 }
 
 /**
- * Normalise a centroid to GeoJSON `[longitude, latitude]`.
- *
- * Track supplies lat/lng as STRINGS; Eagle supplies a `centroid` in one of several shapes.
- * Coordinate order is the classic bug here. Typesense used to swap to [lat, lng] for its geopoint
- * type; nothing swaps any more — Cosmos stores [lng, lat] and AI Search carries it unchanged — so
- * a wrong order now survives all the way to the map instead of being masked.
+ * A GeoJSON `[longitude, latitude]` centroid from Track's lat/lng strings, else Eagle's `centroid`.
+ * Nothing downstream swaps the order, so a wrong one here reaches the map.
  */
 function normalizeCentroid(track, eagle) {
   if (track && hasValue(track.longitude) && hasValue(track.latitude)) {
@@ -438,23 +396,8 @@ const mergeDeleted = (eagle, opts) =>
   (typeof opts.deleted === 'boolean' ? opts.deleted : isDeletedInEagle(eagle));
 
 /**
- * The ACL for a merged project.
- *
- * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present so
- * an upstream restriction is never widened by the merge, minus the sealed token (`eagleBaseAcl`).
- *
- * **With no Eagle match, a project is NOT public.** Product owner, 2026-08-23: *"if track has a
- * project that eagle does not have, this project is NOT public."* Eagle is what publishes; a
- * project that has not reached it has not been published by anyone.
- *
- * This reverses the previous rule, which read the Track export as self-evidently public because it
- * is committed to a public repository. That argument was about the FILE, not the projects in it,
- * and it made "Eagle withheld this" indistinguishable from "Eagle never heard of it" — both landed
- * on `public`. Measured before the change: 28 projects were anonymously readable in demi-test with
- * no Eagle counterpart, and 19 of the 27 checked returned zero anonymous hits on prod eagle-search.
- *
- * Failing closed here is also right for the Eagle-only path (`mergeEagleOnlyProject`), where a
- * missing or empty `read[]` on an Eagle record is an absence of evidence, not evidence of consent.
+ * A merged project's ACL: Eagle's `read[]` less the sealed token, so the merge never widens it. No
+ * Eagle record, or none in `read[]`, fails closed: Eagle is what publishes a project.
  */
 function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   // Level 2 when Eagle sent none, or only the sealed token: the level the legacy admin-role list
@@ -533,17 +476,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
 
-  // isPublished MIRRORS the ACL — it is never an independent signal.
-  //
-  // It used to be `track.is_active !== false`, which conflated two unrelated things. `is_active`
-  // is a Track-internal record flag, not a publication or lifecycle state: of the 40 projects it
-  // marks inactive, 17 are "Pre Work", 8 "Under Work" and 2 "Operation", while only 12 of the 109
-  // "Closed" projects carry it. That produced 23 projects — Ajax Mine, Aurora LNG Digby Island —
-  // reading `isPublished: false` while Eagle's ACL correctly made them publicly visible. Nothing
-  // leaked, but the mirror lied, and setDocumentPublished 409s against an unpublished parent, so
-  // no document could be published under any of them.
-  //
-  // `is_active` is still carried through, as `isActive` via TRACK_PRECEDENCE.
+  // isPublished mirrors the ACL, never Track's `is_active`: that is a Track record flag, not a
+  // publication state.
   const deleted = mergeDeleted(eagle, opts);
   const read = resolveProjectAcl(eagle, deleted);
   const isPublished = read.includes('public');
@@ -570,9 +504,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // Eagle fills the gaps Track cannot.
   if (eagle) Object.assign(merged, pickEagleBlocks(eagle));
 
-  // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
-  // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
-  // omitted rather than emptied when Track has none — an absent feed must not blank a stored one.
+  // Track's dated phases, beside Eagle's own `currentPhaseName` and `phaseHistory`; omitted, not
+  // emptied, when Track has none, so an absent feed never blanks a stored one.
   if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
   // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
   // since an empty list still says Track has no transition date.
@@ -586,14 +519,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   const centroid = normalizeCentroid(track, eagle);
   if (centroid) merged.centroid = centroid;
 
-  // Raw payloads retained unindexed, so a re-merge never needs to re-fetch upstream and any
-  // field can be traced to its source.
-  //
-  // Storage only. This used to claim the API never read it, which was not true: the project
-  // controller and the search fallback both returned it verbatim on anonymous routes. What keeps
-  // it off the wire is the field catalog (`src/vis/catalog/projects.js`, `sources` at maxVis 0),
-  // applied at res.json — not this comment, and not the read ACL, which gates rows rather than
-  // fields.
+  // Raw payloads, so a re-merge never re-fetches upstream. Routes do return the row: the field
+  // catalog (`sources` at maxVis 0 in src/vis/catalog/projects.js) keeps this off the wire.
   merged.sources = {
     track,
     eagle: eagle || null
@@ -603,11 +530,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
 }
 
 /**
- * An Eagle project with no Track counterpart.
- *
- * Included rather than dropped so nothing disappears, and flagged `sourceSystem: 'eagle'` so
- * it is identifiable for later reconciliation with Track. Keyed by its Eagle `_id`, since
- * there is no Track id to use.
+ * An Eagle project with no Track counterpart: kept, never dropped, flagged `sourceSystem: 'eagle'`
+ * and keyed by its Eagle `_id`.
  */
 function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   const eagle = flattenEagleProject(eagleRaw);
@@ -649,11 +573,8 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
 }
 
 /**
- * Build the full registry from both sources.
- *
- * Returns the merged projects plus a reconciliation report — the report is the point, not a
- * side effect: it is what proves the merge matched what was measured (348/28/6/~10) rather
- * than silently dropping records.
+ * The full registry from both sources, plus the reconciliation report that proves no record was
+ * silently dropped.
  */
 function buildRegistry(trackProjects, eagleProjects, opts = {}) {
   const eagleById = new Map(
@@ -739,22 +660,8 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
 }
 
 /**
- * Registry rows whose `eagleId` is a `ProjectNotification` id rather than an Eagle project id.
- *
- * `buildRegistry` already counts these as `trackOnlyDanglingGuid` — a Track `epic_guid` matching
- * nothing in the Eagle project fetch — which reads as ordinary upstream drift. It is more than
- * that when the guid names a notification: `mergeTrackProject` copies the guid onto `eagleId`, so
- * every period and document Eagle hangs off that notification also resolves to THIS project by
- * eagle id. `helpers/parent-admit.js:pickParent` is what stops the project claiming them; this
- * names the rows, so a run says which projects shadow a notification instead of leaving it to be
- * found from a user-facing zero. Measured 2026-09-08: Track 351 and 353 on test.
- *
- * Not folded into `buildRegistry`: the notification ids are a separate upstream fetch the projects
- * stage never makes. The seed calls this from its documents stage, which already holds them.
- *
- * @param {Array} projects        merged registry rows
- * @param {Set}   notificationIds `ProjectNotification` `_id`s, as strings
- * @returns {Array<{id: string, eagleId: string}>}
+ * `{id, eagleId}` of each row whose `eagleId` is a `ProjectNotification` `_id` (a Set of strings),
+ * so a seed run names the projects that shadow a notification (`pickParent` in helpers/parent-admit.js).
  */
 function notificationShadowedProjects(projects, notificationIds) {
   if (!notificationIds || notificationIds.size === 0) return [];
@@ -764,14 +671,8 @@ function notificationShadowedProjects(projects, notificationIds) {
 }
 
 /**
- * Index for resolving an upstream identity (an Eagle id or a Track id) to a canonical project.
- *
- * The seeder's documents stage uses it to resolve partition keys, so it must survive any change
- * to what else is being ingested. A deterministic id join only — nothing that resolves by name.
- * Rows that do not resolve are DROPPED rather than given an invented parent — except the
- * documents stage's ProjectNotification carve-out in `scripts/seed-nosql.js`, which admits a
- * second, explicitly enumerated parent id space. Enumerated is the operative word: it admits
- * only ids the notification list itself confirms, so it is still not an invented parent.
+ * Resolve an Eagle or Track id to a project id, by id join only, never by name; the seed drops a
+ * document that does not resolve rather than invent a parent.
  */
 function buildProjectIndex(projects) {
   const byEagleId = new Map();
