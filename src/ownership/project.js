@@ -34,8 +34,8 @@ const SOURCE_FIRST = Object.freeze(Object.fromEntries(
 /** Per field, when staff last saved it (`PUT /projects/:id`); a stamped field holds over both feeds. */
 const STAFF_EDITED_AT = 'staffEditedAt';
 
-/** The fields a staff save stamps. */
-const STAFF_HELD_FIELDS = Object.freeze([...TRACK_PRECEDENCE.map(([target]) => target), 'centroid']);
+/** The fields a staff save stamps. The phase pair stays Eagle's: a stamp holds it on rows DEMI does not own. */
+const STAFF_HELD_FIELDS = Object.freeze([...TRACK_PRECEDENCE.map(([target]) => target), 'centroid', 'currentPhaseName', 'phaseHistory']);
 
 /**
  * Eagle-only fields eagle-api's project GET returns (its `tagList`), catalog level 2 except the

@@ -220,6 +220,34 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.deepStrictEqual(state.row.staffEditedAt, { centroid: state.row.updatedAt });
   });
 
+  const phase = (id, name) => ({ _id: id, name, type: 'projectPhase', legislation: 2002 });
+  const EAGLE_PHASE = phase('5cf00c03a266b7e1877504e1', 'Pre-Application');
+  const STAFF_PHASE = phase('5cf00c03a266b7e1877504e2', 'Application Review');
+
+  await t.test('of a phase on a row Eagle cannot hand over, then an Eagle push, keeps the staff phase', async () => {
+    const stored = storedEagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] });
+    delete stored.sources.eagle;
+    const state = store(t, stored);
+
+    await put({ currentPhaseName: STAFF_PHASE, phaseHistory: [EAGLE_PHASE, STAFF_PHASE], projectState: 'Application Review' });
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: eagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] }) }
+    }, mockRes());
+
+    assert.ok(!('demiOwnedAt' in state.row), 'the premise: the row stays Eagle\'s');
+    assert.deepStrictEqual([state.row.currentPhaseName, state.row.phaseHistory, state.row.projectState],
+      [STAFF_PHASE, [EAGLE_PHASE, STAFF_PHASE], 'Application Review']);
+  });
+
+  await t.test('sending the stored phases back as fresh refs stamps nothing for them', async () => {
+    const state = store(t, storedEagleProject({ currentPhaseName: EAGLE_PHASE, phaseHistory: [EAGLE_PHASE] }));
+
+    await put({ name: 'Renamed', currentPhaseName: { ...EAGLE_PHASE, item: 'https://example.org' }, phaseHistory: [{ ...EAGLE_PHASE }] });
+
+    assert.deepStrictEqual(state.row.staffEditedAt, { name: state.row.updatedAt });
+  });
+
   await t.test('that loses an etag race stamps against the row it read again', async () => {
     const state = store(t, storedEagleProject());
     projects.upsert.mock.mockImplementationOnce(async () => {

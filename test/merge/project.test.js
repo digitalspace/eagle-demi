@@ -1322,6 +1322,17 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual(merged.centroid, centroid);
   });
 
+  await t.test('a phase history staff saved still goes when the row drops it with its Eagle link', () => {
+    const stored = {
+      id: '207', demiOwnedAt: OWNED_AT, read: ['staff'], phaseHistory: [{ _id: 'p1', name: 'Pre-Application' }],
+      staffEditedAt: { phaseHistory: STAMP }
+    };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, null, OPTS), stored, undefined, { drop: ['phaseHistory'] });
+
+    assert.ok(!('phaseHistory' in merged));
+  });
+
   await t.test('a DEMI-owned project Eagle deleted stays deleted when the feed lists it again', () => {
     const stored = {
       id: '207', demiOwnedAt: OWNED_AT, isDeleted: true, read: ['staff', 'sysadmin'],

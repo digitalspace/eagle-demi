@@ -202,13 +202,16 @@ function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
   if (switchTo) liftOwnedBlock(merged, switchTo);
 }
 
-/** Each field staff saved (`STAFF_EDITED_AT`) takes the stored value, an absent one included, over both feeds. */
-function holdStaffEdits(merged, existing) {
+/**
+ * Each field staff saved (`STAFF_EDITED_AT`) takes the stored value, an absent one included, over both feeds.
+ * A `drop` field still goes: it points into the Eagle project the row left.
+ */
+function holdStaffEdits(merged, existing, { drop = [] } = {}) {
   const stamps = existing && existing[STAFF_EDITED_AT];
   if (!stamps || typeof stamps !== 'object') return merged;
   merged[STAFF_EDITED_AT] = { ...stamps };
   for (const field of STAFF_HELD_FIELDS) {
-    if (!hasValue(stamps[field])) continue;
+    if (!hasValue(stamps[field]) || drop.includes(field)) continue;
     if (existing[field] === undefined) delete merged[field];
     else merged[field] = structuredClone(existing[field]);
   }
@@ -236,7 +239,7 @@ function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop
       merged.read = heldRead(merged.read, existing);
       merged.isPublished = merged.read.includes('public');
     }
-    holdStaffEdits(merged, existing);
+    holdStaffEdits(merged, existing, { drop });
   }
   return Object.assign(merged, deriveAssessments(merged, { previous: existing && existing.assessments }));
 }

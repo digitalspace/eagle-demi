@@ -40,7 +40,7 @@ const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
 const { writeGuarded, raced } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal, refId
 } = require('./eagle-mirror');
 const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
@@ -97,8 +97,13 @@ const eagleMirrored = (row) => hasValue(row.eagleId) && !isNativeProject(row);
 const validPoint = (centroid) => Array.isArray(centroid?.coordinates) &&
   isDeepStrictEqual(validCoordinates(...centroid.coordinates), centroid);
 
+/** The phase refs eagle-admin rebuilds from its Lists on each save, so only their ids are compared. */
+const PHASE_FIELDS = ['currentPhaseName', 'phaseHistory'];
+const refIds = (value) => (Array.isArray(value) ? value.map(refId) : refId(value));
+
 function staffMove(key, stored, sent) {
   if (!hasValue(stored) && !hasValue(sent)) return false;
+  if (PHASE_FIELDS.includes(key)) return !isDeepStrictEqual(refIds(stored), refIds(sent));
   // A stamped bad point would beat Track's coordinates on every merge.
   if (key === 'centroid' && !validPoint(sent)) return false;
   // eagle-admin escapes newlines on save and never unescapes on load.

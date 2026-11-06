@@ -1300,10 +1300,12 @@ paths:
         takes nothing over. An `eagle-<eagleId>` copy that sits beside its Track project, or a
         project with no stored Eagle record, is never taken over. A body sent to a deleted project
         takes nothing over.
-        A body that changes `centroid` or a Track field (`name`, `description`, `projectType`,
-        `projectSubType`, `proponentName`, `projectState`, `abbreviation`, `address`, `isActive`,
-        `eaCertificate`, `eacSigned`, `eacExpires`) stamps it in `staffEditedAt`; Track syncs and
-        Eagle pushes then keep the saved value. Nothing is stamped for an empty value sent for a
+        A body that changes `centroid`, the phase (`currentPhaseName`, `phaseHistory`) or a Track
+        field (`name`, `description`, `projectType`, `projectSubType`, `proponentName`,
+        `projectState`, `abbreviation`, `address`, `isActive`, `eaCertificate`, `eacSigned`,
+        `eacExpires`) stamps it in `staffEditedAt`; Track syncs and Eagle pushes then keep the saved
+        value on every project, taken over or not. The phase fields are compared by List id, so
+        refs sent back with the same ids stamp nothing. Nothing is stamped for an empty value sent for a
         field the project has no value in, a `description` that differs only by newlines sent
         as the two characters `\n`, or a `centroid` that is not a GeoJSON point in BC.
         `staffEditedAt` in the body is ignored.
