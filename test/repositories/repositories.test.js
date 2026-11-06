@@ -784,10 +784,11 @@ test('projects by Eagle id answer one row', async (t) => {
     assert.strictEqual(projects.pickByEagleId([TWIN, native], EAGLE_ID).id, native.id);
   });
 
-  await t.test('of two Track rows the lowest id wins, in either order', () => {
-    const other = { ...TRACK, id: '3001' };
-    assert.strictEqual(projects.pickByEagleId([TRACK, other], EAGLE_ID).id, '272');
-    assert.strictEqual(projects.pickByEagleId([other, TRACK], EAGLE_ID).id, '272');
+  await t.test('of two Track rows the lowest id string wins, in either order', () => {
+    // '1000' sorts before '272' as a string and after it as a number.
+    const other = { ...TRACK, id: '1000' };
+    assert.strictEqual(projects.pickByEagleId([TRACK, other], EAGLE_ID).id, '1000');
+    assert.strictEqual(projects.pickByEagleId([other, TRACK], EAGLE_ID).id, '1000');
   });
 
   await t.test('readByEagleId reads unfiltered and also answers the Track row', async () => {
