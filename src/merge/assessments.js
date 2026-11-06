@@ -228,8 +228,11 @@ function phaseIdsOf(view, assessments) {
   return [...new Set(ids.filter(id => typeof id === 'string' && id))];
 }
 
-/** The live work with a Track id, an assessment first, then the newest; null when there is none. */
-function activeWorkOf(view) {
+/**
+ * The live work with a Track id, an assessment first, then the newest; null when there is none.
+ * Its phase is Eagle's current phase name, else the work's first open phase.
+ */
+function activeWorkOf(view, eaglePhase) {
   const [work] = worksOf(view)
     .filter(one => one.isActive === true && Number.isFinite(one.trackWorkId))
     .sort((a, b) => (b.workTypeId === ASSESSMENT_WORK_TYPE) - (a.workTypeId === ASSESSMENT_WORK_TYPE) ||
@@ -240,7 +243,7 @@ function activeWorkOf(view) {
     trackWorkId: work.trackWorkId,
     eaAct: work.eaAct ?? null,
     workType: work.workType ?? null,
-    currentPhase: (open && open.name) || null
+    currentPhase: eaglePhase || (open && open.name) || null
   };
 }
 
@@ -265,18 +268,18 @@ function deriveAssessments(row, { lists, previous } = {}) {
 
   const assessments = years.map((year) => {
     const block = view[`legislation_${year}`] || (year === currentYear ? view : {});
+    const own = stored.filter(entry => Number(entry.legislationYear) === year);
+    const documents = own
+      .filter(entry => entry.commentPeriodId === undefined)
+      .map(entry => ({ phaseIds: [...(entry.phaseIds || [])], stage: entry.stage ?? null,
+        stageRank: stageRank(year, entry.stage), name: entry.name, startDate: entry.startDate,
+        endDate: entry.endDate ?? null, source: 'documents', documentCount: entry.documentCount }));
+    const documentStages = new Set(documents.map(phase => phase.stage).filter(Boolean));
     const track = trackPhases.filter(phase => yearOfTrack(phase.eaActName) === year).map((phase) => {
       const stage = stageRowFor(year, phase.name);
       return { phaseIds: [], stage, stageRank: stageRank(year, stage), name: phase.name,
         startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: 'track' };
-    });
-    const trackStages = new Set(track.map(phase => phase.stage).filter(Boolean));
-    const own = stored.filter(entry => Number(entry.legislationYear) === year);
-    const documents = own
-      .filter(entry => entry.commentPeriodId === undefined && !(entry.stage && trackStages.has(entry.stage)))
-      .map(entry => ({ phaseIds: [...(entry.phaseIds || [])], stage: entry.stage ?? null,
-        stageRank: stageRank(year, entry.stage), name: entry.name, startDate: entry.startDate,
-        endDate: entry.endDate ?? null, source: 'documents', documentCount: entry.documentCount }));
+    }).filter(phase => !(phase.stage && documentStages.has(phase.stage)));
 
     const milestones = [
       ...BLOCK_MILESTONES.flatMap(([name, field]) => {
@@ -294,8 +297,8 @@ function deriveAssessments(row, { lists, previous } = {}) {
     return {
       legislationYear: year,
       act: LEGISLATIONS[year].label,
-      // Stable sort, Track listed first, so Track wins a tie in rank.
-      phases: [...track, ...documents].sort((a, b) => a.stageRank - b.stageRank),
+      // Stable sort, documents listed first, so Eagle wins a tie in rank.
+      phases: [...documents, ...track].sort((a, b) => a.stageRank - b.stageRank),
       milestones,
       currentPhase: refOf(block.currentPhaseName, lists, before.currentPhase),
       decision: refOf(block.eacDecision, lists, before.decision),
@@ -319,7 +322,9 @@ function deriveAssessments(row, { lists, previous } = {}) {
     }
   }
 
-  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view) };
+  const current = assessments.find(one => one.legislationYear === currentYear);
+  const eaglePhase = current && current.currentPhase ? current.currentPhase.name : null;
+  return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view, eaglePhase) };
 }
 
 /**

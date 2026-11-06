@@ -85,12 +85,20 @@ test('datePhasesFromDocuments', async (t) => {
 });
 
 test('deriveAssessments', async (t) => {
-  await t.test('a Track-dated stage drops its document phase', () => {
+  await t.test('a stage dated by documents and Track keeps only the documents phase and its dates', () => {
     const row = dated(fx.only2018WithWorks(), [{ projectPhaseId: fx.PHASES.earlyEngagement.id,
       datePosted: '2020-01-10T00:00:00.000Z' }]);
     assert.strictEqual(row.documentPhases.length, 1, 'the pass must date the stage for the drop to matter');
     const early = yearOf(deriveAssessments(row), 2018).phases.filter(phase => phase.stage === 'Early Engagement');
-    assert.deepStrictEqual(early.map(phase => phase.source), ['track']);
+    assert.deepStrictEqual(early.map(phase => [phase.source, phase.startDate, phase.endDate]),
+      [['documents', '2020-01-10T00:00:00.000Z', null]]);
+  });
+
+  await t.test('a documents phase sorts before a Track phase of the same rank', () => {
+    const row = { ...fx.prod2018(), phases: [{ name: 'Unlisted Track phase', eaActName: '2018 Act' }],
+      documentPhases: [{ legislationYear: 2018, stage: null, name: 'Unlisted Eagle phase', phaseIds: [],
+        startDate: '2021-01-10T00:00:00.000Z', endDate: null, documentCount: 1 }] };
+    assert.deepStrictEqual(yearOf(deriveAssessments(row), 2018).phases.map(phase => phase.source), ['documents', 'track']);
   });
 
   await t.test('a document stage Track does not date is kept, after the Track stages before it', () => {
@@ -159,9 +167,16 @@ test('deriveAssessments', async (t) => {
     assert.deepStrictEqual([derived.activeWork, yearOf(derived, 2018).trackWorkIds], [null, []]);
   });
 
-  await t.test('the live assessment work is the active work, at its first open phase', () => {
-    assert.deepStrictEqual(deriveAssessments(fx.only2018WithWorks()).activeWork,
+  await t.test('without an Eagle current phase the live assessment work is the active work, at its first open phase', () => {
+    const row = fx.only2018WithWorks();
+    delete row.currentPhaseName;
+    delete row.legislation_2018.currentPhaseName;
+    assert.deepStrictEqual(deriveAssessments(row).activeWork,
       { trackWorkId: 2201, eaAct: '2018 Act', workType: 'Assessment', currentPhase: 'Readiness Decision' });
+  });
+
+  await t.test('the active work takes Eagle\'s current phase over its open Track phase', () => {
+    assert.strictEqual(deriveAssessments(fx.only2018WithWorks()).activeWork.currentPhase, 'Early Engagement');
   });
 
   await t.test('a live work with no Track id is not the active work', () => {
