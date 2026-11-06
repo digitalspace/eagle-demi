@@ -25,7 +25,7 @@ const { DELETED_CEILING } = require('../repositories/documents');
 const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 const {
-  TRACK_PRECEDENCE, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
+  TRACK_PRECEDENCE, SOURCE_FIRST, STAFF_EDITED_AT, STAFF_HELD_FIELDS, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
   EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS, DEMI_OWNED_AT, EXTENSION_LIST_FIELDS, CAC_FIELDS,
   withoutBlockLists
 } = require('../ownership/project');
@@ -224,13 +224,26 @@ function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
   }
   // Track's coordinates still win the centroid; else the stored one stands, Eagle's only where it has none.
   const trackCentroid = normalizeCentroid(merged.sources && merged.sources.track, null);
-  if (!trackCentroid && Array.isArray(existing.centroid)) merged.centroid = [...existing.centroid];
+  if (!trackCentroid && hasValue(existing.centroid)) merged.centroid = structuredClone(existing.centroid);
   if (switchTo) liftOwnedBlock(merged, switchTo);
 }
 
+/** Each field staff saved (`STAFF_EDITED_AT`) takes the stored value, an absent one included, over both feeds. */
+function holdStaffEdits(merged, existing) {
+  const stamps = existing && existing[STAFF_EDITED_AT];
+  if (!stamps || typeof stamps !== 'object') return merged;
+  merged[STAFF_EDITED_AT] = { ...stamps };
+  for (const field of STAFF_HELD_FIELDS) {
+    if (!hasValue(stamps[field])) continue;
+    if (existing[field] === undefined) delete merged[field];
+    else merged[field] = structuredClone(existing[field]);
+  }
+  return merged;
+}
+
 /**
- * Carry DEMI's fields off the stored row, then derive assessments: a held row's `read` only narrows
- * (`heldRead`), an owned one keeps its Eagle side (`holdOwnedFields`), `switchTo` its year move.
+ * Carry DEMI's fields off the stored row, then derive assessments: a held row's `read` only narrows (`heldRead`),
+ * an owned one keeps its Eagle side and `switchTo` year (`holdOwnedFields`), staff saves stand (`holdStaffEdits`).
  */
 function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop, switchTo } = {}) {
   if (!merged) return merged;
@@ -249,6 +262,7 @@ function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop
       merged.read = heldRead(merged.read, existing);
       merged.isPublished = merged.read.includes('public');
     }
+    holdStaffEdits(merged, existing);
   }
   return Object.assign(merged, deriveAssessments(merged, { previous: existing && existing.assessments }));
 }
@@ -545,15 +559,12 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
     updatedAt: now
   };
 
-  // Track wins — but only where Track actually has a value.
   for (const [target, trackField, eagleField] of TRACK_PRECEDENCE) {
     const trackValue = track[trackField];
-    if (hasValue(trackValue)) {
-      merged[target] = trackValue;
-      continue;
-    }
     const eagleValue = eagleField && eagle ? eagle[eagleField] : undefined;
-    if (hasValue(eagleValue)) merged[target] = eagleValue;
+    const ordered = SOURCE_FIRST[target] === 'eagle' ? [eagleValue, trackValue] : [trackValue, eagleValue];
+    const value = ordered.find(hasValue);
+    if (value !== undefined) merged[target] = value;
   }
 
   // Eagle fills the gaps Track cannot.
@@ -793,6 +804,7 @@ module.exports = {
   flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  holdStaffEdits,
   heldRead,
   hasValue,
   TRIMMED_FIELDS,

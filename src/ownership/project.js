@@ -7,7 +7,7 @@ const { SYNC_STATE_FIELDS } = require('./sync-out');
 
 /**
  * `[targetField, trackField, eagleField]`; eagleField null means Eagle has no equivalent.
- * Track wins only when it supplies a value, so an empty Track field never blanks an Eagle one.
+ * `SOURCE_FIRST` names the source that wins; the other fills only a field the first has no value for.
  */
 const TRACK_PRECEDENCE = [
   ['name', 'name', 'name'],
@@ -26,6 +26,16 @@ const TRACK_PRECEDENCE = [
   ['eacSigned', 'eac_signed', null],
   ['eacExpires', 'eac_expires', null]
 ];
+
+/** Which source wins each `TRACK_PRECEDENCE` field both feed: Eagle for the phase name, Track for the rest. */
+const SOURCE_FIRST = Object.freeze(Object.fromEntries(
+  TRACK_PRECEDENCE.map(([target]) => [target, target === 'projectState' ? 'eagle' : 'track'])));
+
+/** Per field, when staff last saved it (`PUT /projects/:id`); a stamped field holds over both feeds. */
+const STAFF_EDITED_AT = 'staffEditedAt';
+
+/** The fields a staff save stamps. */
+const STAFF_HELD_FIELDS = Object.freeze([...TRACK_PRECEDENCE.map(([target]) => target), 'centroid']);
 
 /**
  * Eagle-only fields eagle-api's project GET returns (its `tagList`), catalog level 2 except the
@@ -105,7 +115,7 @@ const DEMI_OWNED_AT = 'demiOwnedAt';
  * so no re-merge can rebuild them.
  */
 const DEMI_ONLY_FIELDS = [
-  'tags', 'levelHeldAt', DEMI_OWNED_AT, 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
+  'tags', 'levelHeldAt', DEMI_OWNED_AT, STAFF_EDITED_AT, 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
   ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
 ];
 
@@ -143,6 +153,8 @@ const PUT_IGNORED_FIELDS = [
   ...LEGISLATION_INDEX_FIELDS,
   // Set by the writes that take the project over; a PUT clearing it would hand the row back to Eagle.
   DEMI_OWNED_AT,
+  // Stamped by the PUT itself from what moved; a body copy would fake or drop a hold.
+  STAFF_EDITED_AT,
   // Catalogued at vis 2, so staff can send them back and break push ordering or the cascade.
   ...PUSH_BOOKKEEPING_FIELDS,
   // The code has a link record behind it, so only `PUT /projects/:id/short-code` moves it.
@@ -163,6 +175,9 @@ function withoutBlockLists(row) {
 
 module.exports = {
   TRACK_PRECEDENCE,
+  SOURCE_FIRST,
+  STAFF_EDITED_AT,
+  STAFF_HELD_FIELDS,
   EAGLE_STAFF_FIELDS,
   EAGLE_ONLY_FIELDS,
   LEGISLATION_INDEX_FIELDS,
