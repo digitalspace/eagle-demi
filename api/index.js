@@ -1,7 +1,7 @@
 'use strict';
 
 // Must run before any other require: the distro hooks `require`, so modules loaded earlier never
-// report. Winston instrumentation is opt-in and is what carries logger output to Application Insights.
+// report. Tests set no connection string, so they run with no exporter and no retry noise.
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
   const { useAzureMonitor } = require('@azure/monitor-opentelemetry');
   useAzureMonitor({
@@ -9,6 +9,7 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
     // stay on: the Performance and Failures blades read them.
     enablePerformanceCounters: false,
     instrumentationOptions: {
+      // Opt-in, and it is what carries logger output to Application Insights.
       winston: { enabled: true }
     }
   });
@@ -26,15 +27,15 @@ module.exports = {
   announceUpdates, edgeBan, intakeScanSweep
 };
 
-// The audit buffer flushes on an unref()'d timer, so a host recycle loses it. appTerminate runs on
-// graceful shutdown only, so this narrows the loss window rather than closing it.
+// A recycle loses the audit buffer (its flush timer is unref()'d); appTerminate, graceful only, narrows
+// that window. Here, not in audit.js, because this file is the only Azure-specific entry point.
 app.hook.appTerminate(async () => {
   const { flush } = require('../src/utils/audit');
   await flush();
 });
 
-// One catch-all: the host matches routes in discovery order, not by specificity. The lazy require
-// lets the timer tests load this file against a recording `app`.
+// One catch-all over the route table in src/http/routes.js: the host matches routes in discovery
+// order, not by specificity. The lazy require lets timer tests load this file with a recording `app`.
 const handler = (request, context) => require('../src/http/router').dispatch(request, context);
 
 const HTTP = {
@@ -46,11 +47,12 @@ const HTTP = {
 app.http('api', { ...HTTP, route: '{*path}' });
 app.http('apiRoot', { ...HTTP, route: '' });
 
-// Each trigger below registers only when its setting is set: the host resolves `%NAME%` at startup,
-// and an unresolvable name is a startup error that takes the HTTP functions down too.
+// A trigger bound by `%NAME%` registers only when that setting is set: the host resolves the name
+// at startup, and an unresolvable one is a startup error that takes the HTTP functions down too.
 if (process.env.RECONCILE_SCHEDULE) {
   app.timer('reconcileEagle', {
-    // The setting's name, not its value, so changing the app setting reschedules without a deploy.
+    // The setting's name, not its value, so a setting change reschedules without a deploy.
+    // NCRONTAB, six fields, seconds first.
     schedule: '%RECONCILE_SCHEDULE%',
     // Deploys restart this app, and a restart must not re-read the whole Eagle corpus.
     runOnStartup: false,
@@ -146,7 +148,8 @@ if (process.env.EDGE_BAN_MODE) {
   });
 }
 
-// Guarded on the account so a release that ships before the intake infrastructure registers no timer.
+// Guarded on the account, so a release that ships before the intake infrastructure exists registers
+// no timer.
 if (require('../src/config').intake.storageAccount) {
   app.timer('intakeScanSweep', {
     schedule: require('../src/config').intake.sweepSchedule,
@@ -162,8 +165,8 @@ const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCo
 const deliveryAttempt = (context) =>
   Number((context && context.triggerMetadata && context.triggerMetadata.dequeueCount) || 1);
 
-// Rethrows, unlike the timers: after `maxDequeueCount` the message must land in the poison queue
-// the alert reads.
+// Rethrows, unlike the timers: swallowing would report every failure as success and lose the job.
+// After `maxDequeueCount` the message lands in the poison queue the alert reads.
 async function bulkDownloadWorker(message, context) {
   // `messageEncoding: "none"` (host.json): the body is the bare job id, a string or undecoded Buffer.
   const jobId = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
@@ -171,8 +174,8 @@ async function bulkDownloadWorker(message, context) {
     .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
-// Throws on the last attempt only: earlier ones re-queue the ids, since host.json's hour-long
-// `visibilityTimeout` (sized for zips) would hide each retry for an hour.
+// Throws on the last attempt only; earlier ones re-queue, as host.json's hour-long `visibilityTimeout`
+// is sized for zips. The body holds ids only, so either path re-reads the document and stamps it as is.
 async function restampChunksWorker(message, context) {
   await require('../src/jobs/restamp-chunks')
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
@@ -193,7 +196,7 @@ async function syncOutWorker(message, context) {
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
-/** Swallows the failure as reconcileEagle does: the next run is the retry. */
+// Swallows the failure as reconcileEagle does: the next run is the retry.
 async function intakeScanSweep() {
   const { logger } = require('../src/utils/logger');
   try {
@@ -203,7 +206,7 @@ async function intakeScanSweep() {
   }
 }
 
-/** Swallows the failure for the reason the reconcile does: the next run is the retry. */
+// Swallows the failure for the reason the reconcile does: the next run is the retry.
 async function cleanupBulkDownloads() {
   const { logger } = require('../src/utils/logger');
   try {
@@ -213,7 +216,7 @@ async function cleanupBulkDownloads() {
   }
 }
 
-/** Swallows the failure for the reason the reconcile does: the next tick is the retry. */
+// Swallows the failure for the reason the reconcile does: the next tick is the retry.
 async function announceUpdates() {
   const { logger } = require('../src/utils/logger');
   try {
@@ -234,8 +237,8 @@ async function reconcileEagle() {
   }
 }
 
-// `store: true` feeds GET /admin/reconcile-engage. Each kind's failure is swallowed so one kind
-// cannot stop the rest.
+// `store: true` feeds GET /admin/reconcile-engage for comment periods. Each kind's failure is
+// swallowed so one kind cannot stop the rest.
 async function reconcileEngage() {
   const { logger } = require('../src/utils/logger');
   const { KINDS } = require('../src/sync-out/kinds');
@@ -258,7 +261,7 @@ async function syncTrackTeams() {
   }
 }
 
-/** `live: true` for the reason syncTrackTeams gives. Swallows the failure as reconcileEagle does. */
+// `live: true` for the reason syncTrackTeams gives. Swallows the failure as reconcileEagle does.
 async function syncTrackProjects() {
   const { logger } = require('../src/utils/logger');
   try {
@@ -268,7 +271,7 @@ async function syncTrackProjects() {
   }
 }
 
-/** Swallows the failure as reconcileEagle does; a bad mode or policy setting throws into the same catch. */
+// Swallows the failure as reconcileEagle does; a bad mode or policy setting throws into the same catch.
 async function edgeBan() {
   const { logger } = require('../src/utils/logger');
   try {
