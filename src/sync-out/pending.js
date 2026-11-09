@@ -5,17 +5,15 @@
  * kind's reconcile hook. `{ repair: true }` re-queues them. It keeps no report, so `store` is ignored.
  */
 
+const { kindOf, versionOf } = require('./kinds');
+const syncOut = require('./index');
 const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
 
-// Required on call, here and below: kinds.js requires this file to register the hook per kind.
-const kinds = () => require('./kinds');
-
 /** The repository, consumers and enqueue of `kind`, as the sync-out worker uses them. */
 function depsFor(kind) {
-  const syncOut = require('./index');
-  return { kind, repo: kinds().kindOf(kind).repo, consumers: syncOut.consumersOf(kind), enqueue: syncOut.enqueue };
+  return { kind, repo: kindOf(kind).repo, consumers: syncOut.consumersOf(kind), enqueue: syncOut.enqueue };
 }
 
 const entryOf = (consumer, row) => (row.syncOut && row.syncOut[consumer.name]) || {};
@@ -26,7 +24,7 @@ const isStray = (consumer, row) => Object.hasOwn(entryOf(consumer, row), 'strayE
 /** True when `consumer` wants `row`, has not sent its version, and no live delivery holds a send claim (`creating`) on it. */
 function pendingFor(consumer, row) {
   const entry = entryOf(consumer, row);
-  const sent = Number.isInteger(entry.sentVersion) && entry.sentVersion >= kinds().versionOf(row);
+  const sent = Number.isInteger(entry.sentVersion) && entry.sentVersion >= versionOf(row);
   return !sent && consumer.wants(row) && !(consumer.inFlight && consumer.inFlight(entry));
 }
 
@@ -34,7 +32,7 @@ const owes = (consumer, row) => pendingFor(consumer, row) && !isStray(consumer, 
 
 /**
  * List pending rows, re-queue each on `repair`; resolves to `{ kind, listed, queued, failed }` (row ids).
- * A kind registers it as `(options) => reconcile(options, depsFor(kind))`; tests pass stub deps.
+ * `./reconcile.js` registers it per kind as `(options) => reconcile(options, depsFor(kind))`; tests pass stub deps.
  */
 async function reconcile({ repair = false, log = logger } = {}, { kind, repo, consumers, enqueue }) {
   const all = await repo.listSyncPending();

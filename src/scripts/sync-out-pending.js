@@ -6,7 +6,8 @@
  * `demi-run`, like reconcile-engage.js.
  */
 
-const { KINDS, kindOf } = require('../sync-out/kinds');
+const { KINDS } = require('../sync-out/kinds');
+const { reconcileOf } = require('../sync-out/reconcile');
 const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
@@ -25,7 +26,7 @@ function parseArgs(argv) {
   return args;
 }
 
-async function run({ kind, repair }, reconcile = kindOf(kind).reconcile) {
+async function run({ kind, repair }, reconcile = reconcileOf(kind)) {
   const report = await reconcile({ repair });
   const engage = report.engage || {};
   const problems = [
