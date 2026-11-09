@@ -427,7 +427,7 @@ in `src/config.js` (`syncOut`, `engageApiBase`):
 | `ENGAGE_API_BASE` | ENGAGE's API, read by both reconcile scripts. Unset skips their ENGAGE side. Bicep param `engageApiBase`. |
 | `RECONCILE_ENGAGE_SCHEDULE` | Timer schedule above. |
 | `DEMI_ENGAGE_PRINCIPALS` | Who may call the ingest. Default `apim:engage`; see "Authentication & authorization". Bicep param `engagePrincipals`. |
-| `DEMI_TRACK_PRINCIPALS` | Who may call `PUT` and `DELETE /track/projects/:id`. Default `apim:track`; see "Authentication & authorization". Bicep param `trackPrincipals`. |
+| `DEMI_TRACK_PRINCIPALS` | Who may call `PUT` and `DELETE /track/projects/:id`. Default `apim:track`. Bicep param `trackPrincipals`. |
 
 A message gets host.json's `maxDequeueCount` sends. Earlier failures re-queue with a doubling delay;
 the last one records `failed` on the row, moves the message to `<SYNC_OUT_QUEUE>-poison` and logs
@@ -1810,7 +1810,7 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-sync-out-failed-<env>` | `AppTraces` | 2 | A sync-out message to eagle-api failed after its retries. Wherever `syncOutQueue` is set: test only |
 | `demi-track-projects-poll-<env>` | `AppTraces` | 2 | No `[track-projects-poll] mode=live` line in 20 minutes, or one with `failures=` over 0, or `run failed`. Checked every 5 minutes, wherever `syncProjectsSchedule` is set |
 | `demi-track-teams-<env>` | `AppTraces` | 2 | No `[track-teams] mode=live` line in 26 hours, or one with `failures=` over 0, or `nightly run failed`. Checked hourly, wherever `syncTeamsSchedule` is set |
-| `demi-track-push-<env>` | `AppTraces` | 2 | In 30 minutes, a `[demi-api] Track refused` line, an error-level `[track-push]` line that is not retryable, or 2 or more retryable lines for one project id. Checked every 15 minutes. APIM 401, 429 and 504 write no app line and show only in the Track log |
+| `demi-track-push-<env>` | `AppTraces` | 2 | In any 30 minutes, checked every 15: a `[demi-api] Track refused apim:` line or a `track` subscription with no registry row. Also an error-level `[track-push]` line that is not retryable, or 2 or more retryable lines for one project id. APIM 401, 429 and 504 write no app line and show only in the Track log |
 | `demi-track-drift-<env>` | `AppTraces` | 2 | The last `[track-teams] mode=live` line with `trackProjects=` over 0 shows `created=` or `updated=` over 0, or more `orphaned=` than the line before it. Checked hourly. Needs `deployTrackDriftAlert` true (default false) and `syncTeamsSchedule` set |
 | `demi-chunk-ingest-failures-<env>` | `AppTraces` | 2 | Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour |
 | `demi-cosmos-ru-<env>` | Cosmos `TotalRequestUnits` metric | 2 | Cosmos used more than `cosmosRuPerHourAlert` RU in the last hour: 3M on test and prod |

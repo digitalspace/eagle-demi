@@ -623,7 +623,7 @@ resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track push failed'
-    description: 'In the last 30 minutes DEMI refused Track (`[demi-api] Track refused`), wrote an error-level `[track-push]` line that is not retryable, or wrote 2 or more retryable lines for one project id. Retryable lines are `write failed` and `delete lost its etag race`; one alone is left to the retry Track sends. APIM 401, 429 and 504 write no app line and show only in the Track log. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
+    description: 'In the last 30 minutes DEMI refused Track (`[demi-api] Track refused apim:`), found no registry row for the `track` subscription, wrote an error-level `[track-push]` line that is not retryable, or wrote 2 or more retryable lines for one project id. Retryable lines are `write failed` and `delete lost its etag race`; one alone is left to the retry Track sends. APIM 401, 429 and 504 write no app line and show only in the Track log. A registry row with no write role is refused by requireWrite with no log line, so it also shows only in the Track log. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
     // Warning: DEMI keeps serving, one project's mirror is behind until the repair.
     severity: 2
     enabled: true
@@ -634,10 +634,10 @@ resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
       allOf: [
         {
           // SeverityLevel 3 is winston `error`, mapped by the Azure Monitor log exporter. Info lines
-          // share the prefix. `Track refused` is logged at warn, so it is matched by its text.
+          // share the prefix. The two refusal lines log at warn, so they are matched by their text.
           query: '''
 let lines = AppTraces
-| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused"
+| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused apim:" or Message startswith "[demi-api] APIM subscription 'track' has no registry row"
 | extend retryable = Message startswith "[track-push] write failed id=" or Message startswith "[track-push] delete lost its etag race id=", projectId = extract("id=([^ ]+)", 1, Message);
 let hard = lines | where not(retryable) | summarize n = count() | where n > 0 | project problem = strcat(n, " non-retryable line(s)");
 let repeated = lines | where retryable | summarize n = count() by projectId | where n >= 2 | project problem = strcat("project ", projectId, ": ", n, " retryable line(s)");
@@ -669,7 +669,7 @@ resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = i
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track project mirror drifted'
-    description: 'The latest `[track-teams] mode=live` line with trackProjects above 0 shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Limit: a missing night leaves no baseline within the 48 hour maximum, so that night\'s orphan rise is missed. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
+    description: 'The latest `[track-teams] mode=live` line with trackProjects above 0 shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Limit: a missing or failed night leaves no baseline within the 48 hour maximum, so that night\'s orphan rise is missed. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
     // Warning, like trackTeamsAlert: the nightly already repaired the rows it counted.
     severity: 2
     enabled: true
@@ -700,7 +700,7 @@ live | top 1 by TimeGenerated | where created > 0 or updated > 0 or orphaned > p
     }
     // Not auto-resolved: a rule still firing from last night would send no mail for tonight's drift.
     autoMitigate: false
-    muteActionsDuration: 'PT12H'
+    muteActionsDuration: 'PT23H'
     actions: {
       actionGroups: [ alertGroup.id ]
     }

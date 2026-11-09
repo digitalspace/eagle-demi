@@ -918,7 +918,7 @@ test('demi-track-push deploys in every environment and pins its failure query', 
     'a window as short as the frequency can split one push and its retry across two evaluations');
   assert.strictEqual(/query: '''\n([\s\S]+?)\n'''/.exec(block)?.[1], [
     'let lines = AppTraces',
-    '| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused"',
+    `| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused apim:" or Message startswith "[demi-api] APIM subscription 'track' has no registry row"`,
     '| extend retryable = Message startswith "[track-push] write failed id=" or Message startswith "[track-push] delete lost its etag race id=", projectId = extract("id=([^ ]+)", 1, Message);',
     'let hard = lines | where not(retryable) | summarize n = count() | where n > 0 | project problem = strcat(n, " non-retryable line(s)");',
     'let repeated = lines | where retryable | summarize n = count() by projectId | where n >= 2 | project problem = strcat("project ", projectId, ": ", n, " retryable line(s)");',
@@ -949,8 +949,8 @@ test('demi-track-drift reads the counts the teams sync logs and is off by defaul
   assert.deepStrictEqual(counts, { trackProjects: '7', created: '2', updated: '3', orphaned: '5' });
   assert.match(query, /^\| where trackProjects > 0\n\| sort by TimeGenerated asc\n\| extend previous = prev\(orphaned\);$/m,
     'a failed night logs trackProjects=0 and orphaned=0; as a baseline it makes the next night a false rise');
-  assert.match(block, /autoMitigate: false\n\s+muteActionsDuration: 'PT12H'/,
-    'auto-resolve would hold a firing rule open and send no mail for the next night');
+  assert.match(block, /autoMitigate: false\n\s+muteActionsDuration: 'PT23H'/,
+    'one mail a night: auto-resolve would send none for the next night, a short mute two for this one');
   assert.match(query, /\| top 1 by TimeGenerated \| where created > 0 or updated > 0 or orphaned > previous$/m,
     'only the latest night is judged, or one bad night alerts for two days');
   assert.strictEqual(/^let span = (\S+);$/m.exec(query)?.[1], '48h', 'two nights, the log alert maximum');
