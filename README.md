@@ -795,6 +795,11 @@ yarn lint && yarn test && yarn test:py
 cd frontend && yarn lint && yarn test && yarn build
 ```
 
+`yarn lint` also runs `scripts/eslint-size-freeze.cjs`. It fails when a file or function recorded in
+`scripts/eslint-size-freeze.{api,frontend}.json` grows, or when new code passes the size or complexity
+limits. After you shrink a recorded file, lint fails until you run
+`node scripts/eslint-size-freeze.cjs --tighten api` (or `frontend`) and commit the lowered baseline.
+
 Authorization is the highest-consequence surface, so those tests assert behaviour rather than
 implementation:
 
