@@ -71,6 +71,7 @@ var proxyMethods = [
 var machineConsumers = [
   'eagle-api'
   'engage'
+  'track'
 ]
 
 // The Consumption tier emits no resource logs, so there is no GatewayLogs diagnostic setting here.

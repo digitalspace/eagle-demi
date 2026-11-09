@@ -405,6 +405,13 @@ param engageApiBase string = ''
 @description('Comma-separated registry row ids permitted on PUT /engage/*.')
 param engagePrincipals string = 'apim:engage'
 
+// Same rules as engagePrincipals. Never share a principal with that list or eagleMirrorPrincipals.
+@description('Comma-separated registry row ids permitted on PUT and DELETE /track/projects/:id.')
+param trackPrincipals string = 'apim:track'
+
+@description('Deploy the log alert that fires when the nightly Track teams sync still finds project drift. Off until Track pushes its writes, because until then the nightly is the only writer and fires every night.')
+param deployTrackDriftAlert bool = false
+
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
@@ -792,6 +799,7 @@ module observability './modules/observability.bicep' = if (deployFoundation) {
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
     deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
+    deployTrackDriftAlert: deployTrackDriftAlert
     chunkRestampQueue: chunkRestampQueue
     syncOutQueue: syncOutQueue
     // Same values the API timers get, so a timer that never runs has no alert expecting it.
@@ -898,6 +906,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     reconcileEngageSchedule: reconcileEngageSchedule
     engageApiBase: engageApiBase
     engagePrincipals: engagePrincipals
+    trackPrincipals: trackPrincipals
     // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
     // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
     dataSourceIdentityId: deploySearch ? identityId : existingSearchIndexerIdentityId

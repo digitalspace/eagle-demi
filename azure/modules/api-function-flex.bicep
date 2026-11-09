@@ -353,6 +353,9 @@ param engageApiBase string = ''
 @description('Comma-separated registry row ids permitted on PUT /engage/*. Empty refuses every writer.')
 param engagePrincipals string = 'apim:engage'
 
+@description('Comma-separated registry row ids permitted on PUT and DELETE /track/projects/:id. Empty refuses every writer.')
+param trackPrincipals string = 'apim:track'
+
 @description('NCRONTAB schedule for the ENGAGE reconcile timer. Empty registers no timer.')
 param reconcileEngageSchedule string = ''
 
@@ -1071,6 +1074,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DEMI_ENGAGE_PRINCIPALS'
           value: engagePrincipals
+        }
+        {
+          name: 'DEMI_TRACK_PRINCIPALS'
+          value: trackPrincipals
         }
         {
           // Always present: an empty value makes the gate answer backup-unconfigured and refuse every lease.

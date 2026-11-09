@@ -28,6 +28,9 @@ param deployReconcileDriftAlert bool = false
 @description('Alert when a bulk download job fails. Off by default, like the drift alert: an environment with no BULK_DOWNLOADS_QUEUE never writes the line this rule reads.')
 param deployBulkDownloadPoisonAlert bool = false
 
+@description('Alert when the nightly Track teams sync still finds project drift. Off until Track pushes its writes: until then the nightly is the only writer of works and fires every night.')
+param deployTrackDriftAlert bool = false
+
 @description('Storage queue the chunk parent-field re-stamp worker triggers on. Gates the poison alert below directly rather than through its own bool: an environment with no queue name never writes the line the alert reads.')
 param chunkRestampQueue string = ''
 
@@ -593,6 +596,87 @@ let teams = AppTraces | where TimeGenerated > ago(span) and Message startswith "
 let absent = teams | where Message contains "[track-teams] mode=live" | summarize n = count() | where n == 0 | project problem = "no live teams line";
 let failing = teams | extend failures = toint(extract("failures=([0-9]+)", 1, Message)) | where failures > 0 or Message contains "nightly run failed" | summarize n = count() | where n > 0 | project problem = strcat(n, " failed teams line(s)");
 union absent, failing
+'''
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// A Track push DEMI could not apply. Error level only: the same prefix carries info lines (held, stateMoved).
+resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-track-push-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI Track push failed'
+    description: 'An error-level `[track-push]` line in the last 15 minutes: a Track PUT or DELETE on /track/projects/:id was not fully applied. The line names the project id. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
+    // Warning: DEMI keeps serving, one project's mirror is behind until the repair.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          // SeverityLevel 3 is winston `error`, mapped by the Azure Monitor log exporter.
+          query: 'AppTraces | where Message startswith "[track-push]" and SeverityLevel >= 3'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 1
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// With Track pushing every write, the nightly teams sync should find nothing to create or update,
+// and no new orphans. Judges the latest live line only; the 48h span is the log alert maximum.
+resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployTrackDriftAlert) {
+  name: 'demi-track-drift-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI Track project mirror drifted'
+    description: 'The latest `[track-teams] mode=live` line shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
+    // Warning, like trackTeamsAlert: the nightly already repaired the rows it counted.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT1H'
+    windowSize: 'P2D'
+    criteria: {
+      allOf: [
+        {
+          query: '''
+let span = 48h;
+let live = AppTraces | where TimeGenerated > ago(span) and Message startswith "[track-teams] mode=live"
+| extend created = toint(extract("created=([0-9]+)", 1, Message)), updated = toint(extract("updated=([0-9]+)", 1, Message)), orphaned = toint(extract("orphaned=([0-9]+)", 1, Message))
+| sort by TimeGenerated asc
+| extend previous = prev(orphaned);
+live | top 1 by TimeGenerated | where created > 0 or updated > 0 or orphaned > previous
 '''
           timeAggregation: 'Count'
           operator: 'GreaterThan'
