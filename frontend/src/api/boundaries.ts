@@ -3,11 +3,8 @@ import { api } from './client';
 import type { Feature, FeatureCollection, Geometry } from '../map/geojson';
 
 /**
- * Administrative boundaries, in three resolutions.
- *
- * A boundary row is fetched at one of three tiers, and the cache only ever climbs: once the full
- * polygons are in hand, a screen asking for the simplified ones is answered from the cache rather
- * than throwing the detail away and fetching again.
+ * The cache only climbs tiers: once full polygons are cached, a simplified request is served
+ * from them instead of discarding the detail and refetching.
  */
 
 export type BoundaryLayer = 'regionalDistricts' | 'municipalities' | 'electoralDistricts';
