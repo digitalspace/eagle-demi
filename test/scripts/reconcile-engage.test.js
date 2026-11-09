@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * reconcile-engage against a fake eagle-api, a fake ENGAGE API, an in-memory repository and a
- * recording enqueue. What matters is what is reported and what is re-queued: only `--repair`
- * queues, and only the rows Eagle disagrees with.
+ * reconcile-engage against fake eagle-api and ENGAGE APIs, an in-memory repository and a recording
+ * enqueue. Only `--repair` queues, and only the rows Eagle disagrees with.
  */
 
 process.env.NODE_ENV = 'test';

@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * ENGAGE ingest for comment periods: `PUT /engage/engagements/:engagementId`.
- *
- * ENGAGE owns the rows it pushes (`sourceSystem: 'engage'`). The Eagle mirror (`comment-period.js`)
- * writes only Eagle's own fields onto them, and sync-out (`src/sync-out`) writes them on to Eagle.
+ * ENGAGE ingest for comment periods. ENGAGE owns the rows it pushes (`sourceSystem: 'engage'`);
+ * the Eagle mirror writes only Eagle's own fields onto them, and sync-out writes them on to Eagle.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');

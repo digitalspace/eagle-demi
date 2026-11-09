@@ -1,9 +1,7 @@
 'use strict';
 
 /**
- * `PUT /engage/engagements/:engagementId`: the ENGAGE ingest of comment periods.
- *
- * Asserted on the stored row and the response, since the ownership split is silent when it breaks:
+ * `PUT /engage/engagements/:engagementId`. Asserted on the stored row and the response:
  * a push that clobbers Eagle's fields or misses `sources.engage.read` still answers 2xx.
  */
 
