@@ -21,7 +21,7 @@
   "src/helpers/access-odata.js": {"complexity":[25]},
   "src/helpers/access-sql.js": {"max-lines":[745]},
   "src/helpers/auth.js": {"complexity":[21]},
-  "src/helpers/native-query.js": {"complexity":[63,47],"max-lines":[405]},
+  "src/helpers/native-query.js": {"complexity":[63,47]},
   "src/helpers/pdf-original.js": {"complexity":[32]},
   "src/helpers/pdf-tail.js": {"complexity":[72,56],"max-lines":[556]},
   "src/http/router.js": {"complexity":[33],"max-lines":[487]},

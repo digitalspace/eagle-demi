@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * The native list contract, parsed once for every `GET /<kind>` list: offset `page` (1-based) and
- * `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the kind's declared filters.
- * Anything else, and any repeated control parameter, is a 400 rather than silently ignored.
- * Filter and `q` clauses also honour each record's own dial on the field, so `count=true` cannot
- * reveal a value that record hides.
- */
+// The native list contract for every `GET /<kind>` list: an unknown or repeated control parameter is a 400.
+// Filter and `q` clauses honour each record's own dial, so `count=true` cannot reveal a value it hides.
 
 const cosmos = require('../db/cosmos-nosql');
 const { pageSizeFor, MAX_PAGE_DEPTH } = require('./access-sql');
@@ -121,7 +116,7 @@ function rangeBound(op, day) {
   return `${day}T${op === 'ge' ? '00:00:00.000' : '23:59:59.999'}Z`;
 }
 
-/** A real `YYYY-MM-DD` calendar day: `2026-02-30` passes the shape and fails the round trip. */
+/** A real `YYYY-MM-DD` calendar day: February 30 passes the shape and fails the round trip. */
 function isDay(value) {
   if (!DAY.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
@@ -335,18 +330,8 @@ function isEagleId(id) {
   return EAGLE_ID.test(String(id || ''));
 }
 
-/**
- * The repository a native kind needs, over one Cosmos container: `list` and `count` share one
- * predicate, `getById` is the same predicate narrowed to one id (cross-partition, so it needs no
- * partition key from the caller, and drains pages through `queryFirst`: one page can come back
- * empty while the row exists).
- *
- * @param {object} opts
- * @param {string} opts.container
- * @param {string} opts.entity          catalog entity, for the `selectFor` projection
- * @param {string} opts.partitionField  'id' or 'projectId'
- * @param {string} opts.defaultOrder    e.g. 'c.id ASC', used when the caller names no sort
- */
+// `list`, `count` and `getById` share one predicate. `getById` is cross-partition and drains pages via
+// `queryFirst`: one page can come back empty while the row exists.
 function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   const spec = (access, criteria, orderBy) => selectWhere({
     access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
@@ -365,11 +350,8 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   };
 }
 
-/**
- * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` from
- * the parent as this caller may see it. Runs on rows already redacted; a parent the caller cannot
- * read adds nothing.
- */
+// Adds `projectName` and `projectEagleId` from the parent as this caller may see it, to rows already
+// redacted; a parent the caller cannot read adds nothing.
 async function projectParentJoin(access, rows) {
   const projects = require('../repositories/projects');
   const ids = [...new Set(rows.map(row => row && row.projectId).filter(Boolean).map(String))];
