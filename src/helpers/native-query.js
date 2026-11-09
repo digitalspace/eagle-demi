@@ -367,6 +367,10 @@ async function projectParentJoin(access, rows) {
 
   const parents = new Map((await projects.listRowsByIds(access, ids))
     .map(row => [String(row.id), redactForAccess('projects', row, access)]));
+  return withProjectNames(rows, parents);
+}
+
+function withProjectNames(rows, parents) {
   return rows.map((row) => {
     const parent = row && parents.get(String(row.projectId));
     if (!parent) return row;
@@ -391,5 +395,6 @@ module.exports = {
   rangeBound,
   isEagleId,
   cosmosKind,
-  projectParentJoin
+  projectParentJoin,
+  withProjectNames
 };
