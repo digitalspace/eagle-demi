@@ -5,7 +5,7 @@
 
 const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
-const { DEFAULTS } = require('../domain/notifications');
+const { DEFAULTS } = require('../domain/notification-fields');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
