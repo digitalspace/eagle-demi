@@ -614,7 +614,8 @@ union absent, failing
   }
 }
 
-// A Track push DEMI could not apply. Error level only: the same prefix carries info lines (held, stateMoved).
+// A Track push DEMI refused or could not apply. A lone retryable line stays quiet: Track sends a
+// 5xx again once, so one id needs two such lines to mean the retry did not land.
 resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-track-push-${environmentName}'
   location: location
@@ -622,21 +623,29 @@ resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track push failed'
-    description: 'An error-level `[track-push]` line in the last 15 minutes: a Track PUT or DELETE on /track/projects/:id was not fully applied. The line names the project id. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
+    description: 'In the last 30 minutes DEMI refused Track (`[demi-api] Track refused`), wrote an error-level `[track-push]` line that is not retryable, or wrote 2 or more retryable lines for one project id. Retryable lines are `write failed` and `delete lost its etag race`; one alone is left to the retry Track sends. APIM 401, 429 and 504 write no app line and show only in the Track log. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
     // Warning: DEMI keeps serving, one project's mirror is behind until the repair.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT15M'
-    windowSize: 'PT15M'
+    windowSize: 'PT30M'
     criteria: {
       allOf: [
         {
-          // SeverityLevel 3 is winston `error`, mapped by the Azure Monitor log exporter.
-          query: 'AppTraces | where Message startswith "[track-push]" and SeverityLevel >= 3'
+          // SeverityLevel 3 is winston `error`, mapped by the Azure Monitor log exporter. Info lines
+          // share the prefix. `Track refused` is logged at warn, so it is matched by its text.
+          query: '''
+let lines = AppTraces
+| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused"
+| extend retryable = Message startswith "[track-push] write failed id=" or Message startswith "[track-push] delete lost its etag race id=", projectId = extract("id=([^ ]+)", 1, Message);
+let hard = lines | where not(retryable) | summarize n = count() | where n > 0 | project problem = strcat(n, " non-retryable line(s)");
+let repeated = lines | where retryable | summarize n = count() by projectId | where n >= 2 | project problem = strcat("project ", projectId, ": ", n, " retryable line(s)");
+union hard, repeated
+'''
           timeAggregation: 'Count'
-          operator: 'GreaterThanOrEqual'
-          threshold: 1
+          operator: 'GreaterThan'
+          threshold: 0
           failingPeriods: {
             numberOfEvaluationPeriods: 1
             minFailingPeriodsToAlert: 1
@@ -653,14 +662,14 @@ resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
 
 // With Track pushing every write, the nightly teams sync should find nothing to create or update,
 // and no new orphans. Judges the latest live line only; the 48h span is the log alert maximum.
-resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployTrackDriftAlert) {
+resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployTrackDriftAlert && !empty(syncTeamsSchedule)) {
   name: 'demi-track-drift-${environmentName}'
   location: location
   tags: tags
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track project mirror drifted'
-    description: 'The latest `[track-teams] mode=live` line shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
+    description: 'The latest `[track-teams] mode=live` line with trackProjects above 0 shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Limit: a missing night leaves no baseline within the 48 hour maximum, so that night\'s orphan rise is missed. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
     // Warning, like trackTeamsAlert: the nightly already repaired the rows it counted.
     severity: 2
     enabled: true
@@ -673,7 +682,8 @@ resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = i
           query: '''
 let span = 48h;
 let live = AppTraces | where TimeGenerated > ago(span) and Message startswith "[track-teams] mode=live"
-| extend created = toint(extract("created=([0-9]+)", 1, Message)), updated = toint(extract("updated=([0-9]+)", 1, Message)), orphaned = toint(extract("orphaned=([0-9]+)", 1, Message))
+| extend trackProjects = toint(extract("trackProjects=([0-9]+)", 1, Message)), created = toint(extract("created=([0-9]+)", 1, Message)), updated = toint(extract("updated=([0-9]+)", 1, Message)), orphaned = toint(extract("orphaned=([0-9]+)", 1, Message))
+| where trackProjects > 0
 | sort by TimeGenerated asc
 | extend previous = prev(orphaned);
 live | top 1 by TimeGenerated | where created > 0 or updated > 0 or orphaned > previous
@@ -688,7 +698,9 @@ live | top 1 by TimeGenerated | where created > 0 or updated > 0 or orphaned > p
         }
       ]
     }
-    autoMitigate: true
+    // Not auto-resolved: a rule still firing from last night would send no mail for tonight's drift.
+    autoMitigate: false
+    muteActionsDuration: 'PT12H'
     actions: {
       actionGroups: [ alertGroup.id ]
     }
