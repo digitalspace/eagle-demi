@@ -9,7 +9,6 @@
  */
 
 const config = require('../config');
-const { createBlobClientFor } = require('../storage/azureBlob');
 const { logger } = require('../utils/logger');
 
 let cached = null;
@@ -17,7 +16,8 @@ let cached = null;
 /** Keyless container client for the configured backup, built once per account and container. */
 function containerClientFor(account, container) {
   if (!cached || cached.account !== account || cached.container !== container) {
-    const store = createBlobClientFor(account, { container });
+    // Required here so @azure/storage-blob loads only when a backup is checked.
+    const store = require('../storage/azureBlob').createBlobClientFor(account, { container });
     cached = { account, container, client: store.getContainerClient() };
   }
   return cached.client;

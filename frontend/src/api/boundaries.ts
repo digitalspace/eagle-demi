@@ -223,32 +223,6 @@ export async function loadBoundaries(
   }
 }
 
-/** Full geometry for one named boundary, merged into the cached row. */
-export async function loadBoundaryGeometry(
-  layer: BoundaryLayer,
-  name: string,
-): Promise<BoundaryRow | null> {
-  if (!name || name === 'all') return null;
-
-  const rows = boundaryCache.get(layer) ?? [];
-  const cached = rows.find((row) => (row.name ?? '').toLowerCase() === name.toLowerCase());
-  if (cached?.geometry) return cached;
-
-  try {
-    const row = await api<BoundaryRow>(`/boundaries/${encodeURIComponent(name)}`);
-    if (!row?.geometry) return null;
-
-    const merged = [...rows];
-    const index = merged.findIndex((b) => (b.name ?? '').toLowerCase() === name.toLowerCase());
-    if (index === -1) merged.push(row);
-    else merged[index] = { ...merged[index], geometry: row.geometry };
-    boundaryCache.set(layer, merged);
-    return row;
-  } catch {
-    return null;
-  }
-}
-
 export function useBoundaries(layer: BoundaryLayer | null, mode: BoundaryMode = 'simplified') {
   return useQuery({
     queryKey: ['boundaries', layer, mode],

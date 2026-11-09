@@ -66,6 +66,18 @@ test('an archived blob matching size and MD5 is ok, read through properties only
   assert.deepStrictEqual(fake.names, [KEY]);
 });
 
+test('with no injected client, the gate asks the blob factory for the configured account and container', async (t) => {
+  const azureBlob = require('../../src/storage/azureBlob');
+  const fake = fakeContainer(async () => archived());
+  const factory = t.mock.method(azureBlob, 'createBlobClientFor', () => ({ getContainerClient: () => fake }));
+
+  const result = await assertBackedUp(KEY, LIVE, configured(undefined));
+
+  assert.deepStrictEqual(result, { ok: true });
+  assert.deepStrictEqual(factory.mock.calls.map((c) => c.arguments), [['eaglebaktest', { container: 'originals' }]]);
+  assert.deepStrictEqual(fake.names, [KEY]);
+});
+
 test('unconfigured by default: the empty BACKUP_ACCOUNT refuses without calling Azure', async () => {
   assert.strictEqual(config.backupAccount, '');
   const result = await assertBackedUp(KEY, LIVE);

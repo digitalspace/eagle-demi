@@ -789,6 +789,8 @@ come right on their next push from Eagle.
 Run both halves. This is the gate for every change.
 
 ```bash
+pip install requests==2.34.2
+pip install -r pdf-title/requirements.txt pytest==9.1.1 cryptography==48.0.0
 yarn lint && yarn test && yarn test:py
 cd frontend && yarn lint && yarn test && yarn build
 ```
@@ -1668,6 +1670,8 @@ not redeploy the other:
 | `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
 | `azure-deploy-staging-api.yaml` | `demi-api-fc-test` | `src/**`, `api/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**`, `azure/search/data-checks.json`, `azure/search/{indexes,indexers,datasources}/**` |
 | `azure-deploy-staging-pdf-title.yaml` | `demi-pdf-title-test`, when it exists (see [PDF title worker](#pdf-title-worker)) | `pdf-title/**` except tests, `scripts/package-pdf-title.sh` |
+| `azure-deploy-staging-secret-rotator.yaml` | `demi-secret-rotator-test`, when it exists | `src/secret-rotator/**`, `src/secret-sync/logger.js`, `src/utils/azure-credential.js`, `scripts/package-secret-sync.sh` |
+| `azure-deploy-staging-secret-sync.yaml` | `demi-secret-sync-test` | `src/secret-sync/**`, `src/utils/**`, `src/config.js`, `scripts/package-secret-sync.sh` |
 | `draft-release.yaml` | nothing — mints the tag and draft release for the same push (see [Releases](#releases)) | *any path* |
 
 **The five staging workflows stay separate, and `draft-release.yaml` is a sixth.** Folding the deploys
@@ -1680,9 +1684,13 @@ that must happen once per push regardless of paths, so it lives in the workflow 
 filter.
 
 All six also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
-what actually ships. That script re-includes `frontend/public/assets/geojson/**` because the
-boundary seeder reads it at runtime, so that one path fires both workflows. Adding a directory to the package without adding it here gives you a deploy that
-silently never runs.
+what actually ships. Adding a directory to the package without adding it here gives you a deploy
+that silently never runs.
+
+That script re-includes `frontend/public/assets/geojson/**` for the boundary seeder, and
+`azure/search/data-checks.json` and `azure/search/{indexes,indexers,datasources}/**` for the search
+code, because each is read at runtime. The geojson path sits under `frontend/`, so it fires both
+workflows.
 
 GitHub Actions authenticates as the user-assigned managed identity **`demi-cicd-test`** through a
 federated credential, with no client secret anywhere:
@@ -1724,14 +1732,16 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-**The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
-`workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
-on staging, never a branch. Its jobs run in this order: `verify-search-schema`,
-`deploy-api`, then `deploy-pdf-title`, which deploys the worker to `demi-pdf-title-prod` (it skips
-with a notice only if that app does not exist). Every Azure job declares `environment: prod`, which is what produces the OIDC
-subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
-federated credential. An earlier note here said no prod workflow existed, which was true only
-between 2026-08-05 and the prod estate being built.
+**`.github/workflows/azure-deploy-prod.yaml` deploys prod.** It runs on `workflow_dispatch` only,
+takes a `version`, and checks out `refs/tags/<version>`: a tag verified on staging, never a branch.
+Every Azure job declares `environment: prod`, which produces the OIDC subject
+`repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the federated
+credential.
+
+`verify-search-schema` runs first, then `deploy-api`, then `deploy-pdf-title` and
+`deploy-secret-rotator` side by side. The pdf-title job skips with a notice if
+`demi-pdf-title-prod` does not exist. The `rollback` job runs only when `deploy-api` fails after
+publishing, and `publish-release` runs last, after the schema check and all three deploys.
 
 Its last job, `publish-release`, flips that version's draft release to published and marks it latest.
 It runs only when every deploy job has succeeded, holds `contents: write` and nothing else, and
@@ -1920,7 +1930,7 @@ Security licence.
 | Secret scanning | Scans the full history on every branch. Zero alerts |
 | **Push protection** | Blocks a push containing a recognised credential, instead of reporting it once it is already public |
 | Dependabot alerts + security updates | Opens PRs for advisories; no config needed for that part |
-| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python`. `.github/workflows/codeql.yml` is disabled in Actions and does not run |
+| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python`. `.github/workflows/codeql.yml` is disabled manually in the Actions settings, so its `pull_request` and `schedule` triggers do not fire |
 
 **Push protection is the enforcement behind "never ship `.env`".** That rule was previously a
 convention, and this repository has already shipped a `.env` carrying `MONGODB_PASSWORD`,
