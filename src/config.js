@@ -435,6 +435,8 @@ const config = {
   // Registry row ids allowed to call the ENGAGE ingest, PUT /engage/*. Same rules as the Eagle
   // mirror's list, defaulting to ENGAGE through APIM. Never share a principal with that list.
   get engagePrincipals() { return principalsFromEnv('DEMI_ENGAGE_PRINCIPALS', 'apim:engage'); },
+  // The Track push, /track/projects/:id. Same rules, defaulting to Track through APIM; never share a principal with those lists.
+  get trackPrincipals() { return principalsFromEnv('DEMI_TRACK_PRINCIPALS', 'apim:track'); },
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),

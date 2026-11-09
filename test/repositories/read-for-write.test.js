@@ -203,6 +203,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
     'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
+    // A Track delete must find a row hidden from the machine principal, as the Eagle push does.
+    'controllers/nosql/track-push.js',
     'controllers/nosql/update.js',
     'controllers/nosql/user.js',
     // A taken-over group's parent, read to derive the group's read: a filtered read would miss a sealed one.

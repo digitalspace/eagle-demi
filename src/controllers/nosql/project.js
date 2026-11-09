@@ -51,6 +51,7 @@ const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
 const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
+const { TRACK_PUSHED_AT } = require('../../scripts/sync-track-projects');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -1008,6 +1009,8 @@ function mergeEaglePush(doc, existing, { switchTo } = {}) {
   // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
+  // Track's ordering stamp, rebuilt away like the marker: dropped, a stale Track push would land.
+  if (existing && existing[TRACK_PUSHED_AT] !== undefined) merged[TRACK_PUSHED_AT] = existing[TRACK_PUSHED_AT];
   carryDemiOnlyFields(merged, existing, undefined, { switchTo });
   // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
   if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
@@ -1283,68 +1286,78 @@ function shortCodeBody(project, row) {
   };
 }
 
-/** Flag and narrow to staff, never remove: eagle-api's delete only flags, and staff and reconcile still read the row. */
+/** Flag and narrow to staff, never remove: staff and reconcile still read the row. Shared by both DELETE routes. */
+// Resolves `{status}`: missing, conflict, skipped (`reason`), failed (`stage`, `error`), deleted (`from` unset on a repeat).
+async function deleteProjectRow(req, id, { read, takeOver: takesOver = true, marker = false, skip = () => null }) {
+  const existing = await read();
+  if (!existing) return { status: 'missing' };
+
+  const written = await writeGuarded({
+    existing,
+    reread: read,
+    attempt: async (current) => {
+      if (!current) return { status: 'missing' };
+      const reason = skip(current);
+      if (reason) return { status: 'skipped', reason };
+      if (deleteStands(current)) return { status: 'already', saved: current };
+      // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
+      const now = new Date().toISOString();
+      const row = markDeleted({ ...current, ...(takesOver ? await takeOver(current, now) : {}), updatedAt: now });
+      // Restore returns an unheld row to Eagle's level, so a row left below it keeps its own.
+      const eagle = current.sources && current.sources.eagle;
+      if (eagle && !current.levelHeldAt && levelOfRead(current.read) < eagleLevel(eagle)) {
+        row.levelHeldAt = now;
+        logger.info('[Project Controller] delete held the project below Eagle\'s level', { id: current.id, eagleId: current.eagleId });
+      }
+      // Written first: an instance killed mid-cascade leaves the debt on the row for a repeat to find.
+      if (marker && visibilityMoved(current, row)) row.cascadePendingAt = now;
+      return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
+    },
+    onLost: (_current, attempt) =>
+      logger.warn('[Project Controller] project delete lost its etag race, rebuilding', { id, attempt })
+  });
+  if (['missing', 'conflict', 'skipped'].includes(written.status)) return written;
+  const { saved, existing: from } = written;
+  if (from) noteTakeover(from, saved, 'DELETE /projects/:id');
+
+  // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
+  if (from) {
+    auditEvent(req, {
+      action: 'project.delete',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
+    });
+  }
+
+  const owed = Boolean(saved.cascadePendingAt);
+  if ((from && visibilityMoved(from, saved)) || owed) {
+    const failure = await runCascade(saved, saved.eagleId);
+    if (failure) return { status: 'failed', stage: 'cascade', error: failure, saved, from };
+    if (owed) await clearCascadePending(saved, saved.eagleId);
+  }
+
+  const twinFailure = saved.eagleId
+    ? await narrowTwin(saved, saved.eagleId, (twin, eagleId) => runCascade(twin, eagleId, { updates: false }))
+    : null;
+  if (twinFailure) return { status: 'failed', stage: 'twin', error: twinFailure, saved, from };
+
+  return { status: 'deleted', saved, from };
+}
+exports.deleteProjectRow = deleteProjectRow;
+
 exports.deleteProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const reread = () => projects.getById(access, req.params.id);
-    const existing = await reread();
-    if (!existing) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const written = await writeGuarded({
-      existing,
-      reread,
-      attempt: async (current) => {
-        if (!current) return { status: 'missing' };
-        if (deleteStands(current)) return { status: 'already', saved: current };
-        // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
-        const now = new Date().toISOString();
-        const row = markDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
-        // Restore returns an unheld row to Eagle's level, so a row left below it keeps its own.
-        const eagle = current.sources && current.sources.eagle;
-        if (eagle && !current.levelHeldAt && levelOfRead(current.read) < eagleLevel(eagle)) {
-          row.levelHeldAt = now;
-          logger.info('[Project Controller] delete held the project below Eagle\'s level', { id: current.id, eagleId: current.eagleId });
-        }
-        return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
-      },
-      onLost: (_current, attempt) =>
-        logger.warn('[Project Controller] project delete lost its etag race, rebuilding',
-          { id: req.params.id, attempt })
-    });
-    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
-    if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
-    const { saved, existing: from } = written;
-    if (from) noteTakeover(from, saved, 'DELETE /projects/:id');
-
-    // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
-    if (from) {
-      auditEvent(req, {
-        action: 'project.delete',
-        targetType: 'project',
-        targetId: saved.id,
-        projectId: saved.id,
-        detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
-      });
-    }
-
-    const owed = Boolean(saved.cascadePendingAt);
-    if ((from && visibilityMoved(from, saved)) || owed) {
-      const failure = await runCascade(saved, saved.eagleId);
-      if (failure) return res.status(500).json({ success: false, error: failure });
-      if (owed) await clearCascadePending(saved, saved.eagleId);
-    }
-
-    const twinFailure = saved.eagleId
-      ? await narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
-      : null;
-    if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
+    const result = await deleteProjectRow(req, req.params.id, { read: () => projects.getById(access, req.params.id) });
+    if (result.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (result.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
+    if (result.status === 'failed') return res.status(500).json({ success: false, error: result.error });
 
     return res.json({
       message: 'Project deleted successfully',
-      deleted: redactForAccess('projects', saved, access)
+      deleted: redactForAccess('projects', result.saved, access)
     });
   } catch (err) {
     return serverError(res, err, 'project controller failed');

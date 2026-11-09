@@ -11,7 +11,7 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
 const {
-  requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requirePdfTitleWorker
+  requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requireTrackWriter, requirePdfTitleWorker
 } = require('../middleware/require-roles');
 // Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
 // grant can widen what one caller sees — see middleware/credentials.js.
@@ -42,6 +42,7 @@ const documentController = () => require('../controllers/nosql/document');
 const updateController = () => require('../controllers/nosql/update');
 const commentPeriodController = () => require('../controllers/nosql/comment-period');
 const engageCommentPeriodController = () => require('../controllers/nosql/engage-comment-period');
+const trackPushController = () => require('../controllers/nosql/track-push');
 const commentController = () => require('../controllers/nosql/comment');
 const organizationController = () => require('../controllers/nosql/organization');
 const notificationController = () => require('../controllers/nosql/notification');
@@ -267,6 +268,10 @@ const routes = [
   // ENGAGE ingest. ENGAGE owns the comment periods it pushes and DEMI writes them on to Eagle
   // (src/sync-out). Pinned to DEMI_ENGAGE_PRINCIPALS on the same terms as the Eagle mirror.
   { method: 'put', path: '/engage/engagements/:engagementId', guards: [authMiddleware, requireWrite, requireEngageWriter], load: () => engageCommentPeriodController().upsertFromEngage },
+
+  // Track push: each Track write sends the whole project. Pinned to DEMI_TRACK_PRINCIPALS, same terms.
+  { method: 'put', path: '/track/projects/:id', guards: [authMiddleware, requireWrite, requireTrackWriter], load: () => trackPushController().putTrackProject },
+  { method: 'delete', path: '/track/projects/:id', guards: [authMiddleware, requireWrite, requireTrackWriter], load: () => trackPushController().deleteTrackProject },
 
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the

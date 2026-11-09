@@ -4530,6 +4530,114 @@ paths:
         '503':
           description: The row changed repeatedly while the push was retried. The caller retries.
 
+  /api/track/projects/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The Track project id.
+        schema:
+          type: string
+    put:
+      summary: Store a project pushed by Track
+      description: |-
+        Receives one whole Track project with its works, phases and events nested, and writes it
+        under the same merge rules as the nightly sync. A project DEMI does not hold is created
+        at level 1. A field staff saved in DEMI is kept. Only the `apim:track` principal may call
+        this route.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pushedAt, project]
+              properties:
+                pushedAt:
+                  type: integer
+                  format: int64
+                  description: >-
+                    Track's commit clock, epoch milliseconds. A push older than the stored one
+                    is refused with 409; an equal one is written.
+                project:
+                  type: object
+                  required: [id, works]
+                  description: The Track project row, with `works[].phases[].events[]` nested.
+                  properties:
+                    id:
+                      type: integer
+                      description: Must equal the `id` in the path.
+                    works:
+                      type: array
+                      items:
+                        type: object
+      responses:
+        '200':
+          description: >-
+            `action` is `updated` or `unchanged`, or `skipped` with `reason` `nativeClash` (a
+            native project holds this Eagle id) or `apiRow` (the row has no Track source).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackPushResult'
+        '201':
+          description: A new row was written. `action` is `created` or `relinked`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackPushResult'
+        '400':
+          description: >-
+            Nothing was written. `code` is `PROJECT_ID_MISMATCH`, `PUSHED_AT_INVALID` or
+            `PAYLOAD_INVALID` (a `works`, `phases` or `events` list is missing).
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '409':
+          description: >-
+            Nothing was written. `code` is `STALE_PUSH` (a newer push already landed),
+            `CREATED_BEHIND` (another push created the row during this one; send it again) or
+            `DUPLICATE_ID` (the project's Eagle id is held by more than one row).
+        '500':
+          description: The write failed.
+        '503':
+          description: The row changed repeatedly while the push was retried. The caller retries.
+    delete:
+      summary: Unpublish a project Track deleted
+      description: |-
+        Flags the row deleted and narrows it to staff; the row stays. A row hidden from the caller
+        is still found. The documents follow. The row is not taken over from Eagle, and an Eagle
+        push cannot republish it. Undo with `PUT /api/projects/{id}/restore`, then
+        `PUT /api/projects/{id}/level`. Any request body is ignored.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: >-
+            `action` is `deleted`, `unchanged` (already deleted; a cascade still owed is retried),
+            or `skipped` with `reason` `apiRow` (the row has no Track source) or `demiOwned`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackPushResult'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          description: DEMI holds no row with this id.
+        '500':
+          description: >-
+            The row is flagged, but its documents or its `eagle-<id>` copy were not updated, or
+            the write failed. The caller retries.
+        '503':
+          description: The row changed repeatedly while the delete was retried. The caller retries.
+
   /api/eagle/comments/{eagleId}:
     put:
       summary: Mirror a public comment from eagle-api
@@ -8469,6 +8577,11 @@ components:
         in `DEMI_ENGAGE_PRINCIPALS` (default `apim:engage`), hold `demi-service-write`, and carry
         no project scope. eagle-api's principal, staff users and any other key get 403. An empty
         setting refuses everyone.
+    TrackForbidden:
+      description: |-
+        Forbidden. Only Track may call the push: the caller must be a registry principal listed
+        in `DEMI_TRACK_PRINCIPALS` (default `apim:track`), hold `demi-service-write`, and carry
+        no project scope. An empty setting refuses everyone.
 
   schemas:
     RequestStats:
@@ -9800,6 +9913,20 @@ components:
             Ignored pushes only: the `pushedAt` of the push that is stored, which this one lost
             to.
 
+    TrackPushResult:
+      type: object
+      required: [id, action]
+      properties:
+        id:
+          type: string
+          description: The Track project id, which is the DEMI row id.
+        action:
+          type: string
+          enum: [created, relinked, updated, unchanged, deleted, skipped]
+        reason:
+          type: string
+          enum: [nativeClash, apiRow, demiOwned]
+          description: Only when `action` is `skipped`.
     EngagePushResult:
       type: object
       properties:
