@@ -447,4 +447,12 @@ test('user data controller', async (t) => {
     assert.strictEqual(res.statusCode, 500);
     assert.deepStrictEqual(res.body, { success: false, error: 'Internal server error.' });
   });
+
+  await t.test('an oversized body is refused for its size before its stray keys are named', async () => {
+    const res = mockRes();
+    await controller.putPrefs(req({ body: { landing: 'map', perPage: 6, junk: 'z'.repeat(70000) } }), res);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.deepStrictEqual(res.body, { error: 'body must be at most 65536 bytes' });
+  });
 });

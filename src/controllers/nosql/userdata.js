@@ -43,12 +43,19 @@ function slugFor(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function tooLarge(body) {
-  return Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES;
+/** Size first, then unknown keys: the error a write body is refused with, or null. */
+function bodyProblem(body, allowed) {
+  if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES) return `body must be at most ${MAX_BODY_BYTES} bytes`;
+  const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
+  return unknown.length > 0 ? `unknown field(s): ${unknown.join(', ')}` : null;
 }
 
-function unknownKeys(body, allowed) {
-  return Object.keys(body).filter((key) => !allowed.includes(key));
+function nameAndSlug(body) {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (name.length < 1 || name.length > MAX_NAME_LENGTH) return { error: `name must be 1-${MAX_NAME_LENGTH} characters` };
+  const slug = slugFor(name);
+  if (!SLUG.test(slug)) return { error: 'name must contain at least one letter or digit' };
+  return { name, slug };
 }
 
 /** GeoJSON order, `[longitude, latitude]` — same as everything else stored here. */
@@ -102,21 +109,14 @@ exports.saveLasso = async (req, res) => {
   try {
     const me = owner(req);
     const body = req.body || {};
-    if (tooLarge(body)) {
-      return res.status(400).json({ error: `body must be at most ${MAX_BODY_BYTES} bytes` });
-    }
-    const unknown = unknownKeys(body, ['name', 'ring']);
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: `unknown field(s): ${unknown.join(', ')}` });
+    const problem = bodyProblem(body, ['name', 'ring']);
+    if (problem) {
+      return res.status(400).json({ error: problem });
     }
 
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (name.length < 1 || name.length > MAX_NAME_LENGTH) {
-      return res.status(400).json({ error: `name must be 1-${MAX_NAME_LENGTH} characters` });
-    }
-    const slug = slugFor(name);
-    if (!SLUG.test(slug)) {
-      return res.status(400).json({ error: 'name must contain at least one letter or digit' });
+    const { name, slug, error } = nameAndSlug(body);
+    if (error) {
+      return res.status(400).json({ error });
     }
     const badRing = ringError(body.ring);
     if (badRing) {
@@ -187,21 +187,14 @@ exports.saveQuery = async (req, res) => {
   try {
     const me = owner(req);
     const body = req.body || {};
-    if (tooLarge(body)) {
-      return res.status(400).json({ error: `body must be at most ${MAX_BODY_BYTES} bytes` });
-    }
-    const unknown = unknownKeys(body, ['name', 'params']);
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: `unknown field(s): ${unknown.join(', ')}` });
+    const problem = bodyProblem(body, ['name', 'params']);
+    if (problem) {
+      return res.status(400).json({ error: problem });
     }
 
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (name.length < 1 || name.length > MAX_NAME_LENGTH) {
-      return res.status(400).json({ error: `name must be 1-${MAX_NAME_LENGTH} characters` });
-    }
-    const slug = slugFor(name);
-    if (!SLUG.test(slug)) {
-      return res.status(400).json({ error: 'name must contain at least one letter or digit' });
+    const { name, slug, error } = nameAndSlug(body);
+    if (error) {
+      return res.status(400).json({ error });
     }
     // A search query string without its leading `?`, e.g. `record=documents&keywords=wildlife`.
     const params = typeof body.params === 'string' ? body.params : null;
@@ -274,12 +267,9 @@ exports.putPrefs = async (req, res) => {
   try {
     const me = owner(req);
     const body = req.body || {};
-    if (tooLarge(body)) {
-      return res.status(400).json({ error: `body must be at most ${MAX_BODY_BYTES} bytes` });
-    }
-    const unknown = unknownKeys(body, ['landing', 'perPage']);
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: `unknown field(s): ${unknown.join(', ')}` });
+    const problem = bodyProblem(body, ['landing', 'perPage']);
+    if (problem) {
+      return res.status(400).json({ error: problem });
     }
     if (!LANDING_SCREENS.includes(body.landing)) {
       return res.status(400).json({ error: `landing must be one of: ${LANDING_SCREENS.join(', ')}` });
