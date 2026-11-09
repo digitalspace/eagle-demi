@@ -52,9 +52,6 @@ The marker carries no newlines around it on purpose. `ingest.py` splits a large 
 on blank lines and drops any block that is whitespace only, so a marker sitting on its own line
 would be thrown away on that route.
 
-`extractor/ocr.py` holds the same constant for the Azure-side extractor, and
-`extractor/test_extract.py` lifts this file's copy by source to check the two still agree.
-
 ## The one thing you can run from a laptop
 
 ```bash

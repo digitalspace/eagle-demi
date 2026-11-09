@@ -1,8 +1,7 @@
 // DEMI REST API on Flex Consumption (FC1) — `demi-api-fc-<env>`, the only API app.
 //
-// Unlike extractor.bicep — whose header says its connection-string approach must not become the
-// pattern — nothing here holds a storage key: the deployment container and the host's own
-// bookkeeping both authenticate as the user-assigned identity.
+// Nothing here holds a storage key: the deployment container and the host's own bookkeeping both
+// authenticate as the user-assigned identity.
 
 @description('Location for Azure Function App resources')
 param location string = resourceGroup().location

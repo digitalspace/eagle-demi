@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Build the deployment zip for demi-pdf-title-<env>: pdf-title/ at the zip root, the same shape as
-# the extractor zip. The list is explicit so test_* and __pycache__ never reach the remote build;
-# files are staged at 0644 so a local umask or exec bit does not ship.
+# Build the deployment zip for demi-pdf-title-<env>: pdf-title/ at the zip root. The list is
+# explicit so test_* and __pycache__ never reach the remote build; files
+# are staged at 0644 so a local umask or exec bit does not ship.
 #
 # Usage: scripts/package-pdf-title.sh <repo-root> <output.zip>
 set -euo pipefail

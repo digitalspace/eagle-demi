@@ -475,10 +475,6 @@ def pdfium_job(path_str, ext):
 # A bare form feed with no newlines around it on purpose. ingest.py splits big documents into
 # blocks on /\n{2,}/ and drops whitespace-only blocks; a marker with blank lines around it would
 # become its own block and be dropped on that route.
-#
-# `extractor/ocr.py` holds the same constant. This file is vendored onto a host that has no copy of
-# the extractor package, so the two definitions are the price of that; the value is the wire
-# contract and is covered by extractor/test_extract.py.
 PAGE_BREAK = "\f"
 
 
