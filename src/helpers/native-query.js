@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The native list contract for every `GET /<kind>` list: `page` (1-based offset paging), `pageSize`,
- * one allow-listed `sort`, `count=true`, `ids=`, `q=`, plus the kind's declared filters.
- * Anything else in the query string is a 400, and so is a repeated control parameter.
- * Filter and `q` clauses honour each record's own dial, so `count=true` cannot reveal a value it hides.
+ * The query contract for every `GET /<kind>` list is documented on `parseNativeQuery` below.
+ * Each record's own dial on the field is parsed once and hides values the caller may not see, even from `count=true`.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -141,6 +139,8 @@ function booleansOf(spec, kind, q, access) {
 }
 
 /**
+ * Contract: `page` (1-based offset paging), `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the
+ * kind's declared filters. Anything else in the query string, or a repeated control parameter, is a 400.
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
  * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]}, anyOf: {field: [values]},
  * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool}, flags: {field: bool} }`.
@@ -335,9 +335,8 @@ function isEagleId(id) {
 }
 
 /**
- * `list`, `count` and `getById` share one predicate. `getById` is cross-partition and drains pages via
- * `queryFirst`: one page can come back empty while the row exists. `partitionField` is `'id'` or
- * `'projectId'`; `defaultOrder` is a raw Cosmos ORDER BY fragment with the `c.` prefix, e.g. `'c.id ASC'`.
+ * `partitionField` is `'id'` or `'projectId'`; `defaultOrder` is a raw ORDER BY fragment with the `c.` prefix, e.g.
+ * `'c.id ASC'`. `getById` drains pages via `queryFirst` (cross-partition), as a page can be empty while the row exists.
  */
 function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   const spec = (access, criteria, orderBy) => selectWhere({
@@ -358,8 +357,8 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
 }
 
 /**
- * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` from the
- * parent as this caller may see it, to rows already redacted; a parent the caller cannot read adds nothing.
+ * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` to
+ * already-redacted rows, reading the parent as this caller may see it; an unreadable parent adds nothing.
  */
 async function projectParentJoin(access, rows) {
   const projects = require('../repositories/projects');
