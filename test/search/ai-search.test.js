@@ -1160,7 +1160,7 @@ test('semantic reranking', async (t) => {
   // semantic IS requested would pass for the wrong reason — or fail depending on file order.
   t.beforeEach(() => aiSearch.resetSemanticExhausted());
 
-  await t.test('on by default for chunks — it is the shipped ranking', async (tt) => {
+  await t.test('always on for chunks — it is the shipped ranking', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
     await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
