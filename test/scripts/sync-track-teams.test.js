@@ -327,6 +327,19 @@ test('closing a project revokes its credentials and leaves an open project alone
     summaryLine(summary));
 });
 
+test('the nightly leaves alone a row a newer push wrote', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const stored = { id: '1', name: 'Older name', sources: { track: {} }, trackPushedAt: Date.now() + 60000 };
+  const written = [];
+  const projects = { listVisible: async () => ({ items: [stored] }), upsert: async (row) => { written.push(row.id); } };
+  const get = async (url) => (url.endsWith('/team-members') ? TEAMS : CLOSED_AND_OPEN);
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(TWO_AND_ONE), projects });
+
+  assert.ok(!written.includes('1'));
+  assert.strictEqual(summary.updated, 0);
+});
+
 test('the project list is read once and feeds both the mirror and the credential sweep', async () => {
   const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
   const credentials = fakeCredentials(TWO_AND_ONE);

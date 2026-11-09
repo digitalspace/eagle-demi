@@ -236,7 +236,7 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     }
   });
 
-  await t.test('the push clocks are push bookkeeping: a staff PUT ignores them and a re-seed keeps them', () => {
+  await t.test('the push clocks are listed as push-owned, PUT-ignored and push-only', () => {
     for (const key of ['eaglePushedAt', 'trackPushedAt']) {
       assert.ok(OWNERS.push.includes(key), `${key} is not owned by the push`);
       assert.ok(PUT_IGNORED_FIELDS.includes(key), `${key} can be moved by a staff PUT`);

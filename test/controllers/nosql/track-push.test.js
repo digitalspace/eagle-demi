@@ -14,10 +14,11 @@ const links = require('../../../src/repositories/links');
 const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
 const { putTrackProject, deleteTrackProject } = require('../../../src/controllers/nosql/track-push');
-const { TRACK_PUSHED_AT } = require('../../../src/scripts/sync-track-projects');
 const { readForLevel } = require('../../../src/helpers/access-sql');
-const { DEMI_OWNED_AT } = require('../../../src/ownership/project');
+const { DEMI_OWNED_AT, TRACK_PUSHED_AT } = require('../../../src/ownership/project');
+const config = require('../../../src/config');
 const { logger } = require('../../../src/utils/logger');
+const { recordEvents } = require('../../helpers/record-events');
 const pushPayload = require('../../fixtures/track-push-payload.json');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject
@@ -33,9 +34,13 @@ const lost = (code) => Object.assign(new Error('lost the race'), { code });
 const ID = String(pushPayload.id);
 /** The stored row a push of Track's fixture lands on. */
 const storedPushTarget = (overrides = {}) => storedEagleProject({ id: ID, trackProjectId: pushPayload.id, ...overrides });
+/** A row only Track feeds: its Eagle id came from Track, and it holds no Eagle copy. */
+const trackOnly = (overrides = {}) => ({
+  ...storedEagleProject(), sources: { track: { track_project_id: 207, name: 'Nicomen Wind Energy' } }, ...overrides
+});
 
 /** An in-memory projects container. `seen.row(id)` is what is stored now. */
-function stage(t, rows = [], { createdBehind = null, losesOn = () => false, docsFail = false, hidden = false } = {}) {
+function stage(t, rows = [], { createdBehind = null, losesOn = () => false, throwsOn = () => false, docsFail = false, hidden = false } = {}) {
   const store = new Map(rows.map(row => [String(row.id), structuredClone(row)]));
   const read = (id) => structuredClone(store.get(String(id)) || null);
   const seen = { writes: [], cascaded: [], row: read, cascade: null };
@@ -47,6 +52,7 @@ function stage(t, rows = [], { createdBehind = null, losesOn = () => false, docs
     .find(row => row.eagleId === eagleId && !String(row.id).startsWith('eagle-')) || null);
   t.mock.method(projects, 'upsert', async (item, opts = {}) => {
     if (losesOn(item)) throw lost(412);
+    if (throwsOn(item)) throw new Error('Cosmos is down');
     if (opts.create && createdBehind) {
       store.set(String(item.id), structuredClone(createdBehind));
       throw lost(409);
@@ -170,14 +176,96 @@ test('PUT /track/projects/:id', async (t) => {
 
   await t.test('a row created behind the push answers 409 so the send can be repeated', async (t) => {
     stage(t, [], { createdBehind: storedPushTarget() });
-    t.mock.method(logger, 'warn', () => {});
+    const warn = t.mock.method(logger, 'warn', () => {});
     const errors = logged(t, 'error');
 
     const res = await put();
 
     assert.strictEqual(res.statusCode, 409);
     assert.strictEqual(res.body.code, 'CREATED_BEHIND');
-    assert.ok(errors()[0].startsWith(`[track-push] refused id=${ID}`));
+    assert.deepStrictEqual(errors(), [], 'a race Track repeats must not fire the alert');
+    const line = warn.mock.calls.find(call => call.arguments[0] === '[track-push] project skipped');
+    assert.strictEqual(line.arguments[1].reason, 'createdBehind');
+  });
+
+  await t.test('a create that loses every race answers 503 rather than created', async (t) => {
+    stage(t, [], { losesOn: () => true });
+    t.mock.method(logger, 'warn', () => {});
+    const errors = logged(t, 'error');
+
+    const res = await put();
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.ok(errors()[0].startsWith(`[track-push] write failed id=${ID} status=conflict`));
+  });
+
+  await t.test('a relink that cannot disown its twin answers 503 and logs at error', async (t) => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...OWNED, sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
+    const seen = stage(t, [twin], { losesOn: (item) => item.id === TWIN_ID });
+    t.mock.method(logger, 'warn', () => {});
+    const errors = logged(t, 'error');
+
+    const res = await put({ pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } });
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.ok(seen.row(ID), 'the premise: the Track row was written');
+    assert.ok(errors().some(line => line.startsWith(`[track-push] write failed id=${ID} status=twinConflict`)));
+  });
+
+  await t.test('a relink whose twin write throws answers 503 and logs at error', async (t) => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...OWNED, sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
+    stage(t, [twin], { throwsOn: (item) => item.id === TWIN_ID });
+    t.mock.method(logger, 'warn', () => {});
+    const errors = logged(t, 'error');
+
+    const res = await put({ pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } });
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.ok(errors().some(line => line.startsWith(`[track-push] twin not disowned id=${TWIN_ID}`)));
+  });
+
+  await t.test('a push landing on a deleted row warns with the id', async (t) => {
+    stage(t, [storedPushTarget({ isDeleted: true, ...STAFF_ONLY })]);
+    const warns = logged(t, 'warn');
+
+    const res = await put();
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(warns().includes(`[track-push] push landed on a deleted row id=${ID}`));
+  });
+
+  await t.test('a push equal to the stored row answers unchanged, with no audit and no new stamp', async (t) => {
+    const seen = stage(t);
+    await put();
+    const rows = recordEvents(t);
+
+    const res = await put({ pushedAt: PUSHED_AT + 1, project: pushPayload });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body, { id: ID, action: 'unchanged' });
+    assert.strictEqual(seen.row(ID)[TRACK_PUSHED_AT], PUSHED_AT);
+    assert.deepStrictEqual(await rows(config.auditStream), []);
+  });
+
+  await t.test('a path id that is not a positive integer answers 400', async (t) => {
+    stage(t);
+    t.mock.method(logger, 'error', () => {});
+
+    const res = await put(undefined, '0');
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.code, 'PROJECT_ID_INVALID');
+  });
+
+  await t.test('a stamp over 5 minutes ahead answers 400', async (t) => {
+    const seen = stage(t);
+    t.mock.method(logger, 'error', () => {});
+
+    const res = await put({ pushedAt: Date.now() + 6 * 60 * 1000, project: pushPayload });
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.code, 'PUSHED_AT_INVALID');
+    assert.deepStrictEqual(seen.writes, []);
   });
 
   await t.test('an API row answers 200 with the reason', async (t) => {
@@ -219,7 +307,7 @@ test('DELETE /track/projects/:id', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('unpublishes, keeps the row and answers without the marker', async (t) => {
-    const seen = stage(t, [storedEagleProject()]);
+    const seen = stage(t, [trackOnly()]);
 
     const res = await del();
 
@@ -231,16 +319,69 @@ test('DELETE /track/projects/:id', async (t) => {
     assert.ok(!('cascadePendingAt' in seen.row('207')), 'cleared once the cascade finished');
   });
 
-  await t.test('does not take an Eagle row over, so sync-out never sends it', async (t) => {
-    const seen = stage(t, [storedEagleProject()]);
+  await t.test('a Track-only row with no Eagle id unpublishes', async (t) => {
+    const { eagleId: _eagleId, ...row } = trackOnly();
+    const seen = stage(t, [row]);
+
+    const res = await del();
+
+    assert.deepStrictEqual(res.body, { id: '207', action: 'deleted' });
+    assert.strictEqual(seen.row('207').isDeleted, true);
+    assert.ok(!seen.row('207').read.includes('public'));
+  });
+
+  await t.test('records Track as the source in the audit row', async (t) => {
+    const rows = recordEvents(t);
+    stage(t, [trackOnly()]);
 
     await del();
 
-    assert.ok(!(DEMI_OWNED_AT in seen.row('207')));
+    const [row] = await rows(config.auditStream);
+    assert.strictEqual(row.Detail.sourceSystem, 'track');
+  });
+
+  await t.test('leaves a row holding an Eagle copy untouched', async (t) => {
+    const stored = storedEagleProject();
+    const seen = stage(t, [stored]);
+    const warns = logged(t, 'warn');
+
+    const res = await del();
+
+    assert.deepStrictEqual(res.body, { id: '207', action: 'skipped', reason: 'eagleLinked' });
+    assert.deepStrictEqual(seen.row('207'), stored);
+    assert.deepStrictEqual(seen.cascaded, []);
+    assert.ok(warns().includes('[track-push] delete skipped id=207 reason=eagleLinked'));
+  });
+
+  await t.test('a later Eagle push still lands on a row the delete left alone', async (t) => {
+    const seen = stage(t, [storedEagleProject()]);
+    t.mock.method(logger, 'warn', () => {});
+    await del();
+
+    const pushed = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject({ description: 'Eagle edit' }) }
+    }, pushed);
+
+    assert.strictEqual(pushed.statusCode, 200);
+    assert.strictEqual(seen.row('207').sources.eagle.description, 'Eagle edit');
+    assert.ok(seen.row('207').read.includes('public'));
+    assert.ok(!('isDeleted' in seen.row('207')));
+  });
+
+  await t.test('a path id that is not a positive integer answers 400', async (t) => {
+    const seen = stage(t);
+    t.mock.method(logger, 'error', () => {});
+
+    const res = await del('207abc');
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.code, 'PROJECT_ID_INVALID');
+    assert.deepStrictEqual(seen.writes, []);
   });
 
   await t.test('logs the level the undo restores', async (t) => {
-    stage(t, [storedEagleProject()]);
+    stage(t, [trackOnly()]);
     const info = t.mock.method(logger, 'info', () => {});
 
     await del();
@@ -250,7 +391,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('finds a row the caller could not read', async (t) => {
-    const seen = stage(t, [storedEagleProject()], { hidden: true });
+    const seen = stage(t, [trackOnly()], { hidden: true });
 
     const res = await del();
 
@@ -297,7 +438,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('a cascade killed mid-run leaves a marker that a repeat repays', async (t) => {
-    const seen = stage(t, [storedEagleProject()]);
+    const seen = stage(t, [trackOnly()]);
     let started;
     const reached = new Promise(resolve => { started = resolve; });
     seen.cascade = () => { started(); return new Promise(() => {}); };
@@ -315,7 +456,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('no marker when visibility does not move', async (t) => {
-    const seen = stage(t, [storedEagleProject(STAFF_ONLY)]);
+    const seen = stage(t, [trackOnly(STAFF_ONLY)]);
 
     await del();
 
@@ -323,7 +464,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('a failed cascade answers 500 and logs the debt at error', async (t) => {
-    const seen = stage(t, [storedEagleProject()], { docsFail: true });
+    const seen = stage(t, [trackOnly()], { docsFail: true });
     const errors = logged(t, 'error');
 
     const res = await del();
@@ -333,31 +474,8 @@ test('DELETE /track/projects/:id', async (t) => {
     assert.ok(seen.row('207').cascadePendingAt, 'the row still says so');
   });
 
-  await t.test('narrows the twin and carries the delete to it', async (t) => {
-    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, read: ['public', 'staff'], isPublished: true };
-    const seen = stage(t, [storedEagleProject(), twin]);
-    t.mock.method(logger, 'warn', () => {});
-
-    const res = await del();
-
-    assert.strictEqual(res.statusCode, 200);
-    assert.ok(!seen.row(TWIN_ID).read.includes('public'));
-    assert.strictEqual(seen.row(TWIN_ID).isDeleted, true);
-  });
-
-  await t.test('a twin that cannot be narrowed answers 500 and logs the debt at error', async (t) => {
-    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, read: ['public', 'staff'], isPublished: true };
-    stage(t, [storedEagleProject(), twin], { losesOn: (item) => item.id === TWIN_ID });
-    const errors = logged(t, 'error');
-
-    const res = await del();
-
-    assert.strictEqual(res.statusCode, 500);
-    assert.ok(errors().some(line => /^\[track-push\] twin owed id=207/.test(line)));
-  });
-
   await t.test('a race lost on every try answers 503 and logs at error', async (t) => {
-    stage(t, [storedEagleProject()], { losesOn: () => true });
+    stage(t, [trackOnly()], { losesOn: () => true });
     t.mock.method(logger, 'warn', () => {});
     const errors = logged(t, 'error');
 
@@ -368,7 +486,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('an Eagle push cannot republish the row', async (t) => {
-    const seen = stage(t, [storedEagleProject()]);
+    const seen = stage(t, [trackOnly()]);
     await del();
 
     await projectController.upsertFromEagle({
@@ -380,7 +498,7 @@ test('DELETE /track/projects/:id', async (t) => {
   });
 
   await t.test('restore then level brings the row back to public, documents included', async (t) => {
-    const seen = stage(t, [storedEagleProject()]);
+    const seen = stage(t, [trackOnly()]);
     await del();
 
     await projectController.restoreProject({ params: { id: '207' }, query: {}, user: STAFF }, mockRes());
@@ -399,6 +517,7 @@ test('DELETE /track/projects/:id', async (t) => {
 test('an Eagle push keeps the stored Track stamp', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const seen = stage(t, [storedEagleProject({ [TRACK_PUSHED_AT]: PUSHED_AT })]);
+  t.mock.method(logger, 'warn', () => {});
 
   await projectController.upsertFromEagle({
     params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }

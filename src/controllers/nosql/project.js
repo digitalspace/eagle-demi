@@ -28,7 +28,7 @@ const {
 } = require('../../merge/project');
 const {
   LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
-  STAFF_EDITED_AT, STAFF_HELD_FIELDS
+  STAFF_EDITED_AT, STAFF_HELD_FIELDS, TRACK_PUSHED_AT
 } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
@@ -51,7 +51,6 @@ const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
 const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
-const { TRACK_PUSHED_AT } = require('../../scripts/sync-track-projects');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -1286,9 +1285,9 @@ function shortCodeBody(project, row) {
   };
 }
 
-/** Flag and narrow to staff, never remove: staff and reconcile still read the row. Shared by both DELETE routes. */
-// Resolves `{status}`: missing, conflict, skipped (`reason`), failed (`stage`, `error`), deleted (`from` unset on a repeat).
-async function deleteProjectRow(req, id, { read, takeOver: takesOver = true, marker = false, skip = () => null }) {
+/** Flag and narrow to staff, never remove: staff and reconcile still read the row. Shared by both DELETE routes.
+ * Resolves `{status}`: missing, conflict, skipped (`reason`), failed (`error`), deleted (`from` unset on a repeat). */
+async function deleteProjectRow(req, id, { read, marker = false, skip = () => null, twin = true, auditDetail = {} }) {
   const existing = await read();
   if (!existing) return { status: 'missing' };
 
@@ -1302,7 +1301,7 @@ async function deleteProjectRow(req, id, { read, takeOver: takesOver = true, mar
       if (deleteStands(current)) return { status: 'already', saved: current };
       // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
       const now = new Date().toISOString();
-      const row = markDeleted({ ...current, ...(takesOver ? await takeOver(current, now) : {}), updatedAt: now });
+      const row = markDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
       // Restore returns an unheld row to Eagle's level, so a row left below it keeps its own.
       const eagle = current.sources && current.sources.eagle;
       if (eagle && !current.levelHeldAt && levelOfRead(current.read) < eagleLevel(eagle)) {
@@ -1327,21 +1326,21 @@ async function deleteProjectRow(req, id, { read, takeOver: takesOver = true, mar
       targetType: 'project',
       targetId: saved.id,
       projectId: saved.id,
-      detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
+      detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished, ...auditDetail }
     });
   }
 
   const owed = Boolean(saved.cascadePendingAt);
   if ((from && visibilityMoved(from, saved)) || owed) {
     const failure = await runCascade(saved, saved.eagleId);
-    if (failure) return { status: 'failed', stage: 'cascade', error: failure, saved, from };
+    if (failure) return { status: 'failed', error: failure };
     if (owed) await clearCascadePending(saved, saved.eagleId);
   }
 
-  const twinFailure = saved.eagleId
-    ? await narrowTwin(saved, saved.eagleId, (twin, eagleId) => runCascade(twin, eagleId, { updates: false }))
+  const twinFailure = twin && saved.eagleId
+    ? await narrowTwin(saved, saved.eagleId, (row, eagleId) => runCascade(row, eagleId, { updates: false }))
     : null;
-  if (twinFailure) return { status: 'failed', stage: 'twin', error: twinFailure, saved, from };
+  if (twinFailure) return { status: 'failed', error: twinFailure };
 
   return { status: 'deleted', saved, from };
 }

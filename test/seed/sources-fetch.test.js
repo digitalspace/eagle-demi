@@ -471,16 +471,10 @@ function decisionListedFirst() {
   return payload;
 }
 
-test('a Track push orders its works by id, whatever order they arrive in', async () => {
+test('a Track push orders its works by id and keeps an inactive mirrored one', async () => {
   const pushed = await pushMatchingReads(amendmentListedFirst());
 
-  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [2001, 2003]);
-});
-
-test('a Track push keeps an inactive mirrored work', async () => {
-  const pushed = await pushMatchingReads(amendmentListedFirst());
-
-  assert.deepStrictEqual(pushed.works.map(w => w.isActive), [true, false]);
+  assert.deepStrictEqual(pushed.works.map(w => [w.trackWorkId, w.isActive]), [[2001, true], [2003, false]]);
 });
 
 test('a Track push orders its phases by sort order', async () => {

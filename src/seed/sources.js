@@ -439,11 +439,8 @@ function pushedList(value, what) {
   return value;
 }
 
-/**
- * Track's push payload, one project with `works[].phases[].events[]` nested, mapped to what the
- * per-work reads of `fetchTrackWorks` give that project. `project` is the raw row the sync takes.
- * @returns {{project: object, phases: Array, works: Array}}
- */
+/** Track's push, one project with `works[].phases[].events[]` nested, mapped to what the per-work reads
+ * of `fetchTrackWorks` give that project. `project` is the raw row the sync takes. */
 function trackPushToSync(payload) {
   const { works: pushed, ...project } = payload;
   const projectWorks = pushedList(pushed, `project ${project.id} works`)

@@ -83,11 +83,14 @@ const EAGLE_TOP_LEVEL_FIELDS = [
   '_updatedBy', '_addedBy', '_deletedBy', 'isDeleted', '__v'
 ];
 
+/** Track's ordering stamp on a project row, its commit clock in epoch ms. */
+const TRACK_PUSHED_AT = 'trackPushedAt';
+
 /**
  * The stamps later Eagle and Track pushes are ordered against, and the cascade still owed. Blanking
  * them lets an applied push land again or loses the cascade.
  */
-const PUSH_BOOKKEEPING_FIELDS = ['eaglePushedAt', 'trackPushedAt', 'cascadePendingAt'];
+const PUSH_BOOKKEEPING_FIELDS = ['eaglePushedAt', TRACK_PUSHED_AT, 'cascadePendingAt'];
 
 /**
  * A carry rule, not an owner: a re-merge takes these back off the stored row because the seed feed
@@ -183,6 +186,7 @@ module.exports = {
   LEGISLATION_INDEX_FIELDS,
   LEGISLATION_KEY,
   EAGLE_TOP_LEVEL_FIELDS,
+  TRACK_PUSHED_AT,
   PUSH_BOOKKEEPING_FIELDS,
   PUSH_ONLY_FIELDS,
   EXTENSION_LIST_FIELDS,

@@ -174,6 +174,8 @@ function keycloakClient() {
  */
 async function sync(argv = [], deps = {}) {
   const args = parseArgs(argv);
+  // Before any read: a push that lands after it holds a newer stamp, so this snapshot cannot overwrite it.
+  const pushedAt = Date.now();
   const get = deps.fetchJson || fetchJson;
   const kc = deps.kc || keycloakClient();
   const credentials = deps.credentials || credentialsRepository();
@@ -295,7 +297,7 @@ async function sync(argv = [], deps = {}) {
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
-      const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works });
+      const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, pushedAt });
       Object.assign(summary, {
         trackProjects: mirrored.trackProjects,
         created: mirrored.created,

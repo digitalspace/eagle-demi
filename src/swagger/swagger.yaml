@@ -4591,7 +4591,8 @@ paths:
                 $ref: '#/components/schemas/TrackPushResult'
         '400':
           description: >-
-            Nothing was written. `code` is `PROJECT_ID_MISMATCH`, `PUSHED_AT_INVALID` or
+            Nothing was written. `code` is `PROJECT_ID_INVALID` (`id` is not a positive integer),
+            `PROJECT_ID_MISMATCH`, `PUSHED_AT_INVALID` (not a number, or over 5 minutes ahead) or
             `PAYLOAD_INVALID` (a `works`, `phases` or `events` list is missing).
         '401':
           description: Unauthorized.
@@ -4605,14 +4606,17 @@ paths:
         '500':
           description: The write failed.
         '503':
-          description: The row changed repeatedly while the push was retried. The caller retries.
+          description: >-
+            The row changed repeatedly while the push was retried, or the `eagle-<id>` copy could
+            not be handed over after a relink. The caller retries.
     delete:
       summary: Unpublish a project Track deleted
       description: |-
-        Flags the row deleted and narrows it to staff; the row stays. A row hidden from the caller
-        is still found. The documents follow. The row is not taken over from Eagle, and an Eagle
-        push cannot republish it. Undo with `PUT /api/projects/{id}/restore`, then
-        `PUT /api/projects/{id}/level`. Any request body is ignored.
+        Flags a Track-only row deleted and narrows it to staff; the row stays. A row hidden from
+        the caller is still found. The documents follow. A row holding an Eagle copy is left
+        untouched. An Eagle push cannot republish a deleted row. Undo with
+        `PUT /api/projects/{id}/restore`, then `PUT /api/projects/{id}/level`. Any request body
+        is ignored.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -4620,7 +4624,8 @@ paths:
         '200':
           description: >-
             `action` is `deleted`, `unchanged` (already deleted; a cascade still owed is retried),
-            or `skipped` with `reason` `apiRow` (the row has no Track source) or `demiOwned`.
+            or `skipped` with `reason` `apiRow` (the row has no Track source), `demiOwned` or
+            `eagleLinked` (the row holds an Eagle copy).
           content:
             application/json:
               schema:
@@ -4633,8 +4638,8 @@ paths:
           description: DEMI holds no row with this id.
         '500':
           description: >-
-            The row is flagged, but its documents or its `eagle-<id>` copy were not updated, or
-            the write failed. The caller retries.
+            The row is flagged but its documents were not updated, or the write failed. The caller
+            retries.
         '503':
           description: The row changed repeatedly while the delete was retried. The caller retries.
 
@@ -9925,8 +9930,9 @@ components:
           enum: [created, relinked, updated, unchanged, deleted, skipped]
         reason:
           type: string
-          enum: [nativeClash, apiRow, demiOwned]
+          enum: [nativeClash, apiRow, demiOwned, eagleLinked]
           description: Only when `action` is `skipped`.
+
     EngagePushResult:
       type: object
       properties:

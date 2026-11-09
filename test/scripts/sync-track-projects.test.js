@@ -613,6 +613,16 @@ test('a create retried after a lost try stores a code whose record is there', as
   assert.ok(links.byId.has(written.shortCode), 'the stored code still resolves');
 });
 
+test('a create that never lands counts as a failure, not a created row', async (t) => {
+  t.mock.method(logger, 'error', () => {});
+  const projects = fakeProjects([]);
+  projects.upsert = async () => { throw conflict(); };
+
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  assert.deepStrictEqual([summary.created, summary.failures], [0, 1]);
+});
+
 test('a record the feed no longer lists is counted, not deleted', async (t) => {
   const projects = fakeProjects([
     storedProject(),
@@ -1205,6 +1215,37 @@ test('the projects poll', async (t) => {
     assert.deepStrictEqual(track.adminCalls, []);
   });
 
+  await t.test('a row a newer push wrote is left alone and not counted', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject({ trackPushedAt: Date.now() + 60000 })]);
+
+    const summary = await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
+
+    assert.deepStrictEqual(projects.writes, []);
+    assert.strictEqual(summary.updated, 0);
+  });
+
+  await t.test('a write carries the time the run started, before it read Track', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject()]);
+    const before = Date.now();
+
+    await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
+
+    assert.ok(projects.writes[0].trackPushedAt >= before);
+  });
+
+  await t.test('counts an orphan without logging its id', async (t) => {
+    quiet(t);
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const projects = fakeProjects([storedProject(), { ...storedProject(), id: '999', sourceSystem: 'track' }]);
+
+    const summary = await run({ live: true, deps: { ...upstream(), projects, links: fakeLinks() } });
+
+    assert.strictEqual(summary.orphaned, 1);
+    assert.ok(!warn.mock.calls.some(call => /no longer lists/.test(call.arguments[0])));
+  });
+
   await t.test('a changed proponent updates the row and its Track snapshot', async (t) => {
     quiet(t);
     const projects = fakeProjects([storedProject()]);
@@ -1321,6 +1362,15 @@ test('the Track push', async (t) => {
     assert.deepStrictEqual(written.works, []);
     assert.deepStrictEqual(written.phases, []);
     assert.deepStrictEqual(written.sources.eagle, eagle);
+  });
+
+  await t.test('empty lists over a row holding none are no change', async () => {
+    const projects = fakeProjects([storedProject()]);
+
+    const result = await push(projects);
+
+    assert.strictEqual(result.action, 'unchanged');
+    assert.deepStrictEqual(projects.writes, []);
   });
 
   await t.test('a push older than the stored one is stale and writes nothing', async () => {
