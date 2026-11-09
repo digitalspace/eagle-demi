@@ -298,8 +298,7 @@ async function syncProjects(apiProjects, opts = {}) {
         continue;
       }
 
-      // An API row (`sources: {}`) is skipped. Stamping `sources.track` marks it Track-sourced,
-      // and `sourceSystem` cannot tell such a row apart from a true Track row.
+      // Skip API rows (`sources: {}`): stamping `sources.track` would pass them off as Track rows.
       if (!(existing.sources || {}).track) {
         summary.skippedApiRows++;
         continue;
