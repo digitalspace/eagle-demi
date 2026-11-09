@@ -2,7 +2,6 @@
 
 Goal: every field of every entity classified and redacted per caller level. The design is
 `docs/rbac-architecture.md`. The shipped behaviour is wiki `Attribute-Level-Access.md`.
-`TODO-frontend.md` holds frontend items.
 
 **This file holds open work only.** A finished unit is one line in [Shipped](#shipped); `git log`
 holds its detail.
