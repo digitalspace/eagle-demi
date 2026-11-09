@@ -421,7 +421,7 @@ function perWorkReads(payload) {
     return names.find(o => o.name === name).id;
   };
   for (const { phases, ...work } of payload.works) {
-    reads.works.push({ ...work, project_id: payload.id });
+    reads.works.push(work);
     reads.phasesByWork[work.id] = phases.map(({ events, ...workPhase }) => {
       reads.eventsByPhase[workPhase.id] = events.map(({ outcome_name: name, ...e }) => ({
         ...e,
@@ -434,18 +434,75 @@ function perWorkReads(payload) {
   return reads;
 }
 
-test('a Track push maps to the same works and phases as the per-work reads', async () => {
+/** The mapped push, once its `works` and `phases` are proven equal to the per-work reads of the same payload. */
+async function pushMatchingReads(payload) {
   const { trackPushToSync } = require('../../src/seed/sources');
-  const reads = await pullWorks(fakeTrackWorks(perWorkReads(pushPayload())));
+  const reads = await pullWorks(fakeTrackWorks(perWorkReads(payload)));
+  const pushed = trackPushToSync(payload);
+  assert.deepStrictEqual(pushed.works, reads.works.get('1001'));
+  assert.deepStrictEqual(pushed.phases, reads.phases.get('1001'));
+  return pushed;
+}
 
-  const pushed = trackPushToSync(pushPayload());
+/** Track's fixture with an inactive amendment, the higher work id, listed before the assessment. */
+function amendmentListedFirst() {
+  const payload = pushPayload();
+  const [assessment] = payload.works;
+  const amendment = structuredClone(assessment);
+  Object.assign(amendment, { id: 2003, is_active: false, work_type_id: 7, work_type: { id: 7, name: 'Amendment' } });
+  amendment.phases[0].id = 3003;
+  payload.works.unshift(amendment);
+  return payload;
+}
 
-  assert.deepStrictEqual(pushed.works, reads.works.get('207'));
-  assert.deepStrictEqual(pushed.phases, reads.phases.get('207'));
-  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [1101, 1102],
-    'by work id, the inactive amendment kept and the type 4 work dropped');
+/** Track's fixture with a later assessment phase listed before the first. */
+function laterPhaseListedFirst() {
+  const payload = pushPayload();
+  const [phase] = payload.works[0].phases;
+  payload.works[0].phases.unshift({ ...structuredClone(phase), id: 3002, sort_order: 7, events: [] });
+  return payload;
+}
+
+/** Track's fixture with the END event listed before the START event. */
+function decisionListedFirst() {
+  const payload = pushPayload();
+  const [phase] = payload.works[0].phases;
+  phase.events.reverse();
+  return payload;
+}
+
+test('a Track push orders its works by id, whatever order they arrive in', async () => {
+  const pushed = await pushMatchingReads(amendmentListedFirst());
+
+  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [2001, 2003]);
+});
+
+test('a Track push keeps an inactive mirrored work', async () => {
+  const pushed = await pushMatchingReads(amendmentListedFirst());
+
+  assert.deepStrictEqual(pushed.works.map(w => w.isActive), [true, false]);
+});
+
+test('a Track push orders its phases by sort order', async () => {
+  const pushed = await pushMatchingReads(laterPhaseListedFirst());
+
+  assert.deepStrictEqual(pushed.phases.map(p => p.sortOrder), [1, 7]);
+  assert.deepStrictEqual(pushed.works[0].phases.map(p => p.sortOrder), [1, 7]);
+});
+
+test('a Track push orders its events by template order', async () => {
+  const pushed = await pushMatchingReads(decisionListedFirst());
+
+  assert.deepStrictEqual(pushed.works[0].milestones.map(m => m.name), ['Assessment start template', 'Decision template']);
+});
+
+test('a Track push maps to the same works and phases as the per-work reads', async () => {
+  const pushed = await pushMatchingReads(pushPayload());
+
+  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [2001], 'the type 4 work dropped');
   assert.strictEqual(pushed.works[0].outcome, 'Certificate Issued');
-  assert.ok(!pushed.works[0].milestones.some(m => m.name === 'Referral to Minister'), 'HIDDEN event dropped');
+  assert.deepStrictEqual(pushed.works[0].milestones.map(m => m.name),
+    ['Assessment start template', 'Decision template'], 'the HIDDEN event dropped');
 });
 
 test('a Track push with no works list is refused rather than read as no works', () => {
@@ -453,7 +510,7 @@ test('a Track push with no works list is refused rather than read as no works', 
   const { works, ...bare } = pushPayload();
 
   assert.ok(works.length, 'the fixture has works to lose');
-  assert.throws(() => trackPushToSync(bare), /project 207 works is not a list/);
+  assert.throws(() => trackPushToSync(bare), /project 1001 works is not a list/);
 });
 
 // eagle-api allows 200 requests a minute, so 429 handling decides whether a comment sweep

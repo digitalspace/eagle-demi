@@ -30,6 +30,10 @@ const OWNED = { [DEMI_OWNED_AT]: '2026-10-30T00:00:00.000Z' };
 
 const lost = (code) => Object.assign(new Error('lost the race'), { code });
 
+const ID = String(pushPayload.id);
+/** The stored row a push of Track's fixture lands on. */
+const storedPushTarget = (overrides = {}) => storedEagleProject({ id: ID, trackProjectId: pushPayload.id, ...overrides });
+
 /** An in-memory projects container. `seen.row(id)` is what is stored now. */
 function stage(t, rows = [], { createdBehind = null, losesOn = () => false, docsFail = false, hidden = false } = {}) {
   const store = new Map(rows.map(row => [String(row.id), structuredClone(row)]));
@@ -74,7 +78,7 @@ const logged = (t, level) => {
   return () => spy.mock.calls.map(call => call.arguments[0]);
 };
 
-const put = async (body = { pushedAt: PUSHED_AT, project: pushPayload }, id = '207') => {
+const put = async (body = { pushedAt: PUSHED_AT, project: pushPayload }, id = ID) => {
   const res = mockRes();
   await putTrackProject({ params: { id }, query: {}, user: STAFF, body }, res);
   return res;
@@ -95,13 +99,13 @@ test('PUT /track/projects/:id', async (t) => {
     const res = await put();
 
     assert.strictEqual(res.statusCode, 201);
-    assert.deepStrictEqual(res.body, { id: '207', action: 'created' });
-    assert.deepStrictEqual(seen.row('207').read, readForLevel(1));
-    assert.strictEqual(seen.row('207')[TRACK_PUSHED_AT], PUSHED_AT);
+    assert.deepStrictEqual(res.body, { id: ID, action: 'created' });
+    assert.deepStrictEqual(seen.row(ID).read, readForLevel(1));
+    assert.strictEqual(seen.row(ID)[TRACK_PUSHED_AT], PUSHED_AT);
   });
 
   await t.test('a push older than the stored one answers 409 STALE_PUSH and writes nothing', async (t) => {
-    const seen = stage(t, [storedEagleProject({ [TRACK_PUSHED_AT]: PUSHED_AT + 1 })]);
+    const seen = stage(t, [storedPushTarget({ [TRACK_PUSHED_AT]: PUSHED_AT + 1 })]);
 
     const res = await put();
 
@@ -111,23 +115,22 @@ test('PUT /track/projects/:id', async (t) => {
   });
 
   await t.test('a field staff saved stays while the rest of the push lands', async (t) => {
-    const seen = stage(t, [storedEagleProject({ name: 'Staff name', staffEditedAt: { name: '2026-11-01T00:00:00.000Z' } })]);
+    const seen = stage(t, [storedPushTarget({ name: 'Staff name', staffEditedAt: { name: '2026-11-01T00:00:00.000Z' } })]);
 
     const res = await put();
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(seen.row('207').name, 'Staff name');
-    assert.strictEqual(seen.row('207').trackProjectId, 207);
-    assert.ok(seen.row('207').works.length > 0, 'the works landed');
+    assert.strictEqual(seen.row(ID).name, 'Staff name');
+    assert.deepStrictEqual(seen.row(ID).works.map(w => w.trackWorkId), [2001], 'the works landed');
   });
 
   await t.test('a held field is named on the [track-push] info line', async (t) => {
-    stage(t, [storedEagleProject({ name: 'Staff name', staffEditedAt: { name: '2026-11-01T00:00:00.000Z' } })]);
+    stage(t, [storedPushTarget({ name: 'Staff name', staffEditedAt: { name: '2026-11-01T00:00:00.000Z' } })]);
     const info = t.mock.method(logger, 'info', () => {});
 
     await put();
 
-    const line = info.mock.calls.find(call => /^\[track-push\] put id=207 /.test(call.arguments[0]));
+    const line = info.mock.calls.find(call => call.arguments[0].startsWith(`[track-push] put id=${ID} `));
     assert.deepStrictEqual(line.arguments[1].held, ['name']);
   });
 
@@ -140,7 +143,7 @@ test('PUT /track/projects/:id', async (t) => {
 
     assert.strictEqual(res.statusCode, 400);
     assert.strictEqual(res.body.code, 'PAYLOAD_INVALID');
-    assert.match(errors()[0], /^\[track-push\] refused id=207 code=PAYLOAD_INVALID/);
+    assert.ok(errors()[0].startsWith(`[track-push] refused id=${ID} code=PAYLOAD_INVALID`));
     assert.deepStrictEqual(seen.writes, []);
   });
 
@@ -166,7 +169,7 @@ test('PUT /track/projects/:id', async (t) => {
   });
 
   await t.test('a row created behind the push answers 409 so the send can be repeated', async (t) => {
-    stage(t, [], { createdBehind: storedEagleProject() });
+    stage(t, [], { createdBehind: storedPushTarget() });
     t.mock.method(logger, 'warn', () => {});
     const errors = logged(t, 'error');
 
@@ -174,29 +177,29 @@ test('PUT /track/projects/:id', async (t) => {
 
     assert.strictEqual(res.statusCode, 409);
     assert.strictEqual(res.body.code, 'CREATED_BEHIND');
-    assert.match(errors()[0], /^\[track-push\] refused id=207/);
+    assert.ok(errors()[0].startsWith(`[track-push] refused id=${ID}`));
   });
 
   await t.test('an API row answers 200 with the reason', async (t) => {
-    const seen = stage(t, [{ id: '207', sources: {} }]);
+    const seen = stage(t, [{ id: ID, sources: {} }]);
     t.mock.method(logger, 'warn', () => {});
 
     const res = await put();
 
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(res.body, { id: '207', action: 'skipped', reason: 'apiRow' });
+    assert.deepStrictEqual(res.body, { id: ID, action: 'skipped', reason: 'apiRow' });
     assert.deepStrictEqual(seen.writes, []);
   });
 
   await t.test('a write that loses every race answers 503 and logs at error', async (t) => {
-    stage(t, [storedEagleProject()], { losesOn: () => true });
+    stage(t, [storedPushTarget()], { losesOn: () => true });
     t.mock.method(logger, 'warn', () => {});
     const errors = logged(t, 'error');
 
     const res = await put();
 
     assert.strictEqual(res.statusCode, 503);
-    assert.match(errors()[0], /^\[track-push\] write failed id=207 status=conflict/);
+    assert.ok(errors()[0].startsWith(`[track-push] write failed id=${ID} status=conflict`));
   });
 
   await t.test('an Eagle id held by several rows answers 409 DUPLICATE_ID', async (t) => {
@@ -204,11 +207,11 @@ test('PUT /track/projects/:id', async (t) => {
     t.mock.method(projects, 'readForWriteByEagleId', async () => { throw Object.assign(new Error('dup'), { code: 'DUPLICATE_ID' }); });
     const errors = logged(t, 'error');
 
-    const res = await put();
+    const res = await put({ pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } });
 
     assert.strictEqual(res.statusCode, 409);
     assert.strictEqual(res.body.code, 'DUPLICATE_ID');
-    assert.match(errors()[0], /^\[track-push\] refused id=207/);
+    assert.ok(errors()[0].startsWith(`[track-push] refused id=${ID}`));
   });
 });
 
