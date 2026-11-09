@@ -84,10 +84,10 @@ const EAGLE_TOP_LEVEL_FIELDS = [
 ];
 
 /**
- * The stamp later pushes are ordered against, and the cascade still owed. Blanking them lets an
- * applied push land again or loses the cascade.
+ * The stamps later Eagle and Track pushes are ordered against, and the cascade still owed. Blanking
+ * them lets an applied push land again or loses the cascade.
  */
-const PUSH_BOOKKEEPING_FIELDS = ['eaglePushedAt', 'cascadePendingAt'];
+const PUSH_BOOKKEEPING_FIELDS = ['eaglePushedAt', 'trackPushedAt', 'cascadePendingAt'];
 
 /**
  * A carry rule, not an owner: a re-merge takes these back off the stored row because the seed feed

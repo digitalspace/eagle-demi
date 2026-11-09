@@ -15,6 +15,7 @@ const {
 const { transformDocument } = require('../../src/seed/transform');
 const { chunkMarkdown } = require('../../src/chunker');
 const { catalogFor } = require('../../src/vis/catalog');
+const { OWNERS, PUT_IGNORED_FIELDS, PUSH_ONLY_FIELDS } = require('../../src/ownership/project');
 const { MIRRORS, captureMirror } = require('../helpers/eagle-mirror-fixtures');
 const { trackWorks } = require('../fixtures/track-works-contract');
 
@@ -228,10 +229,18 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     const jobWritten = ['regionalDistrict', 'municipality', 'electoralDistrict', 'createdAt',
       'sources.wildfire', 'shortCode',
       // The eagle-api push writes both: the clock it orders pushes by, and the marker saying the
-      // project still owes a visibility cascade.
-      'eaglePushedAt', 'cascadePendingAt'];
+      // project still owes a visibility cascade. The Track push writes its own clock.
+      'eaglePushedAt', 'cascadePendingAt', 'trackPushedAt'];
     for (const key of jobWritten) {
       assert.ok(key in catalog, `${key} is not catalogued`);
+    }
+  });
+
+  await t.test('the push clocks are push bookkeeping: a staff PUT ignores them and a re-seed keeps them', () => {
+    for (const key of ['eaglePushedAt', 'trackPushedAt']) {
+      assert.ok(OWNERS.push.includes(key), `${key} is not owned by the push`);
+      assert.ok(PUT_IGNORED_FIELDS.includes(key), `${key} can be moved by a staff PUT`);
+      assert.ok(PUSH_ONLY_FIELDS.includes(key), `${key} is dropped by a re-seed`);
     }
   });
 
