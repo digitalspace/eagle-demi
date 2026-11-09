@@ -22,7 +22,8 @@
 const aiSearch = require('./ai-search');
 const { documentsAcl, NOT_UPDATE_IMAGE } = require('./document-query');
 const { filterFor, inClause, quote } = require('../helpers/access-odata');
-const { nativeCriteria, dialAllows, rangeBound, cosmosKind } = require('../helpers/native-query');
+const { nativeCriteria, rangeBound, cosmosKind } = require('../helpers/native-query');
+const { dialAllows } = require('../helpers/dial');
 const { inList, selectWhere, selectFor, fetchAll } = require('../repositories/_sql');
 const { NAME_CONTAINS_FIELDS, nameContainsClause, presenceTerm } = require('./eagle-query');
 const { levelOf } = require('../vis/level');

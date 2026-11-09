@@ -15,6 +15,7 @@ const {
 } = require('../repositories/_sql');
 const { levelOf } = require('../vis/level');
 const { spellingsOf } = require('./spellings');
+const { topField, dialAllows } = require('./dial');
 const { redactForAccess } = require('../vis/redact');
 
 /** Most ids one `ids=` read may name, and most values one repeated filter may take. */
@@ -101,9 +102,6 @@ function filterNames(spec) {
     ...Object.entries(aliases)
   ]);
 }
-
-// Catalog entries and per-record dials are keyed by the top-level field: `eacDecision._id` is `eacDecision`.
-const topField = field => field.split('.')[0];
 
 /** `assertFilterable` as a value: the refusal message, or null when the caller may see the field. */
 function refusal(entity, field, access) {
@@ -281,12 +279,6 @@ function flagClause(field, on) {
   return { clause: on ? isTrue : `(NOT ${isTrue})`, params: [] };
 }
 
-/** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
-function dialAllows(field, level) {
-  const dial = `c.vis[${JSON.stringify(topField(field))}]`;
-  return `(NOT IS_DEFINED(${dial}) OR ${dial} >= ${level})`;
-}
-
 /**
  * Cosmos criteria and ORDER BY for a parsed query, for `selectWhere`/`countWhere`. The caller's
  * visibility predicate is added by those, not here.
@@ -406,7 +398,6 @@ module.exports = {
   nativeCriteria,
   presenceClause,
   flagClause,
-  dialAllows,
   rangeBound,
   isEagleId,
   cosmosKind,

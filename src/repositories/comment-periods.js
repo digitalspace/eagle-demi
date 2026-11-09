@@ -5,12 +5,11 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const {
-  eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria, EAGLE_SYNC_PENDING
-} = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
+  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria, EAGLE_SYNC_PENDING } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
-const { cosmosKind, dialAllows } = require('../helpers/native-query');
+const { cosmosKind } = require('../helpers/native-query');
+const { dialAllows } = require('../helpers/dial');
 const { levelOf } = require('../vis/level');
 const projects = require('./projects');
 
