@@ -9,7 +9,7 @@
  */
 
 const config = require('../config');
-const { createCredential } = require('../utils/azure-credential');
+const { createBlobClientFor } = require('../storage/azureBlob');
 const { logger } = require('../utils/logger');
 
 let cached = null;
@@ -17,9 +17,8 @@ let cached = null;
 /** Keyless container client for the configured backup, built once per account and container. */
 function containerClientFor(account, container) {
   if (!cached || cached.account !== account || cached.container !== container) {
-    const { BlobServiceClient } = require('@azure/storage-blob');
-    const service = new BlobServiceClient(`https://${account}.blob.core.windows.net`, createCredential());
-    cached = { account, container, client: service.getContainerClient(container) };
+    const store = createBlobClientFor(account, { container });
+    cached = { account, container, client: store.getContainerClient() };
   }
   return cached.client;
 }

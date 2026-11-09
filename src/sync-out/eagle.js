@@ -418,7 +418,7 @@ async function createMinted(s, row, body, update, logFields, spec) {
             { rowId: row.id, eagleId, twinRowId: eagleId });
         }
       } catch (e) {
-        logger.warn(`[sync-out eagle] row ${row.id}: twin check failed`, { rowId: row.id, eagleId, error: e.message });
+        logger.warn(`[sync-out eagle] row ${row.id}: twin check failed`, { rowId: row.id, eagleId, error: e.message, stack: e.stack });
       }
     }
     return { status: 'sent', eagleId };

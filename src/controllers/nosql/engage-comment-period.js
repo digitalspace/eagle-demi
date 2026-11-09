@@ -213,7 +213,7 @@ async function upsertFromEngage(req, res) {
         await commentPeriods.deleteById(existing.id, existing.projectId);
       } catch (err) {
         logger.error(`${LABEL} old partition copy not removed after a project move`,
-          { id: saved.id, engagementId, from: existing.projectId, to: saved.projectId, error: err.message });
+          { id: saved.id, engagementId, from: existing.projectId, to: saved.projectId, error: err.message, stack: err.stack });
       }
     }
     // Comments carry their own `read[]`, so a period that changed level re-derives them, as the mirror does.

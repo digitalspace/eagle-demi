@@ -174,7 +174,7 @@ async function getCost(req, res) {
     if (cached && Date.now() - Date.parse(cached.storedAt) < COST_TTL_MS) return res.json(cached.body);
   } catch (err) {
     // An unreachable cache costs a Cost Management call, not the route.
-    logger.warn('GET /admin/cost: cache read failed', { error: err.message });
+    logger.warn('GET /admin/cost: cache read failed', { error: err.message, stack: err.stack });
   }
 
   try {
@@ -184,7 +184,7 @@ async function getCost(req, res) {
       // spend figures — the budget is context beside them, not the answer.
       config.budgetName
         ? monitor.getBudget(config.costScope, config.budgetName).catch((err) => {
-          logger.warn('GET /admin/cost: budget read failed', { error: err.message });
+          logger.warn('GET /admin/cost: budget read failed', { error: err.message, stack: err.stack });
           return null;
         })
         : null
@@ -214,7 +214,7 @@ async function getCost(req, res) {
       budget
     };
     await cache.put(COST_CACHE_ID, { body }).catch((err) =>
-      logger.warn('GET /admin/cost: cache write failed', { error: err.message }));
+      logger.warn('GET /admin/cost: cache write failed', { error: err.message, stack: err.stack }));
     return res.json(body);
   } catch (err) {
     // Cost Management rate-limits per tenant (429). This figure moves once a day, so any cached

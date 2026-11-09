@@ -203,7 +203,7 @@ async function writeRow(doc, write, args, deps, counts) {
   } catch (err) {
     counts.errors++;
     if (counts.errors <= MAX_LOGGED_ERRORS) {
-      logger.error(`[backfill] ${doc && doc._id}`, { error: err.message });
+      logger.error(`[backfill] ${doc && doc._id}`, { error: err.message, stack: err.stack });
     }
   }
 }
@@ -317,7 +317,7 @@ async function backfillComments(args, deps, state) {
     } catch (err) {
       counts.errors++;
       if (counts.errors <= MAX_LOGGED_ERRORS) {
-        logger.error('[backfill] comment period', { periodId, error: err.message });
+        logger.error('[backfill] comment period', { periodId, error: err.message, stack: err.stack });
       }
     }
   }

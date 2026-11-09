@@ -215,7 +215,7 @@ function makeRes(requestId) {
 function guardStream(readable, requestId) {
   const out = new PassThrough();
   readable.on('error', (err) => {
-    logger.error('Response stream failed after headers were sent', { requestId, evt: 'stream-error', error: err.message });
+    logger.error('Response stream failed after headers were sent', { requestId, evt: 'stream-error', error: err.message, stack: err.stack });
     out.end();
   });
   // A client that goes away cancels `out`; release the store connection behind it too.
@@ -374,7 +374,7 @@ async function removeUpload(file) {
   try {
     await fs.promises.unlink(file);
   } catch (err) {
-    if (err.code !== 'ENOENT') logger.warn('upload temp file not removed', { evt: 'upload-cleanup', file, error: err.message });
+    if (err.code !== 'ENOENT') logger.warn('upload temp file not removed', { evt: 'upload-cleanup', file, error: err.message, stack: err.stack });
   }
 }
 

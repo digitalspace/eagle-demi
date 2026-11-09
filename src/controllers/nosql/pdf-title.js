@@ -554,7 +554,7 @@ async function sweep(req, res) {
         if (noReport) counts.noReport += 1;
       } catch (err) {
         failed.push(row.id);
-        logger.error('[pdf-title] sweep of an expired lease failed', { id: row.id, error: err.message });
+        logger.error('[pdf-title] sweep of an expired lease failed', { id: row.id, error: err.message, stack: err.stack });
       }
     }
     logger.info('[pdf-title] sweep', { scanned: page.items.length, ...counts, failed: failed.length });

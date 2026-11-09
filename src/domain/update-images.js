@@ -134,7 +134,7 @@ async function republish(ctx, row, parentId) {
     await publishFor(ctx, row, parentId);
   } catch (err) {
     logger.error('[Update Images] update saved published but its images could not be republished', {
-      updateId: row.id, error: err.message
+      updateId: row.id, error: err.message, stack: err.stack
     });
   }
 }
