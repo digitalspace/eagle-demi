@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint .",
+    "lint": "eslint . && node ../scripts/eslint-size-freeze.cjs --check frontend",
     "test": "vitest run",
     "e2e": "node scripts/e2e-smoke.mjs --base http://127.0.0.1:4173",
     "design:sync": "bash scripts/sync-design-css.sh",

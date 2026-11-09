@@ -259,32 +259,28 @@ test('intake cleaning', async (t) => {
   });
 
   await t.test('a table of contents is KEPT — dot leaders are not damage', () => {
-    // The rule that makes this safe is `alphaRatio < 0.35`. Measured on the corpus, a real TOC runs
-    // separatorRatio 0.40-0.58 while carrying alphaRatio 0.37-0.56, because it is mostly section
-    // titles with dot leaders between them. Those titles are findable content.
+    // Separator share about 0.4 and letters about 0.5, like a real TOC: only the letter half of the
+    // rule keeps it.
     const toc = Array.from({ length: 40 }, (_, i) =>
-      `Section ${i} Environmental Assessment Certificate Application ${'.'.repeat(20)} ${i * 3}`
+      `Section ${i} Environmental Assessment ${'.'.repeat(25)} ${i * 3}`
     ).join('\n');
     const chunks = chunkMarkdown([para(3000, 'a'), toc, para(3000, 'b')].join('\n\n'));
 
-    assert.ok(chunks.some(c => c.content.includes('Environmental Assessment Certificate')),
+    assert.ok(chunks.some(c => c.content.includes('Environmental Assessment')),
       'the table of contents was dropped as furniture');
   });
 
   await t.test('damaged OCR text is KEPT, because it is still text', () => {
-    // The restraint that matters. classify() would call this garbage on `vowelless-tokens`, but
-    // dropping it would delete the hardest OCR documents from the index and turn a measurable
-    // extraction problem into an invisible one.
+    // Dropping it would delete the hardest OCR documents from the index and hide the damage.
     const salad = Array.from({ length: 300 }, () => 'brtn wgh mrkt schm').join(' ');
     const chunks = chunkMarkdown([para(3000, 'a'), salad, para(3000, 'b')].join('\n\n'));
 
     assert.ok(chunks.some(c => c.content.includes('brtn wgh mrkt')),
-      'damaged text must stay searchable — the retrieval run is what judges it');
+      'damaged text must stay searchable');
   });
 
   await t.test('a document made entirely of furniture still produces one chunk', () => {
-    // Otherwise "extracted but entirely furniture" becomes indistinguishable from "never
-    // extracted", which is the STARVED signal the audit relies on.
+    // A document with no chunks reads as never extracted.
     const chunks = chunkMarkdown('_'.repeat(3000));
 
     assert.strictEqual(chunks.length, 1);

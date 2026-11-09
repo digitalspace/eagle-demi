@@ -148,7 +148,7 @@ test('search-smoke.sh', async (t) => {
     assert.strictEqual(run.status, 1);
     assert.match(run.stderr, /Document search: HTTP 502/);
     assert.match(run.stderr, /2 of 3 search smoke checks failed/);
-    assert.match(run.stderr, /Runbook-Search-Outage\.md/);
+    assert.match(run.stderr, /runbook-search-outage\.md/);
     // Every query is asked even after one fails: a rollback decision wants the whole picture.
     assert.strictEqual(stub.requests.length, 3);
   });

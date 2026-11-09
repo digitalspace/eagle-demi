@@ -608,7 +608,7 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
 
   await t.test('listDistinctProjectIds enumerates partitions, not projects', async () => {
     // The whole point of this read: an Eagle-only project has documents but no `projects` row, so
-    // projects.listVisible() alone would never walk its partition. See backfill-display-name-sort.js.
+    // projects.listVisible() alone would never walk its partition.
     const calls = paged(t, [
       { items: ['207', ''], continuationToken: 'page2' },
       { items: ['208'], continuationToken: undefined }

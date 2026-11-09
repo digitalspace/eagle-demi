@@ -638,9 +638,6 @@ function exitCodeFor(summary) {
 
 module.exports = {
   parseArgs, loadState, saveState, backfill, exitCodeFor,
-  // The bucket naming, shared with `backfill-display-name-sort.js`: two walks that disagreed on
-  // which partition a null `projectId` belongs to would each report covering rows the other read.
-  partitionOf, projectIdOf,
   DEFAULT_CONCURRENCY, DEFAULT_MAX_ATTEMPTS, DEFAULT_STATE, NULL_PARTITION
 };
 

@@ -795,6 +795,18 @@ yarn lint && yarn test && yarn test:py
 cd frontend && yarn lint && yarn test && yarn build
 ```
 
+`yarn lint` also runs `scripts/eslint-size-freeze.cjs`. It fails when a file or function recorded in
+`scripts/eslint-size-freeze.{api,frontend}.json` grows, or when new code goes over the size or
+complexity limits. It also fails on a stale entry and on a drop below a recorded value:
+
+- File deleted: run `node scripts/eslint-size-freeze.cjs --tighten api` (or `frontend`); it drops
+  the entry.
+- File renamed: move the entry's key by hand in the JSON, in the same commit.
+- File shrunk or complexity dropped: run `--tighten` and commit the lowered baseline.
+
+Rebase on `main` before you merge. A baseline tightened on `main` plus growth on an older branch
+fails lint only after the merge.
+
 Authorization is the highest-consequence surface, so those tests assert behaviour rather than
 implementation:
 
@@ -1929,7 +1941,7 @@ Security licence.
 | Secret scanning | Scans the full history on every branch. Zero alerts |
 | **Push protection** | Blocks a push containing a recognised credential, instead of reporting it once it is already public |
 | Dependabot alerts + security updates | Opens PRs for advisories; no config needed for that part |
-| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python`. `.github/workflows/codeql.yml` is disabled manually in the Actions settings, so its `pull_request` and `schedule` triggers do not fire |
+| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python` |
 
 **Push protection is the enforcement behind "never ship `.env`".** That rule was previously a
 convention, and this repository has already shipped a `.env` carrying `MONGODB_PASSWORD`,

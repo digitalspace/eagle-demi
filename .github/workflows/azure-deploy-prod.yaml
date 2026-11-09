@@ -166,7 +166,7 @@ jobs:
             echo "with **allow_missing_schema_probe** ticked — once. Any other time it means the"
             echo "deployed app lost the route, and no release should go out unchecked."
             echo ""
-            echo "Runbook: \`eagle-demi.wiki/Runbook-Search-Outage.md\`."
+            echo "Runbook: \`docs/runbook-search-outage.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-api:
@@ -489,7 +489,7 @@ jobs:
             fi
             echo ""
             echo "The release for \`${{ inputs.version }}\` was NOT published. Runbook:"
-            echo "\`eagle-demi.wiki/Runbook-Search-Outage.md\`."
+            echo "\`docs/runbook-search-outage.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-release:

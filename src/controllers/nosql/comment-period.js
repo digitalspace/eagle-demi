@@ -41,7 +41,7 @@ const KEPT_FROM_ECHO = Object.freeze({
 });
 const ownedElsewhere = (row) => Boolean(row) && Object.hasOwn(KEPT_FROM_ECHO, row.sourceSystem);
 
-/** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side period fields. */
 function staffFields(doc) {
   const list = (v) => (Array.isArray(v) ? v : []);
   return {

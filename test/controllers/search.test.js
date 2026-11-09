@@ -909,9 +909,7 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(hit.documentType, 'Application', 'the label stays, for DEMI\'s own frontend');
   });
 
-  // search-diff compares DEMI's document rows against eagle-search's and no longer tolerates
-  // `isFeatured` / `documentSource` as eagle-only columns, so dropping either mapping turns every
-  // document row into a diff — silently, because the search itself still answers 200.
+  // Eagle's document rows carry both; dropping either mapping fails silently, the search still answers 200.
   await t.test('a document row carries isFeatured and documentSource', async () => {
     t.mock.method(aiSearch, 'searchDocuments', async () => ({
       count: 2,

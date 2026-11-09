@@ -703,8 +703,6 @@ module.exports = {
   TRACK_PRECEDENCE,
   EAGLE_ONLY_FIELDS,
   EAGLE_STAFF_FIELDS,
-  pickEagleFields,
-  flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
   holdStaffEdits,

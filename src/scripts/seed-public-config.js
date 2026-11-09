@@ -14,7 +14,7 @@
  *
  * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run`. `demi-cosmos-*` is
  * private-endpoint-only and keyless, reachable as the app's managed identity and from nowhere
- * else; a laptop with `az` logged in cannot reach it. Same constraint as `seed-config.js`; see
+ * else; a laptop with `az` logged in cannot reach it. See
  * README.md for the recipe.
  *
  * Usage:
