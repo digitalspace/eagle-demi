@@ -1,7 +1,11 @@
 'use strict';
 
-// The native list contract for every `GET /<kind>` list: an unknown or repeated control parameter is a 400.
-// Filter and `q` clauses honour each record's own dial, so `count=true` cannot reveal a value it hides.
+/**
+ * The native list contract for every `GET /<kind>` list: `page` (1-based offset paging), `pageSize`,
+ * one allow-listed `sort`, `count=true`, `ids=`, `q=`, plus the kind's declared filters.
+ * Anything else in the query string is a 400, and so is a repeated control parameter.
+ * Filter and `q` clauses honour each record's own dial, so `count=true` cannot reveal a value it hides.
+ */
 
 const cosmos = require('../db/cosmos-nosql');
 const { pageSizeFor, MAX_PAGE_DEPTH } = require('./access-sql');
@@ -116,7 +120,7 @@ function rangeBound(op, day) {
   return `${day}T${op === 'ge' ? '00:00:00.000' : '23:59:59.999'}Z`;
 }
 
-/** A real `YYYY-MM-DD` calendar day: February 30 passes the shape and fails the round trip. */
+/** A real `YYYY-MM-DD` calendar day: `2026-02-30` passes the shape and fails the round trip. */
 function isDay(value) {
   if (!DAY.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
@@ -330,8 +334,11 @@ function isEagleId(id) {
   return EAGLE_ID.test(String(id || ''));
 }
 
-// `list`, `count` and `getById` share one predicate. `getById` is cross-partition and drains pages via
-// `queryFirst`: one page can come back empty while the row exists.
+/**
+ * `list`, `count` and `getById` share one predicate. `getById` is cross-partition and drains pages via
+ * `queryFirst`: one page can come back empty while the row exists. `partitionField` is `'id'` or
+ * `'projectId'`; `defaultOrder` is a raw Cosmos ORDER BY fragment with the `c.` prefix, e.g. `'c.id ASC'`.
+ */
 function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   const spec = (access, criteria, orderBy) => selectWhere({
     access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
@@ -350,8 +357,10 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   };
 }
 
-// Adds `projectName` and `projectEagleId` from the parent as this caller may see it, to rows already
-// redacted; a parent the caller cannot read adds nothing.
+/**
+ * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` from the
+ * parent as this caller may see it, to rows already redacted; a parent the caller cannot read adds nothing.
+ */
 async function projectParentJoin(access, rows) {
   const projects = require('../repositories/projects');
   const ids = [...new Set(rows.map(row => row && row.projectId).filter(Boolean).map(String))];
