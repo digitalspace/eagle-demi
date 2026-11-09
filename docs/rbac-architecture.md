@@ -13,8 +13,9 @@ Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalo
 ## 1. Model
 
 Status: the field plane (catalog, dials engine, redactor, `/api/me`), the ladder, the sealed
-compartment and Selected Credentials below are built. Entra as a second token issuer is open, and
-the project TODO list tracks it.
+compartment and Selected Credentials below are built. Entra as a second token issuer is open. It
+needs an Entra app registration from the identity team, with the app roles in
+`docs/entra-app-roles.json`, and then a dual-issuer `src/helpers/auth.js`.
 
 The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI already has.
 
@@ -223,10 +224,14 @@ once no project is left. EA windows routinely run past 90 days, so renewal is th
 expiry is visible rather than announced: the holder reads their own live grants and each `end` on
 `GET /api/me`, the grantor lists the same rows on `GET /api/credentials`.
 
-**Fail closed.** Unknown role → level 4. No ladder token → the row matches only privileged
-callers until it is written with one (P3-2 removes the legacy `unsetIsPublic` arm). Missing
-`access.level` → 4. Uncatalogued field removed. Unknown entity throws. Dial out of range →
-`defaultVis`.
+**Fail closed.** Each unknown input resolves to the narrowest outcome:
+
+- unknown role → level 4
+- no ladder token → the row matches only privileged callers until it is written with one
+- missing `access.level` → 4
+- uncatalogued field → removed
+- unknown entity → throws
+- dial out of range → `defaultVis`
 
 **Identity.** Keycloak now, Entra later; role names are the contract, the issuer only changes the
 claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles of its own.
@@ -327,12 +332,10 @@ Each item below overrides the corresponding section of the source document.
    `defaultVis: 2`. Lead and EPD names and emails, and the records-management identifiers
    `orcsClassification` and `edrmsRecordNumber`, stay at 4: public by policy (Section 3,
    question 2, 2026-08-28).
-4. **Level 0 runs the same loop.** No `if (level === 0) return record`. `catalogFor(entity)` is
-   called first so an unknown entity throws for every caller. This only holds because predicates
-   widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
-   false `cacPublished` would hide `cacEmail` from level 0, and the identity property would need
-   a bypass branch. After P3-2 no caller is level 0 — only `systemAccess()` carries it (§5 item 3) —
-   so `maxVis: 0` fields reach no response. Until P3-2 ships, `sysadmin` is level 0 and does see them.
+4. **Level 0 runs the same loop.** There is no `if (level === 0) return record`, and
+   `catalogFor(entity)` runs first so an unknown entity throws for every caller. This holds because
+   predicates widen rather than gate (Section 1), and because only `systemAccess()` carries level 0
+   (§5 item 3), so `maxVis: 0` fields reach no response.
 5. **`read[]` does not carry levels.** The source design put `demi-vis-*` into `read[]` for
    whole-record restriction. `readClause` and `canRead` return `true` for any `SECURE_ROLES`
    holder before reading `read[]` (`src/helpers/access-sql.js:235,373`), `staff` is in
@@ -366,10 +369,9 @@ Each item below overrides the corresponding section of the source document.
    output would delete the row. AI Search hits get a second catalog keyed on index field names.
    For chunks the enforcement point is the `select` string in `src/search/ai-search.js`, not
    `retrievable` (semantic ranking needs `content` retrievable).
-10. **Token hardening is Phase 0 and includes deployment.** `isAllowedClient`
-    (`src/helpers/auth.js`) refuses a verified token whose `azp` is not in `DEMI_ALLOWED_CLIENTS`
-    with 401 — one behaviour, no demoted identity — and an empty list is permissive, which is why
-    `src/config.js` refuses to run outside dev and local without one.
+10. **Token hardening includes deployment.** `isAllowedClient` (`src/helpers/auth.js`) answers
+    401 to a verified token whose `azp` is not in `DEMI_ALLOWED_CLIENTS`, with no demoted identity.
+    An empty list is permissive, so `src/config.js` refuses to run outside dev and local without one.
 11. **The level comparison lives in one function.** `visible(level, effVis)` in `redact.js` is
     the only place the scalar order is assumed. Question 1 is answered (§5); a later switch to a
     clearance set would change one file plus `levelFromRoles`.
@@ -400,9 +402,9 @@ Each item below overrides the corresponding section of the source document.
 
 9. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
    has a team. `documents` already partitions on `/projectId`; no business-unit axis is needed.
-10. Answered 2026-08-28: from Track. A project's team is the union of staff across its works
-    (`staff_work_roles` joined to `works`); a feed mints the existing `project:<id>` realm roles.
-    Lead-managed lists are a manual override, not the system of record. Unit P3-0.
+10. Answered: from Track. A project's team is the union of staff across its works
+    (`staff_work_roles` joined to `works`), and `src/scripts/sync-track-teams.js` mints the
+    matching `project:<id>` realm roles. Lead-managed lists are a manual override, not the system of record.
 11. Answered 2026-08-28: the compartment is exactly the existing `compliance` role
     (`src/controllers/nosql/api-key.js:31`), created as a realm role and granted to named humans
     behind the C&E lead.
@@ -422,9 +424,9 @@ Each item below overrides the corresponding section of the source document.
 15. Answered 2026-08-28: required for any widening to level 4 and for every level-0 release
     (which also carries the case number). Optional on every other move; the audit row already
     carries actor, time, from and to.
-16. Answered 2026-08-28: yes, but `sysadmin` only, always audited, and framed as incident response
+16. Answered: yes, but `sysadmin` only, always audited, and framed as incident response
     (error or privacy breach). A routine correction publishes a replacement instead. Pulling back
-    from level 4 needs `docs/takedown-runbook.md` (unit P3-9): purge the AI Search index, clean up
+    from level 4 follows `docs/takedown-runbook.md`: purge the AI Search index, clean up
     chunks, invalidate caches, and state that copies outside EPIC are unrecoverable.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
@@ -449,7 +451,7 @@ Each item below overrides the corresponding section of the source document.
 ## 5. Changes 2026-08-28 from the EAO sharing model
 
 The business text (levels 1-4 ladder, level 0 compartment, Selected Credentials) supersedes parts
-of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
+of §1-§3. Nothing built before it is withdrawn.
 
 ### Superseded
 
@@ -463,15 +465,11 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    token, which `systemAccess()` does not hold (§1).
 2. **"Group (compartment)" and dial values of shape `{ level, groups }` are deleted.** The EAO
    "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
-   named party over named records, on the ROW plane. See §1 and Phase 3 unit P3-6. Dials stay
-   integers; `src/vis/groups.js` is never created.
-3. **§2 item 4, "level 0 sees every field", stops holding at P3-2.** `sysadmin` is level 0 today
-   and does see `maxVis: 0` fields. After P3-2 moves it to level 1 no caller is level 0, so
-   `maxVis: 0` means what it says: `read`, `ownRead`, `vis`, `s3Key`, `sources` and the Cosmos
-   bookkeeping fields are visible to nobody through a response, `sysadmin` included. The redactor
-   loop is unchanged — still no `if (level === 0) return record`, still one comparison. The U9 and
-   P2-1 deviation notes ("level 0 sees `s3Key`/`read`/`sources.track`") describe today and become
-   void at P3-2.
+   named party over named records, on the ROW plane (§1, `src/middleware/credentials.js`). Dials
+   stay integers; `src/vis/groups.js` does not exist.
+3. **§2 item 4, "level 0 sees every field", holds for `systemAccess()` only.** No caller role maps
+   to level 0 (`src/vis/level.js`), so `maxVis: 0` means what it says. `read`, `ownRead`, `vis`,
+   `s3Key`, `sources` and the Cosmos bookkeeping fields reach no response, `sysadmin` included.
 4. **§2 item 5 is narrowed, not dropped.** `read[]` still carries no FIELD levels (`demi-vis-*`
    stays dead). It does now carry the four ladder tokens `team|staff|idir|public`, which is the row
    plane it always encoded. The reason item 5 gave — `readClause` short-circuits for
@@ -498,11 +496,9 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
 
 - §2 items 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 stand as written.
 - §2 item 11 stands: `visible()` is the only scalar comparison.
-- Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
-  search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
-  item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for
-  `systemAccess()`, and the frontend must gate on `staffUi` from `/api/me` rather than on
-  `privileged`, which goes false for staff. `level`/`tier` cannot stand in for it either: `staff`
-  and `compliance` are both level 2, tier `public`
-  (`frontend/src/app/services/registry-state.service.ts`, P2-5).
+- Catalogs, redactor, `selectFor`, PUT hidden-key guard, search drift ratchets, query-param gate
+  and `/api/me` stand. `selectFor(entity, access)` returns `'*'` only at level 0, which only
+  `systemAccess()` carries. The frontend gates staff UI on `staffUi` from `/api/me`
+  (`frontend/src/session/SessionProvider.tsx`), not on `privileged` or `level`, because `staff`
+  and `compliance` are both level 2.
 - §3 questions 2, 3, 4 stay closed. Questions 9-16 (§3, 2026-08-28b) are answered.
