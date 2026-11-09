@@ -229,6 +229,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // Repair clears `syncOut.<target>.sentVersion` on the row so the worker resends it, sealed or not.
     'scripts/reconcile-engage.js',
     'scripts/seed-public-reads.js',
+    // The Track push matches a row by its Eagle id and its `eagle-<id>` twin, as the run's full list does.
+    'scripts/sync-track-projects.js',
     // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
     'sync-out/index.js',
     // Each kind's repository as the sync-out worker reads it.

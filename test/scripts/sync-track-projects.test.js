@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { HEAL_CAP, run, syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, run, syncProjects, trackChanges, writeTrackProject } = require('../../src/scripts/sync-track-projects');
 const { needsClosing } = require('../../src/scripts/close-unpublished-track-projects');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
@@ -137,6 +137,11 @@ function fakeProjects(rows = [], { midRun } = {}) {
       return { items: snapshot };
     },
     getById: async (_access, id) => structuredClone(find(id)),
+    readForWrite: async (id) => structuredClone(find(id)),
+    // The Track row beside its `eagle-<id>` twin wins, as in the repository.
+    readForWriteByEagleId: async (eagleId) => structuredClone(
+      items.find(p => p.eagleId === eagleId && !String(p.id).startsWith('eagle-')) ||
+      items.find(p => p.eagleId === eagleId) || null),
     upsert: async (row, { etag, create } = {}) => {
       if (create && find(row.id)) throw conflict();
       guard(row.id, etag);
@@ -608,17 +613,22 @@ test('a create retried after a lost try stores a code whose record is there', as
   assert.ok(links.byId.has(written.shortCode), 'the stored code still resolves');
 });
 
-test('a record the feed no longer lists is counted, not deleted', async () => {
+test('a record the feed no longer lists is counted, not deleted', async (t) => {
   const projects = fakeProjects([
     storedProject(),
     { ...storedProject(), id: '999', sourceSystem: 'track' },
+    { ...storedProject(), id: '998', sourceSystem: 'track', isDeleted: true },
     { id: 'eagle-abc', sourceSystem: 'eagle', read: readForLevel(4) }
   ]);
+  const warn = t.mock.method(logger, 'warn', () => {});
 
   const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
-  assert.strictEqual(summary.orphaned, 1, 'the Eagle-only record is not Track\'s to orphan');
-  assert.strictEqual(projects.items.length, 3, 'and every row is still there');
+  assert.strictEqual(summary.orphaned, 1,
+    'the Eagle-only record is not Track\'s to orphan, and Track\'s list hides a row Track deleted');
+  const orphanWarn = warn.mock.calls.find(c => /no longer lists/.test(c.arguments[0]));
+  assert.deepStrictEqual(orphanWarn.arguments[1].ids, ['999']);
+  assert.strictEqual(projects.items.length, 4, 'and every row is still there');
   assert.deepStrictEqual(projects.writes, []);
 });
 
@@ -1290,5 +1300,84 @@ test('the projects poll', async (t) => {
     assert.deepStrictEqual(projects.writes, []);
     assert.strictEqual(errors.mock.calls[0].arguments[1].error, 'HTTP 503');
     assert.match(info.mock.calls.at(-1).arguments[0], /failures=1$/);
+  });
+});
+
+test('the Track push', async (t) => {
+  const PUSHED_AT = 1762650000000;
+  const PHASES = [{ name: 'Application Review', sortOrder: 4, isCompleted: false }];
+  const push = (projects, opts = {}) =>
+    writeTrackProject(API_PROJECT, { phases: [], works: [], deps: { projects, links: fakeLinks() }, ...opts });
+  const quiet = (t) => t.mock.method(logger, 'warn', () => {});
+
+  await t.test('empty lists clear the stored works and phases and keep the Eagle snapshot', async () => {
+    const eagle = { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy' };
+    const projects = fakeProjects([storedProject({ works: trackWorks(), phases: PHASES, sources: { track: FLAT, eagle } })]);
+
+    const result = await push(projects);
+
+    assert.strictEqual(result.action, 'updated');
+    const [written] = projects.writes;
+    assert.deepStrictEqual(written.works, []);
+    assert.deepStrictEqual(written.phases, []);
+    assert.deepStrictEqual(written.sources.eagle, eagle);
+  });
+
+  await t.test('a push older than the stored one is stale and writes nothing', async () => {
+    const projects = fakeProjects([storedProject({ trackPushedAt: PUSHED_AT })]);
+
+    const result = await writeTrackProject({ ...API_PROJECT, name: 'Renamed' },
+      { phases: [], works: [], pushedAt: PUSHED_AT - 1, deps: { projects, links: fakeLinks() } });
+
+    assert.strictEqual(result.action, 'stale');
+    assert.deepStrictEqual(projects.writes, []);
+  });
+
+  await t.test('a push that writes stamps the row with its time', async () => {
+    const projects = fakeProjects([storedProject({ trackPushedAt: PUSHED_AT })]);
+
+    await writeTrackProject({ ...API_PROJECT, name: 'Renamed' },
+      { phases: [], works: [], pushedAt: PUSHED_AT + 1, deps: { projects, links: fakeLinks() } });
+
+    assert.strictEqual(projects.writes[0].trackPushedAt, PUSHED_AT + 1);
+  });
+
+  await t.test('a project naming a native project\'s Eagle id is skipped', async (t) => {
+    const warn = quiet(t);
+    const native = {
+      id: '0f8fad5b-d9cb-469f-a165-70867728950e', trackProjectId: null, sourceSystem: 'demi',
+      eagleId: API_PROJECT.epic_guid, sources: {}, read: readForLevel(1)
+    };
+    const projects = fakeProjects([native]);
+
+    const result = await push(projects);
+
+    assert.strictEqual(result.action, 'skipped');
+    assert.strictEqual(result.reason, 'nativeClash');
+    assert.deepStrictEqual(projects.writes, []);
+    assert.ok(warn.mock.calls.some(c => /\[track-push\] project skipped/.test(c.arguments[0])));
+  });
+
+  await t.test('a row created through POST /projects is skipped', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject({ sources: {} })]);
+
+    const result = await push(projects);
+
+    assert.strictEqual(result.reason, 'apiRow');
+    assert.deepStrictEqual(projects.writes, []);
+  });
+
+  await t.test('an Eagle-only twin is re-keyed and hands its ownership to the Track row', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ demiOwnedAt: NOW, syncVersion: 3 })]);
+
+    const result = await push(projects, { pushedAt: PUSHED_AT });
+
+    assert.strictEqual(result.action, 'relinked');
+    const row = projects.items.find(p => p.id === '207');
+    assert.deepStrictEqual(row.read, readForLevel(4), 'a re-key must not move a level');
+    assert.strictEqual(row.trackPushedAt, PUSHED_AT);
+    const twin = projects.items.find(p => p.id === `eagle-${API_PROJECT.epic_guid}`);
+    assert.strictEqual(Object.hasOwn(twin, 'demiOwnedAt'), false);
   });
 });

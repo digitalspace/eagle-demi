@@ -466,6 +466,7 @@ function carryDelete(row, existing) {
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
  * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
  *                                     not fetched, which also leaves `legislationTransitions` out
+ * @param {boolean}     [opts.complete] the lists are all of Track's (a push), so an empty one clears
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
@@ -509,11 +510,12 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
 
   // Track's dated phases, beside Eagle's own `currentPhaseName` and `phaseHistory`; omitted, not
   // emptied, when Track has none, so an absent feed never blanks a stored one.
-  if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
+  const { complete = false } = opts;
+  if (Array.isArray(opts.phases) && (complete || opts.phases.length)) merged.phases = opts.phases;
   // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
   // since an empty list still says Track has no transition date.
   if (Array.isArray(opts.works)) {
-    if (opts.works.length) merged.works = opts.works;
+    if (complete || opts.works.length) merged.works = opts.works;
     merged.legislationTransitions = legislationTransitions(merged.legislationYearList, opts.works);
   }
   nullEagleJunkDates(merged);
