@@ -108,6 +108,10 @@ async function main(mode, name) {
     writeBaseline(baselinePath, current);
     return 0;
   }
+  return judge(mode, baselinePath, current);
+}
+
+function judge(mode, baselinePath, current) {
   const { next, problems } = compare(JSON.parse(fs.readFileSync(baselinePath, 'utf8')), current);
   if (mode === '--tighten') writeBaseline(baselinePath, next);
   // Tightening clears every stale entry; new and grown offenders still need a code change.
@@ -126,4 +130,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { compare };
+module.exports = { compare, judge };

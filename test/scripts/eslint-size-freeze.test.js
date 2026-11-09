@@ -1,9 +1,12 @@
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { compare } = require('../../scripts/eslint-size-freeze.cjs');
+const { compare, judge } = require('../../scripts/eslint-size-freeze.cjs');
 
 const baseline = { 'src/big.js': { 'max-lines': [500], complexity: [30, 25] } };
 
@@ -41,4 +44,31 @@ test('a shrunk function is stale and tightening lowers its ceiling', () => {
 
   assert.deepStrictEqual(problems, ['stale src/big.js complexity: 21 is under ceiling 25, run --tighten']);
   assert.deepStrictEqual(next['src/big.js'].complexity, [30, 21]);
+});
+
+function tighten(t, current) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'size-freeze-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'baseline.json');
+  fs.writeFileSync(file, JSON.stringify(baseline));
+  const printed = [];
+  t.mock.method(process.stderr, 'write', (line) => printed.push(line));
+  const code = judge('--tighten', file, current);
+  t.mock.restoreAll();
+  return { code, printed, written: JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
+
+test('--tighten with only stale entries exits 0 and writes the lower ceilings', (t) => {
+  const { code, printed, written } = tighten(t, { 'src/big.js': { 'max-lines': [480], complexity: [30, 25] } });
+
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(printed, []);
+  assert.deepStrictEqual(written['src/big.js']['max-lines'], [480]);
+});
+
+test('--tighten with a grown offender exits 1 and prints it', (t) => {
+  const { code, printed } = tighten(t, { 'src/big.js': { 'max-lines': [510], complexity: [30, 21] } });
+
+  assert.strictEqual(code, 1);
+  assert.deepStrictEqual(printed, ['grown src/big.js max-lines: 510 is over ceiling 500\n']);
 });
