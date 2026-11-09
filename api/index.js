@@ -17,7 +17,7 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 
 const { app } = require('@azure/functions');
 
-// Streaming response bodies for document downloads; needs @azure/functions 4.3.0+ and runtime 4.28+.
+// Streams document download bodies; needs @azure/functions 4.3.0+ and runtime 4.28+.
 app.setup({ enableHttpStream: true });
 
 // Exported for the timer and trigger test suites; the host is the only other caller.
@@ -27,15 +27,15 @@ module.exports = {
   announceUpdates, edgeBan, intakeScanSweep
 };
 
-// A recycle loses the audit buffer (its flush timer is unref()'d); appTerminate, graceful only, narrows
-// that window. Here, not in audit.js, because this file is the only Azure-specific entry point.
+// A recycle loses the audit buffer (its flush timer is unref()'d); appTerminate, graceful only,
+// narrows that window. Here, not in audit.js: this is the only Azure-specific entry point.
 app.hook.appTerminate(async () => {
   const { flush } = require('../src/utils/audit');
   await flush();
 });
 
 // One catch-all over the route table in src/http/routes.js: the host matches routes in discovery
-// order, not by specificity. The lazy require lets timer tests load this file with a recording `app`.
+// order, not by specificity. The lazy require lets timer tests load this with a recording `app`.
 const handler = (request, context) => require('../src/http/router').dispatch(request, context);
 
 const HTTP = {
@@ -96,7 +96,7 @@ if (process.env.BULK_DOWNLOADS_QUEUE) {
 }
 
 // Unset = the document controller skips the re-stamp and flags `parentFieldsPending` for
-// `backfill-chunk-parent-fields.js --pending`; the inline walk is opt-in via `CHUNK_RESTAMP_INLINE`.
+// `backfill-chunk-parent-fields.js --pending`; `CHUNK_RESTAMP_INLINE` opts in to the inline walk.
 if (process.env.CHUNK_RESTAMP_QUEUE) {
   app.storageQueue('restampChunksWorker', {
     queueName: '%CHUNK_RESTAMP_QUEUE%',
@@ -138,10 +138,11 @@ if (process.env.ANNOUNCE_UPDATES_SCHEDULE) {
   });
 }
 
-// Guarded on EDGE_BAN_MODE being SET, not its value: deployed apps set `off`, and an off tick clears the rule.
-// Schedule as a value, not `%EDGE_BAN_SCHEDULE%`: an unset name would fail host startup, not default hourly.
+// Guarded on EDGE_BAN_MODE being set, not its value: deployed apps set `off`, and an off tick
+// clears the rule.
 if (process.env.EDGE_BAN_MODE) {
   app.timer('edgeBan', {
+    // A value, not `%EDGE_BAN_SCHEDULE%`: an unset name fails startup rather than run hourly.
     schedule: require('../src/config').edgeBan.schedule,
     runOnStartup: false,
     handler: edgeBan
@@ -168,15 +169,16 @@ const deliveryAttempt = (context) =>
 // Rethrows, unlike the timers: swallowing would report every failure as success and lose the job.
 // After `maxDequeueCount` the message lands in the poison queue the alert reads.
 async function bulkDownloadWorker(message, context) {
-  // `messageEncoding: "none"` (host.json): the body is the bare job id, a string or undecoded Buffer.
+  // `messageEncoding: "none"` (host.json): the body is the bare job id, as string or raw Buffer.
   const jobId = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
   await require('../src/jobs/bulk-download')
     .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
-// Throws on the last attempt only; earlier ones re-queue, as host.json's hour-long `visibilityTimeout`
-// is sized for zips. The body holds ids only, so either path re-reads the document and stamps it as is.
+// Throws on the last attempt only; earlier ones re-queue themselves, since host.json's hour-long
+// `visibilityTimeout` (sized for zips) would hide each retry for an hour.
 async function restampChunksWorker(message, context) {
+  // The body holds ids only, so either path re-reads the document and stamps its current fields.
   await require('../src/jobs/restamp-chunks')
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
@@ -189,9 +191,10 @@ async function searchDefinitionsWorker(message, context) {
     .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
-// Earlier failures re-queue with backoff (the hour-long `visibilityTimeout` is sized for zips). The
-// last attempt does not throw: it parks the message in the poison queue and logs the alert once.
+// Earlier failures re-queue themselves with backoff, since host.json's hour-long
+// `visibilityTimeout` (sized for zips) would hide each retry for an hour.
 async function syncOutWorker(message, context) {
+  // The last attempt does not throw: it parks the message in the poison queue and alerts once.
   await require('../src/sync-out')
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
@@ -271,7 +274,7 @@ async function syncTrackProjects() {
   }
 }
 
-// Swallows the failure as reconcileEagle does; a bad mode or policy setting throws into the same catch.
+// Swallows the failure as reconcileEagle does; a bad mode or policy setting lands in this catch.
 async function edgeBan() {
   const { logger } = require('../src/utils/logger');
   try {
@@ -281,7 +284,7 @@ async function edgeBan() {
       logger.info('[edge-ban] EDGE_BAN_MODE, EDGE_LOG_WORKSPACE_ID or EDGE_BAN_RULE_ID is unset, run skipped');
       return;
     }
-    // Off clears the rule and judges nothing, so a missing or broken policy must not block the kill switch.
+    // Off clears the rule and judges nothing, so a missing or broken policy cannot block it.
     const policy = mode === 'off' ? null : settings.policy;
     if (mode !== 'off' && !policy) {
       logger.error('[edge-ban] EDGE_BAN_POLICY is unset or its Key Vault reference did not resolve, run skipped');
