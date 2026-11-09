@@ -12,7 +12,7 @@ const {
   eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-/** Eagle's staff-side organization fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side organization fields. */
 function staffFields(doc) {
   return {
     description: doc.description || '',

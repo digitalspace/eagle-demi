@@ -1,24 +1,7 @@
 'use strict';
 
-/**
- * text-quality.js — the artefact heuristics, in one place.
- *
- * These were written for `src/scripts/audit-chunk-quality.js`, which grades text ALREADY in the
- * corpus. The chunker now needs two of the same judgements at ingest time, and a second copy of
- * thresholds tuned against the real corpus is how the audit and the cleaner quietly stop agreeing
- * — the audit would report a defect the cleaner believes it removed. So they live here and both
- * callers import them.
- *
- * WHAT THESE ARE NOT. They are cheap syntactic signals, not a verdict on quality; the audit script
- * says so at length and it is worth repeating at the point of reuse. The only honest measure of a
- * search corpus is whether a human-visible phrase retrieves its own document — that is
- * `score-retrieval.js`. Nothing here should ever be used to decide that text is "bad enough" to
- * drop, with the single exception documented on `isSeparatorFurniture()`.
- *
- * Known blind spot, measured rather than assumed: character-spacing damage — real corpus text
- * reading `Tum ble r Ridge` — scores CLEAN. Every fragment is pronounceable and none is vowelless.
- * Catching it needs a dictionary or a bigram model this deliberately does not carry.
- */
+// Syntactic artefact signals for the chunker, not a quality verdict: never drop text on them except
+// via isSeparatorFurniture(). Spaced-out letters (`Tum ble r Ridge`) score clean by design.
 
 // docling emits this for every picture; there is no way to turn it off (image_export_mode admits
 // only placeholder/embedded/referenced), so it is stripped or tolerated, never prevented.
@@ -187,9 +170,6 @@ function isSeparatorFurniture(text) {
 }
 
 module.exports = {
-  round,
   stripPlaceholders,
-  measure,
-  classify,
   isSeparatorFurniture
 };

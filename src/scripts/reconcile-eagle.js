@@ -812,7 +812,7 @@ function report(summary, { json } = {}) {
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
-        'public search — that is close-unpublished-track-projects.js, not the push');
+        'public search; the push does not unpublish them');
     }
   }
   for (const label of STORED_LABELS) {

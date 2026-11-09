@@ -78,48 +78,37 @@ script under `src/scripts/` names the role.
 These scripts read with `systemAccess()`, the level-0 context that passes every ACL, so anything
 they print or write out is unredacted and is handled as level-0 material:
 
-`src/scripts/audit-chunk-quality.js`, `backfill-chunk-parent-fields.js`, `backfill-display-name-sort.js`,
-`backfill-document-list-ids.js`, `backfill-eac-number.js`, `backfill-eagle-staff-fields.js`,
+`src/scripts/backfill-chunk-parent-fields.js`, `backfill-document-list-ids.js`, `backfill-eac-number.js`,
 `backfill-objects.js`, `backfill-trim-project-labels.js`, `backup-originals.js`,
-`close-unpublished-track-projects.js`, `probe-phrase-presence.js`, `purge-extraction.js`,
-`reconcile-eagle.js`, `restore-originals.js`, `score-retrieval.js`, `seed-nosql.js`,
-`seed-public-reads.js`, `sync-track-projects.js`, `sync-wildfires.js`.
+`date-assessment-phases.js`, `purge-extraction.js`, `reconcile-eagle.js`, `restore-originals.js`,
+`seed-nosql.js`, `seed-public-reads.js`, `sync-track-projects.js`, `sync-wildfires.js`.
 
 `grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
 
-`src/scripts/export-chunks-to-eagle.js`, `src/scripts/copy-to-env.js` and
-`src/scripts/backfill-eagle-ladder.js` are level-0 material as well and are deliberately absent from
-that grep: all three query a container directly (`SELECT * FROM c`, `export-chunks-to-eagle.js` over
-`chunks` on a `--dump` run, `copy-to-env.js` over `projects`, `documents`, `boundaries` and
-`chunks`; `backfill-eagle-ladder.js` selects ACL fields from every Eagle-mirrored container), with no
-access predicate at all — wider than `systemAccess()`, not narrower.
+`src/scripts/copy-to-env.js` and `src/scripts/backfill-eagle-ladder.js` are level-0 material as well
+and are deliberately absent from that grep. Both query a container directly with no access
+predicate, which is wider than `systemAccess()`, not narrower. `copy-to-env.js` runs `SELECT * FROM c`
+over `projects`, `documents`, `boundaries` and `chunks`; `backfill-eagle-ladder.js` selects ACL
+fields from every Eagle-mirrored container.
 
-Ten of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
-`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out`,
-`backup-originals.js --out`, `restore-originals.js --out`, `seed-nosql.js`, `seed-public-reads.js`,
-`backfill-chunk-parent-fields.js` (its state file) and `copy-to-env.js` (its `--checkpoint` file,
-written on every `--live` run, not only `--dump`).
+Six of them leave a file behind rather than only printing:
 
-### Delete the dump
+- `backup-originals.js --out` and `restore-originals.js --out`
+- `seed-nosql.js` and `seed-public-reads.js`
+- `backfill-chunk-parent-fields.js`, its state file
+- `copy-to-env.js`, its `--checkpoint` file, written on every `--live` run
 
-`--dump` writes every chunk it reads, `read[]` and full text included, to the working directory of
-the devbox it ran on (`demi-devbox-test`, `demi-devbox-prod`). The file is in transit, not a
-backup — it is deleted as soon as it reaches its destination, on the same connection that made it:
+### Delete the copy checkpoint
 
-```
-shred -u /home/backups/chunks-YYYYMMDD.jsonl   # the path passed to --dump
-ls -l /home/backups                            # confirm nothing is left
-```
-
-`copy-to-env.js --live` writes its own file, the `--checkpoint` path (default `./copy-checkpoint.json`),
-on every run, not only a `--dump` one — resume state per container, not chunk text, but still level-0
-material off the devbox once the copy is verified complete:
+`copy-to-env.js --live` writes the `--checkpoint` path (default `./copy-checkpoint.json`) on every
+run. It holds resume state per container, not chunk text, but it is still level-0 material. Delete it
+off the devbox once the copy is verified complete:
 
 ```
 shred -u <path passed to --checkpoint, or ./copy-checkpoint.json>
 ```
 
-A devbox is stop/start operated and only `/home` survives a stop, so a dump left there outlives the
+A devbox is stop/start operated and only `/home` survives a stop, so a file left there outlives the
 session that made it.
 
 ## Rotating ADMIN_API_KEY

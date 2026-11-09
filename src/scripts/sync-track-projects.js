@@ -298,8 +298,7 @@ async function syncProjects(apiProjects, opts = {}) {
         continue;
       }
 
-      // An API row (`sources: {}`) is skipped: stamping `sources.track` would make
-      // close-unpublished-track-projects.js unpublish it; `sourceSystem` cannot tell them apart.
+      // An API row (`sources: {}`) is skipped, never stamped `sources.track`: `sourceSystem` cannot tell them apart.
       if (!(existing.sources || {}).track) {
         summary.skippedApiRows++;
         continue;

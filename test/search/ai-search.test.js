@@ -124,7 +124,7 @@ test('ai-search query construction', async (t) => {
       'accented letters must survive or French place names become unsearchable');
   });
 
-  // Found by the first real run of score-retrieval.js against the live index, on a corpus phrase:
+  // Found against the live index, on a corpus phrase:
   // "EAST TOBA AND MONTROSE HYDROELECTRIC PROJECT" came back
   // `Failed to parse query string at line 1, column 42` — column 42 is exactly where the bare AND
   // lands. Any public query containing a standalone AND/OR/NOT was answering HTTP 400.

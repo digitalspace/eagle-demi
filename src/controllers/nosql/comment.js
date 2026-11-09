@@ -26,7 +26,7 @@ const {
   eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-/** Eagle's staff-side review fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side review fields. */
 function staffFields(doc) {
   return {
     datePosted: doc.datePosted || null,
