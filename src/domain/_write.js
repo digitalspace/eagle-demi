@@ -68,4 +68,17 @@ function readWith(read, published) {
   return published ? ['public', ...base] : base;
 }
 
-module.exports = { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ };
+const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
+
+/** `(action, fields) => audit builder` for `targetType`; `project: false` leaves `projectId` out. */
+function auditFor(targetType, { project = true } = {}) {
+  return (action, fields) => (saved) => ({
+    action, targetType, targetId: saved.id, ...(project && { projectId: saved.projectId }), ...(fields && { detail: { fields } })
+  });
+}
+
+/** The answer for keys a per-project dial hides from this caller. */
+const notWritable = (keys) =>
+  ({ status: 'invalid', fields: Object.fromEntries(keys.map(key => [key, 'is not writable by this caller'])) });
+
+module.exports = { writeRow, queued, readWith, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ };

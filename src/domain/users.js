@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const users = require('../repositories/users');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, readWith, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
 const { storedRead } = require('../controllers/nosql/user');
 
@@ -61,7 +61,7 @@ const BODY_SCHEMA = Object.freeze({ ...SCHEMA, isPublished: { type: 'boolean' } 
 
 const readUser = (ctx, id) => users.getById(ctx.access, id);
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
+const auditOf = auditFor('user', { project: false });
 
 /** Every field, missing or empty ones defaulted: eagle-api's `value ? value : ''`. */
 function replaced(value) {
@@ -73,10 +73,6 @@ function publicRefused(isPublished, orgName) {
   return isPublished === true && orgName !== PUBLIC_ORG_NAME
     ? { status: 'invalid', fields: { isPublished: `only a user whose orgName is '${PUBLIC_ORG_NAME}' can be public` } }
     : null;
-}
-
-function auditOf(action, fields) {
-  return (saved) => ({ action, targetType: 'user', targetId: saved.id, detail: { fields } });
 }
 
 /**
@@ -149,9 +145,7 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const refused = refusedWriteKeys(users.CONTAINER, next, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const actor = actorOf(ctx);
   let tookOver = false;
