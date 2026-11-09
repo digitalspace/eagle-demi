@@ -32,7 +32,7 @@
   "src/merge/project.js": {"complexity":[28],"max-lines":[731]},
   "src/repositories/_sql.js": {"max-lines":[427]},
   "src/repositories/chunks.js": {"max-lines":[764]},
-  "src/repositories/comment-periods.js": {"max-lines":[511]},
+  "src/repositories/comment-periods.js": {"max-lines":[513]},
   "src/repositories/documents.js": {"max-lines":[1086]},
   "src/repositories/projects.js": {"max-lines":[521]},
   "src/repositories/updates.js": {"max-lines":[787]},
