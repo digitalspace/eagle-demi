@@ -13,16 +13,12 @@ const {
   readParent, ownRead, hasNoRead, updateRead, inheritsParentRead, isPublicParent
 } = require('../../helpers/update-parent');
 const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
-const { mirrorError } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
-const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
 const documents = require('../../repositories/documents');
 const { toIsoOrNull } = require('../../seed/transform');
 const { plainTextOf } = require('../../helpers/html-entities');
-const {
-  eaglePush, refId, upsertKeepingDemiRows, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { refId, upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
 
 const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
 const EMAIL_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif']);
@@ -264,45 +260,13 @@ exports.announce = announce;
  *
  * The body carries the RAW Eagle record, exactly as the project and document mirrors do.
  */
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (written.status === 'conflict') {
-      return pushConflict(res, { label: 'Update Controller', eagleId });
-    }
-    const { saved, existing, ignored } = written;
-    // Nothing was written, so there is nothing to announce either — the newer push already did.
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: 'Update Controller', action: 'update.push', targetType: 'update',
-        current: existing, projectId: existing.projectId, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'update.push',
-      targetType: 'update',
-      targetId: saved.id,
-      projectId: saved.projectId,
-      detail: {
-        eagleId,
-        isPublishedFrom: existing ? existing.isPublished : null,
-        isPublishedTo: saved.isPublished
-      }
-    });
-
-    // A DEMI row's echo changes nothing DEMI owns; the announce timer mails its publish and its withdrawal, and
-    // sync-out's call does not wait on eagle-notify.
+exports.upsertFromEagle = pushHandler({
+  label: 'Update Controller', action: 'update.push', targetType: 'update', mirror: mirrorFromEagle,
+  projectScoped: true,
+  // A stale push never gets here, so the newer push did the announce. A DEMI row's echo changes nothing DEMI
+  // owns; the announce timer mails its publish and its withdrawal, and sync-out's call does not wait on eagle-notify.
+  after: async ({ saved, existing }) => {
     if (!(existing && existing.sourceSystem === 'demi')) await announce(saved, existing);
-
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'update controller failed');
-  }
-};
+  },
+  failure: 'update controller failed'
+});
