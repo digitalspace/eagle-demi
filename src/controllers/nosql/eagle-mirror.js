@@ -7,6 +7,7 @@
 
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
+const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
 const { heldSealed } = require('../../helpers/access-sql');
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
@@ -29,6 +30,11 @@ function eaglePush(req) {
   const doc = req.body && req.body.doc;
   if (!doc || String(doc._id || '') !== eagleId) return null;
   return { eagleId, doc, pushedAt: pushedAtOf(req.body) };
+}
+
+/** The 400 for a push whose body names another record than its path. */
+function mismatchedPush(res) {
+  return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
 }
 
 /**
@@ -81,6 +87,53 @@ function pushConflict(res, { label, eagleId, projectId }) {
   return res.status(503).json({
     error: 'The record is being written by another request. Push it again.'
   });
+}
+
+const publishedDetail = (saved, existing, eagleId) => ({
+  eagleId,
+  isPublishedFrom: existing ? existing.isPublished : null,
+  isPublishedTo: saved.isPublished
+});
+
+/**
+ * A `PUT /eagle/*` handler. `mirror(eagleId, doc, { pushedAt })` writes; `refuse(written, doc, res)` and
+ * `after(written, res)` answer before the conflict check and after the audit, or return undefined to go on.
+ */
+function pushHandler({
+  label, action, targetType, mirror, refuse, projectScoped = false, detail = publishedDetail, after, failure
+}) {
+  return async (req, res) => {
+    try {
+      const push = eaglePush(req);
+      if (!push) return mismatchedPush(res);
+      const { eagleId, doc, pushedAt } = push;
+
+      const written = await mirror(eagleId, doc, { pushedAt });
+      const refused = refuse && refuse(written, doc, res);
+      if (refused) return refused;
+      if (written.status === 'conflict') return pushConflict(res, { label, eagleId });
+      const { saved, existing, ignored } = written;
+      if (ignored) {
+        return ignoreStalePush(req, res, {
+          label, action, targetType, current: existing,
+          ...(projectScoped && { projectId: existing.projectId }), pushedAt
+        });
+      }
+
+      auditEvent(req, {
+        action,
+        targetType,
+        targetId: saved.id,
+        ...(projectScoped && { projectId: saved.projectId }),
+        detail: detail(saved, existing, eagleId)
+      });
+      const answered = after && await after(written, res);
+      if (answered) return answered;
+      return res.json({ id: saved.id, action: 'upsert' });
+    } catch (err) {
+      return mirrorError(res, err, failure);
+    }
+  };
 }
 
 /**
@@ -149,6 +202,8 @@ function refId(value) {
 
 module.exports = {
   eaglePush,
+  mismatchedPush,
+  pushHandler,
   isStalePush,
   stampPush,
   ignoreStalePush,
