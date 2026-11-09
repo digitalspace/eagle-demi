@@ -456,8 +456,6 @@ Each item below overrides the corresponding section of the source document.
 - `ENRICHMENT_SOURCES` is empty in prod, so `sources.wildfire` is a test-only value.
 - `rolesFor` has no `|| user.roles` fallback.
 - PUT accepts arbitrary body keys; POST drops them (`src/controllers/nosql/project.js`).
-- `export-chunks-to-eagle.js` pushes a four-field projection by default; `SELECT *` only under
-  `--dump`, which writes to the devbox working directory, not to a storage account.
 - `src/ai/summarize.js` consumes chunk `content` only, never a project or document row.
 - No AI Search index has any staff, email, or `sources` field retrievable or searchable.
 - ADR-004 is `eagle-demi.wiki/ADR-004-Read-ACL-Authorization-Model.md`.

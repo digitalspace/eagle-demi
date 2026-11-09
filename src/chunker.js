@@ -161,15 +161,8 @@ function createChunkAccumulator(options = {}) {
       // entirely text already indexed under its neighbour.
       if (!own || (chunkIndex > 0 && own.length < MIN_CHUNK_SIZE)) continue;
 
-      // Furniture — a chunk that is nothing but rules, dot leaders or form underscores — carries no
-      // words, so it can never be the right answer to a query and only spends an index entry. This
-      // is the ONLY quality reason acted on here: `classify()` also reports vowelless and
-      // fragmented tokens, but those describe damaged TEXT, and dropping them would delete the
-      // hardest OCR documents from the index and hide a measurable extraction problem.
-      //
-      // Guarded on `chunkIndex > 0` for the same reason the size floor is: a document must still
-      // produce at least one chunk, or "extracted but entirely furniture" becomes indistinguishable
-      // from "never extracted", which is the STARVED signal the audit relies on.
+      // Furniture carries no words to find; damaged OCR text does, so only furniture is dropped.
+      // First chunk always kept: a document with no chunks reads as never extracted.
       if (chunkIndex > 0 && isSeparatorFurniture(own)) continue;
 
       const ownStart = part.start + part.text.search(/\S/);

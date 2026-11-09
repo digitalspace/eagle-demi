@@ -835,9 +835,8 @@ async function runSearch(index, opts = {}) {
   };
 
   const once = async () => {
-    // Counted per REQUEST, not per call: a page larger than SERVICE_MAX_TOP costs one semantic
-    // query per request and the scorecard divides by this number. `semanticQuery` is deleted after
-    // a 402, so the stripped retry below is correctly not counted as a semantic one.
+    // Per request, not per call: Azure bills each request and a page over SERVICE_MAX_TOP sends
+    // several. The retry after a 402 has no `semanticQuery`, so it is not counted.
     if (semantic && body.semanticQuery) semanticCounters.requested++;
     let data;
     try {
@@ -855,10 +854,8 @@ async function runSearch(index, opts = {}) {
       data = await send();
     }
 
-    // Whether L2 actually ran is invisible in the results — the same shape comes back either way,
-    // in a different order. Unlogged, a service that is silently serving BM25 all day looks exactly
-    // like one where reranking is working, and the scorecard would be measuring something no user
-    // gets.
+    // Whether L2 ran is invisible in the results: the same shape comes back in BM25 order.
+    // Unlogged, a service silently serving BM25 all day looks exactly like one that reranks.
     if (semantic && data['@search.semanticPartialResponseReason']) {
       notePartialRerank(data['@search.semanticPartialResponseReason']);
     }
@@ -1434,19 +1431,8 @@ async function searchChunks(opts = {}) {
 
   const { value, count, degraded } = await runSearch(index, {
     ...opts,
-    // ON by default, and only here — the chunk index is the only one with a semantic
-    // configuration, and asking for one that does not exist is a 400. Measured on 78 labels,
-    // 2026-08-05, paired run in one session against the same corpus:
-    //
-    //   recall@1   0.308 -> 0.372     recall@10  0.590 -> 0.628     MRR  0.398 -> 0.472
-    //   5 miss->hit and 2 hit->miss at k=10; 23 labels moved up, 7 down, 25 unchanged
-    //   found@50 unchanged at 55 in BOTH arms, which is the check that L1 was untouched
-    //
-    // All three metrics move together with nothing regressing — the same bar FUZZY_BOOST cleared
-    // and `anyTerms` failed. 5 vs 2 discordant pairs is not significant on its own (one SE ~0.056);
-    // the case is the consistent direction, not the aggregate. Pass `semantic: false` to opt out,
-    // which is how the scorecard measures the BM25 arm.
-    semantic: opts.semantic !== false,
+    // Only the chunk index declares a semantic configuration; asking for one elsewhere is a 400.
+    semantic: true,
     // This `select` is what stops the API shipping whole chunks — see CHUNK_SELECT.
     select: CHUNK_SELECT,
     highlight: 'content'
@@ -1469,11 +1455,7 @@ async function searchChunks(opts = {}) {
       // says. Every layer above reads a boolean.
       pageNumbered: hit.pageNumbered === true,
       read: hit.read,
-      snippet: snippetFrom(hit),
-      // Present only when L2 actually ran, so it doubles as the answer to "was this reranked?" —
-      // undefined both when semantic was not asked for and when it was asked for but degraded to
-      // a partial response. Nothing in the API forwards it; it is for instruments and diagnosis.
-      rerankerScore: hit['@search.rerankerScore']
+      snippet: snippetFrom(hit)
     }))
   };
 }

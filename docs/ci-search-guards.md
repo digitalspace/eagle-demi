@@ -133,4 +133,4 @@ HTTP scripts against a stub server; `test/scripts/search-select-changed.test.js`
 against a throwaway git repository. `test/workflows/azure-deploy-prod.test.js` checks that
 `skip_schema_probe` defaults to false, turns off both gates, and leaves the job itself unconditional.
 
-Runbook for an outage in progress: `eagle-demi.wiki/Runbook-Search-Outage.md`.
+Runbook for an outage in progress: `docs/runbook-search-outage.md`.

@@ -385,7 +385,7 @@ async function run({ live = false, deps } = {}) {
   return summary;
 }
 
-/** 1 on any failed write, matching close-unpublished-track-projects.js. */
+/** 1 on any failed write. */
 const exitCodeFor = (summary) => (summary.failures > 0 ? 1 : 0);
 
 /**
