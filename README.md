@@ -1929,7 +1929,7 @@ Security licence.
 | Secret scanning | Scans the full history on every branch. Zero alerts |
 | **Push protection** | Blocks a push containing a recognised credential, instead of reporting it once it is already public |
 | Dependabot alerts + security updates | Opens PRs for advisories; no config needed for that part |
-| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python`. `.github/workflows/codeql.yml` is disabled manually in the Actions settings, so its `pull_request` and `schedule` triggers do not fire |
+| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python` |
 
 **Push protection is the enforcement behind "never ship `.env`".** That rule was previously a
 convention, and this repository has already shipped a `.env` carrying `MONGODB_PASSWORD`,
