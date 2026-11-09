@@ -10,9 +10,8 @@ const {
 } = require('../merge/project');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
+  requireSettings, putRecord, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
 } = require('./eagle');
-const { putRecord } = require('./_put');
 const { organizationEagleId } = require('./eagle-organization');
 
 const NAME = 'eagle';

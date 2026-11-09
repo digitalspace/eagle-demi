@@ -7,9 +7,8 @@ const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
 const { FIELDS } = require('../domain/notification-fields');
 const {
-  requireSettings, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
+  requireSettings, putRecord, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
-const { putRecord } = require('./_put');
 
 const NAME = 'eagle';
 const KIND = 'notification';

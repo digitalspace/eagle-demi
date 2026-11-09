@@ -10,9 +10,8 @@ const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, missingOnPut, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
+  requireSettings, putRecord, missingOnPut, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
 } = require('./eagle');
-const { putRecord } = require('./_put');
 
 const NAME = 'eagle';
 const KIND = 'comment';

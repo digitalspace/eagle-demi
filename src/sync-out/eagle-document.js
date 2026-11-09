@@ -14,9 +14,8 @@ const { isNativeProject, isMintedNative } = require('../merge/project');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { DOCUMENT } = require('./kinds');
 const {
-  requireSettings, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
+  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
 } = require('./eagle');
-const { putRecord } = require('./_put');
 
 const NAME = 'eagle';
 

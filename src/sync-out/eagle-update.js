@@ -11,9 +11,8 @@ const notifications = require('../repositories/notifications');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
+  requireSettings, putRecord, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
 } = require('./eagle');
-const { putRecord } = require('./_put');
 
 const NAME = 'eagle';
 const KIND = 'update';

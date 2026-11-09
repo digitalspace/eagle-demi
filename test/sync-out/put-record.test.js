@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
 const eagle = require('../../src/sync-out/eagle');
-const { putRecord } = require('../../src/sync-out/_put');
+const { putRecord } = eagle;
 const { API, wireEagle } = require('../helpers/sync-out-eagle');
 
 const S = { apiBase: API, issuer: config.keycloakIssuer, clientId: 'demi-sync-out', clientSecret: 'unused' };
