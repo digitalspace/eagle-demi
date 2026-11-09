@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Runs one sync-out kind's reconcile hook: lists rows with a version not yet sent, and `--repair` re-queues
- * them. For comment periods the ENGAGE checks of reconcile-engage.js run first. Runs on the devbox via
- * `demi-run`, like reconcile-engage.js.
+ * Runs one sync-out kind's reconcile hook: lists rows with a version not yet sent; `--repair` re-queues them.
+ * Comment periods run the ENGAGE checks first. Runs on the devbox via `demi-run`.
  */
 
 const { KINDS } = require('../sync-out/kinds');
