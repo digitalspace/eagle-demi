@@ -199,6 +199,47 @@ test('PUT /track/projects/:id', async (t) => {
     assert.ok(errors()[0].startsWith(`[track-push] write failed id=${ID} status=conflict`));
   });
 
+  await t.test('a relink that loses every race answers 503', async (t) => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
+    stage(t, [twin], { losesOn: (item) => item.id === ID });
+    t.mock.method(logger, 'warn', () => {});
+    const errors = logged(t, 'error');
+
+    const res = await put({ pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } });
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.ok(errors()[0].startsWith(`[track-push] write failed id=${ID} status=conflict`));
+  });
+
+  await t.test('a retry clears a twin the first try left owned', async (t) => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...OWNED, sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
+    let losing = true;
+    const seen = stage(t, [twin], { losesOn: (item) => losing && item.id === TWIN_ID });
+    t.mock.method(logger, 'warn', () => {});
+    t.mock.method(logger, 'error', () => {});
+    const body = { pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } };
+    assert.strictEqual((await put(body)).statusCode, 503, 'the premise: the first try left it owned');
+    losing = false;
+
+    const res = await put(body);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!(DEMI_OWNED_AT in seen.row(TWIN_ID)));
+  });
+
+  await t.test('a relink that wrote the row audits it even when the twin keeps it from answering', async (t) => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...OWNED, sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
+    stage(t, [twin], { losesOn: (item) => item.id === TWIN_ID });
+    t.mock.method(logger, 'warn', () => {});
+    t.mock.method(logger, 'error', () => {});
+    const rows = recordEvents(t);
+
+    await put({ pushedAt: PUSHED_AT, project: { ...pushPayload, epic_guid: PROJECT_EAGLE_ID } });
+
+    const [row] = await rows(config.auditStream);
+    assert.strictEqual(row.Detail.action, 'relinked');
+  });
+
   await t.test('a relink that cannot disown its twin answers 503 and logs at error', async (t) => {
     const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...OWNED, sources: { eagle: { _id: PROJECT_EAGLE_ID } }, ...STAFF_ONLY };
     const seen = stage(t, [twin], { losesOn: (item) => item.id === TWIN_ID });
@@ -224,14 +265,26 @@ test('PUT /track/projects/:id', async (t) => {
     assert.ok(errors().some(line => line.startsWith(`[track-push] twin not disowned id=${TWIN_ID}`)));
   });
 
-  await t.test('a push landing on a deleted row warns with the id', async (t) => {
+  await t.test('a push on a deleted row warns with the id', async (t) => {
     stage(t, [storedPushTarget({ isDeleted: true, ...STAFF_ONLY })]);
     const warns = logged(t, 'warn');
 
     const res = await put();
 
     assert.strictEqual(res.statusCode, 200);
-    assert.ok(warns().includes(`[track-push] push landed on a deleted row id=${ID}`));
+    assert.ok(warns().includes(`[track-push] push on a deleted row id=${ID}`));
+  });
+
+  await t.test('a no-change push on a deleted row warns too', async (t) => {
+    const seen = stage(t);
+    await put();
+    await projects.upsert({ ...seen.row(ID), isDeleted: true });
+    const warns = logged(t, 'warn');
+
+    const res = await put();
+
+    assert.strictEqual(res.body.action, 'unchanged');
+    assert.ok(warns().includes(`[track-push] push on a deleted row id=${ID}`));
   });
 
   await t.test('a push equal to the stored row answers unchanged, with no audit and no new stamp', async (t) => {
@@ -255,6 +308,16 @@ test('PUT /track/projects/:id', async (t) => {
 
     assert.strictEqual(res.statusCode, 400);
     assert.strictEqual(res.body.code, 'PROJECT_ID_INVALID');
+  });
+
+  await t.test('a stamp in seconds answers 400', async (t) => {
+    const seen = stage(t);
+    t.mock.method(logger, 'error', () => {});
+
+    const res = await put({ pushedAt: 1762650000, project: pushPayload });
+
+    assert.strictEqual(res.body.code, 'PUSHED_AT_INVALID');
+    assert.deepStrictEqual(seen.writes, []);
   });
 
   await t.test('a stamp over 5 minutes ahead answers 400', async (t) => {

@@ -18,6 +18,8 @@ const WRITTEN_STATUS = { created: 201, relinked: 201, updated: 200 };
 const RETRY = 'The record is being written by another request. Try again.';
 const TRACK_ID = /^[1-9]\d*$/;
 const MAX_PUSH_AHEAD_MS = 5 * 60 * 1000;
+// Below this a stamp is in seconds, and every later push in milliseconds would outrank it.
+const MIN_PUSHED_AT = 1e12;
 
 /** Logged at error: nothing was written. */
 function refuse(res, id, status, code, error) {
@@ -42,7 +44,7 @@ function trackPush(id, body) {
     return { refusal: ['PROJECT_ID_MISMATCH', 'body.project.id must match the :id in the path'] };
   }
   // A stamp far ahead would make every real push look stale until the clock caught up.
-  if (!Number.isFinite(pushedAt) || pushedAt > Date.now() + MAX_PUSH_AHEAD_MS) {
+  if (!Number.isFinite(pushedAt) || pushedAt < MIN_PUSHED_AT || pushedAt > Date.now() + MAX_PUSH_AHEAD_MS) {
     return { refusal: ['PUSHED_AT_INVALID', 'body.pushedAt must be epoch milliseconds, at most 5 minutes ahead'] };
   }
   return { project, pushedAt };
@@ -67,6 +69,13 @@ exports.putTrackProject = async (req, res) => {
     const { project, phases, works } = mapped;
     const result = await writeTrackProject(project, { phases, works, pushedAt });
     const { action, reason, held = [], stateMove = null } = result;
+    const audit = (auditedAction) => auditEvent(req, {
+      action: 'project.push',
+      targetType: 'project',
+      targetId: id,
+      projectId: id,
+      detail: { sourceSystem: 'track', action: auditedAction, pushedAt }
+    });
 
     if (action === 'stale') {
       logger.info(`[track-push] stale id=${id}`, { [TRACK_PUSHED_AT]: pushedAt });
@@ -74,6 +83,7 @@ exports.putTrackProject = async (req, res) => {
     }
     if (action === 'failed') {
       logger.error(`[track-push] write failed id=${id} status=${result.status}`);
+      if (result.written) audit('relinked');
       return res.status(503).json({ error: RETRY, id });
     }
     if (action === 'skipped' && reason === 'createdBehind') {
@@ -83,15 +93,7 @@ exports.putTrackProject = async (req, res) => {
     if (action === 'skipped') return res.json({ id, action, reason });
 
     logger.info(`[track-push] put id=${id} action=${action}`, { held, stateMove, [TRACK_PUSHED_AT]: pushedAt });
-    if (WRITTEN_STATUS[action]) {
-      auditEvent(req, {
-        action: 'project.push',
-        targetType: 'project',
-        targetId: id,
-        projectId: id,
-        detail: { sourceSystem: 'track', action, pushedAt }
-      });
-    }
+    if (WRITTEN_STATUS[action]) audit(action);
     return res.status(WRITTEN_STATUS[action] || 200).json({ id, action });
   } catch (err) {
     if (err.code === DUPLICATE_ID) {

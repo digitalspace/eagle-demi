@@ -229,7 +229,8 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
 
   // Without link upkeep a stored row is written only when Track moved it; the migration-only write is the night's.
   const owes = (row) => !skipLinkUpkeep && owesLink(row);
-  const stamp = (row, pushedAt, current) => stampPush(row, pushedAt, current, TRACK_PUSHED_AT);
+  // A run compares against its start time but never stamps: that time is DEMI's clock, not a Track commit.
+  const stamp = (row, pushedAt, current) => stampPush(row, push ? pushedAt : undefined, current, TRACK_PUSHED_AT);
 
   /**
    * One `GET /api/v1/projects` row; {pushedAt} is a push's epoch ms. Resolves `{action}`: created, relinked,
@@ -244,8 +245,11 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     // Every merge below takes the same options; the phase and work lists are per project, so they
     // are read once.
     const mergeOpts = { now, phases, works, complete };
-    if (phases) summary.phases++;
-    if (works) summary.works++;
+    const countLists = () => {
+      if (phases) summary.phases++;
+      if (works) summary.works++;
+    };
+    const landed = (inserted) => !live || inserted === 'saved';
 
     if (relink) {
       // A re-key, not a new record: it keeps the level and stamps; the `eagle-<id>` row stays,
@@ -264,9 +268,13 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
         return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS), twin);
       });
       if (inserted === 'conflict') return { action: 'failed', status: 'conflict' };
-      summary.relinked++;
       if (inserted === 'exists') return { action: 'skipped', reason: 'createdBehind' };
-      return (inserted === 'saved' && await disownFailure(relink.id)) || { action: 'relinked' };
+      if (landed(inserted)) {
+        summary.relinked++;
+        countLists();
+      }
+      const failure = inserted === 'saved' && await disownFailure(relink.id);
+      return failure ? { ...failure, written: true } : { action: 'relinked' };
     }
 
     const native = !existing && guid ? await lookup.native(guid) : null;
@@ -284,8 +292,12 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       withDerived(merged, null);
       const inserted = await insert(id, async () => merged);
       if (inserted === 'conflict') return { action: 'failed', status: 'conflict' };
-      summary.created++;
-      return inserted === 'exists' ? { action: 'skipped', reason: 'createdBehind' } : { action: 'created' };
+      if (inserted === 'exists') return { action: 'skipped', reason: 'createdBehind' };
+      if (landed(inserted)) {
+        summary.created++;
+        countLists();
+      }
+      return { action: 'created' };
     }
 
     // An API row (`sources: {}`) is skipped: stamping `sources.track` would make
@@ -295,22 +307,34 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       return { action: 'skipped', reason: 'apiRow' };
     }
     await heal(existing);
-    if (isStalePush(pushedAt, existing, TRACK_PUSHED_AT)) return { action: 'stale' };
-
-    // Counted here only, so an etag retry of the write below cannot count a row twice.
-    const { changes: found, held } = trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts));
-    if (held.length) summary.held++;
-    let stateMove = null;
-    if ('projectState' in found) {
-      summary.stateMoved++;
-      stateMove = `${JSON.stringify(existing.projectState ?? null)} -> ${JSON.stringify(found.projectState)}`;
+    // A retry repairs a relink whose first try left the twin owned.
+    const twinOwed = push && guid ? await disownFailure(eagleOnlyProjectId(guid)) : null;
+    if (twinOwed) return twinOwed;
+    if (isStalePush(pushedAt, existing, TRACK_PUSHED_AT)) {
+      summary.stale++;
+      return { action: 'stale' };
     }
+    if (push && existing.isDeleted === true) logger.warn(`[track-push] push on a deleted row id=${id}`);
+
+    const { changes: found, held } = trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts));
+    const stateMove = 'projectState' in found
+      ? `${JSON.stringify(existing.projectState ?? null)} -> ${JSON.stringify(found.projectState)}`
+      : null;
     const result = { held, stateMove };
     const changed = Object.keys(found).length > 0;
+    const tally = () => {
+      countLists();
+      if (held.length) summary.held++;
+      if (stateMove) summary.stateMoved++;
+    };
     // A row owing a slug code is written even when Track says nothing new; the migration stamps
     // `shortCodeSource`, so the next night skips it.
-    if (!changed && !owes(existing)) return { action: 'unchanged', ...result };
+    if (!changed && !owes(existing)) {
+      tally();
+      return { action: 'unchanged', ...result };
+    }
     if (!live) {
+      tally();
       if (changed) summary.updated++;
       // A migration with no free slug keeps its code, so only a real move counts.
       if (owesLink(existing) && await mint({ ...existing })) summary.shortLinks++;
@@ -330,15 +354,18 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       if (moved) row.updatedAt = now;
       const minted = await mintRow(row);
       await repo.upsert(row, { etag: current._etag });
-      return { status: 'saved', minted, deleted: current.isDeleted === true };
+      return { status: 'saved', minted, moved };
     });
     if (written.status === 'conflict' || written.status === 'missing') {
-      return { action: 'failed', status: written.status, ...result };
+      return { action: 'failed', status: written.status };
     }
-    if (written.status === 'stale') return { action: 'stale' };
+    if (written.status === 'stale') {
+      summary.stale++;
+      return { action: 'stale' };
+    }
+    tally();
     // A mint alone is not an update: it counts in `shortLinks` and leaves `updatedAt` alone.
-    if (written.status === 'saved' && changed) summary.updated++;
-    if (push && written.deleted) logger.warn(`[track-push] push landed on a deleted row id=${id}`);
+    if (written.moved) summary.updated++;
     return { action: written.status === 'saved' ? 'updated' : 'unchanged', ...result };
   };
 
@@ -381,7 +408,7 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
 const emptySummary = (trackProjects) => ({
   trackProjects,
   created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
-  shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, failures: 0
+  shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, failures: 0
 });
 
 /**
@@ -453,11 +480,17 @@ async function syncProjects(apiProjects, opts = {}) {
     }
   }
 
-  // `/projects` hides soft-deleted rows, so a Track delete that landed is not an orphan.
-  const orphans = [...stored].filter(([id, project]) =>
-    !listed.has(id) && project.sourceSystem === 'track' && project.isDeleted !== true).map(([id]) => id);
+  // `/projects` hides soft-deleted rows, so a Track delete that landed is not an orphan. A Track delete
+  // skips a row holding an Eagle copy, so that row stays live for good and is listed apart.
+  const unlisted = [...stored].filter(([id, project]) =>
+    !listed.has(id) && project.sourceSystem === 'track' && project.isDeleted !== true);
+  const eagleLinked = ([, project]) => Boolean(project.sources && project.sources.eagle);
+  const orphans = unlisted.filter(row => !eagleLinked(row)).map(([id]) => id);
+  const eagleLinkedIds = unlisted.filter(eagleLinked).map(([id]) => id);
   summary.orphaned = orphans.length;
-  if (orphans.length && !skipLinkUpkeep) logger.warn('[track-projects] DEMI rows Track no longer lists', { ids: orphans });
+  if (unlisted.length && !skipLinkUpkeep) {
+    logger.warn('[track-projects] DEMI rows Track no longer lists', { ids: orphans, eagleLinkedIds });
+  }
   if (nativeClashes.length) {
     logger.warn('[track-projects] Track projects name the Eagle id of a native project; not created',
       { clashes: nativeClashes });

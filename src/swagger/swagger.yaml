@@ -4608,7 +4608,7 @@ paths:
         '503':
           description: >-
             The row changed repeatedly while the push was retried, or the `eagle-<id>` copy could
-            not be handed over after a relink. The caller retries.
+            not be handed over. The caller retries, which repeats the hand-over.
     delete:
       summary: Unpublish a project Track deleted
       description: |-

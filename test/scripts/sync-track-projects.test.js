@@ -623,6 +623,35 @@ test('a create that never lands counts as a failure, not a created row', async (
   assert.deepStrictEqual([summary.created, summary.failures], [0, 1]);
 });
 
+test('a row that never landed feeds no count and no state move', async (t) => {
+  t.mock.method(logger, 'error', () => {});
+  t.mock.method(logger, 'warn', () => {});
+  const info = t.mock.method(logger, 'info', () => {});
+  const projects = fakeProjects([storedProject({ name: 'Staff name', staffEditedAt: { name: NOW } })]);
+  projects.upsert = async () => { throw preconditionFailed(); };
+  const moved = { ...API_PROJECT, project_state: { name: 'Operation' } };
+
+  const summary = await syncProjects([moved], {
+    live: true, deps: { projects, links: fakeLinks() }, now: NOW, phases: new Map([['207', []]]), works: new Map([['207', []]])
+  });
+
+  assert.deepStrictEqual([summary.held, summary.stateMoved, summary.updated, summary.phases, summary.works, summary.failures],
+    [0, 0, 0, 0, 0, 1]);
+  assert.ok(!info.mock.calls.some(c => /projectState moves/.test(c.arguments[0])));
+});
+
+test('an unlisted row holding an Eagle copy is logged apart and not counted as an orphan', async (t) => {
+  const linked = { ...storedProject(), id: '997', sourceSystem: 'track', sources: { track: FLAT, eagle: { _id: 'e' } } };
+  const projects = fakeProjects([storedProject(), linked]);
+  const warn = t.mock.method(logger, 'warn', () => {});
+
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  assert.strictEqual(summary.orphaned, 0);
+  const line = warn.mock.calls.find(c => /no longer lists/.test(c.arguments[0]));
+  assert.deepStrictEqual(line.arguments[1], { ids: [], eagleLinkedIds: ['997'] });
+});
+
 test('a record the feed no longer lists is counted, not deleted', async (t) => {
   const projects = fakeProjects([
     storedProject(),
@@ -959,7 +988,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 
@@ -1222,17 +1251,29 @@ test('the projects poll', async (t) => {
     const summary = await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
 
     assert.deepStrictEqual(projects.writes, []);
-    assert.strictEqual(summary.updated, 0);
+    assert.deepStrictEqual([summary.updated, summary.stale], [0, 1]);
   });
 
-  await t.test('a write carries the time the run started, before it read Track', async (t) => {
+  await t.test('a run writes no push stamp', async (t) => {
     quiet(t);
     const projects = fakeProjects([storedProject()]);
-    const before = Date.now();
 
     await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
 
-    assert.ok(projects.writes[0].trackPushedAt >= before);
+    assert.ok(!('trackPushedAt' in projects.writes[0]));
+  });
+
+  await t.test('a push older than the run still lands on a row the run wrote', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject()]);
+    const pushedAt = Date.now() - 60000;
+    await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
+
+    const result = await writeTrackProject({ ...API_PROJECT, name: 'Pushed name' },
+      { phases: [], works: [], pushedAt, deps: { projects, links: fakeLinks() } });
+
+    assert.strictEqual(result.action, 'updated');
+    assert.strictEqual(projects.writes.at(-1).name, 'Pushed name');
   });
 
   await t.test('counts an orphan without logging its id', async (t) => {
