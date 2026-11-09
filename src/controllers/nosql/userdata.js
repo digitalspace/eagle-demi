@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Per-user data — saved map lassos, saved search queries and interface preferences. There is no
- * account entity: the Keycloak token IS the account, so the partition key is always taken from the
- * verified token and a client-supplied `userId` is never read. Reads are unaudited; every write
- * leaves an audit row.
+ * Saved lassos, saved queries and prefs. The token is the account: the partition key comes from it,
+ * never from a client `userId`. Reads are unaudited; every write leaves an audit row.
  */
 
 const userdata = require('../../repositories/userdata');
@@ -25,7 +23,7 @@ const SLUG = /^[a-z0-9-]{1,80}$/;
 const PARAMS = /^[A-Za-z0-9_.%&=+,:*-]*$/;
 
 const PER_PAGE_OPTIONS = [6, 12, 24];
-/** The Angular app's screen keys (0038d3e) plus the `/developers` path. The frontend now offers
+/** The Angular app's screen keys plus the `/developers` path. The frontend now offers
  * only `LANDING_OPTIONS` in frontend/src/shell/prefs.ts, every one of them in this list. */
 const LANDING_SCREENS = [
   'map', 'search', 'summary', 'notify', 'links', 'rbac', 'developers', 'api', 'keys',
