@@ -7,8 +7,12 @@ const { createRequire } = require('node:module');
 
 const REPO = path.resolve(__dirname, '..');
 const WORKSPACES = {
-  api: { dir: '.', testFiles: ['test/**'] },
-  frontend: { dir: 'frontend', testFiles: ['src/**/*.{test,spec}.{ts,tsx}', 'src/test-*.{ts,tsx}'] },
+  api: { dir: '.', files: ['**/*.{js,cjs,mjs}'], testFiles: ['test/**'] },
+  frontend: {
+    dir: 'frontend',
+    files: ['**/*.{js,cjs,mjs,ts,tsx}'],
+    testFiles: ['src/**/*.{test,spec}.{ts,tsx}', 'src/test-*.{ts,tsx}', 'src/**/*-test-stub.{ts,tsx}'],
+  },
 };
 const RULES = {
   'max-lines': ['error', { max: 400 }],
@@ -22,7 +26,7 @@ const TEST_RULES = {
 };
 
 // Inline config is off so an eslint-disable comment cannot hide an offender.
-async function measure({ dir, testFiles }) {
+async function measure({ dir, files, testFiles }) {
   const cwd = path.join(REPO, dir);
   const { ESLint } = createRequire(path.join(cwd, 'package.json'))('eslint');
   const eslint = new ESLint({
@@ -30,13 +34,13 @@ async function measure({ dir, testFiles }) {
     allowInlineConfig: false,
     ruleFilter: ({ ruleId }) => ruleId in RULES,
     overrideConfig: [
-      { files: ['**/*.{js,cjs,mjs,ts,tsx}'], rules: RULES },
+      { files, rules: RULES },
       { files: testFiles, rules: TEST_RULES },
     ],
   });
   const current = {};
   for (const result of await eslint.lintFiles(['.'])) {
-    const file = path.relative(cwd, result.filePath);
+    const file = path.relative(cwd, result.filePath).split(path.sep).join('/');
     for (const msg of result.messages) {
       if (msg.fatal) throw new Error(`${file}: ${msg.message}`);
       const match = /too many lines \((\d+)\)|complexity of (\d+)/.exec(msg.message);
@@ -51,6 +55,7 @@ async function measure({ dir, testFiles }) {
 }
 
 // Values are compared largest to largest, so renaming a function or moving it within its file needs no baseline edit.
+// The cost: functions in one file can swap budgets, so one may grow while another shrinks by more.
 function compare(baseline, current) {
   const next = {};
   const problems = [];
@@ -78,10 +83,14 @@ function compare(baseline, current) {
   return { next, problems };
 }
 
+function sortedKeys(obj) {
+  return Object.fromEntries(Object.keys(obj).sort().map((key) => [key, obj[key]]));
+}
+
 function writeBaseline(file, data) {
   const lines = Object.keys(data)
     .sort()
-    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(data[key])}`);
+    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(sortedKeys(data[key]))}`);
   fs.writeFileSync(file, `{\n${lines.join(',\n')}\n}\n`);
 }
 
@@ -100,18 +109,21 @@ async function main(mode, name) {
     return 0;
   }
   const { next, problems } = compare(JSON.parse(fs.readFileSync(baselinePath, 'utf8')), current);
-  if (mode === '--tighten') {
-    writeBaseline(baselinePath, next);
-    return 0;
-  }
-  for (const problem of problems) process.stderr.write(`${problem}\n`);
-  return problems.length ? 1 : 0;
+  if (mode === '--tighten') writeBaseline(baselinePath, next);
+  // Tightening clears every stale entry; new and grown offenders still need a code change.
+  const remaining = mode === '--tighten' ? problems.filter((p) => !p.startsWith('stale ')) : problems;
+  for (const problem of remaining) process.stderr.write(`${problem}\n`);
+  return remaining.length ? 1 : 0;
 }
 
-main(process.argv[2], process.argv[3]).then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(`${err.message}\n`);
-    process.exit(2);
-  },
-);
+if (require.main === module) {
+  main(process.argv[2], process.argv[3]).then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(2);
+    },
+  );
+}
+
+module.exports = { compare };

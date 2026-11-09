@@ -796,9 +796,16 @@ cd frontend && yarn lint && yarn test && yarn build
 ```
 
 `yarn lint` also runs `scripts/eslint-size-freeze.cjs`. It fails when a file or function recorded in
-`scripts/eslint-size-freeze.{api,frontend}.json` grows, or when new code passes the size or complexity
-limits. After you shrink a recorded file, lint fails until you run
-`node scripts/eslint-size-freeze.cjs --tighten api` (or `frontend`) and commit the lowered baseline.
+`scripts/eslint-size-freeze.{api,frontend}.json` grows, or when new code goes over the size or
+complexity limits. It also fails on a stale entry and on a drop below a recorded value:
+
+- File deleted: run `node scripts/eslint-size-freeze.cjs --tighten api` (or `frontend`); it drops
+  the entry.
+- File renamed: move the entry's key by hand in the JSON, in the same commit.
+- File shrunk or complexity dropped: run `--tighten` and commit the lowered baseline.
+
+Rebase on `main` before you merge. A baseline tightened on `main` plus growth on an older branch
+fails lint only after the merge.
 
 Authorization is the highest-consequence surface, so those tests assert behaviour rather than
 implementation:
