@@ -31,7 +31,6 @@ module.exports = [
       'frontend/**',
       'tmp/**',
       'public/**',
-      'design/**',
       '.claude/**'
     ]
   }
