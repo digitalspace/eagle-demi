@@ -3,7 +3,7 @@
 The work is `run.main`, unchanged; this file only turns app settings into its argv and raises on a
 non-zero exit, so a failed pass shows as a failed invocation. Rows left over stay on the work list.
 
-`extensionBundle` in host.json is required for the trigger to register (see extractor/function_app.py).
+`extensionBundle` in host.json is required for the trigger to register.
 """
 
 import logging

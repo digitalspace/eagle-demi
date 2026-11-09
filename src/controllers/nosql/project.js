@@ -289,7 +289,7 @@ async function cascadeEngagementVisibility(projectId, read) {
     return null;
   } catch (cascadeErr) {
     logger.error('[Project Controller] engagement ACL cascade failed', {
-      projectId, error: cascadeErr.message
+      projectId, error: cascadeErr.message, stack: cascadeErr.stack
     });
     return 'Project visibility changed, but its comment periods were not updated.';
   }
@@ -312,7 +312,7 @@ async function cascadeUpdateVisibility(projectId, eagleId, read) {
     return null;
   } catch (cascadeErr) {
     logger.error('[Project Controller] update ACL cascade failed', {
-      projectId, eagleId, error: cascadeErr.message
+      projectId, eagleId, error: cascadeErr.message, stack: cascadeErr.stack
     });
     return 'Project visibility changed, but its updates were not updated.';
   }
@@ -337,7 +337,7 @@ async function cascadeMirrorVisibility(label, repo, projectId, read) {
     return null;
   } catch (cascadeErr) {
     logger.error(`[Project Controller] ${label} ACL cascade failed`, {
-      projectId, error: cascadeErr.message
+      projectId, error: cascadeErr.message, stack: cascadeErr.stack
     });
     return `Project visibility changed, but its ${label} were not updated.`;
   }
@@ -365,7 +365,7 @@ async function cascadeDocumentVisibility(projectId, acl) {
     return null;
   } catch (cascadeErr) {
     logger.error('[Project Controller] document ACL cascade failed', {
-      projectId, error: cascadeErr.message
+      projectId, error: cascadeErr.message, stack: cascadeErr.stack
     });
     return 'Project visibility changed, but its documents were not updated.';
   }
@@ -1041,7 +1041,7 @@ async function runCascade(saved, eagleId, options) {
       { read: saved.read, isPublished: saved.isPublished }, saved.eagleId, options);
   } catch (cascadeErr) {
     logger.error('[Project Controller] project visibility cascade threw', {
-      projectId: saved.id, eagleId, error: cascadeErr.message
+      projectId: saved.id, eagleId, error: cascadeErr.message, stack: cascadeErr.stack
     });
     failure = 'Project visibility changed, but its documents, engagement and updates were not updated.';
   }
@@ -1057,7 +1057,7 @@ async function markCascadePending(saved, eagleId) {
     await projects.patchCascadePending(saved.id, new Date().toISOString(), saved._etag);
   } catch (patchErr) {
     logger.error('[Project Controller] could not record the owed visibility cascade', {
-      projectId: saved.id, eagleId, error: patchErr.message
+      projectId: saved.id, eagleId, error: patchErr.message, stack: patchErr.stack
     });
   }
 }
@@ -1068,7 +1068,7 @@ async function clearCascadePending(saved, eagleId) {
     await projects.patchCascadePending(saved.id, null, saved._etag);
   } catch (patchErr) {
     logger.error('[Project Controller] could not clear the owed visibility cascade', {
-      projectId: saved.id, eagleId, error: patchErr.message
+      projectId: saved.id, eagleId, error: patchErr.message, stack: patchErr.stack
     });
   }
 }

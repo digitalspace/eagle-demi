@@ -16,10 +16,7 @@ const INVASIVES_WMS_URL =
 const INVASIVES_LAYER = 'pub:WHSE_FOREST_VEGETATION.IBC_INVASIVE_SPECIES_OBS_SP';
 const WILDFIRE_LAYER = 'pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP';
 
-export const OGL_BC_ATTRIBUTION =
-  'Contains information licensed under the Open Government Licence – British Columbia.';
-
-export const REGIONAL_BOUNDARIES_ASSET = '/env_regional_boundaries_reprojected.geojson';
+const REGIONAL_BOUNDARIES_ASSET = '/env_regional_boundaries_reprojected.geojson';
 
 /* -------------------------------------------------------------------------- wildfires */
 
@@ -60,7 +57,7 @@ type Props = Record<string, unknown>;
 
 const text = (value: unknown): string => (value == null ? '' : String(value));
 
-export function wildfiresUrl(): string {
+function wildfiresUrl(): string {
   return (
     `${DATABC_OWS_URL}?service=WFS&version=1.0.0&request=GetFeature` +
     `&typeName=${WILDFIRE_LAYER}&outputFormat=application/json&srsName=EPSG:4326`
@@ -124,7 +121,7 @@ export function wildfireCoordinates(
 /* ---------------------------------------------------------------- environmental regions */
 
 /** The build-time regions asset, served from this app's own origin. */
-export async function fetchRegionalBoundaries(signal?: AbortSignal): Promise<FeatureCollection> {
+async function fetchRegionalBoundaries(signal?: AbortSignal): Promise<FeatureCollection> {
   const res = await fetch(REGIONAL_BOUNDARIES_ASSET, { signal });
   if (!res.ok) throw new Error(`Regional boundaries unavailable (HTTP ${res.status})`);
   return (await res.json()) as FeatureCollection;
@@ -211,22 +208,6 @@ export function invasivesTileUrl(species = ''): string {
   if (cql) params.set('CQL_FILTER', cql);
   // MapLibre substitutes the token itself, so it has to reach the template unescaped.
   return `${INVASIVES_WMS_URL}?${params}&BBOX={bbox-epsg-3857}`;
-}
-
-export interface RasterSource {
-  type: 'raster';
-  tiles: string[];
-  tileSize: number;
-  attribution: string;
-}
-
-export function invasivesRasterSource(species = ''): RasterSource {
-  return {
-    type: 'raster',
-    tiles: [invasivesTileUrl(species)],
-    tileSize: 256,
-    attribution: OGL_BC_ATTRIBUTION,
-  };
 }
 
 /** The viewport a GetFeatureInfo question is asked about. */
@@ -331,7 +312,7 @@ export function parseHits(xml: string): number | null {
   return matched ? Number(matched[1]) : null;
 }
 
-export function hitsUrl(cql: string, rule: string): string {
+function hitsUrl(cql: string, rule: string): string {
   const params = new URLSearchParams({
     service: 'WFS',
     version: '2.0.0',
@@ -391,7 +372,7 @@ export function createInvasiveCounter(apply: (matches: InvasiveMatches | null) =
 }
 
 /** The build-time species list. Losing it only costs the dropdown; typing still filters the map. */
-export async function fetchInvasiveSpecies(signal?: AbortSignal): Promise<string[]> {
+async function fetchInvasiveSpecies(signal?: AbortSignal): Promise<string[]> {
   const res = await fetch(new URL('data/invasive-species.json', document.baseURI).toString(), {
     signal,
   });

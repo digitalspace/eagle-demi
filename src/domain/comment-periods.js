@@ -318,8 +318,6 @@ function setPublished(published) {
 }
 
 module.exports = {
-  CREATE_SCHEMA,
-  UPDATE_SCHEMA,
   create,
   update,
   remove,

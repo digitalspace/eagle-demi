@@ -11,13 +11,13 @@ identity holds Search Service Contributor. So these guards check, they do not fi
 ## The checks
 
 **Before a production deploy.** `verify-search-schema` in `azure-deploy-prod.yaml` builds a probe
-body from the deployed tag's `azure/search/indexes/*.json` and POSTs it to the API that is
-currently serving production (`scripts/search-schema-probe.sh`). The endpoint
-`/health/search-schema` — it arrives with PR #349 — runs the select against the live index with
-`top: 0`, together with the orders it derives from the app's own query builder, and answers 503
-naming the missing fields. A 503 stops the release before `deploy-extractor` or `deploy-api`
-runs. The probe sends no `orderby` of its own: an index's `sortable` flags are not the set the app
-can order by, and a list built from them would block a release over fields no query sorts on.
+body from the deployed tag's `azure/search/indexes/*.json` and POSTs it to the API that serves
+production (`scripts/search-schema-probe.sh`). The endpoint `/health/search-schema` runs the select
+against the live index with `top: 0`, together with the orders it derives from the app's own query
+builder, and answers 503 naming the missing fields. A 503 stops the release before `deploy-api` runs.
+
+The probe sends no `orderby` of its own. An index's `sortable` flags are not the set the app orders
+by, so a list built from them would block a release over fields no query sorts on.
 
 Before it posts, the probe GETs `/health/search-schema` on the target app and keeps only the
 indexes the app reports back. Index definitions in the directory that the deployed app does not
@@ -46,8 +46,8 @@ That can lock a fix out: `v0.114.1` answers 500 on both endpoints because its bu
 case only, tick `skip_schema_probe`. Use it for a 500 only, not a 503 (a 503 that names missing
 fields is real drift: widen the index) and not a 404 (use `allow_missing_schema_probe`).
 
-It skips both the schema and the data probe, and the job still succeeds, so `deploy-extractor`,
-`deploy-api`, the rollback and the publish run as usual. The run log shows a warning and the job
+It skips both the schema and the data probe, and the job still succeeds, so `deploy-api`,
+the rollback and the publish run as usual. The run log shows a warning and the job
 summary shows the same line, naming the tag, who dispatched the run and who ran it (they differ
 on a re-run). The publish step adds that line to the release notes.
 

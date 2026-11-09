@@ -5,7 +5,7 @@ import { resolveListLabel, type ListRef, type ResolvedLabel } from './list-ref';
 import { listRowsQuery, type ListRow, type WireEnvelope } from './search';
 
 // Kept here so existing callers need no change; the code lives in the import-free list-ref.ts.
-export { resolveListLabel, type ListRef, type ResolvedLabel };
+export { resolveListLabel, type ListRef };
 
 /** Several resolved labels rendered as one line, with the tooltip for any id still on show. */
 export interface LabelLine {
@@ -114,7 +114,7 @@ export type KeyDocumentRole =
   | 'application'
   | 'assessmentReport';
 
-export interface KeyDocumentRef extends SummaryDocumentRef {
+interface KeyDocumentRef extends SummaryDocumentRef {
   role: KeyDocumentRole;
   /** Set only when the registry held nothing else for the role, so the page says which language. */
   languageFlag?: 'fr';
@@ -130,12 +130,12 @@ export const KEY_DOCUMENT_LABELS: Record<KeyDocumentRole, { label: string; note:
   assessmentReport: { label: 'Assessment report', note: 'The EAO’s assessment of the application.' },
 };
 
-export interface SummaryCountBlock {
+interface SummaryCountBlock {
   count: number;
   latest?: SummaryDocumentRef | null;
 }
 
-export interface ProjectSummaryFacts {
+interface ProjectSummaryFacts {
   documentTotal?: number;
   amendments?: SummaryDocumentRef[];
   inspections?: SummaryCountBlock;
@@ -158,7 +158,7 @@ export interface ProjectSummaryCitation {
   format?: 'pdf' | 'html';
 }
 
-export interface StatusSection {
+interface StatusSection {
   sentence: string;
   citations?: number[];
 }
@@ -172,24 +172,24 @@ export interface ConditionItem {
   citations?: number[];
 }
 
-export interface ConditionsSection {
+interface ConditionsSection {
   sourceDocumentId?: string;
   items: ConditionItem[];
 }
 
-export interface AmendmentNote {
+interface AmendmentNote {
   documentId: string;
   sentence: string;
   citations?: number[];
 }
 
-export interface TimelineEventNote {
+interface TimelineEventNote {
   date: string;
   label: string;
   citations?: number[];
 }
 
-export interface ComplianceSection {
+interface ComplianceSection {
   sourceDocumentId?: string;
   paragraph: string;
   citations?: number[];
@@ -209,7 +209,7 @@ export interface FederalDocumentRef {
   docId: string;
 }
 
-export interface FederalDecisionRef extends FederalDocumentRef {
+interface FederalDecisionRef extends FederalDocumentRef {
   /** Null for a decision the registry never filed as a file: `pageUrl` is then the only link. */
   pdfUrl: string | null;
   /** The registry's document page, which prints an older decision instead of linking a PDF. */
@@ -220,7 +220,7 @@ export interface FederalDecisionRef extends FederalDocumentRef {
 }
 
 /** What the federal registry says about the project, read at generation time, never from a model. */
-export interface FederalFacts {
+interface FederalFacts {
   status: string | null;
   cearId: string;
   projectUrl: string;
@@ -228,13 +228,13 @@ export interface FederalFacts {
   decision?: FederalDecisionRef;
 }
 
-export interface FederalSection extends ConditionsSection {
+interface FederalSection extends ConditionsSection {
   source?: 'demi' | 'iaac';
   facts?: FederalFacts;
   reason?: 'no_federal_decision' | 'federal_decision_unreadable' | 'no_conditions';
 }
 
-export interface ProjectSummarySections {
+interface ProjectSummarySections {
   status?: StatusSection | null;
   conditions?: ConditionsSection | null;
   amendments?: AmendmentNote[] | null;
@@ -244,7 +244,7 @@ export interface ProjectSummarySections {
   federal?: FederalSection | null;
 }
 
-export interface ProjectSummaryRecord {
+interface ProjectSummaryRecord {
   id: string;
   projectId: string;
   eagleId?: string | null;

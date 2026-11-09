@@ -569,7 +569,6 @@ module.exports = {
   inlinePages,
   pdfToPages,
   fetchFederalSource,
-  REGISTRY_ORIGIN,
   MAX_REQUESTS,
   CRAWL_DELAY_MS,
   USER_AGENT

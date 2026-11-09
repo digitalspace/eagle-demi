@@ -30,8 +30,6 @@ permissions:
   contents: read
 
 env:
-  # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not.
-  EXTRACTOR_APP_NAME: eagle-extractor-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
   PDF_TITLE_APP_NAME: demi-pdf-title-prod
   SECRET_ROTATOR_APP_NAME: demi-secret-rotator-prod
@@ -42,103 +40,6 @@ env:
   SEARCH_BASE_URL: https://projects.eao.gov.bc.ca/demi-search
 
 jobs:
-  deploy-extractor:
-    name: Deploy extractor (Azure Function App)
-    runs-on: ubuntu-latest
-    # After the schema check: the rollback job only redeploys the API, so an extractor shipped ahead
-    # of a failed check would stay on the new tag.
-    needs: verify-search-schema
-    environment: prod
-    timeout-minutes: 25
-    env:
-      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-    steps:
-      # Format first, because it decides what gets checked out below. The environment's tag policy
-      # already refuses anything that is not `v*`; this says WHICH shape of `v*` is a release.
-      - name: Validate version format
-        # Through the environment, never interpolated into the script body: `${{ inputs.version }}`
-        # is substituted before bash starts, so the regex would validate a string already run as shell.
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          VERSION="$INPUT_VERSION"
-          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
-            exit 1
-          fi
-
-      # scripts/ comes from the ref this workflow is running, NEVER from the tag: no release up to
-      # v0.68.0 carries `wait-for-function.sh`, and the deploy would fail on a missing script after
-      # it had already published. Root first — a checkout cleans the directory it lands in.
-      - name: Checkout this workflow's ref for the tooling
-        uses: actions/checkout@v7
-
-      # `ref:` is the whole point: without it the packaged extractor is the branch the dispatch was
-      # fired from and the job ships `main` while claiming to deploy a tag. Source only, in a
-      # subdirectory. No fetch-depth: nothing here reads history.
-      - name: Checkout the tag
-        uses: actions/checkout@v7
-        with:
-          ref: refs/tags/${{ inputs.version }}
-          path: release
-
-      - name: Azure Login
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # No extractor in prod yet, so "absent" skips and lets the API job behind `needs:` run. Only
-      # ResourceNotFound or AuthorizationFailed means absent: the deploy identity's Website
-      # Contributor role is granted per site by hand when a site is created, so a site that was
-      # never created answers Forbidden, not NotFound. Any other error must still stop the release.
-      - name: Does the extractor exist yet?
-        id: probe
-        run: |
-          set -uo pipefail
-          if err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$EXTRACTOR_APP_NAME" \
-                     --query name -o tsv 2>&1 >/dev/null); then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$err" == *ResourceNotFound* || "$err" == *AuthorizationFailed* ]]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "⏭️ $EXTRACTOR_APP_NAME not present — skipping the extractor deploy." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::az functionapp show failed for $EXTRACTOR_APP_NAME: $err"
-            exit 1
-          fi
-
-      # Zipped AT THE ROOT, and nothing else: `test_extract.py` and `__pycache__` are developer
-      # files the remote build would carry into the app.
-      - name: Package the extractor
-        if: steps.probe.outputs.found == 'true'
-        run: |
-          cd release/extractor
-          zip -r /tmp/extractor.zip function_app.py extract.py ocr.py requirements.txt host.json
-          unzip -l /tmp/extractor.zip
-
-      # `config-zip`, not `scripts/deploy-azure.sh`: a Flex app has no Kudu wwwroot, and the remote
-      # build is what installs pypdfium2 and rapidocr-onnxruntime from `requirements.txt`.
-      - name: Deploy the extractor
-        if: steps.probe.outputs.found == 'true'
-        run: |
-          az functionapp deployment source config-zip \
-            -g "$AZURE_RESOURCE_GROUP" \
-            -n "$EXTRACTOR_APP_NAME" \
-            --src /tmp/extractor.zip
-
-      # A missing `extensionBundle` in host.json loads the app happily and never registers
-      # `queueTrigger`, which is indistinguishable from "no documents arrived".
-      - name: Verify the queue trigger is registered
-        if: steps.probe.outputs.found == 'true'
-        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$EXTRACTOR_APP_NAME" extract_document
-
-      - name: Report extractor failure to job summary
-        if: failure()
-        run: |
-          echo "### ❌ Extractor deployment failed" >> $GITHUB_STEP_SUMMARY
-          echo "Check the step logs above for packaging, zipdeploy or trigger-registration errors." >> $GITHUB_STEP_SUMMARY
-
   # The index definitions of the tag ABOUT TO SHIP, asked of the app that is ALREADY SERVING. That
   # pairing is the whole gate: v0.77.2 selected `fileSize`, the live `documents` index did not have
   # it, and every Document query answered 502 for 65 minutes (2026-09-08) behind a green deploy.
@@ -271,10 +172,8 @@ jobs:
   deploy-api:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
-    # Ordered, not concurrent: all three jobs sit behind the same approval, the API must not serve
-    # traffic while the extractor it feeds is still going up, and it must not ship selects the live
-    # indexes cannot answer.
-    needs: [deploy-extractor, verify-search-schema]
+    # After the schema check: the API must not ship selects the live indexes cannot answer.
+    needs: verify-search-schema
     environment: prod
     timeout-minutes: 30
     outputs:
@@ -599,7 +498,7 @@ jobs:
     # LAST, and only on a fully successful deploy: a job with `needs` runs only when every one of
     # them succeeded. Add a deploy job above and it belongs in this list too.
     # verify-search-schema already gates both deploys; listed here only to read its outputs.
-    needs: [deploy-extractor, deploy-api, deploy-pdf-title, deploy-secret-rotator, verify-search-schema]
+    needs: [deploy-api, deploy-pdf-title, deploy-secret-rotator, verify-search-schema]
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level block, which is what keeps `contents: read`
     # on the deploy jobs. No environment: a second approval gate here would gate only bookkeeping.

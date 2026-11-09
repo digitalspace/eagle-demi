@@ -1,15 +1,11 @@
 'use strict';
 
 /**
- * Is this exact stored object in the archive backup? Asked before anything rewrites an original.
- *
- * Reads the backup blob's properties only: an archived blob refuses Get Blob, and the API's
- * reader role must never need content. Every doubt is a refusal, so a missing setting, an
- * unreachable account and a malformed answer all come back not ok.
+ * Asked before anything rewrites an original. Reads blob properties only: an archived blob refuses
+ * Get Blob, and the reader role never needs content. Every doubt (unset, unreachable, bad) refuses.
  */
 
 const config = require('../config');
-const { createCredential } = require('../utils/azure-credential');
 const { logger } = require('../utils/logger');
 
 let cached = null;
@@ -17,9 +13,9 @@ let cached = null;
 /** Keyless container client for the configured backup, built once per account and container. */
 function containerClientFor(account, container) {
   if (!cached || cached.account !== account || cached.container !== container) {
-    const { BlobServiceClient } = require('@azure/storage-blob');
-    const service = new BlobServiceClient(`https://${account}.blob.core.windows.net`, createCredential());
-    cached = { account, container, client: service.getContainerClient(container) };
+    // Required here so @azure/storage-blob loads only when a backup is checked.
+    const store = require('../storage/azureBlob').createBlobClientFor(account, { container });
+    cached = { account, container, client: store.getContainerClient() };
   }
   return cached.client;
 }
@@ -39,11 +35,8 @@ const MULTIPART_ETAG = /^[0-9a-f]{32}-\d+$/;
 const SINGLE_ETAG = /^[0-9a-f]{32}$/;
 
 /**
- * Does the live object's ETag prove it is the bytes that were backed up?
- *
- * Single-part: the ETag is the content MD5, compared with the blob's stored Content-MD5.
- * Multipart: compared with the source ETag the copy recorded, because the gate has no sha256 of
- * the live object to set against the recorded one, and size alone misses a same-size rewrite.
+ * Multipart ETags are compared with the source ETag the copy recorded: the gate has no live
+ * sha256, and size alone misses a same-size rewrite.
  */
 function etagMatches(etag, props) {
   if (SINGLE_ETAG.test(etag)) {
@@ -62,14 +55,7 @@ function safeError(err) {
   return { error: message, code: errorCode(err) || null, statusCode: (err && err.statusCode) || null };
 }
 
-/**
- * `{ ok: true }` when the backup blob for `s3Key` is archived and matches the live object's
- * `stat` (`{ size, etag }`), else `{ ok: false, reason }` with reason one of `no-backup`,
- * `size-mismatch`, `md5-mismatch`, `not-archive`, `backup-unconfigured`. A read that fails for any
- * cause other than BlobNotFound is logged and answered `no-backup`: the backup is not confirmed.
- *
- * `options` takes `account`, `container` and `containerClient` so tests can pass a fake.
- */
+/** A read failing for any cause other than BlobNotFound is logged, then answered `no-backup`. */
 async function assertBackedUp(s3Key, stat, options = {}) {
   const account = 'account' in options ? options.account : config.backupAccount;
   const container = 'container' in options ? options.container : config.backupContainer;

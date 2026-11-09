@@ -6,7 +6,7 @@ import type { MapRef } from '@vis.gl/react-maplibre';
 import type { FeatureCollection, Polygon } from 'geojson';
 import { LASSO_MIN_POINTS } from './map-state';
 
-export const LASSO_COLOUR = '#013366';
+const LASSO_COLOUR = '#013366';
 export const LASSO_SOURCE_ID = 'lasso';
 export const LASSO_FILL_LAYER_ID = 'lasso-fill';
 export const LASSO_LINE_LAYER_ID = 'lasso-line';

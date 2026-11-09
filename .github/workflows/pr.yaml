@@ -47,20 +47,19 @@ jobs:
       - name: Run API tests
         run: yarn test
 
-      # The extractor is Python in a Node repo, so `yarn test` cannot see it. Its suite checks
-      # `decide()` against extraction-host/worker.py over 3,000 generated inputs.
+      # extraction-host is Python in a Node repo, so `yarn test` cannot see it. `--selfcheck` pins
+      # the `decide()` routing rule and touches no network.
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
-      # `extract.py` imports requests at module load, so the selftest dies on the import without it.
-      # Pinned: an unpinned install makes the gate depend on whatever PyPI published this morning.
-      - name: Install extractor test dependencies
+      # worker.py imports requests at module load. Pinned so the gate does not track PyPI.
+      - name: Install extraction host test dependencies
         run: pip install requests==2.34.2
 
-      - name: Run extractor tests
-        run: python3 extractor/test_extract.py
+      - name: Check extraction host routing
+        run: python3 extraction-host/worker.py --selfcheck
 
       # cryptography only lets the tests build AES-encrypted fixtures.
       - name: Install PDF title test dependencies
@@ -227,11 +226,6 @@ jobs:
       - name: Validate Bicep Template
         run: az bicep build --file ./azure/main.bicep
 
-      # extractor.bicep is deliberately NOT wired into main.bicep — it is deployed on its own, so
-      # compiling main.bicep alone would let a broken template reach a hand-run production deploy.
-      - name: Validate Extractor Module
-        run: az bicep build --file ./azure/modules/extractor.bicep
-
       # The param files are where the subnet ids, object-store coordinates and CORS origins live,
       # and none of it is covered by compiling main.bicep.
       - name: Validate Test Parameters
@@ -244,4 +238,4 @@ jobs:
         if: failure()
         run: |
           echo "### ❌ Bicep template failed to compile" >> $GITHUB_STEP_SUMMARY
-          echo "Fix \`azure/main.bicep\`, \`azure/modules/extractor.bicep\`, \`azure/main.test.bicepparam\` or \`azure/main.prod.bicepparam\`." >> $GITHUB_STEP_SUMMARY
+          echo "Fix \`azure/main.bicep\`, \`azure/main.test.bicepparam\` or \`azure/main.prod.bicepparam\`." >> $GITHUB_STEP_SUMMARY

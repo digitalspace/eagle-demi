@@ -704,7 +704,6 @@ module.exports = {
   EAGLE_ONLY_FIELDS,
   EAGLE_STAFF_FIELDS,
   pickEagleFields,
-  EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,

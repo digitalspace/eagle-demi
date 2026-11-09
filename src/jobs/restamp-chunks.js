@@ -222,13 +222,13 @@ async function requeue({ documentId, projectId, attempt, maxAttempts, err }) {
     await enqueue({ documentId, projectId, attempt: attempt + 1 }, { visibilityTimeout });
   } catch (sendErr) {
     logger.error('[chunk restamp] retry could not be queued', {
-      documentId, projectId, attempt, error: sendErr.message, cause: err.message
+      documentId, projectId, attempt, error: sendErr.message, stack: sendErr.stack, cause: err.message
     });
     return false;
   }
   logger.warn(
     `[chunk restamp] attempt failed ${documentId} (${attempt}/${maxAttempts}): ${err.message}`,
-    { documentId, projectId, attempt, visibilityTimeout, error: err.message }
+    { documentId, projectId, attempt, visibilityTimeout, error: err.message, stack: err.stack }
   );
   return true;
 }

@@ -747,7 +747,7 @@ async function run(argv, deps = {}) {
   return failed ? 1 : 0;
 }
 
-module.exports = { parseArgs, parseCsv, run, needsRemint, mintToken, MIN_GAP_MS, EAGLE_MAX_LIMIT, REMINT_MARGIN_S };
+module.exports = { parseCsv, run, needsRemint, mintToken, MIN_GAP_MS, EAGLE_MAX_LIMIT };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, err => {

@@ -79,11 +79,13 @@ function makeBlobStore({ account, container, credential, check }) {
     return serviceClient;
   }
 
+  function getContainerClient(containerName = container()) {
+    return getServiceClient().getContainerClient(containerName);
+  }
+
   function getBlobClient(key, containerName = container()) {
     if (!key) throw new Error('[storage] a blob name is required');
-    return getServiceClient()
-      .getContainerClient(containerName)
-      .getBlockBlobClient(key);
+    return getContainerClient(containerName).getBlockBlobClient(key);
   }
 
   async function getBuffer(key) {
@@ -254,6 +256,7 @@ function makeBlobStore({ account, container, credential, check }) {
     putObjectStream,
     removeObject,
     describe,
+    getContainerClient,
     getDelegationKey,
     _resetCache
   };

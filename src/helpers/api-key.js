@@ -110,8 +110,6 @@ function defaultExpiry(now = Date.now()) {
 }
 
 module.exports = {
-  PREFIX,
-  DEFAULT_TTL_DAYS,
   generateKey,
   parseKey,
   verify,

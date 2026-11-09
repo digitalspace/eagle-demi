@@ -20,7 +20,6 @@
 const cosmos = require('../db/cosmos-nosql');
 
 const CONTAINER = 'apikeys';
-const PARTITION_FIELD = 'id';
 
 /** Strip the secret digest before anything is returned to a caller. */
 function redact(record) {
@@ -87,8 +86,6 @@ async function touchLastUsed(keyId, at = new Date().toISOString()) {
 }
 
 module.exports = {
-  CONTAINER,
-  PARTITION_FIELD,
   redact,
   getById,
   upsert,

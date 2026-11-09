@@ -503,4 +503,4 @@ function archive(ctx, existing, actor, seen) {
   });
 }
 
-module.exports = { STATUSES, CREATE_SCHEMA, UPDATE_SCHEMA, create, update, remove };
+module.exports = { create, update, remove };

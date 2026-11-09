@@ -7,10 +7,10 @@ import {
   type RecordTypeConfig,
 } from './record-type';
 
-export const DOCUMENTS_SORT = '-datePosted';
+const DOCUMENTS_SORT = '-datePosted';
 
 /** The `List` item `type` each document filter draws its options from. */
-export const DOCUMENT_FILTER_LISTS: Record<string, string> = {
+const DOCUMENT_FILTER_LISTS: Record<string, string> = {
   milestone: 'label',
   documentAuthorType: 'author',
   type: 'doctype',

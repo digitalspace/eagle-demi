@@ -363,4 +363,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { probe, parseArgs, fold, loose, ladder, classifyLabel, tokenCoverage, despacedKind };
+module.exports = { parseArgs, fold, ladder, classifyLabel, tokenCoverage };

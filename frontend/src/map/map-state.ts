@@ -16,13 +16,13 @@ export const BOUNDARY_LAYERS: BoundaryLayer[] = [
 ];
 
 /** Boundary layer id -> the denormalised project field naming that boundary. */
-export const BOUNDARY_FIELD: Record<BoundaryLayer, 'regionalDistrict' | 'municipality' | 'electoralDistrict'> = {
+const BOUNDARY_FIELD: Record<BoundaryLayer, 'regionalDistrict' | 'municipality' | 'electoralDistrict'> = {
   regionalDistricts: 'regionalDistrict',
   municipalities: 'municipality',
   electoralDistricts: 'electoralDistrict',
 };
 
-export const BOUNDARY_SECTION_LABEL: Record<BoundaryLayer, string> = {
+const BOUNDARY_SECTION_LABEL: Record<BoundaryLayer, string> = {
   regionalDistricts: 'Regional district',
   municipalities: 'Municipality',
   electoralDistricts: 'Electoral district',
@@ -32,7 +32,7 @@ export type FilterKey = 'gating' | 'sector' | 'region' | BoundaryLayer;
 
 export type Filters = Record<FilterKey, string[]>;
 
-export const EMPTY_FILTERS: Filters = {
+const EMPTY_FILTERS: Filters = {
   gating: [],
   sector: [],
   region: [],
@@ -52,8 +52,8 @@ export interface Lasso {
 }
 
 /** The chip id the lasso answers to; it is one shape, so it needs no value of its own. */
-export const LASSO_CHIP_ID = 'lasso:area';
-export const LASSO_FALLBACK_LABEL = 'Lasso area';
+const LASSO_CHIP_ID = 'lasso:area';
+const LASSO_FALLBACK_LABEL = 'Lasso area';
 
 /** Under four points the shape has no interior, so a stray click clears rather than filters. */
 export const LASSO_MIN_POINTS = 4;
@@ -67,7 +67,7 @@ export function lassoGeometry(ring: number[][]): Geometry {
  * `prefers-reduced-motion` unless the options say the move is essential, and these moves are short
  * and asked for by the reader, so they play.
  */
-export const CAMERA_MOTION = { essential: true } as const;
+const CAMERA_MOTION = { essential: true } as const;
 
 /** Fast at the start, settling at the end, the way a map pan is expected to feel. */
 const easeOut = (t: number): number => 1 - Math.pow(1 - t, 3);
@@ -89,7 +89,7 @@ export const CAMERA_FIT = { duration: FIT_MS, easing: easeOut, ...CAMERA_MOTION 
 export type SortBy = 'relevance' | 'name';
 
 /** The nine EAO environmental regions, as the Angular screen listed them. */
-export const AVAILABLE_REGIONS = [
+const AVAILABLE_REGIONS = [
   'Vancouver Island',
   'Lower Mainland',
   'Thompson',
@@ -101,7 +101,7 @@ export const AVAILABLE_REGIONS = [
   'Peace',
 ];
 
-export interface FilterOption {
+interface FilterOption {
   value: string;
   label: string;
   checked: boolean;
@@ -170,7 +170,7 @@ export function matchesBoundary(
  * A drawn area keeps only what it encloses. A project with no centroid has nothing to test, so it
  * drops out — the drawn shape is an explicit "these ones", not a filter something can slip past.
  */
-export function matchesLasso(project: Project, lasso: Lasso | null): boolean {
+function matchesLasso(project: Project, lasso: Lasso | null): boolean {
   if (!lasso) return true;
   if (!project.centroid) return false;
   const point: Position = [Number(project.centroid[0]), Number(project.centroid[1])];
@@ -292,10 +292,10 @@ export function buildSections(
 }
 
 /** ponytail: 50-row cap, the section's own search box is the way past it; virtualise if lists grow. */
-export const BOUNDARY_OPTION_CAP = 50;
+const BOUNDARY_OPTION_CAP = 50;
 
 /** Boundary names, sorted, narrowed by the section's search box. */
-export function boundaryNames(rows: BoundaryRow[] | undefined, query: string): string[] {
+function boundaryNames(rows: BoundaryRow[] | undefined, query: string): string[] {
   const needle = query.toLowerCase().trim();
   // A boundary read that answered with anything but a list still leaves a usable filter section.
   return (Array.isArray(rows) ? rows : [])
@@ -323,7 +323,7 @@ export function boundarySection(
 }
 
 /** One chip per picked value. `id` is `section:value`, so a chip removes only itself. */
-export function activeFilters(
+function activeFilters(
   filters: Filters,
   lasso: Lasso | null = null,
 ): { id: string; label: string }[] {
@@ -420,7 +420,7 @@ export function fuzzyMatch(text: string, query: string): boolean {
 }
 
 /** The one blob the client filter matches against, field order as the Angular screen had it. */
-export function projectSearchText(project: Project): string {
+function projectSearchText(project: Project): string {
   const trackDescription = project.rawMetadata?.trackAttributes?.['description'];
   return [
     project.name,
@@ -450,7 +450,7 @@ export function searchProjects(projects: Project[], query: string): Project[] {
   return projects.filter((project) => fuzzyMatch(projectSearchText(project), needle));
 }
 
-export type FieldSource = 'TRACK' | 'EPIC' | 'DEMI';
+type FieldSource = 'TRACK' | 'EPIC' | 'DEMI';
 
 export interface FieldRow {
   key: string;

@@ -69,7 +69,7 @@ function notifyFailure(err, projectId, call) {
     logger.error('[CAC] notify not configured', { projectId, call });
     return { status: 'unavailable', error: 'The subscription service is not configured. Nothing was changed.' };
   }
-  logger.error('[CAC] eagle-notify call failed', { projectId, call, status: err.status, code: err.code, error: err.message });
+  logger.error('[CAC] eagle-notify call failed', { projectId, call, status: err.status, code: err.code, error: err.message, stack: err.stack });
   return { status: 'upstream-failed', error: 'The subscription service did not remove the members. Nothing was changed.' };
 }
 

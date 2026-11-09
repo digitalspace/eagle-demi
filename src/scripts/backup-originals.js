@@ -612,7 +612,7 @@ async function run(argv, deps = {}) {
 }
 
 module.exports = {
-  parseArgs, redact, buildPlan, reconcile, run,
+  parseArgs, redact, run,
   ACCOUNT_NAME, stripQuotes, isMd5Etag, readLines, defaultContainers, rehydrationState
 };
 

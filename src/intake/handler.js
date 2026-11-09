@@ -100,4 +100,4 @@ async function applyScanResult(row, scan, deps) {
   return outcome;
 }
 
-module.exports = { applyScanResult, objectKeyFor };
+module.exports = { applyScanResult };

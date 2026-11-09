@@ -382,4 +382,4 @@ function readOriginal(readRange, originalLength) {
   return run;
 }
 
-module.exports = { readOriginal, READ_BUDGET, INFLATE_BUDGET, MAX_ROWS };
+module.exports = { readOriginal, READ_BUDGET, MAX_ROWS };

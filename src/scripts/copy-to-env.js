@@ -94,7 +94,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   }
 }
 
-module.exports = { main, parseArgs };
+module.exports = { main };
 
 if (require.main === module) {
   main().catch((err) => { console.error(err.message); process.exit(1); });

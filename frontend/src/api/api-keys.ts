@@ -33,7 +33,7 @@ export const GRANTABLE_ROLES = [
 ];
 
 /** Roles that can mutate data — picking one makes `allowWrite: true` mandatory on mint. */
-export const WRITE_ROLES = ['sysadmin', 'staff', 'demi-admin', 'demi-service-write'];
+const WRITE_ROLES = ['sysadmin', 'staff', 'demi-admin', 'demi-service-write'];
 
 export function grantsWrite(roles: string[]): boolean {
   return roles.some((role) => WRITE_ROLES.includes(role));
@@ -42,7 +42,7 @@ export function grantsWrite(roles: string[]): boolean {
 export type KeyStatus = 'Revoked' | 'Expired' | 'Expiring' | 'Active';
 
 /** How long before expiry a key starts warning. */
-export const EXPIRING_SOON_DAYS = 30;
+const EXPIRING_SOON_DAYS = 30;
 
 /** DEMI stores no status field; `revokedAt` and `expiresAt` are the whole of it. */
 export function keyStatus(key: ApiKey, now = Date.now()): KeyStatus {

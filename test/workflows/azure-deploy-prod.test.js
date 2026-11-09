@@ -109,7 +109,6 @@ test('the input is read only by the verify job', () => {
   const inFile = LINES.join('\n').match(/inputs\.skip_schema_probe/g) || [];
   assert.ok(inVerify.length > 0);
   assert.strictEqual(inFile.length, inVerify.length);
-  assert.doesNotMatch(job('deploy-extractor').join('\n'), /skip_schema_probe/);
   assert.doesNotMatch(job('deploy-api').join('\n'), /skip_schema_probe/);
   assert.doesNotMatch(job('rollback').join('\n'), /skip_schema_probe/);
   assert.doesNotMatch(PUBLISH_JOB.join('\n'), /skip_schema_probe/);

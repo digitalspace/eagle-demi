@@ -272,7 +272,7 @@ async function recreate(project, code, links, by, result) {
     await links.create(projectLinkRecord(project, code, by));
   } catch (err) {
     logger.warn('[short-links] held code has no record and could not be recreated',
-      { projectId: project.id, code, error: err.message });
+      { projectId: project.id, code, error: err.message, stack: err.stack });
     result.lost.push(code);
     return;
   }

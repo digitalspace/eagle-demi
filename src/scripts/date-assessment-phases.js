@@ -91,7 +91,7 @@ async function run({ live = false, deps = {} } = {}) {
         }
       } catch (err) {
         summary.failures++;
-        logger.error(`[assessment-phases] project ${id} failed`, { error: err.message });
+        logger.error(`[assessment-phases] project ${id} failed`, { error: err.message, stack: err.stack });
       }
     }
   } catch (err) {

@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   boundaryCache,
   loadBoundaries,
-  loadBoundaryGeometry,
   tierOf,
   toFeatureCollection,
   type BoundaryRow,
@@ -131,34 +130,6 @@ describe('loadBoundaries', () => {
 
     const stored = JSON.parse(window.localStorage.getItem('demi_boundaries_cache:anonymous') ?? '{}');
     expect(stored.regionalDistricts).toEqual([{ name: 'Capital', code: 'CRD' }]);
-  });
-});
-
-describe('loadBoundaryGeometry', () => {
-  it('answers from the cached row once it carries geometry', async () => {
-    const row = { name: 'Victoria-Beacon Hill', geometry: POLYGON };
-    boundaryCache.set('electoralDistricts', [row]);
-
-    await expect(loadBoundaryGeometry('electoralDistricts', 'Victoria-Beacon Hill')).resolves.toBe(
-      row,
-    );
-    expect(apiMock).not.toHaveBeenCalled();
-  });
-
-  it('puts fetched geometry on the row the cache already holds', async () => {
-    boundaryCache.set('electoralDistricts', [{ name: 'Victoria-Beacon Hill', code: 'VBH' }]);
-    apiMock.mockResolvedValue({ name: 'Victoria-Beacon Hill', geometry: POLYGON });
-
-    await loadBoundaryGeometry('electoralDistricts', 'Victoria-Beacon Hill');
-
-    expect(boundaryCache.get('electoralDistricts')).toEqual([
-      { name: 'Victoria-Beacon Hill', code: 'VBH', geometry: POLYGON },
-    ]);
-  });
-
-  it('asks nothing for the all-boundaries placeholder', async () => {
-    await expect(loadBoundaryGeometry('electoralDistricts', 'all')).resolves.toBeNull();
-    expect(apiMock).not.toHaveBeenCalled();
   });
 });
 

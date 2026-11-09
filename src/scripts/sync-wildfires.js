@@ -5,6 +5,7 @@ const http = require('http');
 const wildfiresRepo = require('../repositories/wildfires');
 const projectsRepo = require('../repositories/projects');
 const { systemAccess } = require('../helpers/access-sql');
+const { logger } = require('../utils/logger');
 
 const WFS_POINTS_URL = 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP&outputFormat=json';
 const WFS_POLYS_URL = 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_POLYS_SP&outputFormat=json';
@@ -19,12 +20,12 @@ function fetchJson(url) {
         try {
           resolve(JSON.parse(body));
         } catch (err) {
-          console.error(`[Wildfire Sync] Error parsing JSON from ${url}:`, err.message);
+          logger.error(`[Wildfire Sync] Error parsing JSON from ${url}`, { error: err.message, stack: err.stack });
           resolve({ features: [] });
         }
       });
     }).on('error', err => {
-      console.error(`[Wildfire Sync] HTTP error fetching ${url}:`, err.message);
+      logger.error(`[Wildfire Sync] HTTP error fetching ${url}`, { error: err.message, stack: err.stack });
       resolve({ features: [] });
     });
   });
@@ -41,7 +42,7 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
 }
 
 async function syncWildfiresData() {
-  console.log('[Wildfire Sync] Fetching B.C. Wildfire data from DataBC OpenMaps WFS...');
+  logger.info('[Wildfire Sync] Fetching B.C. Wildfire data from DataBC OpenMaps WFS...');
 
   const [pointsData, polysData] = await Promise.all([
     fetchJson(WFS_POINTS_URL),
@@ -51,7 +52,7 @@ async function syncWildfiresData() {
   const points = pointsData?.features || [];
   const polys = polysData?.features || [];
 
-  console.log(`[Wildfire Sync] Received ${points.length} incident points and ${polys.length} perimeters.`);
+  logger.info(`[Wildfire Sync] Received ${points.length} incident points and ${polys.length} perimeters.`);
 
   const polyMap = new Map();
   for (const p of polys) {
@@ -88,7 +89,7 @@ async function syncWildfiresData() {
   }
 
   // --- Proximity Engine Calculation ---
-  console.log('[Wildfire Proximity] Calculating distance between projects and active fires...');
+  logger.info('[Wildfire Proximity] Calculating distance between projects and active fires...');
   const activeFires = points.filter(f => f.properties?.FIRE_STATUS !== 'Out' && f.properties?.LATITUDE && f.properties?.LONGITUDE);
   // Only projects that HAVE a centroid, projected to id/name/centroid. A project without one
   // was skipped by the loop below anyway, so listing the rest was pure RU.
@@ -141,7 +142,7 @@ async function syncWildfiresData() {
     updatedProjects++;
   }
 
-  console.log(`[Wildfire Sync] Complete: ${syncedWildfires} wildfires synced, ${updatedProjects} projects updated with proximity metrics.`);
+  logger.info(`[Wildfire Sync] Complete: ${syncedWildfires} wildfires synced, ${updatedProjects} projects updated with proximity metrics.`);
   return { syncedWildfires, updatedProjects };
 }
 

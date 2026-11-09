@@ -86,4 +86,4 @@ function createClient({ apiServer, token, fetchImpl = fetch }) {
   };
 }
 
-module.exports = { createClient, restartPatch, WORKLOAD_PATH };
+module.exports = { createClient };

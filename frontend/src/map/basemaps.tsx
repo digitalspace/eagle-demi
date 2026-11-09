@@ -85,7 +85,7 @@ export function basemapSource(name: string): Omit<Basemap, 'name' | 'path'> & { 
   };
 }
 
-export function activeBasemapName(stored: string): string {
+function activeBasemapName(stored: string): string {
   return BASEMAPS.some((basemap) => basemap.name === stored) ? stored : DEFAULT_BASEMAP;
 }
 

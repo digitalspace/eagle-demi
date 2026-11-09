@@ -3,11 +3,8 @@ import { api } from './client';
 import type { Feature, FeatureCollection, Geometry } from '../map/geojson';
 
 /**
- * Administrative boundaries, in three resolutions.
- *
- * A boundary row is fetched at one of three tiers, and the cache only ever climbs: once the full
- * polygons are in hand, a screen asking for the simplified ones is answered from the cache rather
- * than throwing the detail away and fetching again.
+ * The cache only climbs tiers: once full polygons are cached, a simplified request is served
+ * from them instead of discarding the detail and refetching.
  */
 
 export type BoundaryLayer = 'regionalDistricts' | 'municipalities' | 'electoralDistricts';
@@ -60,11 +57,11 @@ export function tierOf(rows: BoundaryRow[] | undefined | null): BoundaryTier {
 }
 
 /** Do these rows already answer a request for `mode`, at this resolution or a better one? */
-export function covers(rows: BoundaryRow[] | undefined | null, mode: BoundaryMode): boolean {
+function covers(rows: BoundaryRow[] | undefined | null, mode: BoundaryMode): boolean {
   return TIER_RANK[tierOf(rows)] >= TIER_RANK[mode];
 }
 
-export function boundariesPath(layer: BoundaryLayer, mode: BoundaryMode): string {
+function boundariesPath(layer: BoundaryLayer, mode: BoundaryMode): string {
   return `/boundaries?type=${encodeURIComponent(API_TYPE[layer])}&geometry=${GEOMETRY_PARAM[mode]}`;
 }
 
@@ -223,46 +220,11 @@ export async function loadBoundaries(
   }
 }
 
-/** Full geometry for one named boundary, merged into the cached row. */
-export async function loadBoundaryGeometry(
-  layer: BoundaryLayer,
-  name: string,
-): Promise<BoundaryRow | null> {
-  if (!name || name === 'all') return null;
-
-  const rows = boundaryCache.get(layer) ?? [];
-  const cached = rows.find((row) => (row.name ?? '').toLowerCase() === name.toLowerCase());
-  if (cached?.geometry) return cached;
-
-  try {
-    const row = await api<BoundaryRow>(`/boundaries/${encodeURIComponent(name)}`);
-    if (!row?.geometry) return null;
-
-    const merged = [...rows];
-    const index = merged.findIndex((b) => (b.name ?? '').toLowerCase() === name.toLowerCase());
-    if (index === -1) merged.push(row);
-    else merged[index] = { ...merged[index], geometry: row.geometry };
-    boundaryCache.set(layer, merged);
-    return row;
-  } catch {
-    return null;
-  }
-}
-
 export function useBoundaries(layer: BoundaryLayer | null, mode: BoundaryMode = 'simplified') {
   return useQuery({
     queryKey: ['boundaries', layer, mode],
     queryFn: () => loadBoundaries(layer as BoundaryLayer, mode),
     enabled: layer !== null,
-    staleTime: Infinity,
-  });
-}
-
-export function useBoundaryGeometry(layer: BoundaryLayer | null, name: string | null) {
-  return useQuery({
-    queryKey: ['boundary', layer, name],
-    queryFn: () => loadBoundaryGeometry(layer as BoundaryLayer, name as string),
-    enabled: layer !== null && !!name && name !== 'all',
     staleTime: Infinity,
   });
 }

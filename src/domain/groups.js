@@ -231,5 +231,5 @@ async function removeMember(ctx, id, userId) {
 }
 
 module.exports = {
-  GROUP_READ, CREATE_SCHEMA, UPDATE_SCHEMA, MEMBERS_SCHEMA, create, update, remove, addMembers, removeMember
+  GROUP_READ, create, update, remove, addMembers, removeMember
 };

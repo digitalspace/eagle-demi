@@ -3,17 +3,6 @@
 const { logger } = require('../utils/logger');
 
 /**
- * Send standardized success response
- */
-function sendSuccess(res, data, statusCode = 200, extra = {}) {
-  return res.status(statusCode).json({
-    success: true,
-    data,
-    ...extra
-  });
-}
-
-/**
  * Send standardized error response
  */
 function sendError(res, error, statusCode = 500) {
@@ -62,7 +51,6 @@ function serverError(res, err, context) {
 }
 
 module.exports = {
-  sendSuccess,
   sendError,
   serverError,
   searchServiceReply,

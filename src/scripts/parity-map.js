@@ -390,5 +390,5 @@ const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, NATIVE_FIELDS,
-  EAGLE_ID, same, sameField, native, search, cappedFromStaff
+  EAGLE_ID, sameField, native, search, cappedFromStaff
 };

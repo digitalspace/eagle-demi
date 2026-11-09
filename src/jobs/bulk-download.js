@@ -306,14 +306,14 @@ async function buildPart({
       } catch (err) {
         if (fatal) throw fatal;
         logger.warn(`[bulk] object unreadable job=${jobId} document=${doc.id}`,
-          { error: err.message });
+          { error: err.message, stack: err.stack });
         errors.push({ documentId: doc.id, name, reason: REASON.unavailable });
         continue;
       }
 
       if (truncated) {
         logger.warn(`[bulk] object truncated job=${jobId} document=${doc.id}`,
-          { error: truncated.message });
+          { error: truncated.message, stack: truncated.stack });
         errors.push({ documentId: doc.id, name, reason: REASON.truncated });
       } else {
         included += 1;
@@ -448,7 +448,7 @@ async function releaseSlot(job) {
     job.slotReleasedAt = at;
     await bulkDownloads.releaseSlot(job.requesterKey);
   } catch (err) {
-    logger.warn(`[bulk] could not release slot for ${job.id}`, { error: err.message });
+    logger.warn(`[bulk] could not release slot for ${job.id}`, { error: err.message, stack: err.stack });
   }
 }
 
@@ -462,7 +462,7 @@ async function markTerminal(id, fields, statuses, what) {
   try {
     return await bulkDownloads.patchIfStatus(id, fields, statuses);
   } catch (err) {
-    logger.error(`[bulk] could not mark ${id} ${what}`, { error: err.message });
+    logger.error(`[bulk] could not mark ${id} ${what}`, { error: err.message, stack: err.stack });
     return false;
   }
 }
@@ -478,7 +478,7 @@ async function dropParts(parts) {
       await storage.removeObject(part.key);
     } catch (err) {
       left.push(part);
-      logger.warn(`[bulk] could not drop part ${part.key}`, { error: err.message });
+      logger.warn(`[bulk] could not drop part ${part.key}`, { error: err.message, stack: err.stack });
     }
   }
   return left;
@@ -554,7 +554,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     }
   } catch (err) {
     // A lost race is the normal case, not a failure — the instance that won is building the zip.
-    logger.warn(`[bulk] could not claim ${id}`, { error: err.message });
+    logger.warn(`[bulk] could not claim ${id}`, { error: err.message, stack: err.stack });
     return null;
   }
 

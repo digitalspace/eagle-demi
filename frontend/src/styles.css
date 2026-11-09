@@ -4,7 +4,6 @@
 @import './styles/vendor/components.css';
 @import './styles/vendor/demi-admin.css';
 
-/* App shell layout, from the 2026-08-28-revision handoff (DEMI Demo.dc.html:16-26). */
 html, body {
   margin: 0;
   padding: 0;

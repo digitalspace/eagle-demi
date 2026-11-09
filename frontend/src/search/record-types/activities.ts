@@ -8,7 +8,7 @@ import {
 type Row = Record<string, unknown>;
 
 /** Activities are dated with `dateAdded`, not the shared `datePosted` the other tabs sort by. */
-export const ACTIVITIES_SORT = '-dateAdded';
+const ACTIVITIES_SORT = '-dateAdded';
 
 /** The index field behind "Documents attached". */
 export const ATTACHMENTS_FILTER_ID = 'documentUrl';

@@ -86,7 +86,7 @@ async function post(body) {
       });
     } catch (err) {
       logger.warn('[notify] eagle-notify unreachable', {
-        attempt, idempotencyKey: body.idempotencyKey, error: err.message
+        attempt, idempotencyKey: body.idempotencyKey, error: err.message, stack: err.stack
       });
     }
   }
@@ -170,7 +170,7 @@ async function cacPost(path, body) {
         signal: AbortSignal.timeout(TIMEOUT_MS)
       });
     } catch (err) {
-      logger.warn('[notify] eagle-notify unreachable', { path, attempt, error: err.message });
+      logger.warn('[notify] eagle-notify unreachable', { path, attempt, error: err.message, stack: err.stack });
       failure = new NotifyError(`eagle-notify unreachable: ${err.message}`);
       continue;
     }
@@ -210,5 +210,5 @@ function unsubscribeCac(eagleProjectId) {
 
 module.exports = {
   OUTCOME, NotifyError, configured, updatePublished, updateCancelled, unsubscribeCacMember, unsubscribeCac,
-  excerptOf, summaryOf, urlFor
+  excerptOf, summaryOf
 };

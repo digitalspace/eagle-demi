@@ -449,7 +449,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
       const mapped = ((await phaseRowsOf(work.id)) || []).map(trackPhaseToPublic).sort(bySortOrder);
       if (mapped.length) phases.set(projectId, mapped);
     } catch (err) {
-      logger.error(`[seed] work ${work.id} phases`, { error: err.message });
+      logger.error(`[seed] work ${work.id} phases`, { error: err.message, stack: err.stack });
     }
   }
 
@@ -511,7 +511,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
       stats.works += rows.length;
     } catch (err) {
       stats.failures++;
-      logger.error(`[seed] project ${projectId} works`, { error: err.message });
+      logger.error(`[seed] project ${projectId} works`, { error: err.message, stack: err.stack });
     }
   });
   stats.projects = works.size;

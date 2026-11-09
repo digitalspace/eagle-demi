@@ -200,7 +200,6 @@ async function gateChunksByParent(access, items, count) {
 module.exports = {
   liveFacetColumns,
   facetReasons,
-  staleChunksInScope,
   resetStaleChunkScopeCache,
   gateChunksByParent
 };

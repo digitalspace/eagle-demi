@@ -60,7 +60,7 @@ async function reconcile({ repair = false, log = logger } = {}, { kind, repo, co
         }
       } catch (err) {
         report.failed.push(String(row.id));
-        log.warn(`${TAG} ${kind}: could not re-queue row ${row.id}`, { kind, id: row.id, error: err.message });
+        log.warn(`${TAG} ${kind}: could not re-queue row ${row.id}`, { kind, id: row.id, error: err.message, stack: err.stack });
       }
     }
   }

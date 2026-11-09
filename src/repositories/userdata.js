@@ -52,7 +52,6 @@ async function remove(userId, id) {
 }
 
 module.exports = {
-  CONTAINER,
   getItem,
   listAll,
   countByType,

@@ -217,4 +217,4 @@ async function remove(ctx, id, extId) {
   }, auditOf('extension.delete', found.list, extId));
 }
 
-module.exports = { ITEM_SCHEMA, bodyOf, idOf, list, create, update, remove };
+module.exports = { bodyOf, idOf, list, create, update, remove };

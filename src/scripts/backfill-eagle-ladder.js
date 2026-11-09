@@ -438,7 +438,7 @@ function exitCodeFor(summaries) {
 }
 
 module.exports = {
-  parseArgs, backfillEagleLadder, exitCodeFor, summaryLine, STEPS
+  parseArgs, backfillEagleLadder, exitCodeFor, summaryLine
 };
 
 if (require.main === module) {

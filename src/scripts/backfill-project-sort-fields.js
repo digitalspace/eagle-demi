@@ -86,7 +86,7 @@ function exitCodeFor(summary) {
   return summary.failed > 0 ? 1 : 0;
 }
 
-module.exports = { backfillProjectSortFields, fillOps, summaryLine, exitCodeFor, parseArgs };
+module.exports = { backfillProjectSortFields, exitCodeFor, parseArgs };
 
 if (require.main === module) {
   backfillProjectSortFields(process.argv.slice(2))

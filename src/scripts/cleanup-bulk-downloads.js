@@ -87,7 +87,7 @@ async function run() {
         expired += 1;
       } catch (err) {
         failures += 1;
-        logger.error(`[bulk] cleanup could not expire ${job.id}`, { error: err.message });
+        logger.error(`[bulk] cleanup could not expire ${job.id}`, { error: err.message, stack: err.stack });
       }
     }
     jobs += batch.length;

@@ -246,7 +246,7 @@ async function sync(argv = [], deps = {}) {
       roleByName.set(name, await kc.createRole(name));
     } catch (err) {
       summary.failures++;
-      logger.error(`[track-teams] create ${name} failed`, { error: err.message });
+      logger.error(`[track-teams] create ${name} failed`, { error: err.message, stack: err.stack });
     }
   }
 
@@ -266,7 +266,7 @@ async function sync(argv = [], deps = {}) {
         await write(id, reps);
       } catch (err) {
         summary.failures++;
-        logger.error(`[track-teams] ${label} ${username} failed`, { error: err.message });
+        logger.error(`[track-teams] ${label} ${username} failed`, { error: err.message, stack: err.stack });
       }
     }
   };
@@ -289,7 +289,7 @@ async function sync(argv = [], deps = {}) {
       summary.trackWorksFailed = pulled.stats.failures;
     } catch (err) {
       summary.failures++;
-      logger.error('[track-teams] work phase pull failed', { error: err.message });
+      logger.error('[track-teams] work phase pull failed', { error: err.message, stack: err.stack });
     }
 
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
@@ -309,7 +309,7 @@ async function sync(argv = [], deps = {}) {
       summary.failures += mirrored.failures;
     } catch (err) {
       summary.failures++;
-      logger.error('[track-teams] project mirror failed', { error: err.message });
+      logger.error('[track-teams] project mirror failed', { error: err.message, stack: err.stack });
     }
 
     const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
@@ -331,12 +331,12 @@ async function sync(argv = [], deps = {}) {
       } catch (err) {
         summary.failures++;
         logger.error(`[track-teams] credential revoke for project ${id} failed`,
-          { error: err.message });
+          { error: err.message, stack: err.stack });
       }
     }
   } catch (err) {
     summary.failures++;
-    logger.error(`[track-teams] credential close-out failed`, { error: err.message });
+    logger.error(`[track-teams] credential close-out failed`, { error: err.message, stack: err.stack });
   }
 
   // After the mirror, because the dating reads the Track phases and works it just wrote.
@@ -347,7 +347,7 @@ async function sync(argv = [], deps = {}) {
       summary.failures += dated.failures;
     } catch (err) {
       summary.failures++;
-      logger.error('[track-teams] assessment pass failed', { error: err.message });
+      logger.error('[track-teams] assessment pass failed', { error: err.message, stack: err.stack });
     }
   } else {
     logger.info('[track-teams] assessment pass skipped: ASSESSMENT_PASS is off');

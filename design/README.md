@@ -56,9 +56,3 @@ Serve over HTTP — opening `.dc.html` from the filesystem blocks the stylesheet
 ```sh
 npx serve design/handoffs/<name>
 ```
-
-## Bundles here
-
-| Bundle | What it covers |
-| --- | --- |
-| `2026-08-28-revision/` | Redesign of the DEMI frontend: shell, discover, operate, developer and account screens. |

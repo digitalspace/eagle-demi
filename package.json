@@ -21,7 +21,8 @@
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --test 'test/**/*.test.js'"
+    "test": "node --test 'test/**/*.test.js'",
+    "test:py": "python3 extraction-host/worker.py --selfcheck && python3 -m pytest pdf-title"
   },
   "engines": {
     "node": ">=22.12.0"

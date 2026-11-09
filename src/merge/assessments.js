@@ -345,4 +345,4 @@ function actBlocks(row) {
   });
 }
 
-module.exports = { ASSESSMENT_WORK_TYPE, DERIVED_FIELDS, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };
+module.exports = { ASSESSMENT_WORK_TYPE, DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments };

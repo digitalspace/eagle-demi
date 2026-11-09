@@ -174,7 +174,7 @@ async function syncProjects(apiProjects, opts = {}) {
       summary.healed += repointed.length;
     } catch (err) {
       summary.failures++;
-      logger.error(`[track-projects] project ${project.id} link heal failed`, { error: err.message });
+      logger.error(`[track-projects] project ${project.id} link heal failed`, { error: err.message, stack: err.stack });
     }
   };
 
@@ -345,7 +345,7 @@ async function syncProjects(apiProjects, opts = {}) {
       }
     } catch (err) {
       summary.failures++;
-      logger.error(`[track-projects] project ${id} failed`, { error: err.message });
+      logger.error(`[track-projects] project ${id} failed`, { error: err.message, stack: err.stack });
     }
   }
 
@@ -382,7 +382,7 @@ async function syncProjects(apiProjects, opts = {}) {
       }
     } catch (err) {
       summary.failures++;
-      logger.error(`[track-projects] project ${row.id} short code migration failed`, { error: err.message });
+      logger.error(`[track-projects] project ${row.id} short code migration failed`, { error: err.message, stack: err.stack });
     }
   }
 

@@ -189,7 +189,7 @@ async function propagateParentFields(saved) {
   } catch (err) {
     // Only a log: the row went in flagged, so the reconcile and `--pending` already see this one.
     logger.error('[Document Controller] chunk parent-field restamp could not be queued', {
-      documentId: saved.id, error: err.message
+      documentId: saved.id, error: err.message, stack: err.stack
     });
   }
 }
@@ -213,7 +213,7 @@ async function patchParentFieldsInline(saved) {
     await restampChunks.clearPending(saved);
   } catch (err) {
     logger.error('[Document Controller] chunk parent-field patch failed', {
-      documentId: saved.id, error: err.message
+      documentId: saved.id, error: err.message, stack: err.stack
     });
   }
 }
@@ -270,7 +270,7 @@ async function reStampParentFieldDrift(snapshot, { moved = false } = {}) {
     return flagged;
   } catch (err) {
     logger.error('[Document Controller] parent-field drift check after ingest failed', {
-      documentId: snapshot.id, error: err.message
+      documentId: snapshot.id, error: err.message, stack: err.stack
     });
     return null;
   }
@@ -1385,7 +1385,7 @@ exports.setLevel = async (req, res) => {
       // Surfaced, never swallowed: a half-applied ACL is worse than a failed one, because the
       // operator believes the document is restricted.
       logger.error('[Document Controller] chunk ACL patch failed', {
-        documentId: existing.id, error: aclErr.message
+        documentId: existing.id, error: aclErr.message, stack: aclErr.stack
       });
       return res.status(500).json({
         success: false,
@@ -1842,7 +1842,7 @@ async function tryRecordIngestFailure(document, message, fields = {}) {
     });
   } catch (err) {
     logger.warn('[Document Controller] chunk ingest failure not recorded', {
-      documentId: document.id, error: err.message
+      documentId: document.id, error: err.message, stack: err.stack
     });
   }
 }
@@ -1897,7 +1897,7 @@ async function drainRequest(stream) {
     stream.resume();
     await finished(stream);
   } catch (err) {
-    logger.warn('[Document Controller] request body not drained', { error: err.message });
+    logger.warn('[Document Controller] request body not drained', { error: err.message, stack: err.stack });
   }
 }
 
@@ -1913,7 +1913,7 @@ async function removeOverCapChunks(document) {
     await aiSearch.deleteChunksForDocument(document.id, { strict: true });
   } catch (err) {
     logger.warn('[Document Controller] over-cap index delete incomplete', {
-      documentId: document.id, error: err.message
+      documentId: document.id, error: err.message, stack: err.stack
     });
     return { indexIncomplete: err.message };
   }
@@ -1928,7 +1928,7 @@ async function removeOverCapChunks(document) {
     }
   } catch (err) {
     logger.warn('[Document Controller] over-cap chunk removal failed', {
-      documentId: document.id, error: err.message
+      documentId: document.id, error: err.message, stack: err.stack
     });
     shortfall.push('chunk removal failed');
   }
@@ -2111,7 +2111,7 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
       parentFields = chunks.parentStampFieldsOf(current, parentStampedAt(current, startedAt));
     } catch (err) {
       logger.warn('[Document Controller] parent fields could not be refreshed mid-ingest', {
-        documentId: doc.id, error: err.message
+        documentId: doc.id, error: err.message, stack: err.stack
       });
     }
   };

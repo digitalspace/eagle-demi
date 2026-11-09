@@ -18,6 +18,9 @@ on:
       - 'yarn.lock'
       - 'frontend/public/assets/geojson/**'
       - 'azure/search/data-checks.json'
+      - 'azure/search/indexes/**'
+      - 'azure/search/indexers/**'
+      - 'azure/search/datasources/**'
       - '.github/workflows/azure-deploy-staging-api.yaml'
   workflow_dispatch:
 
