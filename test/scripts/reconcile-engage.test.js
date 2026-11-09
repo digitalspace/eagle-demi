@@ -256,6 +256,15 @@ test('DEMI vs Eagle', async (t) => {
     }]);
   });
 
+  await t.test('two periods on different URLs with no path are not a duplicate', async (tt) => {
+    const { deps } = setup(tt, { fetchOpts: { byProject: [
+      { _id: 'cp-42', metURL: 'https://engage.eao.gov.bc.ca/' },
+      { _id: 'cp-43', metURL: 'https://other.eao.gov.bc.ca/' }
+    ] } });
+    const report = await run({ deps });
+    assert.deepStrictEqual(report.duplicates, []);
+  });
+
   await t.test('a row sync-out marked conflict is reported with its candidate and never re-queued', async (tt) => {
     const { deps, queued } = setup(tt, { rows: [engageRow({
       eagleId: null, syncOut: { eagle: { status: 'conflict', candidateEagleId: 'cp-legacy', sentVersion: 2 } }

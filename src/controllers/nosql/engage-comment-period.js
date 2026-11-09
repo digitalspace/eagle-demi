@@ -100,6 +100,7 @@ async function readByMetUrl(push, projectId) {
   if (!key || trackingId || engagement.isPublished !== true || engagement.isDeleted === true) return null;
   const rows = (await commentPeriods.listEveryByProject(projectId, systemAccess())).filter(row =>
     row.sourceSystem === 'eagle' && !row.engagementId && row.isDeleted !== true
+    && row.read?.includes('public')
     && metUrlKey(row.metURL) === key
     && datesOverlap(push, row));
   if (rows.length > 1) {

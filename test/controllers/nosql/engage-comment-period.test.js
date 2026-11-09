@@ -213,6 +213,38 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.deepStrictEqual(warned[0].meta.ids, [PERIOD_EAGLE_ID, 'cp-second']);
   });
 
+  await t.test('a staff-only period on the path is not joined, so the push cannot publish it', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ read: ['staff', 'sysadmin'], isPublished: false })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.deepStrictEqual(store.get(PERIOD_EAGLE_ID).read, ['staff', 'sysadmin']);
+  });
+
+  await t.test('a bare-host push does not join a period with an empty metURL', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ metURL: '' })] });
+
+    const res = await push(pushOf({ metURL: 'https://engage.gov.bc.ca/' }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a push ending the moment the period starts joins it', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({
+      dateStarted: '2026-10-31T06:59:00.000Z', dateCompleted: '2026-11-30T00:00:00.000Z'
+    })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, PERIOD_EAGLE_ID);
+    assert.strictEqual(store.has('engage-42'), false);
+  });
+
   await t.test('a deleted period on the path is not revived by the join', async () => {
     const { store } = stage(t, { rows: [periodOnPath({ isDeleted: true })] });
 
