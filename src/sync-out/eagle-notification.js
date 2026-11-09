@@ -5,7 +5,7 @@
 
 const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
-const { DEFAULTS } = require('../domain/notification-fields');
+const { FIELDS } = require('../domain/notification-fields');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
@@ -14,9 +14,6 @@ const NAME = 'eagle';
 const KIND = 'notification';
 const NATIVE = 'demi';
 const ROUTE = '/projectNotification';
-
-/** The fields eagle-api's PUT maps, each reset to its default when absent. */
-const FIELDS = Object.freeze(Object.keys(DEFAULTS));
 
 // eagle-api sets the level from `?publish=` on both POST and PUT; it has no publish route for notifications.
 const withLevel = (path, row) => `${path}?publish=${isPublic(row.read)}`;

@@ -37,11 +37,11 @@ const NUMBER_FIELDS = Object.freeze({
     ? null : 'must be an array of at most 2 numbers or strings'
 });
 
-const FIELDS = [...Object.keys(SCHEMA), ...Object.keys(NUMBER_FIELDS)];
+const FIELDS = Object.freeze([...Object.keys(SCHEMA), ...Object.keys(NUMBER_FIELDS)]);
 
 /**
- * What a field sent empty in a PUT becomes, as the Eagle push maps it. create and update override
- * the null `notificationReceivedDate`: Cosmos cannot continue a page sorted on a null value.
+ * What a field sent empty in a PUT becomes, as the Eagle push maps it. domain/notifications.js
+ * overrides the null `notificationReceivedDate`: Cosmos cannot continue a page sorted on a null value.
  */
 const DEFAULTS = Object.freeze({
   ...Object.fromEntries(FIELDS.map(key => [key, null])),
