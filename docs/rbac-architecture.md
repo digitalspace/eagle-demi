@@ -1,8 +1,7 @@
 # DEMI attribute-level access control
 
-Status: Accepted direction, not started. Source: "DEMI Role-Based Access Control & Field-Level
-Redaction" by Mark Lise (Digitalspace), 2026-08-11, revalidated by its author against `42f7436`
-on 2026-08-26. Audited here against `aea2a0c` on 2026-08-26. Work items: `TODO-rbac.md`.
+Status: Accepted. Source: "DEMI Role-Based Access Control & Field-Level Redaction" by Mark Lise
+(Digitalspace), checked by its author against `42f7436`. Audited here against `aea2a0c`.
 
 Section 1 is the model as accepted. Section 2 is what the audit changed and why. Section 3 lists
 questions only the EAO can answer. Section 4 records claims in the source document that were wrong
@@ -13,9 +12,9 @@ Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalo
 
 ## 1. Model
 
-Status: the field plane (catalog, dials engine, redactor, `/api/me`) is live on test. The ladder,
-the sealed compartment and Selected Credentials below are the design for Phases 3 and 5; the code
-they describe does not exist yet, and `TODO-rbac.md` is the record of what has shipped.
+Status: the field plane (catalog, dials engine, redactor, `/api/me`), the ladder, the sealed
+compartment and Selected Credentials below are built. Entra as a second token issuer is open, and
+the project TODO list tracks it.
 
 The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI already has.
 
@@ -184,8 +183,8 @@ Sealing is an application-layer guarantee. Cosmos data-plane operators, backups 
    `compliance is not grantable by this caller`. `compliance` stays in `GRANTABLE_ROLES` — the gate
    is on the caller, not on the list.
 
-Encryption is a later hardening, not part of this design: per-record envelope encryption is
-optional Phase 5b in `TODO-rbac.md`, taken only when the compartment holds real C&E material.
+Encryption is not part of this design. Per-record envelope encryption is an optional hardening,
+taken only when the compartment holds real C&E material.
 
 A record leaves level 0 only through `POST /api/sealed/:id/release`. One `compliance` holder is
 enough; the body must carry `caseNumber` and `decision` (400 without either). The release rewrites

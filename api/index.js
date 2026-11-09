@@ -102,7 +102,7 @@ if (require('../src/config').reconcileEngageSchedule) {
 }
 
 // The Track team feed, on the same terms and guarded the same way. Stays empty until both realm
-// clients exist in the environment's realm — see TODO-rbac.md P3-0.
+// clients exist in the environment's realm.
 if (process.env.SYNC_TEAMS_SCHEDULE) {
   app.timer('syncTrackTeams', {
     schedule: '%SYNC_TEAMS_SCHEDULE%',
