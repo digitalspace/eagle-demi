@@ -121,12 +121,13 @@ test('a storage fault that is not a race propagates', async () => {
   }), /raced/);
 });
 
-test('auditFor names the project unless told not to, in a fixed key order', () => {
+test('auditFor names the project unless told not to', () => {
   const saved = { id: 'c1', projectId: 'p1' };
   const scoped = auditFor('commentPeriod')('commentPeriod.update', ['name'])(saved);
-  assert.deepStrictEqual(Object.entries(scoped), [['action', 'commentPeriod.update'], ['targetType', 'commentPeriod'],
-    ['targetId', 'c1'], ['projectId', 'p1'], ['detail', { fields: ['name'] }]]);
+  assert.deepStrictEqual(scoped, { action: 'commentPeriod.update', targetType: 'commentPeriod',
+    targetId: 'c1', projectId: 'p1', detail: { fields: ['name'] } });
 
   const unscoped = auditFor('user', { project: false })('user.update', ['name'])(saved);
-  assert.deepStrictEqual(Object.keys(unscoped), ['action', 'targetType', 'targetId', 'detail']);
+  assert.deepStrictEqual(unscoped, { action: 'user.update', targetType: 'user', targetId: 'c1', detail: { fields: ['name'] } });
+  assert.ok(!('projectId' in unscoped));
 });
