@@ -18,7 +18,7 @@ export interface MetrePoint {
   y: number;
 }
 
-export interface LngLat {
+interface LngLat {
   lng: number;
   lat: number;
 }

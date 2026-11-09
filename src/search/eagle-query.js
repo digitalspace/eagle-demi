@@ -896,7 +896,6 @@ module.exports = {
   PRESENCE_KEYS,
   DEFAULT_ORDER,
   KNOWN_PARAMS,
-  COSMOS_PROJECT_DATASETS,
   buildFilter,
   buildOrderBy,
   // The Cosmos list reads normalise the same three wire shapes — see repositories/_sql.orderByFrom.

@@ -175,7 +175,7 @@ function exitCodeFor(summary) {
   return summary.failed > 0 || summary.scanned !== summary.expected ? 1 : 0;
 }
 
-module.exports = { parseArgs, planPatch, backfillDisplayNameSort, exitCodeFor, summaryLine };
+module.exports = { parseArgs, planPatch, backfillDisplayNameSort, exitCodeFor };
 
 if (require.main === module) {
   const { initCosmosClient } = require('../db/cosmos-nosql');

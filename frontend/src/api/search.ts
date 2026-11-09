@@ -5,8 +5,8 @@ import { ApiError, api, type ApiInit } from './client';
 
 /** What the loader asks for. The API caps list reads at 1000 whatever is sent. */
 export const SEARCH_PAGE_SIZE = 500;
-export const SEARCH_RETRIES = 2;
-export const SEARCH_RETRY_DELAY_MS = 1000;
+const SEARCH_RETRIES = 2;
+const SEARCH_RETRY_DELAY_MS = 1000;
 
 export type Dataset = 'Project' | 'Document';
 
@@ -34,7 +34,7 @@ export interface ListRow {
 }
 
 /** Every Eagle `List` row, in one request. */
-export async function fetchListRows(init?: ApiInit): Promise<ListRow[]> {
+async function fetchListRows(init?: ApiInit): Promise<ListRow[]> {
   const body = await api<WireEnvelope<ListRow>[] | null>(`/search?dataset=List&pageSize=${LIST_PAGE_SIZE}`, init);
   return body?.[0]?.searchResults ?? [];
 }
@@ -99,7 +99,7 @@ export const searchRetry = {
 } as const;
 
 /** One `[n]` citation in an AI summary, resolved server-side back to the chunk it points at. */
-export interface SummaryCitation {
+interface SummaryCitation {
   n: number;
   chunkId: string;
   documentId: string;

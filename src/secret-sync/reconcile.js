@@ -18,7 +18,6 @@ const { groupBySecret, tokenSecretName } = require('./mapping');
 
 const VERSION_ANNOTATION = 'secret-sync/vault-version';
 const UPDATED_ANNOTATION = 'secret-sync/updated-at';
-const RESTARTED_ANNOTATION = 'secret-sync/restarted-at';
 
 /**
  * Does the live Secret already hold the mapped values?
@@ -161,9 +160,5 @@ async function reconcile({ entries, namespaces, readSecret, createClient, logger
 
 module.exports = {
   reconcile,
-  secretDataChanged,
-  buildSecret,
-  VERSION_ANNOTATION,
-  UPDATED_ANNOTATION,
-  RESTARTED_ANNOTATION
+  secretDataChanged
 };

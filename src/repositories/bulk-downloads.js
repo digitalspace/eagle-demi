@@ -27,7 +27,6 @@ const cosmos = require('../db/cosmos-nosql');
 const documents = require('./documents');
 
 const CONTAINER = 'bulkDownloads';
-const PARTITION_FIELD = 'id';
 
 // Job ids are UUIDs a controller minted. Anything else is not a job that ever existed — and the
 // container also holds `quota:<requester>` and `searchdef:<uuid>` rows, which no request may reach
@@ -248,7 +247,6 @@ async function releaseSlot(requesterKey) {
 
 module.exports = {
   CONTAINER,
-  PARTITION_FIELD,
   JOB_ID,
   SEARCH_DEF_PREFIX,
   SEARCH_DEF_KIND,

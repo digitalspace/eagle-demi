@@ -18,7 +18,7 @@ const ORGANIZATION_PAGE_SIZE = 500;
 const ORGANIZATION_MAX_PAGES = 20;
 
 /** The company types whose organizations fill the proponent filter. */
-export const PROPONENT_COMPANY_TYPE = 'Proponent/Certificate Holder';
+const PROPONENT_COMPANY_TYPE = 'Proponent/Certificate Holder';
 
 export type SearchRow = Record<string, unknown>;
 

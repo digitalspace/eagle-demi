@@ -14,7 +14,7 @@ export const LOAD_ERROR_MESSAGE =
   'Could not load registry data from the API. This is a connection or server error — ' +
   'the list below is empty, not filtered.';
 
-export const projectsKey = (query: string) => ['search', 'Project', query] as const;
+const projectsKey = (query: string) => ['search', 'Project', query] as const;
 
 /** Coordinates arrive in several shapes and occasionally reversed; heal what is recoverable. */
 export function parseCentroid(raw: unknown): [number, number] {
@@ -118,7 +118,7 @@ export function mapProject(p: RawProject): Project {
   };
 }
 
-export interface ProjectsResult {
+interface ProjectsResult {
   projects: Project[];
   /** Index-wide match total, or null where the backend reported none. */
   matchCount: number | null;

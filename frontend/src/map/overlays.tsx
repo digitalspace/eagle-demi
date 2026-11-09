@@ -62,8 +62,8 @@ export const NAME_PROPERTY: Record<OverlayLayer, string> = {
 
 export const fillLayerId = (layer: OverlayLayer): string => `${layer}-fill`;
 export const lineLayerId = (layer: OverlayLayer): string => `${layer}-line`;
-export const INVASIVES_SOURCE_ID = 'invasives';
-export const INVASIVES_LAYER_ID = 'invasives-raster';
+const INVASIVES_SOURCE_ID = 'invasives';
+const INVASIVES_LAYER_ID = 'invasives-raster';
 
 const hover: ExpressionSpecification = ['boolean', ['feature-state', 'hover'], false];
 const selected: ExpressionSpecification = ['boolean', ['feature-state', 'selected'], false];

@@ -187,8 +187,6 @@ function isSeparatorFurniture(text) {
 }
 
 module.exports = {
-  IMAGE_PLACEHOLDER,
-  VOWEL,
   round,
   stripPlaceholders,
   measure,

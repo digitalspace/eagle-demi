@@ -1,7 +1,7 @@
 /** One entry per screen: adding a page is a row here, a route, and a component. */
 
 export const GROUPS = ['Discover', 'Account', 'Operate', 'Reference'] as const;
-export type Group = (typeof GROUPS)[number];
+type Group = (typeof GROUPS)[number];
 
 export interface Screen {
   key: string;

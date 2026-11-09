@@ -17,7 +17,7 @@ const EPIC_PUBLIC_DOCUMENT_BASE = 'https://projects.eao.gov.bc.ca/api/public/doc
 export const epicPublicDownloadUrl = (documentId: string): string =>
   `${EPIC_PUBLIC_DOCUMENT_BASE}/${encodeURIComponent(documentId)}/download`;
 
-export const documentsKey = (query: string) => ['search', 'Document', query] as const;
+const documentsKey = (query: string) => ['search', 'Document', query] as const;
 
 /** The API's own placeholders. A rebuilt subline beats echoing them back to the reader. */
 const PLACEHOLDER_SNIPPET =

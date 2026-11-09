@@ -62,4 +62,4 @@ function writeHandler(fn, { entity, shape = (body) => body }) {
   };
 }
 
-module.exports = { writeHandler, WRITE_CONFLICT_ERROR };
+module.exports = { writeHandler };

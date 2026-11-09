@@ -210,5 +210,5 @@ function unsubscribeCac(eagleProjectId) {
 
 module.exports = {
   OUTCOME, NotifyError, configured, updatePublished, updateCancelled, unsubscribeCacMember, unsubscribeCac,
-  excerptOf, summaryOf, urlFor
+  excerptOf, summaryOf
 };

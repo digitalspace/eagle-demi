@@ -104,11 +104,7 @@ function defaultEnd(now = Date.now()) {
 }
 
 module.exports = {
-  PARTY_TYPES,
-  SCOPE_TYPES,
-  GRANTABLE_LEVELS,
   MAX_SCOPE_IDS,
-  DEFAULT_DAYS,
   grantError,
   isLive,
   liveCredentials,

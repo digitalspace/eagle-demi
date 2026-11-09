@@ -47,4 +47,4 @@ async function putFeedCache({ fetchedAt, ranges }, db = cosmos) {
   return db.upsert(CONTAINER, { id: FEED_ID, fetchedAt, ranges, ttl: TTL_SECONDS });
 }
 
-module.exports = { CONTAINER, TTL_SECONDS, idOf, listBans, putBan, getFeedCache, putFeedCache };
+module.exports = { TTL_SECONDS, listBans, putBan, getFeedCache, putFeedCache };

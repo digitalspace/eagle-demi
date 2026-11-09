@@ -184,4 +184,4 @@ async function update(ctx, id, changes) {
   return written;
 }
 
-module.exports = { SCHEMA, DEFAULTS, PUBLIC_ORG_NAME, create, update };
+module.exports = { create, update };

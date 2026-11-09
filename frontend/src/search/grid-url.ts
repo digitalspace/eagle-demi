@@ -21,10 +21,10 @@ export const INSIDE_SORT = '-matches';
 export const RELEVANCE_SORT = '-score';
 
 /** Shortest keyword worth a round trip. One character matches most of the corpus. */
-export const MIN_KEYWORD_LENGTH = 2;
+const MIN_KEYWORD_LENGTH = 2;
 
 /** URL keys the grid owns. Anything else on the query string is a filter id. */
-export const RESERVED_PARAMS = [
+const RESERVED_PARAMS = [
   'keywords',
   'record',
   'scope',
@@ -56,12 +56,12 @@ export interface GridDefaults {
 }
 
 /** A query string as a plain object, so callers can merge before writing back. */
-export function paramsToObject(search: URLSearchParams): Record<string, string> {
+function paramsToObject(search: URLSearchParams): Record<string, string> {
   return Object.fromEntries(search.entries());
 }
 
 /** Drops null, undefined and empty entries, matching how the router omitted them. */
-export function toSearchParams(params: Record<string, unknown>): URLSearchParams {
+function toSearchParams(params: Record<string, unknown>): URLSearchParams {
   const next = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value == null || value === '') continue;
@@ -75,7 +75,7 @@ export function toSearchParams(params: Record<string, unknown>): URLSearchParams
  * `?sortBy=+name` arrives here as `" name"`. Restore the sign rather than issuing a request the
  * API cannot sort by.
  */
-export function normalizeSortBy(value: string): string {
+function normalizeSortBy(value: string): string {
   return value.startsWith(' ') ? `+${value.slice(1)}` : value;
 }
 

@@ -4,7 +4,7 @@ import { RecordLink, type ListRowField, type ListRowMeta } from './parts';
 import './record-detail.css';
 
 /** The record's own page, offered at the foot of the sheet. */
-export interface RecordDetailLink {
+interface RecordDetailLink {
   href: string;
   label: string;
   /** Leaves the app, so it opens as a plain anchor in its own tab. */

@@ -348,6 +348,5 @@ module.exports = {
   isAllowedClient,
   isRegistryIdentity,
   forgetCachedKey,
-  KEY_CACHE_TTL_MS,
   KEY_CACHE_MAX
 };

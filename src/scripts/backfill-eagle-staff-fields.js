@@ -145,7 +145,7 @@ function exitCodeFor(summaries) {
   return summaries.some(s => s.failed > 0 || s.scanned !== s.expected) ? 1 : 0;
 }
 
-module.exports = { parseArgs, planRow, backfillEagleStaffFields, exitCodeFor, summaryLine };
+module.exports = { parseArgs, backfillEagleStaffFields, exitCodeFor };
 
 if (require.main === module) {
   cosmos.initCosmosClient();

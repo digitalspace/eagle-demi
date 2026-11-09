@@ -223,4 +223,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { audit, scoreChunk, measure, classify, mulberry32 };
+module.exports = { scoreChunk, mulberry32 };

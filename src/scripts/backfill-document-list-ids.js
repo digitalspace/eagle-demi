@@ -428,7 +428,7 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, listFieldsFor, planPatch, backfill, exitCodeFor, BACKFILLED, DEFAULT_BATCH
+  parseArgs, listFieldsFor, planPatch, backfill, exitCodeFor, DEFAULT_BATCH
 };
 
 if (require.main === module) {

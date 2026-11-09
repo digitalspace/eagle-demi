@@ -5,7 +5,7 @@
 
 export type GridTemplate = 'grid' | 'list';
 
-export type ColumnFilter = 'text' | 'year' | 'values' | null;
+type ColumnFilter = 'text' | 'year' | 'values' | null;
 
 export interface ValueOption {
   value: string;
@@ -58,7 +58,7 @@ export interface GridColumn<Row = unknown> {
   options?: ValueOption[];
 }
 
-export type AdvancedFieldKind = 'date' | 'select' | 'toggle' | 'text';
+type AdvancedFieldKind = 'date' | 'select' | 'toggle' | 'text';
 
 export interface AdvancedField {
   id: string;

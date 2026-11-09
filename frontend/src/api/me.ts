@@ -19,7 +19,7 @@ export interface SavedQuery {
   savedAt: string;
 }
 
-export interface MyData {
+interface MyData {
   prefs: Prefs | null;
   lassos: SavedLasso[];
   queries: SavedQuery[];
@@ -31,7 +31,7 @@ const PARAMS_UNSAFE = /[^A-Za-z0-9_.%&=+,:*-]/gu;
 /** Budget for `GET /me/data`; a hung API must not hold the screens open. */
 export const MY_DATA_TIMEOUT_MS = READ_TIMEOUT_MS;
 
-export const MY_DATA_KEY = ['me', 'data'];
+const MY_DATA_KEY = ['me', 'data'];
 
 /** Strips a leading `?` and percent-encodes what the API would refuse. */
 export function toQueryParams(search: string): string {

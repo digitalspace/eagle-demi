@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ApiError, api, errorMessage, notifyBase, serverError, type ApiInit } from './client';
 
 /** `GET staff/stats` — eagle-notify api/src/stats.js `summarise()`. */
-export interface NotifyStats {
+interface NotifyStats {
   subscribers: { confirmed: number; unconfirmed: number; unsubscribed: number };
   services: { serviceName: string; confirmed: number }[];
   confirmationsByDay: { day: string; count: number }[];
@@ -39,14 +39,14 @@ export interface NotifyTemplate {
   subject: string;
 }
 
-export interface NotifyOverview {
+interface NotifyOverview {
   stats: NotifyStats;
   campaigns: NotifyCampaign[];
   /** Only the oldest sending campaign is moving; the rest are queued behind it. */
   activeId: string | null;
 }
 
-export const NOTIFY_QUERY = ['notify', 'overview'];
+const NOTIFY_QUERY = ['notify', 'overview'];
 
 /** `${NOTIFY_API_LOCATION}/api`, or null when no base this app will call is configured. */
 export function notifyApiBase(): string | null {

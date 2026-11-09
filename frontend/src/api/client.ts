@@ -39,7 +39,7 @@ export function serverError(body: string): string | null {
 }
 
 /** The DEMI API base, prefix included. Empty API_LOCATION = same origin, through the dev proxy. */
-export function apiPath(): string {
+function apiPath(): string {
   const { API_PATH = '/api', API_LOCATION } = config();
   const base = API_LOCATION || window.location.origin;
   return new URL(API_PATH, base).href.replace(/\/$/, '');
@@ -88,7 +88,7 @@ function matchesBase(url: URL, base: string | null): boolean {
  * Only the DEMI API, as `isApiUrl` in the Angular app (0038d3e). eagle-notify is a different host
  * and opts in.
  */
-export function isAllowedUrl(url: URL): boolean {
+function isAllowedUrl(url: URL): boolean {
   return matchesBase(url, apiPath());
 }
 

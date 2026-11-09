@@ -2115,10 +2115,8 @@ async function generateProjectSummary(projectId, opts = {}) {
 module.exports = {
   generateProjectSummary,
   SECTIONS,
-  PROMPT_VERSION,
   PRICED_AS,
   SOURCE_ACCESS,
-  isPublicSource,
   QUIET_REASONS,
   // Exported for tests: each is a gate with its own failure mode, and each is worth pinning apart
   // from a whole-record run.
@@ -2126,17 +2124,12 @@ module.exports = {
   sanitisePromptName,
   validCitations,
   groundedInCitations,
-  claimTokens,
   normaliseNationName,
-  canonicalNationName,
-  NATION_ALIASES,
   joinNations,
   pickSource,
   isFrenchTitle,
   hasFullDate,
-  mergeTimelineBatches,
   buildItems,
-  buildNations,
   buildTimeline,
   PICK
 };

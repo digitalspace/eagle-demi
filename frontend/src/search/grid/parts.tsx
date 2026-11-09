@@ -24,7 +24,7 @@ import { asText, isValidIsoDate, pageNumbers } from './grid-format';
 type Row = Record<string, unknown>;
 
 export const ADVANCED_FILTERS_ID = 'display-grid-advanced-filters';
-export const FILTER_TEXT_MAX = 120;
+const FILTER_TEXT_MAX = 120;
 const TEXT_DEBOUNCE_MS = 300;
 
 /** Marks search hits as text nodes, so a record whose name holds markup stays text. */

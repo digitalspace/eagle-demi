@@ -225,7 +225,6 @@ function setPublished(published) {
 }
 
 module.exports = {
-  SCHEMA,
   DEFAULTS,
   create,
   update,

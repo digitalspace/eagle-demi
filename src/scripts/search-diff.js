@@ -794,8 +794,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  CASES, PAGES, DEMI_URL, EAGLE_URL, RPROXY_HOST, EXPECTED_KEY_DELTA, UNSTAMPED,
-  baselineOf, selectivity, ordered, pagingReport, specKey, EXPECTED_DIVERGENCE, acceptedReason,
-  pageIsPastEnd,
-  parseArgs, credential, expandCases, buildUrl, label, summarize, compareCase, main
+  CASES, PAGES, UNSTAMPED,
+  baselineOf, selectivity, pagingReport, specKey, EXPECTED_DIVERGENCE,
+  parseArgs, credential, expandCases, buildUrl, summarize, compareCase
 };

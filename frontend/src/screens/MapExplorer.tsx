@@ -104,7 +104,7 @@ const CLUSTER_FIT_PADDING = 80;
 /** Six placeholder rows, sized like the real one, so the list does not resize when it lands. */
 const SKELETON_ROWS = [1, 2, 3, 4, 5, 6];
 /** Same breakpoint as the narrow rules in map-explorer.css: below it the list and the map take turns. */
-export const MAP_NARROW_QUERY = '(max-width: 48rem)';
+const MAP_NARROW_QUERY = '(max-width: 48rem)';
 
 interface MapFeature {
   key: string;

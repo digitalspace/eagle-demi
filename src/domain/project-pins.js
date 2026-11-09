@@ -134,4 +134,4 @@ async function labelPins(access, rows) {
   return rows;
 }
 
-module.exports = { PIN_EDITORS, MAX_PINS, pinChanges, labelPins };
+module.exports = { MAX_PINS, pinChanges, labelPins };

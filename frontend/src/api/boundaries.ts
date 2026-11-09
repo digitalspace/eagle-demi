@@ -60,11 +60,11 @@ export function tierOf(rows: BoundaryRow[] | undefined | null): BoundaryTier {
 }
 
 /** Do these rows already answer a request for `mode`, at this resolution or a better one? */
-export function covers(rows: BoundaryRow[] | undefined | null, mode: BoundaryMode): boolean {
+function covers(rows: BoundaryRow[] | undefined | null, mode: BoundaryMode): boolean {
   return TIER_RANK[tierOf(rows)] >= TIER_RANK[mode];
 }
 
-export function boundariesPath(layer: BoundaryLayer, mode: BoundaryMode): string {
+function boundariesPath(layer: BoundaryLayer, mode: BoundaryMode): string {
   return `/boundaries?type=${encodeURIComponent(API_TYPE[layer])}&geometry=${GEOMETRY_PARAM[mode]}`;
 }
 
@@ -254,15 +254,6 @@ export function useBoundaries(layer: BoundaryLayer | null, mode: BoundaryMode = 
     queryKey: ['boundaries', layer, mode],
     queryFn: () => loadBoundaries(layer as BoundaryLayer, mode),
     enabled: layer !== null,
-    staleTime: Infinity,
-  });
-}
-
-export function useBoundaryGeometry(layer: BoundaryLayer | null, name: string | null) {
-  return useQuery({
-    queryKey: ['boundary', layer, name],
-    queryFn: () => loadBoundaryGeometry(layer as BoundaryLayer, name as string),
-    enabled: layer !== null && !!name && name !== 'all',
     staleTime: Infinity,
   });
 }

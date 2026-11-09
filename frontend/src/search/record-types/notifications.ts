@@ -11,7 +11,7 @@ import {
 } from './record-type';
 
 /** Newest record first, by insertion order. */
-export const NOTIFICATIONS_SORT = '-_id';
+const NOTIFICATIONS_SORT = '-_id';
 
 /** The project the notification became. */
 function projectHref(row: Record<string, unknown>): string | undefined {

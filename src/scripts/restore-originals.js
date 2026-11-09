@@ -433,7 +433,7 @@ async function run(argv, deps = {}) {
   return { exitCode: exitCodeFor(counts, args.mode), summary: counts };
 }
 
-module.exports = { parseArgs, difference, recordAction, run };
+module.exports = { parseArgs, run };
 
 if (require.main === module) {
   require('../db/cosmos-nosql').initCosmosClient();

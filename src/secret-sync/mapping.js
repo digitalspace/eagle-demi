@@ -104,7 +104,6 @@ function groupBySecret(entries, namespace) {
 }
 
 module.exports = {
-  environmentOf,
   tokenSecretName,
   validateMapping,
   loadMapping,

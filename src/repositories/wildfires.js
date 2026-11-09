@@ -18,14 +18,11 @@
 const cosmos = require('../db/cosmos-nosql');
 
 const CONTAINER = 'wildfires';
-const PARTITION_FIELD = 'id';
 
 async function upsert(wildfire) {
   return cosmos.upsert(CONTAINER, wildfire);
 }
 
 module.exports = {
-  CONTAINER,
-  PARTITION_FIELD,
   upsert
 };

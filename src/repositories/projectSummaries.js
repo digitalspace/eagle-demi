@@ -32,13 +32,7 @@ async function upsert(record) {
   return saved;
 }
 
-async function remove(projectId) {
-  return cosmos.remove(CONTAINER, String(projectId), String(projectId));
-}
-
 module.exports = {
-  CONTAINER,
   getById,
-  upsert,
-  remove
+  upsert
 };

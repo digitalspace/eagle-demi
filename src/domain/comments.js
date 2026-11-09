@@ -243,4 +243,4 @@ async function setStatus(ctx, id, input) {
     auditOf('comment.setStatus', ['eaoStatus']));
 }
 
-module.exports = { STATUSES, CREATE_SCHEMA, UPDATE_SCHEMA, create, update, setStatus };
+module.exports = { create, update, setStatus };

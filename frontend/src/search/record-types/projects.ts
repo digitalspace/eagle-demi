@@ -10,7 +10,7 @@ import {
 } from './record-type';
 
 /** Sort the tab asks for. */
-export const PROJECTS_SORT = '-dateUpdated';
+const PROJECTS_SORT = '-dateUpdated';
 
 /** The `List` item `type` each list-backed project filter draws its options from. */
 const LIST_TYPES = {
