@@ -118,7 +118,7 @@ function byProjectSpec(projectId, access, orderBy, criteria = []) {
   });
 }
 
-/** Every period of one parent, deleted ones too, past `listByProject`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+/** Every period of one parent, deleted ones too, past `listByProject`'s MAX_PAGE_SIZE cap: reconcile reads and the ENGAGE URL join. */
 async function listEveryByProject(projectId, access) {
   return fetchAll(CONTAINER, byProjectSpec(projectId, access), { partitionKey: String(projectId) });
 }
