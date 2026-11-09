@@ -194,7 +194,7 @@ test('search-schema-probe.sh', async (t) => {
     assert.strictEqual(run.status, 1);
     assert.match(run.stderr, /documents: missing fileSize/);
     assert.match(run.stderr, /demi-devbox\.sh apply --env prod/);
-    assert.match(run.stderr, /Runbook-Search-Outage\.md/);
+    assert.match(run.stderr, /runbook-search-outage\.md/);
   });
 
   await t.test('names the environment the operator has to widen', async () => {

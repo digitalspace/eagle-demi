@@ -57,7 +57,7 @@ esac
 BASE_URL="${1%/}"
 INDEX_DIR="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/azure/search/indexes}"
 
-RUNBOOK='eagle-demi.wiki/Runbook-Search-Outage.md'
+RUNBOOK='docs/runbook-search-outage.md'
 APPLY_CMD="scripts/demi-devbox.sh apply --env ${DEMI_ENV:-prod}"
 
 BODY=$(node -e '
