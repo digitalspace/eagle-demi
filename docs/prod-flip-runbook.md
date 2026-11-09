@@ -91,7 +91,7 @@ predicate, which is wider than `systemAccess()`, not narrower. `copy-to-env.js` 
 over `projects`, `documents`, `boundaries` and `chunks`; `backfill-eagle-ladder.js` selects ACL
 fields from every Eagle-mirrored container.
 
-Six of them leave a file behind rather than only printing:
+Six scripts from the two lists above leave a file behind rather than only printing:
 
 - `backup-originals.js --out` and `restore-originals.js --out`
 - `seed-nosql.js` and `seed-public-reads.js`
