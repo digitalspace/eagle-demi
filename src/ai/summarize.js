@@ -106,8 +106,8 @@ function foundryChat(url, token, { system, user, maxTokens, signal, jsonObject }
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      // Deterministic: this is compression, not composition. Two identical searches returning
-      // two different summaries reads as a bug to a user and makes the probes non-repeatable.
+      // Deterministic: same input, same output, for search and project summaries. A rerun that
+      // reads differently looks like a bug to a user and makes the probes non-repeatable.
       temperature: 0,
       max_tokens: maxTokens,
       ...(jsonObject ? { response_format: { type: 'json_object' } } : {})

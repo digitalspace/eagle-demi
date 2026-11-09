@@ -96,8 +96,8 @@ const publishedDetail = (saved, existing, eagleId) => ({
 });
 
 /**
- * A `PUT /eagle/*` handler. `mirror(eagleId, doc, { pushedAt })` writes; `refuse(written, doc, res)` and
- * `after(written, res)` answer before the conflict check and after the audit, or return undefined to go on.
+ * A `PUT /eagle/*` handler. `refuse(written, doc, res)` runs before the conflict check, `after(written, res)` after
+ * the audit; each stops it only by returning the sent response (`return res.status(..).json(..)`), else undefined.
  */
 function pushHandler({
   label, action, targetType, mirror, refuse, projectScoped = false, detail = publishedDetail, after, failure
