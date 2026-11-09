@@ -1684,8 +1684,8 @@ that must happen once per push regardless of paths, so it lives in the workflow 
 filter.
 
 All six also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
-what actually ships. Adding a directory to the package without adding it here gives you a deploy
-that silently never runs.
+what actually ships. A test checks the script's re-include sets against these paths, but not a
+new top-level directory that ships by default.
 
 That script re-includes `frontend/public/assets/geojson/**` for the boundary seeder, and
 `azure/search/data-checks.json` and `azure/search/{indexes,indexers,datasources}/**` for the search
@@ -1739,9 +1739,8 @@ Every Azure job declares `environment: prod`, which produces the OIDC subject
 credential.
 
 `verify-search-schema` runs first, then `deploy-api`, then `deploy-pdf-title` and
-`deploy-secret-rotator` side by side. The pdf-title job skips with a notice if
-`demi-pdf-title-prod` does not exist. The `rollback` job runs only when `deploy-api` fails after
-publishing, and `publish-release` runs last, after the schema check and all three deploys.
+`deploy-secret-rotator` side by side. Each of those two jobs skips with a notice if its Function
+App does not exist. The `rollback` job runs only when `deploy-api` fails after publishing.
 
 Its last job, `publish-release`, flips that version's draft release to published and marks it latest.
 It runs only when every deploy job has succeeded, holds `contents: write` and nothing else, and

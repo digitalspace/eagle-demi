@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Reads blob properties only: an archived blob refuses Get Blob, and the reader role must never
- * need content. Every doubt (unset, unreachable, malformed) is a refusal, never ok.
+ * Asked before anything rewrites an original. Reads blob properties only: an archived blob refuses
+ * Get Blob, and the reader role never needs content. Every doubt (unset, unreachable, bad) refuses.
  */
 
 const config = require('../config');

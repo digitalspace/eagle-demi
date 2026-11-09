@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: scripts/package-pdf-title.sh <repo-root> <output.zip>, for demi-pdf-title-<env>. An explicit
-# list keeps test_* and __pycache__ out of the build; 0644 staging stops a local umask or exec bit.
+# list keeps test_* and __pycache__ out of the build; 0644 staging stops a local umask or exec bit shipping.
 set -euo pipefail
 
 REPO_ROOT="$(cd "${1:?repo root required}" && pwd)"
