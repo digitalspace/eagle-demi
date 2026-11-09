@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { logger } = require('../utils/logger');
 const { buildContainsQuery } = require('./ai-search');
+const { sortEntries } = require('./sort-entries');
 const { subTypeSources } = require('./sub-type');
 const { PROJECT_TYPE_SPELLINGS, spellingsOf } = require('../helpers/spellings');
 const { catalogFor } = require('../vis/catalog');
@@ -678,21 +679,6 @@ function orderable(meta) {
 }
 
 /**
- * The sort keys a `sortBy` actually carries, whichever of the three wire shapes it arrived in.
- *
- * SEPARATE FROM `buildOrderBy` BECAUSE THE ROUTER ASKS THE SAME QUESTION: the projects map sends
- * `sortBy=&sortBy=` on every call, and a truthiness test would read that as "the caller asked for an
- * order" and move a million-row list read onto the AI Search path.
- */
-function sortEntries(sortBy) {
-  return (Array.isArray(sortBy) ? sortBy : [sortBy])
-    .filter(s => typeof s === 'string' && s.trim() !== '')
-    .flatMap(s => s.split(','))
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
-/**
  * Did the caller ask for anything only the INDEX can answer — a filter or a sort?
  *
  * THIS IS THE ROUTING TEST: the Cosmos list reads take fixed criteria in a fixed order, so a request
@@ -898,8 +884,6 @@ module.exports = {
   KNOWN_PARAMS,
   buildFilter,
   buildOrderBy,
-  // The Cosmos list reads normalise the same three wire shapes — see repositories/_sql.orderByFrom.
-  sortEntries,
   hasCriteria,
   unknownParams,
   unsupportedParams,
