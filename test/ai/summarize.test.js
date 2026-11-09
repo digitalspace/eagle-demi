@@ -5,7 +5,9 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const config = require('../../src/config');
-const { summarize, buildPrompt, parseCitations, truncate, estimateCostCad, SYSTEM_PROMPT } = require('../../src/ai/summarize');
+const {
+  summarize, foundryChat, buildPrompt, parseCitations, truncate, estimateCostCad, SYSTEM_PROMPT
+} = require('../../src/ai/summarize');
 
 const chunk = (n, content) => ({
   chunkId: `doc1::p0::c${n}`,
@@ -180,5 +182,38 @@ test('the system prompt states the grounding contract', async (t) => {
     assert.match(SYSTEM_PROMPT, /ONLY from the numbered sources/);
     assert.match(SYSTEM_PROMPT, /Never use outside knowledge/);
     assert.match(SYSTEM_PROMPT, /do not answer the question, say so/);
+  });
+});
+
+test('foundryChat', async (t) => {
+  const stubFetch = (t) => {
+    const calls = [];
+    t.mock.method(global, 'fetch', async (url, init) => { calls.push({ url, init }); return { ok: true }; });
+    return calls;
+  };
+
+  await t.test('sends the search summary at temperature 0 with its abort signal and no JSON mode', async (t) => {
+    const calls = stubFetch(t);
+    const { signal } = new AbortController();
+    await foundryChat('https://foundry.example/chat', 'a-token', { system: 'S', user: 'U', maxTokens: 50, signal });
+
+    assert.strictEqual(calls[0].url, 'https://foundry.example/chat');
+    assert.strictEqual(calls[0].init.signal, signal);
+    assert.strictEqual(calls[0].init.headers.Authorization, 'Bearer a-token');
+    assert.strictEqual(calls[0].init.body, JSON.stringify({
+      messages: [{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }],
+      temperature: 0,
+      max_tokens: 50
+    }));
+  });
+
+  await t.test('adds JSON mode last, and no signal key when none is given', async (t) => {
+    const calls = stubFetch(t);
+    await foundryChat('https://foundry.example/chat', 'a-token', { system: 'S', user: 'U', maxTokens: 50, jsonObject: true });
+
+    assert.ok(!('signal' in calls[0].init));
+    const body = JSON.parse(calls[0].init.body);
+    assert.deepStrictEqual(Object.keys(body), ['messages', 'temperature', 'max_tokens', 'response_format']);
+    assert.deepStrictEqual(body.response_format, { type: 'json_object' });
   });
 });
