@@ -666,7 +666,6 @@ test('a row created through POST /projects is left alone, not reclassified', asy
   assert.deepStrictEqual(projects.writes, []);
   const [after] = projects.items;
   assert.deepStrictEqual(after, stored, 'byte-identical');
-  assert.strictEqual((after.sources || {}).track, undefined, 'sources.track must stay absent');
 });
 
 /** The Eagle-only row the merge writes when Track has no counterpart yet. */

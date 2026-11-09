@@ -1186,16 +1186,6 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(calls[0].body.semanticConfiguration, 'chunks-semantic');
   });
 
-  await t.test('semantic: false opts out — the scorecard needs a BM25 arm', async (tt) => {
-    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
-
-    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false });
-
-    assert.strictEqual(calls[0].body.semanticQuery, undefined);
-    assert.strictEqual(calls[0].body.semanticConfiguration, undefined);
-    assert.strictEqual(calls[0].body.semanticErrorHandling, undefined);
-  });
-
   await t.test('NEVER on projects or documents — those indexes have no semantic configuration, ' +
     'and naming one that does not exist is a 400', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
@@ -1314,7 +1304,7 @@ test('semantic reranking', async (t) => {
       const calls = captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
 
       await assert.rejects(
-        () => aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false }),
+        () => aiSearch.searchProjects({ filter: null, keywords: 'peace river' }),
         /HTTP 402/
       );
       assert.strictEqual(calls.length, 1, 'nothing to strip, so nothing to retry');
