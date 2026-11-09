@@ -9,6 +9,7 @@ const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
   assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria, EAGLE_SYNC_PENDING
 } = require('./_sql');
+const { firstByIdAcross } = require('./_first-by-id');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind } = require('../helpers/native-query');
 const { dialAllows } = require('../helpers/dial');
@@ -36,14 +37,7 @@ async function getById(access, id, projectId, { includeDeleted = false } = {}) {
     return canRead(item, access, PARTITION_FIELD) ? item : null;
   }
 
-  const spec = selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: [...(includeDeleted ? [] : [NOT_DELETED]), eq('id', String(id), '@id')]
-  });
-  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
-  // the row exists, and the caller reads that as "no such comment period".
-  return await cosmos.queryFirst(CONTAINER, spec, {});
+  return firstByIdAcross(CONTAINER, access, PARTITION_FIELD, id, includeDeleted ? [] : [NOT_DELETED]);
 }
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
