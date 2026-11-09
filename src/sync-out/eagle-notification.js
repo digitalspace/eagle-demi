@@ -7,8 +7,9 @@ const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
 const { FIELDS } = require('../domain/notification-fields');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
+  requireSettings, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
+const { putRecord } = require('./_put');
 
 const NAME = 'eagle';
 const KIND = 'notification';
@@ -28,13 +29,7 @@ function bodyFor(row) {
 }
 
 /** PUT the row's fields and level; false when Eagle has no notification under the id. */
-async function put(s, eagleId, row, body, logFields) {
-  const path = withLevel(pathOf(eagleId), row);
-  const res = await call(s, 'PUT', path, body, logFields);
-  if (res.status === 404) return false;
-  if (!res.ok) throw failure('PUT', path, res);
-  return true;
-}
+const put = async (s, eagleId, row, body, logFields) => putRecord(s, withLevel(pathOf(eagleId), row), body, logFields);
 
 const owned = row => Boolean(row && row.sourceSystem === NATIVE);
 const wants = row => owned(row) && Boolean(row.eagleId || settings.eagle.nativeEnabled);

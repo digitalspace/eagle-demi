@@ -10,8 +10,9 @@ const {
 } = require('../merge/project');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
+  requireSettings, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
 } = require('./eagle');
+const { putRecord } = require('./_put');
 const { organizationEagleId } = require('./eagle-organization');
 
 const NAME = 'eagle';
@@ -86,13 +87,7 @@ async function bodyFor(row, logFields) {
 }
 
 /** PUT the row's fields; false when Eagle has no project under the id. */
-async function put(s, eagleId, body, logFields) {
-  const path = pathOf(eagleId);
-  const res = await call(s, 'PUT', path, body, logFields);
-  if (res.status === 404) return false;
-  if (!res.ok) throw failure('PUT', path, res);
-  return true;
-}
+const put = async (s, eagleId, body, logFields) => putRecord(s, pathOf(eagleId), body, logFields);
 
 const owned = row => (isNativeProject(row) || takenOver(row)) && row.isDeleted !== true;
 const wants = row => owned(row) && (row.eagleId ? mintedHere(row) || takenOver(row) : settings.eagle.nativeEnabled);
