@@ -8,6 +8,7 @@ const config = require('../../src/config');
 const {
   summarize, foundryChat, buildPrompt, parseCitations, truncate, estimateCostCad, SYSTEM_PROMPT
 } = require('../../src/ai/summarize');
+const azureCredential = require('../../src/utils/azure-credential');
 
 const chunk = (n, content) => ({
   chunkId: `doc1::p0::c${n}`,
@@ -51,6 +52,28 @@ test('summarize', async (t) => {
     config.summaryEnabled = false;
     const result = await summarize('pipeline', []);
     assert.strictEqual(result.reason, 'no_results');
+  });
+
+  await t.test('sends its abort signal and the summary token cap, never JSON mode', async (t) => {
+    const { foundryEndpoint, foundryDeployment } = config;
+    t.after(() => Object.assign(config, { foundryEndpoint, foundryDeployment }));
+    Object.assign(config, { summaryEnabled: true, foundryEndpoint: 'https://foundry.example', foundryDeployment: 'd' });
+    t.mock.method(azureCredential, 'createCredential', () => ({
+      getToken: async () => ({ token: 'a-token', expiresOnTimestamp: Date.now() + 3600 * 1000 })
+    }));
+    const calls = [];
+    t.mock.method(global, 'fetch', async (url, init) => {
+      calls.push(init);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'Text [1].' } }] }) };
+    });
+
+    const result = await summarize('pipeline', [chunk(0, 'some text')]);
+
+    assert.strictEqual(result.summary, 'Text [1].');
+    assert.ok(calls[0].signal instanceof AbortSignal);
+    const body = JSON.parse(calls[0].body);
+    assert.ok(!('response_format' in body));
+    assert.strictEqual(body.max_tokens, config.summaryMaxTokens);
   });
 });
 
@@ -192,7 +215,7 @@ test('foundryChat', async (t) => {
     return calls;
   };
 
-  await t.test('sends the search summary at temperature 0 with its abort signal and no JSON mode', async (t) => {
+  await t.test('the helper sends temperature 0 and the given signal, and no JSON mode unless asked', async (t) => {
     const calls = stubFetch(t);
     const { signal } = new AbortController();
     await foundryChat('https://foundry.example/chat', 'a-token', { system: 'S', user: 'U', maxTokens: 50, signal });
