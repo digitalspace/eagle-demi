@@ -129,5 +129,4 @@ test('auditFor names the project unless told not to', () => {
 
   const unscoped = auditFor('user', { project: false })('user.update', ['name'])(saved);
   assert.deepStrictEqual(unscoped, { action: 'user.update', targetType: 'user', targetId: 'c1', detail: { fields: ['name'] } });
-  assert.ok(!('projectId' in unscoped));
 });
