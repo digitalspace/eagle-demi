@@ -16,24 +16,7 @@ const { check, without } = require('./_schema');
 const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { ORGANIZATION } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
-
-const SHORT = { type: 'string', max: 1000 };
-
-/** The fields eagle-api's POST copies from the body (organization.js:92-113). None is required. */
-const SCHEMA = Object.freeze({
-  name: SHORT,
-  description: { type: 'string', max: 10000 },
-  country: SHORT,
-  postal: SHORT,
-  province: SHORT,
-  city: SHORT,
-  address1: SHORT,
-  address2: SHORT,
-  companyType: SHORT,
-  companyLegal: SHORT,
-  company: SHORT,
-  parentCompany: { type: 'id', nullable: true }
-});
+const { SCHEMA } = require('./organization-fields');
 
 /** Create adds `isPublished`, which eagle-api did not take: it published every new organization. */
 const CREATE_SCHEMA = Object.freeze({ ...SCHEMA, isPublished: { type: 'boolean' } });
@@ -215,7 +198,6 @@ function setPublished(published) {
 }
 
 module.exports = {
-  SCHEMA,
   create,
   update,
   publish: setPublished(true),

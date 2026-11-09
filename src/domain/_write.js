@@ -5,6 +5,7 @@ const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 const { nextSyncVersion } = require('../sync-out/kinds');
+const syncOut = require('../sync-out');
 
 /**
  * The one write path for domain modules: etag-guarded, rebuilt from the stored row on every lost
@@ -52,8 +53,7 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
 
 /** `written`, after a landed write is queued for sync-out as `kind`; each consumer's `wants` picks the rows it sends. */
 async function queued(written, kind) {
-  // Required here: sync-out consumers import domain schemas, so a top-level require would be a cycle.
-  if (written.status === 'ok') await require('../sync-out').enqueueQuietly(written.value, { kind });
+  if (written.status === 'ok') await syncOut.enqueueQuietly(written.value, { kind });
   return written;
 }
 

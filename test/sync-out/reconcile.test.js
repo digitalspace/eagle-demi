@@ -11,7 +11,8 @@ const assert = require('node:assert');
 const cache = require('../../src/repositories/cache');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const { logger } = require('../../src/utils/logger');
-const { COMMENT_PERIOD, kindOf } = require('../../src/sync-out/kinds');
+const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
+const { reconcileOf } = require('../../src/sync-out/reconcile');
 const { run } = require('../../src/scripts/sync-out-pending');
 const { API, useEnv, wireQueue, wireEagle } = require('../helpers/sync-out-eagle');
 
@@ -52,7 +53,7 @@ function wire(t, { engage = [], pending = [lapsedRow()], listEveryEngage, readFo
 test('the ENGAGE checks run before the pending pass, and their report rides under engage', async (t) => {
   const { order } = wire(t, { engage: [engageRow()] });
 
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+  const report = await reconcileOf(COMMENT_PERIOD)({ repair: true });
 
   assert.deepStrictEqual(order, ['engage', 'pending']);
   assert.deepStrictEqual(report.engage.neverSynced.map(f => f.id), ['engage-1']);
@@ -63,7 +64,7 @@ test('the nightly store run lists both passes, queues nothing and stores the ENG
   const stored = [];
   t.mock.method(cache, 'put', async (id, value) => { stored.push({ id, value }); });
 
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ store: true });
+  const report = await reconcileOf(COMMENT_PERIOD)({ store: true });
 
   assert.deepStrictEqual(report.listed, ['lapsed', 'engage-1']);
   assert.deepStrictEqual(sent, []);
@@ -74,7 +75,7 @@ test('the nightly store run lists both passes, queues nothing and stores the ENG
 test('an ENGAGE pass that throws is logged as an error and the lapsed send claim is still re-queued', async (t) => {
   const { sent, error } = wire(t, { listEveryEngage: async () => { throw new Error('cosmos down'); } });
 
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+  const report = await reconcileOf(COMMENT_PERIOD)({ repair: true });
 
   assert.deepStrictEqual(report.engage, { error: 'cosmos down' });
   assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id, m.body.repair]), [[COMMENT_PERIOD, 'lapsed', true]]);
@@ -103,7 +104,7 @@ test('an ENGAGE row whose repair throws fails the CLI, named apart from pending 
 test('with SYNC_OUT_EAGLE_ENABLED off every ENGAGE repair candidate is reported not re-queued', async (t) => {
   wire(t, { engage: [engageRow()], env: { SYNC_OUT_EAGLE_ENABLED: 'false' } });
 
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+  const report = await reconcileOf(COMMENT_PERIOD)({ repair: true });
 
   assert.deepStrictEqual(report.engage.notRequeued, ['engage-1']);
 });
@@ -111,7 +112,7 @@ test('with SYNC_OUT_EAGLE_ENABLED off every ENGAGE repair candidate is reported 
 test('an ENGAGE repair candidate no consumer takes is reported not re-queued', async (t) => {
   wire(t, { engage: [{ ...engageRow(), scanStatus: 'pending' }] });
 
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+  const report = await reconcileOf(COMMENT_PERIOD)({ repair: true });
 
   assert.deepStrictEqual(report.engage.notRequeued, ['engage-1']);
 });

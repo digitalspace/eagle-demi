@@ -244,8 +244,8 @@ async function reconcileEagle() {
 // swallowed so one kind cannot stop the rest.
 async function reconcileEngage() {
   const { logger } = require('../src/utils/logger');
-  const { KINDS } = require('../src/sync-out/kinds');
-  for (const [kind, { reconcile }] of Object.entries(KINDS)) {
+  const { HOOKS } = require('../src/sync-out/reconcile');
+  for (const [kind, reconcile] of Object.entries(HOOKS)) {
     try {
       await reconcile({ store: true });
     } catch (err) {

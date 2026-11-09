@@ -20,7 +20,8 @@ const lists = require('../../src/repositories/lists');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const updates = require('../../src/repositories/updates');
-const { DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE, kindOf } = require('../../src/sync-out/kinds');
+const { DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE } = require('../../src/sync-out/kinds');
+const { reconcileOf } = require('../../src/sync-out/reconcile');
 const { logger } = require('../../src/utils/logger');
 const { depsFor, reconcile } = require('../../src/sync-out/pending');
 const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
@@ -176,7 +177,7 @@ test('the document hook re-queues only rows owed a send, a lapsed send claim inc
   const lines = [];
   const log = { info: () => {}, warn: (line) => { lines.push(line); } };
 
-  const report = await kindOf(DOCUMENT).reconcile({ repair: true, log });
+  const report = await reconcileOf(DOCUMENT)({ repair: true, log });
 
   assert.deepStrictEqual(sent, ['owed', 'lapsed'].map(id =>
     ({ kind: DOCUMENT, consumer: 'eagle', id, projectId: '1234', attempt: 1, repair: true })));
@@ -184,7 +185,7 @@ test('the document hook re-queues only rows owed a send, a lapsed send claim inc
     { listed: ['owed', 'lapsed'], queued: 2, failed: [] });
 
   delete process.env.SYNC_OUT_EAGLE_DOCUMENT_ENABLED;
-  await kindOf(DOCUMENT).reconcile({ repair: true, log });
+  await reconcileOf(DOCUMENT)({ repair: true, log });
   assert.match(lines[0], /needs SYNC_OUT_EAGLE_ENABLED and SYNC_OUT_EAGLE_DOCUMENT_ENABLED true/);
   assert.strictEqual(sent.length, 2);
 });
@@ -215,14 +216,14 @@ for (const { kind, flag, repo, row } of [
     const lines = [];
     const log = { info: () => {}, warn: (line) => { lines.push(line); } };
 
-    const report = await kindOf(kind).reconcile({ repair: true, log });
+    const report = await reconcileOf(kind)({ repair: true, log });
 
     assert.deepStrictEqual(listedWith, [kind === ORGANIZATION ? ['Organization'] : []]);
     assert.deepStrictEqual(sent.map(m => [m.kind, m.id, m.repair]), [[kind, 'owed', true], [kind, 'lapsed', true]]);
     assert.deepStrictEqual({ listed: report.listed, queued: report.queued }, { listed: ['owed', 'lapsed'], queued: 2 });
 
     delete process.env[flag];
-    await kindOf(kind).reconcile({ repair: true, log });
+    await reconcileOf(kind)({ repair: true, log });
     assert.match(lines[0], new RegExp(`needs SYNC_OUT_EAGLE_ENABLED and ${flag} true`));
   });
 }
