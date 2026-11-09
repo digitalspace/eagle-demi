@@ -419,6 +419,48 @@ function trackWorkToPublic(work, phaseEvents) {
 
 const bySortOrder = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0);
 
+const isMirrored = (work) => MIRRORED_WORK_TYPE_IDS.has(workTypeIdOf(work));
+
+/** `{work_phase}` rows by sort order, each beside its public shape. */
+const orderedPhases = (rows) => (rows || [])
+  .map(row => ({ row, phase: trackPhaseToPublic(row) }))
+  .sort((a, b) => bySortOrder(a.phase, b.phase));
+
+/** The events `milestones[]` shows: HIDDEN dropped, by template order, then id. */
+function shownEvents(events) {
+  const order = (e) => (e.event_configuration || {}).sort_order || 0;
+  return (events || []).filter(e => (e.event_configuration || {}).visibility !== 'HIDDEN')
+    .sort((a, b) => order(a) - order(b) || a.id - b.id);
+}
+
+/** A list the push must send; a missing one would read as "none" and clear the stored rows. */
+function pushedList(value, what) {
+  if (!Array.isArray(value)) throw new Error(`[track-push] ${what} is not a list`);
+  return value;
+}
+
+/**
+ * Track's push payload, one project with `works[].phases[].events[]` nested, mapped to what the
+ * per-work reads of `fetchTrackWorks` give that project. `project` is the raw row the sync takes.
+ * @returns {{project: object, phases: Array, works: Array}}
+ */
+function trackPushToSync(payload) {
+  const { works: pushed, ...project } = payload;
+  const projectWorks = pushedList(pushed, `project ${project.id} works`)
+    .map(work => ({ ...work, project_id: project.id }));
+  const phaseRows = (work) => pushedList(work.phases, `work ${work.id} phases`).map(wp => ({ work_phase: wp }));
+
+  const assessment = assessmentWorkByProject(projectWorks).get(String(project.id));
+  const phases = assessment ? orderedPhases(phaseRows(assessment)).map(p => p.phase) : [];
+  const works = projectWorks.filter(isMirrored).sort((a, b) => a.id - b.id).map(work =>
+    trackWorkToPublic(work, orderedPhases(phaseRows(work)).map(({ row, phase }) => ({
+      phase,
+      milestones: shownEvents(pushedList(row.work_phase.events, `work phase ${row.work_phase.id} events`))
+        .map(e => trackMilestoneToPublic(e, e.outcome_name))
+    }))));
+  return { project, phases, works };
+}
+
 /**
  * Assessment phases and, with `opts.works`, every mirrored work, keyed by Track project id.
  * A failed read is logged and leaves only that project out, so the sync keeps its stored rows.
@@ -446,7 +488,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   const phases = new Map();
   for (const [projectId, work] of assessmentWorkByProject(workList)) {
     try {
-      const mapped = ((await phaseRowsOf(work.id)) || []).map(trackPhaseToPublic).sort(bySortOrder);
+      const mapped = orderedPhases(await phaseRowsOf(work.id)).map(p => p.phase);
       if (mapped.length) phases.set(projectId, mapped);
     } catch (err) {
       logger.error(`[seed] work ${work.id} phases`, { error: err.message, stack: err.stack });
@@ -470,11 +512,8 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   };
 
   const milestonesOf = async (workPhaseId) => {
-    const events = (await counted(`${base}/milestones/workphases/${workPhaseId}/events`)) || [];
-    const shown = events.filter(e => (e.event_configuration || {}).visibility !== 'HIDDEN');
-    const order = (e) => (e.event_configuration || {}).sort_order || 0;
-    shown.sort((a, b) => order(a) - order(b) || a.id - b.id);
-    return Promise.all(shown.map(async (e) => {
+    const events = await counted(`${base}/milestones/workphases/${workPhaseId}/events`);
+    return Promise.all(shownEvents(events).map(async (e) => {
       const configurationId = e.event_configuration_id ?? (e.event_configuration || {}).id;
       const outcome = e.outcome_id == null ? null
         : (await outcomeNamesFor(configurationId)).get(e.outcome_id);
@@ -483,18 +522,17 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   };
 
   const workOf = async (work) => {
-    const rows = ((await phaseRowsOf(work.id)) || [])
-      .map(row => ({ id: (row.work_phase || {}).id, phase: trackPhaseToPublic(row) }))
-      .sort((a, b) => bySortOrder(a.phase, b.phase));
     const phaseEvents = [];
-    for (const { id, phase } of rows) phaseEvents.push({ phase, milestones: await milestonesOf(id) });
+    for (const { row, phase } of orderedPhases(await phaseRowsOf(work.id))) {
+      phaseEvents.push({ phase, milestones: await milestonesOf((row.work_phase || {}).id) });
+    }
     return trackWorkToPublic(work, phaseEvents);
   };
 
   const byProject = new Map();
   for (const work of workList || []) {
     const key = projectKeyOf(work);
-    if (!MIRRORED_WORK_TYPE_IDS.has(workTypeIdOf(work)) || key === null) continue;
+    if (!isMirrored(work) || key === null) continue;
     if (!byProject.has(key)) byProject.set(key, []);
     byProject.get(key).push(work);
   }
@@ -613,6 +651,7 @@ module.exports = {
   fetchTrackProjects,
   loadTrackProjects,
   fetchTrackWorks,
+  trackPushToSync,
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,

@@ -1,0 +1,154 @@
+{
+  "id": 207,
+  "name": "Cariboo Gold",
+  "description": "Underground gold mine near Wells.",
+  "epic_guid": "5c7e18d6a3e1b40024c1d2f3",
+  "latitude": "53.1012",
+  "longitude": "-121.5571",
+  "address": "Wells, BC",
+  "abbreviation": "CGP",
+  "is_active": true,
+  "proponent": { "id": 41, "name": "Osisko Development Corp." },
+  "sub_type": { "id": 12, "name": "Gold" },
+  "type": { "id": 3, "name": "Mines" },
+  "project_state": { "id": 2, "name": "Under EAC" },
+  "ea_certificate": "M23-01",
+  "eac_signed": "2023-10-10T00:00:00+00:00",
+  "eac_expires": "2028-10-10T00:00:00+00:00",
+  "works": [
+    {
+      "id": 1102,
+      "work_type_id": 7,
+      "work_type": { "id": 7, "name": "Amendment" },
+      "title": null,
+      "simple_title": "Amendment 1",
+      "ea_act": { "id": 3, "name": "2018 Act" },
+      "start_date": "2025-03-03T00:00:00+00:00",
+      "is_active": false,
+      "work_state": "SUSPENDED",
+      "work_decision_date": null,
+      "anticipated_decision_date": "2026-12-01T00:00:00+00:00",
+      "phases": [
+        {
+          "id": 9201,
+          "name": "Amendment Review",
+          "start_date": "2025-03-03T00:00:00+00:00",
+          "end_date": null,
+          "number_of_days": 120,
+          "legislated": false,
+          "sort_order": 1,
+          "is_completed": false,
+          "phase": {
+            "id": 31, "name": "Amendment", "ea_act_id": 3, "ea_act": { "id": 3, "name": "2018 Act" },
+            "work_type": { "id": 7, "name": "Amendment" }
+          },
+          "events": [
+            {
+              "id": 7301, "name": "Amendment Decision", "actual_date": null,
+              "anticipated_date": "2026-12-01T00:00:00+00:00", "number_of_days": 0, "outcome_name": null,
+              "event_configuration": {
+                "id": 640, "name": "Amendment Decision", "event_position": "END", "event_type_id": 22,
+                "visibility": "MANDATORY", "sort_order": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1101,
+      "work_type_id": 6,
+      "work_type": { "id": 6, "name": "Assessment" },
+      "title": "Cariboo Gold Assessment",
+      "simple_title": "Assessment",
+      "ea_act": { "id": 3, "name": "2018 Act" },
+      "start_date": "2016-05-02T00:00:00+00:00",
+      "is_active": true,
+      "work_state": "COMPLETED",
+      "work_decision_date": "2023-10-10T00:00:00+00:00",
+      "anticipated_decision_date": "2023-09-30T00:00:00+00:00",
+      "phases": [
+        {
+          "id": 9102,
+          "name": "EAC Decision",
+          "start_date": "2023-08-01T00:00:00+00:00",
+          "end_date": "2023-10-10T00:00:00+00:00",
+          "number_of_days": 30,
+          "legislated": true,
+          "sort_order": 7,
+          "is_completed": true,
+          "phase": {
+            "id": 27, "name": "Decision", "ea_act_id": 3, "ea_act": { "id": 3, "name": "2018 Act" },
+            "work_type": { "id": 6, "name": "Assessment" }
+          },
+          "events": [
+            {
+              "id": 7202, "name": "Minister decides", "actual_date": "2023-10-10T00:00:00+00:00",
+              "anticipated_date": "2023-09-30T00:00:00+00:00", "number_of_days": 30,
+              "outcome_name": "Certificate Issued",
+              "event_configuration": {
+                "id": 620, "name": "EAC Decision", "event_position": "END", "event_type_id": 22,
+                "visibility": "MANDATORY", "sort_order": 9
+              }
+            },
+            {
+              "id": 7203, "name": "Internal referral", "actual_date": "2023-09-01T00:00:00+00:00",
+              "anticipated_date": null, "number_of_days": 0, "outcome_name": null,
+              "event_configuration": {
+                "id": 621, "name": "Referral to Minister", "event_position": "INTERMEDIATE", "event_type_id": 14,
+                "visibility": "HIDDEN", "sort_order": 3
+              }
+            },
+            {
+              "id": 7201, "name": "Decision phase start", "actual_date": "2023-08-01T00:00:00+00:00",
+              "anticipated_date": "2023-08-01T00:00:00+00:00", "number_of_days": 0, "outcome_name": null,
+              "event_configuration": {
+                "id": 619, "name": null, "event_position": "START", "event_type_id": 1,
+                "visibility": "MANDATORY", "sort_order": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": 9101,
+          "name": "Pre-EA (EAC Assessment)",
+          "start_date": "2019-02-01T00:00:00+00:00",
+          "end_date": "2019-08-01T00:00:00+00:00",
+          "number_of_days": 180,
+          "legislated": true,
+          "sort_order": 1,
+          "is_completed": true,
+          "phase": {
+            "id": 21, "name": "Early Engagement", "ea_act_id": 3, "ea_act": { "id": 3, "name": "2018 Act" },
+            "work_type": { "id": 6, "name": "Assessment" }
+          },
+          "events": [
+            {
+              "id": 7101, "name": "Project Transitioning FROM the EA Act (2002)",
+              "actual_date": "2019-12-16T00:00:00+00:00", "anticipated_date": null, "number_of_days": 0,
+              "outcome_name": null,
+              "event_configuration": {
+                "id": 610, "name": "Project Transitioning FROM the EA Act (2002)", "event_position": "INTERMEDIATE",
+                "event_type_id": 22, "visibility": "OPTIONAL", "sort_order": 4
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1103,
+      "work_type_id": 4,
+      "work_type": { "id": 4, "name": "Exemption Order" },
+      "title": "Not mirrored",
+      "simple_title": "Exemption",
+      "ea_act": { "id": 3, "name": "2018 Act" },
+      "start_date": "2024-01-15T00:00:00+00:00",
+      "is_active": true,
+      "work_state": "IN_PROGRESS",
+      "work_decision_date": null,
+      "anticipated_decision_date": null,
+      "phases": []
+    }
+  ]
+}

@@ -409,6 +409,53 @@ test('with the flag off only the assessment phases are read and works stays empt
   assert.strictEqual(works.size, 0);
 });
 
+/** A fresh copy of Track's push payload, so no test can change what the next one sees. */
+const pushPayload = () => structuredClone(require('../fixtures/track-push-payload.json'));
+
+/** The same project as the per-work routes serve it: outcome names become ids on their configuration. */
+function perWorkReads(payload) {
+  const reads = { works: [], phasesByWork: {}, eventsByPhase: {}, outcomesByConfiguration: {} };
+  const outcomeId = (configurationId, name) => {
+    const names = (reads.outcomesByConfiguration[configurationId] ||= []);
+    if (!names.some(o => o.name === name)) names.push({ id: names.length + 1, name });
+    return names.find(o => o.name === name).id;
+  };
+  for (const { phases, ...work } of payload.works) {
+    reads.works.push({ ...work, project_id: payload.id });
+    reads.phasesByWork[work.id] = phases.map(({ events, ...workPhase }) => {
+      reads.eventsByPhase[workPhase.id] = events.map(({ outcome_name: name, ...e }) => ({
+        ...e,
+        event_configuration_id: e.event_configuration.id,
+        outcome_id: name == null ? null : outcomeId(e.event_configuration.id, name)
+      }));
+      return { work_phase: workPhase };
+    });
+  }
+  return reads;
+}
+
+test('a Track push maps to the same works and phases as the per-work reads', async () => {
+  const { trackPushToSync } = require('../../src/seed/sources');
+  const reads = await pullWorks(fakeTrackWorks(perWorkReads(pushPayload())));
+
+  const pushed = trackPushToSync(pushPayload());
+
+  assert.deepStrictEqual(pushed.works, reads.works.get('207'));
+  assert.deepStrictEqual(pushed.phases, reads.phases.get('207'));
+  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [1101, 1102],
+    'by work id, the inactive amendment kept and the type 4 work dropped');
+  assert.strictEqual(pushed.works[0].outcome, 'Certificate Issued');
+  assert.ok(!pushed.works[0].milestones.some(m => m.name === 'Referral to Minister'), 'HIDDEN event dropped');
+});
+
+test('a Track push with no works list is refused rather than read as no works', () => {
+  const { trackPushToSync } = require('../../src/seed/sources');
+  const { works, ...bare } = pushPayload();
+
+  assert.ok(works.length, 'the fixture has works to lose');
+  assert.throws(() => trackPushToSync(bare), /project 207 works is not a list/);
+});
+
 // eagle-api allows 200 requests a minute, so 429 handling decides whether a comment sweep
 // finishes. Waits go through the injected `sleep` and cost no wall-clock time.
 const throttled = (headers = {}) => ({ status: 429, ok: false, headers: new Headers(headers) });
