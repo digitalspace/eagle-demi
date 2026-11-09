@@ -812,7 +812,7 @@ function report(summary, { json } = {}) {
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-only project(s) are gone from Eagle's public search ` +
-        'but stay published in DEMI, because the push never unpublishes; unpublish them by hand');
+        'but are still in DEMI; the push never unpublishes or deletes them');
     }
   }
   for (const label of STORED_LABELS) {
