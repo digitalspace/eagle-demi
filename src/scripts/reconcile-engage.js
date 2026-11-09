@@ -12,6 +12,7 @@ const eagle = require('../sync-out/eagle');
 const config = require('../config');
 const { writeGuarded } = require('../helpers/etag-write');
 const { admitParent } = require('../helpers/parent-admit');
+const { metUrlKey } = require('../helpers/met-url');
 const { logger } = require('../utils/logger');
 
 const REPORT_ID = cache.RECONCILE_ENGAGE_REPORT_ID;
@@ -126,10 +127,14 @@ async function checkDuplicates(rows, reader, report) {
     const byUrl = new Map();
     for (const period of Array.isArray(res.body) ? res.body : []) {
       if (!period || !period.metURL) continue;
-      byUrl.set(period.metURL, [...(byUrl.get(period.metURL) || []), String(period._id)]);
+      const key = metUrlKey(period.metURL) || period.metURL;
+      const group = byUrl.get(key) || { metURLs: [], eagleIds: [] };
+      group.metURLs.push(period.metURL);
+      group.eagleIds.push(String(period._id));
+      byUrl.set(key, group);
     }
-    for (const [metURL, eagleIds] of byUrl) {
-      if (eagleIds.length > 1) report.duplicates.push({ eagleProjectId, metURL, eagleIds });
+    for (const { metURLs, eagleIds } of byUrl.values()) {
+      if (eagleIds.length > 1) report.duplicates.push({ eagleProjectId, metURLs, eagleIds });
     }
   }
 }
@@ -266,7 +271,7 @@ function findingLines(r) {
     ...r.missingInEagle.map(f => `${TAG} missing-in-eagle ${ref(f)}`),
     ...r.drift.map(f => `${TAG} drift ${ref(f)} ` +
       f.fields.map(d => `${d.field} demi=${d.demi} eagle=${d.eagle}`).join(' ')),
-    ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURL=${f.metURL} ` +
+    ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURLs=${f.metURLs.join(',')} ` +
       `eagleIds=${f.eagleIds.join(',')}`),
     ...r.conflicts.map(f => `${TAG} conflict ${ref(f)} candidateEagleId=${f.candidateEagleId}`),
     ...r.skipped.map(f => `${TAG} skipped ${ref(f)}`),

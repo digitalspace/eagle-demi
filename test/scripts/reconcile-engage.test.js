@@ -240,7 +240,20 @@ test('DEMI vs Eagle', async (t) => {
     ] } });
     const report = await run({ deps });
     assert.deepStrictEqual(report.duplicates,
-      [{ eagleProjectId: EAGLE_PROJECT, metURL: EAGLE_COPY.metURL, eagleIds: ['cp-42', 'cp-43'] }]);
+      [{ eagleProjectId: EAGLE_PROJECT, metURLs: [EAGLE_COPY.metURL, EAGLE_COPY.metURL], eagleIds: ['cp-42', 'cp-43'] }]);
+  });
+
+  await t.test('two Eagle periods on one engagement path under different hosts are a duplicate', async (tt) => {
+    const { deps } = setup(tt, { fetchOpts: { byProject: [
+      { _id: 'cp-42', metURL: 'https://engage.eao.gov.bc.ca/nicomen-wind' },
+      { _id: 'cp-43', metURL: 'https://test.engage.eao.gov.bc.ca/nicomen-wind/' }
+    ] } });
+    const report = await run({ deps });
+    assert.deepStrictEqual(report.duplicates, [{
+      eagleProjectId: EAGLE_PROJECT,
+      metURLs: ['https://engage.eao.gov.bc.ca/nicomen-wind', 'https://test.engage.eao.gov.bc.ca/nicomen-wind/'],
+      eagleIds: ['cp-42', 'cp-43']
+    }]);
   });
 
   await t.test('a row sync-out marked conflict is reported with its candidate and never re-queued', async (tt) => {

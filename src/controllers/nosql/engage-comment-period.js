@@ -10,6 +10,7 @@ const { constrainToProject, DELETED_CEILING } = require('../../repositories/docu
 const { admitParent, refusalCode, eagleRef } = require('../../helpers/parent-admit');
 const { eagleReadUnder } = require('../../seed/transform');
 const { DUPLICATE_ID } = require('../../helpers/duplicate-id');
+const { metUrlKey } = require('../../helpers/met-url');
 const { serverError } = require('../../helpers/response');
 const syncOut = require('../../sync-out');
 const { COMMENT_PERIOD, nextSyncVersion } = require('../../sync-out/kinds');
@@ -17,7 +18,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { upsertWithRetry } = require('./eagle-mirror');
 const { cascadeToComments } = require('./comment-period');
-const { levelOfRead } = require('../../helpers/access-sql');
+const { levelOfRead, systemAccess } = require('../../helpers/access-sql');
 
 const LABEL = '[ENGAGE Comment Period Controller]';
 const PUSHED_AT_FIELD = 'engagePushedAt';
@@ -84,14 +85,47 @@ function engagePush(req) {
   return { engagementId, engagement, pushedAt, trackingId, start, end };
 }
 
+/** A missing date parses to NaN and fails both comparisons, so an undated side never overlaps. */
+function datesOverlap({ start, end }, row) {
+  return Date.parse(start) <= Date.parse(row.dateCompleted) && Date.parse(end) >= Date.parse(row.dateStarted);
+}
+
+/**
+ * The one unclaimed Eagle period of this project on a published engagement's URL path, hosts aside.
+ * Never for a draft or delete, or with a tracking id: the id lookup already found any row it names.
+ */
+async function readByMetUrl(push, projectId) {
+  const { engagementId, engagement, trackingId } = push;
+  const key = metUrlKey(engagement.metURL);
+  if (!key || trackingId || engagement.isPublished !== true || engagement.isDeleted === true) return null;
+  const rows = (await commentPeriods.listEveryByProject(projectId, systemAccess())).filter(row =>
+    row.sourceSystem === 'eagle' && !row.engagementId && row.isDeleted !== true
+    && metUrlKey(row.metURL) === key
+    && datesOverlap(push, row));
+  if (rows.length > 1) {
+    logger.warn(`${LABEL} URL ambiguous, several Eagle periods share this engagement path, none joined`,
+      { engagementId, projectId, path: key, ids: rows.map(row => row.id) });
+  }
+  return rows.length === 1 ? rows[0] : null;
+}
+
 /**
  * The row this engagement writes to: already tied to it (in any partition, so a project move finds
- * it), else the Eagle period it names, else its own.
+ * it), else the Eagle period it names, else its own, else the period on its URL path.
  */
-async function readTarget({ engagementId, trackingId }, projectId) {
+async function readTarget(push, projectId) {
+  const { engagementId, trackingId } = push;
   return await commentPeriods.readForWriteByEngagementId(engagementId, projectId)
     || (trackingId && await commentPeriods.readForWrite(trackingId, projectId))
-    || await commentPeriods.readForWrite(engageRowId(engagementId), projectId);
+    || await commentPeriods.readForWrite(engageRowId(engagementId), projectId)
+    || await readByMetUrl(push, projectId);
+}
+
+/** Logged after the write, as a 412 retry reads the target again. Only the URL join reaches this row shape. */
+function logUrlJoin({ engagementId, engagement, trackingId }, existing, saved) {
+  if (trackingId || !existing || existing.sourceSystem !== 'eagle' || existing.engagementId) return;
+  logger.info(`${LABEL} engage push joined an Eagle period by URL path`,
+    { id: saved.id, engagementId, path: metUrlKey(engagement.metURL) });
 }
 
 /** The ENGAGE-owned fields written over `current`; everything Eagle owns rides through untouched. */
@@ -203,6 +237,7 @@ async function upsertFromEngage(req, res) {
     if (written.ignored) return refuseStale(req, res, { engagementId, pushedAt, current: written.existing });
 
     const { saved, existing } = written;
+    logUrlJoin(push, existing, saved);
     const queued = await syncOut.enqueueQuietly(saved, { kind: COMMENT_PERIOD });
     // Same partition move as the Eagle mirror: Cosmos leaves the old row behind. The new row is marked,
     // so a copy this fails to remove reads as a half-finished move, not a duplicate.

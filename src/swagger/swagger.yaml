@@ -4400,11 +4400,17 @@ paths:
       description: |-
         Receives one ENGAGE engagement. ENGAGE owns the row (`sourceSystem: 'engage'`): the row
         tied to this engagement is updated, else the Eagle period named by `trackingId` is adopted,
-        else a new row `engage-<engagementId>` is created. A row tied to this engagement under
-        another project is moved to the new one. The Eagle mirror writes only Eagle's own fields
-        onto it afterwards. The stored ACL is the engagement's own, constrained to the parent's,
-        and a deleted engagement is narrowed to staff rather than removed. Every write raises the
-        row's `syncVersion`, which is what sync-out compares against what it last sent.
+        else its row `engage-<engagementId>` is updated. With none of those, a published
+        engagement with no `trackingId` adopts the one Eagle period of its project with the same
+        `metURL` path and query (scheme, host, fragment and trailing slash aside), provided no
+        engagement owns that period, it is not deleted, and the two date ranges overlap. A
+        missing date on either side means no join. A draft or a delete never joins by URL, and
+        two or more matching periods join none. Otherwise a new row `engage-<engagementId>` is
+        created. A row tied to this engagement under another project is moved to the new one.
+        The Eagle mirror writes only Eagle's own fields onto it afterwards. The stored ACL is the engagement's own,
+        constrained to the parent's, and a deleted engagement is narrowed to staff rather than
+        removed. Every write raises the row's `syncVersion`, which is what sync-out compares
+        against what it last sent.
 
         When the stored level moves, the comments under the period are re-derived from it. The
         row is then queued for sync-out, which writes it on to Eagle. A failed enqueue is logged,
