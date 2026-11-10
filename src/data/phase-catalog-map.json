@@ -48,8 +48,6 @@
         "track": { "6": ["Early Engagement"] } },
       { "name": "DPD Development (Proponent Time)", "eagle": false, "group": "assessment", "stage": "Early Engagement",
         "track": { "6": ["DPD Development (Proponent Time)"] } },
-      { "name": "Revised DPD Development (Proponent Time)", "eagle": false, "group": "assessment", "stage": "Early Engagement",
-        "track": { "6": ["Revised DPD Development (Proponent Time)"] } },
       { "name": "Readiness Decision", "group": "assessment", "stage": "Readiness Decision",
         "track": { "6": ["Readiness Decision"] } },
       { "name": "Process Planning", "group": "assessment", "stage": "Process Planning",
