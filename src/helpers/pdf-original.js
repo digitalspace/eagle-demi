@@ -25,9 +25,24 @@ const END_WINDOW = 4096;
 /** First read at an offset; a parse that runs off its end retries twice as wide. */
 const FIRST_WINDOW = 4096;
 const RETRY_MARGIN = 1024;
+/** A range read still pending after this long fails the read, so the queue moves on. */
+const READ_TIMEOUT_MS = 60 * 1000;
 
 const isInt = (v) => Boolean(v) && Number.isInteger(v.number) && v.number >= 0;
 const refOf = (v) => (v && v.ref ? v.ref : null);
+
+// A plain Error, not a refusal: a refusal would skip the document for good, this one is retried.
+async function withDeadline(readRange, offset, n) {
+  let timer;
+  const late = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('original range read timed out')), READ_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([readRange(offset, n), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Range reads that never reach the original's end and stop at the read budget. */
 function source(readRange, length) {
@@ -37,7 +52,7 @@ function source(readRange, length) {
     const n = Math.min(want, length - offset);
     spent += n;
     if (spent > READ_BUDGET) refuse('original-read-budget');
-    const buf = await readRange(offset, n);
+    const buf = await withDeadline(readRange, offset, n);
     if (!Buffer.isBuffer(buf) || buf.length !== n) refuse('original-short-read');
     return buf;
   }
