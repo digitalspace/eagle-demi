@@ -960,7 +960,7 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.deepStrictEqual(order, ['chunk index', 'document index', 'chunks', 'row']);
   });
 
-  await t.test('a failed index removal does not fail the delete', async () => {
+  await t.test('with search unconfigured, a failed index removal does not fail the delete', async () => {
     // Pins the path with search unconfigured: nothing is indexed, so the row goes and the
     // response reports 0. Configured: test/controllers/nosql/document-delete-kept.test.js.
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
