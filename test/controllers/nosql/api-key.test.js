@@ -21,18 +21,10 @@ const audit = require('../../../src/utils/audit');
 const apiKeys = require('../../../src/repositories/api-keys');
 const controller = require('../../../src/controllers/nosql/api-key');
 const { GRANTABLE_ROLES } = require('../../../src/controllers/nosql/api-key');
+const { mockRes } = require('../../helpers/mock-res');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; }
-  };
-}
 
 /** Mint as a caller holding `roles`, capturing whatever reaches the registry. */
 async function mint(callerRoles, body, t) {

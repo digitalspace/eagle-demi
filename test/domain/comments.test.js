@@ -12,7 +12,8 @@ const audit = require('../../src/utils/audit');
 const comments = require('../../src/repositories/comments');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const syncOut = require('../../src/sync-out');
-const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
+const { levelOfRead } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const comment = require('../../src/domain/comments');
 const { mirrorFromEagle } = require('../../src/controllers/nosql/comment');
 const { logger } = require('../../src/utils/logger');
@@ -37,10 +38,6 @@ const STORED = Object.freeze({
   dateAdded: '2024-01-01T00:00:00.000Z', read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1'
 });
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage: one stored comment, its periods and the period counter. Returns what was written. */

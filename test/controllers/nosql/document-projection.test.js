@@ -9,23 +9,13 @@ const documents = require('../../../src/repositories/documents');
 const documentController = require('../../../src/controllers/nosql/document');
 const { redactForAccess } = require('../../../src/vis/redact');
 const config = require('../../../src/config');
+const { mockRes } = require('../../helpers/mock-res');
 
 // The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
 config.enrichmentSources = ['wildfire'];
 
 /** The fail-closed level every unauthenticated caller resolves to. */
 const ANON_ACCESS = { level: 4 };
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(k, v) { this.headers[k] = v; }
-  };
-}
 
 const ANON = { query: {}, params: {}, body: {} };
 

@@ -13,7 +13,7 @@ const projects = require('../../src/repositories/projects');
 const notify = require('../../src/services/notify');
 const syncOut = require('../../src/sync-out');
 const { logger } = require('../../src/utils/logger');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const cac = require('../../src/domain/cac');
 
 let rows = [];
@@ -26,10 +26,6 @@ const STORED = Object.freeze({
   projectCAC: true, projectCACPublished: true, cacEmail: 'cac@example.com', _etag: 'e1'
 });
 
-function ctxFor(roles) {
-  const req = { user: { sub: 'kc-1', preferred_username: 'idir-staff', realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage holding one project; returns the rows written, each write's options and the rows queued. */

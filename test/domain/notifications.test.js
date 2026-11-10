@@ -13,7 +13,8 @@ const notifications = require('../../src/repositories/notifications');
 const updates = require('../../src/repositories/updates');
 const syncOut = require('../../src/sync-out');
 const { NOTIFICATION } = require('../../src/sync-out/kinds');
-const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
+const { levelOfRead } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const { logger } = require('../../src/utils/logger');
 const notification = require('../../src/domain/notifications');
 const { mirrorFromEagle } = require('../../src/controllers/nosql/notification');
@@ -31,10 +32,6 @@ const STORED = Object.freeze({
   read: ['public', 'staff', 'sysadmin'], isPublished: true, _etag: 'e1'
 });
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage holding `stored`; returns what was written, queued for sync-out, and how often the parent cache was dropped. */

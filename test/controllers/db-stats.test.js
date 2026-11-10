@@ -11,16 +11,7 @@ const documentsRepo = require('../../src/repositories/documents');
 const boundariesRepo = require('../../src/repositories/boundaries');
 const cosmosNoSql = require('../../src/db/cosmos-nosql');
 const { logger } = require('../../src/utils/logger');
-
-function mockRes() {
-  const res = {
-    body: null,
-    statusCode: 200,
-    status(code) { res.statusCode = code; return res; },
-    json(body) { res.body = body; return res; }
-  };
-  return res;
-}
+const { mockRes } = require('../helpers/mock-res');
 
 /**
  * Every count the handler issues. The document counts are answered off the OPTS, so a stat wired

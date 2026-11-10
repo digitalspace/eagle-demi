@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const cosmos = require('../../src/db/cosmos-nosql');
 const sitemap = require('../../src/controllers/sitemap');
 const { logger } = require('../../src/utils/logger');
@@ -57,14 +57,7 @@ const locs = xml => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]);
 test('GET /sitemap.xml', async (t) => {
   t.beforeEach((t) => {
     sitemap._resetCache();
-    const linkBaseUrl = config.linkBaseUrl;
-    const keycloakEnabled = config.keycloakEnabled;
-    config.linkBaseUrl = HOST;
-    config.keycloakEnabled = false;
-    t.after(() => {
-      config.linkBaseUrl = linkBaseUrl;
-      config.keycloakEnabled = keycloakEnabled;
-    });
+    useConfig(t, { linkBaseUrl: HOST, keycloakEnabled: false });
   });
   t.afterEach(() => t.mock.restoreAll());
 

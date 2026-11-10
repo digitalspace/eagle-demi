@@ -20,18 +20,9 @@ const storage = require('../../../src/storage');
 const documentController = require('../../../src/controllers/nosql/document');
 const sealedController = require('../../../src/controllers/nosql/sealed');
 const { naturalSortKey } = require('../../../src/helpers/natural-sort');
+const { mockRes } = require('../../helpers/mock-res');
 
 const PARENT = { id: '207', read: ['public', 'staff'], isPublished: true, region: 'skeena' };
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
 
 test('every document write site stamps the natural-sort key', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

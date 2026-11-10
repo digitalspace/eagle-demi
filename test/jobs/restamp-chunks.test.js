@@ -16,6 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const cosmos = require('../../src/db/cosmos-nosql');
 const documents = require('../../src/repositories/documents');
 const chunks = require('../../src/repositories/chunks');
@@ -35,9 +36,7 @@ const patchResult = (overrides = {}) =>
 
 /** Set `config.chunkRestampQueue` for one test and put it back afterwards. */
 function withQueueName(t, name) {
-  const previous = config.chunkRestampQueue;
-  config.chunkRestampQueue = name;
-  t.after(() => { config.chunkRestampQueue = previous; });
+  useConfig(t, { chunkRestampQueue: name });
 }
 
 /**

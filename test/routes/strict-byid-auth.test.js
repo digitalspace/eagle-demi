@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
 const inspectionController = require('../../src/controllers/nosql/inspection');
@@ -44,17 +44,11 @@ async function callReads(t, headers) {
   return { statuses, callers };
 }
 
-function keycloak(t, enabled) {
-  const keycloakEnabled = config.keycloakEnabled;
-  config.keycloakEnabled = enabled;
-  t.after(() => { config.keycloakEnabled = keycloakEnabled; });
-}
-
 const eachRead = value => READS.map(() => value);
 
 test('by-id reads refuse a rejected Bearer', async (t) => {
   await t.test('a rejected Bearer answers 401 and never reaches the handler', async (t) => {
-    keycloak(t, true);
+    useConfig(t, { keycloakEnabled: true });
     t.mock.method(logger, 'warn', () => {});
     const { statuses, callers } = await callReads(t, { authorization: 'Bearer not-a-real-token' });
     assert.deepStrictEqual(statuses, eachRead(401));
@@ -68,7 +62,7 @@ test('by-id reads refuse a rejected Bearer', async (t) => {
   });
 
   await t.test('a valid staff Bearer reaches the handler as that caller', async (t) => {
-    keycloak(t, false);
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign({ preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only');
     const { statuses, callers } = await callReads(t, { authorization: `Bearer ${token}` });
     assert.deepStrictEqual(statuses, eachRead(200));
