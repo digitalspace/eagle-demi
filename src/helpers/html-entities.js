@@ -39,14 +39,14 @@ function decodeEntities(text) {
       const code = body[1] === 'x' || body[1] === 'X'
         ? parseInt(body.slice(2), 16)
         : parseInt(body.slice(1), 10);
-      // fromCodePoint throws past U+10FFFF, and one bad entity must not fail the whole text.
-      return Number.isFinite(code) && code <= 0x10FFFF ? String.fromCodePoint(code) : whole;
+      // NUL and surrogates are not text, and fromCodePoint throws past U+10FFFF: one bad entity stays as written.
+      const text = code > 0 && code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF);
+      return text ? String.fromCodePoint(code) : whole;
     }
     // Letters are matched as written; the punctuation entities are not case-sensitive.
-    const named = NAMED_LETTERS[body] !== undefined
-      ? NAMED_LETTERS[body]
-      : NAMED_ENTITIES[body.toLowerCase()];
-    return named === undefined ? whole : named;
+    if (Object.hasOwn(NAMED_LETTERS, body)) return NAMED_LETTERS[body];
+    const lower = body.toLowerCase();
+    return Object.hasOwn(NAMED_ENTITIES, lower) ? NAMED_ENTITIES[lower] : whole;
   });
 }
 
