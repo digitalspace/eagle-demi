@@ -1,7 +1,7 @@
 'use strict';
 
-// One hand-written fixture for the push and catalog-completeness suites: a copy per suite, or one
-// derived from the controllers, can grow a field along with the code and never fail.
+// Hand-written Eagle records shared by the push and catalog-completeness suites. One copy, so the
+// suites cannot drift; never derived from the controllers, so it cannot grow along with them.
 
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
