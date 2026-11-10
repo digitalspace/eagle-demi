@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const audit = require('../../src/utils/audit');
-const { writeRow } = require('../../src/domain/_write');
+const { writeRow, auditFor } = require('../../src/domain/_write');
 const { logger } = require('../../src/utils/logger');
 
 let rows = [];
@@ -119,4 +119,14 @@ test('a storage fault that is not a race propagates', async () => {
     ctx: CTX, repo: fakeRepo([500]), existing: STORED, reread: async () => STORED,
     build: current => current, audit: auditOf
   }), /raced/);
+});
+
+test('auditFor names the project unless told not to', () => {
+  const saved = { id: 'c1', projectId: 'p1' };
+  const scoped = auditFor('commentPeriod')('commentPeriod.update', ['name'])(saved);
+  assert.deepStrictEqual(scoped, { action: 'commentPeriod.update', targetType: 'commentPeriod',
+    targetId: 'c1', projectId: 'p1', detail: { fields: ['name'] } });
+
+  const unscoped = auditFor('user', { project: false })('user.update', ['name'])(saved);
+  assert.deepStrictEqual(unscoped, { action: 'user.update', targetType: 'user', targetId: 'c1', detail: { fields: ['name'] } });
 });

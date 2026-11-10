@@ -475,15 +475,8 @@ async function chatFoundry(system, user, maxTokens) {
   }
 
   const token = await summarizer.getToken();
-  const res = await fetch(summarizer.foundryChatUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0,
-      max_tokens: maxTokens,
-      response_format: { type: 'json_object' }
-    })
+  const res = await summarizer.foundryChat(summarizer.foundryChatUrl(), token, {
+    system, user, maxTokens, jsonObject: true
   });
 
   if (!res.ok) {

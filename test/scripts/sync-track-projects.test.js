@@ -11,7 +11,6 @@ const fs = require('fs');
 const path = require('path');
 
 const { HEAL_CAP, run, syncProjects, trackChanges, writeTrackProject } = require('../../src/scripts/sync-track-projects');
-const { needsClosing } = require('../../src/scripts/close-unpublished-track-projects');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
@@ -708,7 +707,6 @@ function apiProject(overrides = {}) {
 test('a row created through POST /projects is left alone, not reclassified', async () => {
   const stored = apiProject();
   const projects = fakeProjects([stored]);
-  assert.strictEqual(needsClosing(stored), false, 'the premise: nothing would close it today');
 
   const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
@@ -717,10 +715,6 @@ test('a row created through POST /projects is left alone, not reclassified', asy
   assert.deepStrictEqual(projects.writes, []);
   const [after] = projects.items;
   assert.deepStrictEqual(after, stored, 'byte-identical');
-  assert.strictEqual((after.sources || {}).track, undefined,
-    'the discriminator close-unpublished reads must stay absent');
-  assert.strictEqual(needsClosing(after), false,
-    'stamping sources.track on would strip public from a deliberately published row');
 });
 
 /** The Eagle-only row the merge writes when Track has no counterpart yet. */

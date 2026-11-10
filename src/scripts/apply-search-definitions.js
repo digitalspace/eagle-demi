@@ -33,7 +33,7 @@
  * User Access Administrator, RBAC Administrator, two custom), and Search Service Contributor is on
  * neither list. Proven 2026-08-22 by a grant/revoke cycle at the service scope.
  *
- * DRY RUN BY DEFAULT. `--live` is the mutating flag, matching export-chunks-to-eagle.js.
+ * DRY RUN BY DEFAULT. `--live` is the mutating flag.
  *
  *   node src/scripts/apply-search-definitions.js            # report what would change
  *   node src/scripts/apply-search-definitions.js --live     # PUT them

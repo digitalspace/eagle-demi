@@ -1,8 +1,7 @@
 # DEMI attribute-level access control
 
-Status: Accepted direction, not started. Source: "DEMI Role-Based Access Control & Field-Level
-Redaction" by Mark Lise (Digitalspace), 2026-08-11, revalidated by its author against `42f7436`
-on 2026-08-26. Audited here against `aea2a0c` on 2026-08-26. Work items: `TODO-rbac.md`.
+Status: Accepted. Source: "DEMI Role-Based Access Control & Field-Level Redaction" by Mark Lise
+(Digitalspace), checked by its author against `42f7436`. Audited here against `aea2a0c`.
 
 Section 1 is the model as accepted. Section 2 is what the audit changed and why. Section 3 lists
 questions only the EAO can answer. Section 4 records claims in the source document that were wrong
@@ -13,9 +12,10 @@ Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalo
 
 ## 1. Model
 
-Status: the field plane (catalog, dials engine, redactor, `/api/me`) is live on test. The ladder,
-the sealed compartment and Selected Credentials below are the design for Phases 3 and 5; the code
-they describe does not exist yet, and `TODO-rbac.md` is the record of what has shipped.
+Status: the field plane (catalog, dials engine, redactor, `/api/me`), the ladder, the sealed
+compartment and Selected Credentials below are built. Entra as a second token issuer is open. It
+needs an Entra app registration from the identity team, with the app roles in
+`docs/entra-app-roles.json`, and then a dual-issuer `src/helpers/auth.js`.
 
 The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI already has.
 
@@ -44,10 +44,10 @@ downwards: a level-2 row carries no `team` token, so a caller whose only ladder 
 Levels 2-4 all carry `staff`, so staff reads every row at level 2 or above with one token. Level 1
 rows are reached only through the team arm.
 
-`rolesFor` (`access-sql.js:76`) adds `idir` when `identity_provider === 'idir'`. It never adds
-`team`: `team` is a row token only, matched by the team arm (`read[]` carries `team` AND the row's
-project is in `access.teams`), never by the caller's role list — a caller token `team` would match
-every level-1 row of every project. `project:*` stays stripped; which projects is `teamsFor`'s job.
+`rolesFor` (`src/helpers/access-sql.js`) adds `idir` when `identity_provider === 'idir'`. It never
+adds `team`, a row token matched only by the team arm: `read[]` carries `team` AND the row's
+project is in `access.teams`. A caller token `team` would match every level-1 row of every
+project, so `project:*` stays stripped and `teamsFor` resolves the projects.
 
 **Teams grant, key scope restricts.** Two different project facts, and they must not be merged.
 
@@ -58,12 +58,12 @@ A user token carrying `project:` roles is therefore NOT scoped — its tier come
 roles. ANDing team membership into every read instead would drop a staff caller who holds
 `project:207` to that one project and hide every other level-2 row.
 
-`access.scope` is the `projectScope` minted onto an API key (`api-key.js:73`). It is a deliberate
-RESTRICTION by the key's issuer: a key with `roles: ['staff'], projectScope: ['207']` may read
-project 207 and nothing else. It sets `TIER.SCOPED` and is ANDed into every read by `scopeClause`
-(`access-sql.js:317`) and `canRead` (`:391`), exactly as today; none of that changes.
+`access.scope` is the `projectScope` minted onto an API key (`src/controllers/nosql/api-key.js`).
+It is a deliberate RESTRICTION by the key's issuer: a key with `roles: ['staff'], projectScope:
+['207']` may read project 207 and nothing else. It sets `TIER.SCOPED`, and `scopeClause` and
+`canRead` (`src/helpers/access-sql.js`) AND it into every read.
 
-`projectScopeFor` (`:168`) splits along that line: `teamsFor(req)` reads the realm `project:` roles
+`projectScopeFor` splits along that line: `teamsFor(req)` reads the realm `project:` roles
 into `access.teams`, and `projectScopeFor` keeps only the explicit key `projectScope`.
 
 `isPublished` still mirrors `read.includes('public')`. A record's level is derived, not stored: `levelOfRead(read)` =
@@ -74,74 +74,94 @@ widest token present, 1 when none.
 `sysadmin` is superuser on the ladder (levels 1-4) and has no access to level 0. `ADMIN_ROLES` and
 `WRITE_ROLES` are unchanged: staff writes and administers exactly as before.
 
-`SECURE_ROLES` and `isPrivileged` carry the ROW-plane short-circuit meaning and nothing else. They
-must not also decide who may hold a session. `authMiddleware` (`src/middleware/auth.js:21`) 403s
-any caller `isPrivileged` rejects and fronts every write and admin route, so dropping `staff` from
-`SECURE_ROLES` on its own would lock staff out of the whole API. `authMiddleware` therefore gates
-on a separate `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` — the
-ladder's staff and service roles — and the two sets move independently. `SECURE_ROLES` is in that
-union because `demi-service-read` is privileged for reads and holds no write role. `compliance` is
-NOT in it: four routes sit behind `authMiddleware` with no second gate (`/db/stats`,
-`/admin/index-progress`, `/search/summary`, `/links`), and a compartment credential has no business
-there. The sealed routes (§1 Level 0) mount their own chain, `authenticate` then
-`requireRole('compliance')`, and never pass through `authMiddleware`. `requireWrite`,
-`requireAdmin` and `requireRole` stay the per-route gates behind it.
+`SECURE_ROLES` and `isPrivileged` carry the ROW-plane short-circuit meaning and nothing else, so
+they do not decide who may hold a session. The `authMiddleware` gate (`src/middleware/auth.js`)
+fronts every write and admin route and checks `AUTHENTICATED_ROLES`, the union of `SECURE_ROLES`
+and `WRITE_ROLES`. The union includes `SECURE_ROLES` because `demi-service-read` is privileged for
+reads and holds no write role.
+
+`compliance` is NOT in `AUTHENTICATED_ROLES`. Four routes sit behind `authMiddleware` with no
+second gate (`/db/stats`, `/admin/index-progress`, `/search/summary`, `/links`), and a compartment
+credential has no business there. The sealed routes (§1 Level 0) mount their own chain,
+`authenticate` then `requireRole('compliance')`, and never pass through `authMiddleware`.
+
+`requireWrite`, `requireAdmin` and `requireRole` are the per-route gates behind `authMiddleware`.
 
 **Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
-published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
-`read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
-stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
-`compliance` token (`eagleBaseAcl`), so a record's own read lands at level 1, 2 or 4, and at level 2
-when Eagle sent no `read[]`. A compliance-only or empty record lands at `['sysadmin']`, the same as
-`['compliance','sysadmin']`, never at the project team. Updates differ (`ownRead` in
-`src/helpers/update-parent.js`): a row with a status other than `archived` takes its parent's
-ceiling when its `read` is missing or `[]`; a row with no status takes it only when its `read` is
-missing and `active: true` (`inheritsParentRead`). Otherwise it is stored as `[]`. A child is then
-capped by its parent's ceiling (`capRead`; for Updates `capIfLower`), so it lands no higher than
-that, and a child under a DEMI-sealed parent is stored sealed by its push. A parent sealed by an
-Eagle push (level 0, no `sealedAt`) is no ceiling for an Update: `ceilingRead` uses the parent's
-Eagle read minus compliance instead, so the Update can land at level 2 or 4 under a stored level-0
-parent. The exception is a comment period or
-document under a `ProjectNotification`: it keeps its own `eagleBaseAcl` read uncapped
-(`comment-period.js`, `document.js`). An Update under a notification is capped by it. A row DEMI
-sealed (`POST /sealed` stamps `sealedAt`) stays sealed until released; a row sealed by a push has
-no `sealedAt`, and its next push derives it again from Eagle's read and the parent as it is then.
+published) contain `staff`, so they read as level 2 and no stored ACL is rewritten. The
+`levelOfRead` helper ignores admin role names in `read[]`, which only match callers who
+short-circuit anyway.
 
-**Eagle-mirror staff rule: removed 2026-10-08.** From 2026-10-05 to 2026-10-08 the push added
-`staff` to any Eagle `read[]` with no ladder token, on the belief that Eagle's `staff` role skips
-read checks. It does not: eagle-api's `$redact` matches `read[]` tokens to roles literally, so Eagle
-shows `['sysadmin']` or `['sysadmin','inspector']` rows to those roles only. DEMI now matches Eagle.
-A pushed record stores Eagle's own read (`helpers/eagle-acl.js:eagleBaseAcl`); an empty Eagle
-`read[]` is stored as `['sysadmin']`, since Eagle shows it to no one, and only a missing one lands
-at level 2. Under a parent it stores that read capped by the parent (`eagleReadUnder`, which is
-`capRead`). The cap never lets in a caller the parent keeps out. A read with no ladder token, such
-as `['sysadmin','inspector']`, keeps its privileged names plus the names the parent also carries,
-or all of them under a public parent, and never becomes `['team']`. So an inspection under a public
-project stores `['sysadmin','inspector']`, and under a staff or team project `['sysadmin']`. A
-ladder read under a parent with no ladder token keeps only the parent's privileged names. A read
-left with no names becomes `['sysadmin']`, never `[]`. Updates follow the same cap
-(`helpers/update-parent.js:readUnder`), except that an empty Update read stays `[]`. A
-document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. The
-`--reverse` mode of `src/scripts/backfill-eagle-ladder.js` rewrites rows the removed rule widened;
-see the README section "Eagle read ladder backfill".
+The eagle-api push mirrors EPIC's own `read[]` minus the `compliance` token (`eagleBaseAcl`). A
+record's own read lands at level 1, 2 or 4, and at level 2 when Eagle sent no `read[]`. A
+compliance-only or empty record lands at `['sysadmin']`, never at the project team.
+
+Updates differ (`ownRead` and `inheritsParentRead` in `src/helpers/update-parent.js`). An Update
+takes its parent's ceiling when:
+
+- it has a status other than `archived`, and its `read` is missing or `[]`
+- it has no status, its `read` is missing, and it is `active: true`
+
+Otherwise it is stored as `[]`.
+
+A child is capped by its parent's ceiling (`capRead`; for Updates `capIfLower`), so it lands no
+higher than that. A child under a DEMI-sealed parent is stored sealed by its push.
+
+A parent sealed by an Eagle push (level 0, no `sealedAt`) is no ceiling for an Update. The
+`ceilingRead` helper uses that parent's Eagle read minus compliance instead, so the Update can land
+at level 2 or 4 under a stored level-0 parent.
+
+A comment period or document under a `ProjectNotification` keeps its own `eagleBaseAcl` read
+uncapped (`comment-period.js`, `document.js`). An Update under a notification is capped by it.
+
+A row DEMI sealed (`POST /sealed` stamps `sealedAt`) stays sealed until released. A row sealed by a
+push has no `sealedAt`, and its next push derives it again from Eagle's read and the parent.
+
+**Eagle reads are stored as Eagle sent them.** The eagle-api `$redact` stage matches `read[]`
+tokens to roles literally, so Eagle shows `['sysadmin']` or `['sysadmin','inspector']` rows to
+those roles only, and DEMI does the same. A pushed record stores Eagle's own read (`eagleBaseAcl`
+in `helpers/eagle-acl.js`).
+
+An empty Eagle `read[]` is stored as `['sysadmin']`, since Eagle shows it to no one, and only a
+missing one lands at level 2. Under a parent, the push stores that read capped by the parent
+(`eagleReadUnder`, which is `capRead`). The cap never lets in a caller the parent keeps out.
+
+A read with no ladder token, such as `['sysadmin','inspector']`, keeps its privileged names plus
+the names the parent also carries, or all of them under a public parent. It never becomes
+`['team']`. So an inspection under a public project stores `['sysadmin','inspector']`, and under a
+staff or team project `['sysadmin']`.
+
+A ladder read under a parent with no ladder token keeps only the parent's privileged names. A read
+left with no names becomes `['sysadmin']`, never `[]`. Updates follow the same cap (`readUnder` in
+`helpers/update-parent.js`), except that an empty Update read stays `[]`.
+
+A document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap.
+The `--reverse` mode of `src/scripts/backfill-eagle-ladder.js` strips a `staff` token Eagle never
+sent; see the README section "Eagle read ladder backfill".
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
 
-**Widening is an act.** `PUT /api/{projects,documents}/:id/level` with `{ level, confirm, reason }`,
-`requireWrite`, audited as `record.widen` / `record.narrow` through `auditEvent`. Level 4 requires
-`confirm: true` and answers 400 without it. Level 4 and a level-0 release also require a `reason`
-body field and answer 400 without it; on every other move `reason` is optional, because the audit
-row already carries actor, time, from and to. Nothing else widens automatically — no job, no push, no
-merge raises a record's level, apart from the Eagle-mirror exception above. A document still cannot out-rank its project, nor a comment period,
-nor a comment its period; a project's change cascades to all three. A document or period parented by
-a `ProjectNotification` instead of a project has no such ceiling — a notification carries no access
-list to narrow against — so it keeps the one Eagle published it with. Which of the two is the parent
-is decided in one place, `helpers/parent-admit.js`, and a notification wins over a project row
-carrying the same id: some Track projects hold a `ProjectNotification` `_id` in `epic_guid`, which
-the merge copies to `eagleId`, and letting the project win narrowed those children to a Track-only
-project's level 2. The audit buffer flushes on graceful instance shutdown;
-a forced kill can drop up to one second of buffered rows.
+**Widening is an act.** The route `PUT /api/{projects,documents}/:id/level` takes
+`{ level, confirm, reason }` behind `requireWrite` and is audited as `record.widen` /
+`record.narrow` through `auditEvent`. Level 4 needs `confirm: true`, and level 4 and a level-0
+release need a `reason`; each answers 400 without it.
+
+On every other move `reason` is optional, because the audit row carries actor, time, from and to.
+Nothing else widens automatically: no job or merge raises a record's level, and an Eagle push
+stores the read Eagle sent (above).
+
+A document cannot out-rank its project, nor a comment period, nor a comment its period, and a
+project's change cascades to all three. A document or period parented by a `ProjectNotification`
+has no such ceiling, since a notification carries no access list, so it keeps the read Eagle sent.
+
+The parent is decided in one place, `helpers/parent-admit.js`, and a notification wins over a
+project row carrying the same id. Some Track projects hold a `ProjectNotification` `_id` in
+`epic_guid`, which the merge copies to `eagleId`. Letting the project win would narrow those
+children to a Track-only project's level 2.
+
+The audit buffer flushes on graceful instance shutdown; a forced kill can drop up to one second of
+buffered rows.
 
 Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is
 incident response — an error or a privacy breach, never a routine correction, which publishes a
@@ -176,23 +196,22 @@ Sealing is an application-layer guarantee. Cosmos data-plane operators, backups 
 
 1. The `ADMIN_API_KEY` break-glass must not resolve the `compliance` role.
 2. Exports and backups stay locked down.
-3. Only a caller that already holds `compliance` may mint a `compliance` API key. The compartment
-   issues its own keys. `POST /api/admin/api-keys` (`api.js:122`) is gated on `requireAdmin`, so
-   every `staff`, `sysadmin` and `demi-admin` caller reaches it, and `compliance` is in
-   `GRANTABLE_ROLES` (`api-key.js:31`); without this gate any staff member mints itself into the
-   compartment. A `requireAdmin` caller without `compliance` gets 400
-   `compliance is not grantable by this caller`. `compliance` stays in `GRANTABLE_ROLES` — the gate
-   is on the caller, not on the list.
+3. Only a caller that already holds `compliance` may mint a `compliance` API key, so the
+   compartment issues its own keys. The route `POST /api/admin/api-keys` is gated on
+   `requireAdmin`, which every `staff`, `sysadmin` and `demi-admin` caller passes, and
+   `GRANTABLE_ROLES` (`src/controllers/nosql/api-key.js`) includes `compliance`. The gate is on the
+   caller, not the list: a `requireAdmin` caller without `compliance` gets 400 `compliance is not
+   grantable by this caller`.
 
-Encryption is a later hardening, not part of this design: per-record envelope encryption is
-optional Phase 5b in `TODO-rbac.md`, taken only when the compartment holds real C&E material.
+Encryption is not part of this design. Per-record envelope encryption is an optional hardening,
+taken only when the compartment holds real C&E material.
 
 A record leaves level 0 only through `POST /api/sealed/:id/release`. One `compliance` holder is
 enough; the body must carry `caseNumber` and `decision` (400 without either). The release rewrites
-`read[]` to `readForLevel(1)`, writes `auditEvent('sealed.release')` with the case number and
-decision. That audit row is the record of the release; nothing is emailed. Two-person release is
-a later policy toggle. Nothing enters level 0 through
-the widening endpoint; `PUT /:id/level` 400s on level 0.
+`read[]` to `readForLevel(1)` and writes `auditEvent('sealed.release')` with both.
+
+That audit row is the record of the release, and nothing is emailed. Nothing enters level 0
+through the widening endpoint: `PUT /:id/level` answers 400 on level 0.
 
 **Selected Credentials.** A credential grants a named party sight of specified records at levels
 1-3 without changing any record's level and without changing anyone else's access. Stored in
@@ -224,13 +243,18 @@ once no project is left. EA windows routinely run past 90 days, so renewal is th
 expiry is visible rather than announced: the holder reads their own live grants and each `end` on
 `GET /api/me`, the grantor lists the same rows on `GET /api/credentials`.
 
-**Fail closed.** Unknown role → level 4. No ladder token → the row matches only privileged
-callers until it is written with one (P3-2 removes the legacy `unsetIsPublic` arm). Missing
-`access.level` → 4. Uncatalogued field removed. Unknown entity throws. Dial out of range →
-`defaultVis`.
+**Fail closed.** Each unknown input fails closed or falls back to its default:
 
-**Identity.** Keycloak now, Entra later; role names are the contract, the issuer only changes the
-claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles of its own.
+- unknown role → level 4
+- no ladder token → outside the sealed compartment, the row matches only privileged callers until
+  it is written with one
+- missing `access.level` → 4
+- uncatalogued field → removed
+- unknown entity → throws
+- dial out of range → `defaultVis`
+
+**Identity.** Keycloak issues the tokens, and role names are the contract, so a second issuer
+changes only the claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles.
 
 ### User, group and inspection mirrors (2026-10-06)
 
@@ -290,18 +314,20 @@ Each item below overrides the corresponding section of the source document.
 
 1. **Redactor sits at the response boundary, not inside `getById`.** Eight controller paths read
    with the caller's access and spread the result back into an upsert
-   (`src/controllers/nosql/project.js:180,213`; `document.js:320,337,373`;
-   `boundary.js:129,150,178,194`). A redacting `getById` would erase every hidden field on the
-   first edit by a level 1-4 caller. Cosmos upsert replaces the item. Repositories return raw
-   documents. `redactForAccess(entity, doc, access)` is called at every `res.json` of an entity
-   and on the repository row before each search mapper. This is the placement `publicView` already
-   uses and for the same reason (`src/repositories/projects.js:142`). The coverage ratchet scans
-   `src/controllers/**` per call site, not per file. Redaction-safe update then needs only one
-   rule: PUT returns 400 on any body key the caller cannot see. Two things survive from the
-   source design's repository placement: list reads still use a catalog-derived `select`
-   (`selectFor(entity, access)`, fields with `maxVis >= level` plus row-plane fields) so
-   never-visible values do not leave Cosmos, and the tripwire test also covers controller error
-   and log paths, since raw documents now pass through them.
+   (`src/controllers/nosql/project.js`, `document.js`, `boundary.js`). Cosmos upsert replaces the
+   item, so a redacting `getById` would erase every hidden field on the first edit.
+
+   Repositories return raw documents. The redactor `redactForAccess(entity, doc, access)` runs at
+   every `res.json` of an entity and on the repository row before each search mapper. That is where
+   `publicView` sits, for the same reason (`src/repositories/projects.js`).
+
+   The coverage ratchet scans `src/controllers/**` per call site, not per file. Redaction-safe
+   update needs one rule: PUT returns 400 on any body key the caller cannot see.
+
+   Two things survive from the source design's repository placement. List reads use a
+   catalog-derived `select` (`selectFor(entity, access, partitionField)`), so never-visible values
+   do not leave Cosmos. The tripwire test also covers controller error and log paths, since raw
+   documents pass through them.
 2. **Catalog is authored from the merged document, not from the Track CSV.** Source of truth for
    field names is what `mergeTrackProject`, `mergeEagleOnlyProject` (`src/merge/project.js`) and
    `transformDocument` (`src/seed/transform.js`) emit. 15 fields in the source catalog do not exist
@@ -317,33 +343,30 @@ Each item below overrides the corresponding section of the source document.
    The completeness test diffs the catalog against the emitters, so the list above is enforced,
    not maintained by hand. Catalog keys may be dotted one level (`sources.wildfire`) and the
    redactor descends only for listed dotted keys.
-3. **Day-one defaults reproduce today's public output.** Every field `eagle-public` renders
-   anonymously today gets `defaultVis: 4`. That includes `projectLead`, `projectLeadEmail`,
-   `responsibleEPD`, `responsibleEPDEmail`, `eaoMember`, `projectCAC`,
-   `projectCACPublished` (`eagle-public/src/app/services/api.ts:274-318`). `cacEmail` is
-   `defaultVis: 2, maxVis: 4, when: 'cacPublished'` (item 7), not a flat 4. The source catalog gave
-   `name`, `description`, `centroid`, `proponentName`, `region`, `projectState` `defaultVis: 2`,
-   which would have left an anonymous project response with five identifier fields. Fields
-   `eagle-public` does not request today: `complianceLead`, `execProjectDirector`. Those start at
-   `defaultVis: 2`. Lead and EPD names and emails, and the records-management identifiers
-   `orcsClassification` and `edrmsRecordNumber`, stay at 4: public by policy (Section 3,
-   question 2, 2026-08-28).
-4. **Level 0 runs the same loop.** No `if (level === 0) return record`. `catalogFor(entity)` is
-   called first so an unknown entity throws for every caller. This only holds because predicates
-   widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
-   false `cacPublished` would hide `cacEmail` from level 0, and the identity property would need
-   a bypass branch. After P3-2 no caller is level 0 — only `systemAccess()` carries it (§5 item 3) —
-   so `maxVis: 0` fields reach no response. Until P3-2 ships, `sysadmin` is level 0 and does see them.
-5. **`read[]` does not carry levels.** The source design put `demi-vis-*` into `read[]` for
-   whole-record restriction. `readClause` and `canRead` return `true` for any `SECURE_ROLES`
-   holder before reading `read[]` (`src/helpers/access-sql.js:235,373`), `staff` is in
-   `SECURE_ROLES`, membership has no ordering, and `read[]` is rebuilt from `isPublished` at eight
-   write sites. Rows stay `read[]` plus scope. Whole-record level rules, if ever needed, become a
-   catalog rule, not ACL vocabulary.
-6. **Dials survive upserts.** `upsertFromEagle` (`src/controllers/nosql/project.js:277-286`)
-   and `seed-nosql.js:403` replace the whole item and carry only `sources` forward. `vis` is
-   carried forward beside `sources` in both, with a test, in the same change that adds the dial
-   engine.
+3. **Defaults keep the public output of `eagle-public`.** Every field `eagle-public` renders
+   anonymously has `defaultVis: 4`, including `projectLead`, `projectLeadEmail`, `responsibleEPD`,
+   `responsibleEPDEmail`, `eaoMember`, `projectCAC` and `projectCACPublished`
+   (`eagle-public/src/app/services/api.ts`). The field `cacEmail` is `defaultVis: 2, maxVis: 4,
+   when: 'cacPublished'` (item 7), not a flat 4.
+
+   The source catalog gave `name`, `description`, `centroid`, `proponentName`, `region` and
+   `projectState` `defaultVis: 2`, which would leave an anonymous project response with five
+   identifier fields. Fields `eagle-public` does not request, `complianceLead` and
+   `execProjectDirector`, start at `defaultVis: 2`.
+
+   Lead and EPD names and emails, and the records-management identifiers `orcsClassification` and
+   `edrmsRecordNumber`, stay at 4: public by policy (§3 question 2).
+4. **Level 0 runs the same loop.** There is no `if (level === 0) return record`, and
+   `catalogFor(entity)` runs first so an unknown entity throws for every caller. Predicates widen
+   rather than gate (Section 1), and only `systemAccess()` carries level 0 (§5 item 1), so
+   `maxVis: 0` fields reach no response, `sysadmin` included.
+5. **`read[]` does not carry field levels.** The source design put `demi-vis-*` into `read[]` for
+   whole-record restriction, but `read[]` carries the row-plane ladder tokens (§1) and membership
+   has no ordering. Whole-record level rules, if ever needed, become a catalog rule, not ACL
+   vocabulary.
+6. **Dials survive upserts.** The Eagle upsert (`upsertFromEagle` in
+   `src/controllers/nosql/project.js`) and `seed-nosql.js` replace the whole item. Both carry `vis`
+   forward beside `sources`, and a test covers it.
 7. **`cacPublished` reads a flag DEMI owns.** `projectCACPublished` is DEMI-owned
    (`CAC_FIELDS` in `src/ownership/project.js`). Once a row holds it, only the CAC routes in
    `src/domain/cac.js` change it: create, publish, unpublish and delete. An Eagle push or a seed
@@ -367,65 +390,59 @@ Each item below overrides the corresponding section of the source document.
    output would delete the row. AI Search hits get a second catalog keyed on index field names.
    For chunks the enforcement point is the `select` string in `src/search/ai-search.js`, not
    `retrievable` (semantic ranking needs `content` retrievable).
-10. **Token hardening is Phase 0 and includes deployment.** `isAllowedClient`
-    (`src/helpers/auth.js`) refuses a verified token whose `azp` is not in `DEMI_ALLOWED_CLIENTS`
-    with 401 — one behaviour, no demoted identity — and an empty list is permissive, which is why
-    `src/config.js` refuses to run outside dev and local without one.
-11. **The level comparison lives in one function.** `visible(level, effVis)` in `redact.js` is
-    the only place the scalar order is assumed. Question 1 is answered (§5); a later switch to a
-    clearance set would change one file plus `levelFromRoles`.
-12. **Roles.** `compliance` (grantable, ACL-bearing, `src/controllers/nosql/api-key.js:24`) is
-    added to `ROLE_LEVELS`. The 3-role lists named `SECURE_ROLES` in `src/merge/project.js:22` and
-    `src/seed/transform.js:16` equal `ADMIN_ROLES` in `access-sql.js:42`, not `SECURE_ROLES`;
-    they build stored `read[]`, so they import `ADMIN_ROLES` and are never widened to the 5-role
-    list (that would rewrite every ACL). DEMI creates no realm roles of its own: it reuses Eagle's
-    (`sysadmin`, `staff`), classification is gated by `requireRole('sysadmin')`, level 3 is the
-    `idir` claim and level 1 the team arm (§1). `demi-admin` and `demi-service-*` exist only on API keys.
+10. **Token hardening includes deployment.** `isAllowedClient` (`src/helpers/auth.js`) answers
+    401 to a verified token whose `azp` is not in `DEMI_ALLOWED_CLIENTS`, with no demoted identity.
+    An empty list is permissive, so `src/config.js` refuses to run outside dev and local without
+    one.
+11. **The level comparison lives in one function.** The function `visible(level, effVis)` in
+    `redact.js` is the only place the scalar order is assumed. A switch to a clearance set would
+    change that file plus `levelFromRoles`.
+12. **Roles.** The ACL-bearing `compliance` role is in `ROLE_LEVELS` and in `GRANTABLE_ROLES`
+    (`src/controllers/nosql/api-key.js`), which is `AUTHENTICATED_ROLES` plus `compliance` and
+    `public`. DEMI creates no realm roles: it reuses Eagle's (`sysadmin`, `staff`), and `demi-admin`
+    and `demi-service-*` exist only on API keys.
 13. **Dropped.** `visLevelCap` on API keys (keys already carry roles and scope), a separate
-    `audits` container (`auditEvent` exists), `GET /api/vis-catalog` (no admin UI yet), golden
-    fixture files (a regenerated golden proves nothing). `/api/me` is kept but is its own change.
+    `audits` container (`auditEvent` exists), `GET /api/vis-catalog` (no admin UI reads it), golden
+    fixture files (a regenerated golden proves nothing).
 14. **Every new endpoint updates `src/swagger/swagger.yaml` in the same PR.**
 
 ## 3. Questions for the EAO
 
-1. Answered 2026-08-28: the EAO sharing model — ladder 1-4 on the row plane, level 0 a sealed
-   compartment, Selected Credentials a time-bound lane. Model in §1, deltas in §5.
-2. Answered 2026-08-28 (Daniel): project lead and EPD names and emails are public, because
-   `eagle-public` already shows them. They stay `defaultVis: 4`; no exception list.
-3. Dropped 2026-08-28: `forMAEE` is a column of the source spreadsheet that nothing in DEMI
-   reads. No catalog entry derives from it.
-4. Moot 2026-08-28: `project_tracking_number` (`trackProjectId`) and `epic_guid` (`eagleId`) are
-   in today's anonymous response and catalogued `4/4`. They stay public.
+1. Answered: the EAO sharing model, with ladder 1-4 on the row plane, level 0 a sealed
+   compartment and Selected Credentials a time-bound lane. Model in §1, deltas in §5.
+2. Answered (Daniel): project lead and EPD names and emails are public, because `eagle-public`
+   shows them. They stay `defaultVis: 4`; no exception list.
+3. Dropped: `forMAEE` is a column of the source spreadsheet that nothing in DEMI reads. No catalog
+   entry derives from it.
+4. Moot: `project_tracking_number` (`trackProjectId`) and `epic_guid` (`eagleId`) are in the
+   anonymous response and catalogued `4/4`. They stay public.
 
-### 2026-08-28b
+### Follow-up questions
 
-9. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
-   has a team. `documents` already partitions on `/projectId`; no business-unit axis is needed.
-10. Answered 2026-08-28: from Track. A project's team is the union of staff across its works
-    (`staff_work_roles` joined to `works`); a feed mints the existing `project:<id>` realm roles.
-    Lead-managed lists are a manual override, not the system of record. Unit P3-0.
-11. Answered 2026-08-28: the compartment is exactly the existing `compliance` role
-    (`src/controllers/nosql/api-key.js:31`), created as a realm role and granted to named humans
-    behind the C&E lead.
-12. Answered 2026-08-28: one `compliance` holder is enough, provided the release records a case
-    number and a decision in the same action. The `sealed.release` audit row is the record and
-    nothing is emailed. Two-person release is a later policy toggle, not a schema change.
-13. Answered 2026-08-28: yes, people through BCeID enabled as an IdP on `eao-epic` — BCeID
-    Business for proponents and consultants, which ties the credential to the organisation. IDIR
-    guest only for an external acting as staff. Systems use the existing registry API keys (roles +
-    `projectScope` + level cap). BCeID is not `idir`, so a BCeID party never lands on level 3 by
-    accident.
-14. Answered 2026-08-28: `end` is required and defaults to 90 days, enforced on the grant and not
-    on the login. The grant is also auto-revoked when the project closes or the engagement's work
-    completes. EA windows routinely exceed 90 days, so renewal is the norm, and the expiry is
-    visible rather than announced: the holder sees their own grants and each `end` on
-    `GET /api/me`, the grantor on `GET /api/credentials`.
-15. Answered 2026-08-28: required for any widening to level 4 and for every level-0 release
-    (which also carries the case number). Optional on every other move; the audit row already
-    carries actor, time, from and to.
-16. Answered 2026-08-28: yes, but `sysadmin` only, always audited, and framed as incident response
+9. Closed (Daniel): a project must exist before any record does, so every record has a team.
+   The `documents` container partitions on `/projectId`; no business-unit axis is needed.
+10. Answered: from Track. A project's team is the union of staff across its works
+    (`staff_work_roles` joined to `works`), and `src/scripts/sync-track-teams.js` mints the
+    matching `project:<id>` realm roles. Lead-managed lists are a manual override, not the
+    system of record.
+11. Answered: the compartment is exactly the `compliance` role (`src/controllers/nosql/api-key.js`),
+    created as a realm role and granted to named humans behind the C&E lead.
+12. Answered: one `compliance` holder is enough, provided the release records a case number and a
+    decision in the same action. The `sealed.release` audit row is the record and nothing is
+    emailed. Two-person release would be a policy toggle, not a schema change.
+13. Answered: yes, people through BCeID enabled as an IdP on `eao-epic`, with BCeID Business for
+    proponents and consultants and IDIR guest only for an external acting as staff. Systems use
+    the registry API keys (roles, `projectScope`, level cap). BCeID is not `idir`, so a BCeID party
+    never lands on level 3.
+14. Answered: `end` is required, defaults to 90 days, and is enforced on the grant, not the login.
+    The grant is also revoked when Track reports the project closed. Renewal is the norm, and the
+    holder sees each `end` on `GET /api/me`, the grantor on `GET /api/credentials`.
+15. Answered: required for any widening to level 4 and for every level-0 release, which also
+    carries the case number. Optional on every other move, because the audit row carries actor,
+    time, from and to.
+16. Answered: yes, but `sysadmin` only, always audited, and framed as incident response
     (error or privacy breach). A routine correction publishes a replacement instead. Pulling back
-    from level 4 needs `docs/takedown-runbook.md` (unit P3-9): purge the AI Search index, clean up
+    from level 4 follows `docs/takedown-runbook.md`: purge the AI Search index, clean up
     chunks, invalidate caches, and state that copies outside EPIC are unrecoverable.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
@@ -434,76 +451,46 @@ Each item below overrides the corresponding section of the source document.
 - `src/helpers/response.js` is not dead: `serverError` is imported by six controllers.
 - `res.json` sites: 108 total, 62 non-error, not about 45.
 - No email-intake upload route exists; the only upload route is `POST /documents/extract`.
-- `publicView` has a fifth call site (`src/controllers/nosql/project.js:336`); at
-  `src/controllers/search.js:431` it filters only the `sources` sub-object of a hand-built row.
+- `publicView` has a fifth call site (`src/controllers/nosql/project.js`); in
+  `src/controllers/search.js` it filters only the `sources` sub-object of a hand-built row.
 - `ENRICHMENT_SOURCES` is empty in prod, so `sources.wildfire` is a test-only value.
-- `rolesFor` has no `|| user.roles` fallback today.
-- PUT already accepts arbitrary body keys; POST already drops them (`project.js:115-118,191-196`).
-- `export-chunks-to-eagle.js` pushes a four-field projection by default; `SELECT *` only under
-  `--dump`, which writes to the devbox working directory, not to a storage account.
+- `rolesFor` has no `|| user.roles` fallback.
+- PUT accepts arbitrary body keys; POST drops them (`src/controllers/nosql/project.js`).
 - `src/ai/summarize.js` consumes chunk `content` only, never a project or document row.
 - No AI Search index has any staff, email, or `sources` field retrievable or searchable.
 - ADR-004 is `eagle-demi.wiki/ADR-004-Read-ACL-Authorization-Model.md`.
 - `boundaries.js` was deliberately removed from the coverage test's `UNGATED` list; `config.js` is
   in it.
 
-## 5. Changes 2026-08-28 from the EAO sharing model
+## 5. Changes from the EAO sharing model
 
 The business text (levels 1-4 ladder, level 0 compartment, Selected Credentials) supersedes parts
-of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
+of §1-§3. Nothing built before it is withdrawn.
 
 ### Superseded
 
-1. **Levels are not one nested ladder that `sysadmin` tops.** The first draft of §1 (2026-08-28,
-   superseded the same day) put `sysadmin` at 0 and called 0 "Sensitive". Level 0 is a compartment outside the ladder; `sysadmin` is superuser on
-   levels 1-4 only. `ROLE_LEVELS` (`src/vis/level.js:10`): `sysadmin: 0 → 1`, `demi-admin: 0 → 1`;
-   `staff: 2`, `demi-service-read/write: 2`, `compliance: 2`, `public: 4` unchanged; add `idir: 3`.
-   There is no `team` entry — team membership is a row-plane fact resolved per record by the team
-   arm in `readClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0` on the FIELD
-   plane and is the only caller that carries it; the ROW plane's level 0 is the `compliance`
-   token, which `systemAccess()` does not hold (§1).
+1. **Levels are not one nested ladder that `sysadmin` tops.** Level 0 is a compartment outside the
+   ladder, and `sysadmin` is superuser on levels 1-4 only. In `ROLE_LEVELS` (`src/vis/level.js`),
+   `sysadmin` and `demi-admin` are 1; `staff`, `demi-service-read/write` and `compliance` are 2;
+   `idir` is 3; `public` is 4.
+
+   There is no `team` entry, because team membership is a row-plane fact resolved per record by
+   the team arm in `readClause`/`canRead`. The FIELD-plane level 0 belongs to `systemAccess()`
+   alone. The ROW-plane level 0 is the `compliance` token, which `systemAccess()` lacks (§1).
 2. **"Group (compartment)" and dial values of shape `{ level, groups }` are deleted.** The EAO
    "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
-   named party over named records, on the ROW plane. See §1 and Phase 3 unit P3-6. Dials stay
-   integers; `src/vis/groups.js` is never created.
-3. **§2 item 4, "level 0 sees every field", stops holding at P3-2.** `sysadmin` is level 0 today
-   and does see `maxVis: 0` fields. After P3-2 moves it to level 1 no caller is level 0, so
-   `maxVis: 0` means what it says: `read`, `ownRead`, `vis`, `s3Key`, `sources` and the Cosmos
-   bookkeeping fields are visible to nobody through a response, `sysadmin` included. The redactor
-   loop is unchanged — still no `if (level === 0) return record`, still one comparison. The U9 and
-   P2-1 deviation notes ("level 0 sees `s3Key`/`read`/`sources.track`") describe today and become
-   void at P3-2.
-4. **§2 item 5 is narrowed, not dropped.** `read[]` still carries no FIELD levels (`demi-vis-*`
-   stays dead). It does now carry the four ladder tokens `team|staff|idir|public`, which is the row
-   plane it always encoded. The reason item 5 gave — `readClause` short-circuits for
-   `SECURE_ROLES`, of which `staff` was a member — is fixed rather than worked around: `staff`
-   leaves `SECURE_ROLES` (`src/helpers/access-sql.js:32`).
-5. **§2 item 12's role note.** `SECURE_ROLES` drops `staff` and becomes
-   `['sysadmin','demi-admin','demi-service-read','demi-service-write']`. `ADMIN_ROLES` (`:44`) and
-   `WRITE_ROLES` (`:58`) are untouched: staff's write and admin rights do not move. Every write
-   site that spelled an ACL as `[...SECURE_ROLES]` must convert to `readForLevel()` in the same
-   commit — every `grep -rn SECURE_ROLES src/` hit that builds a `read[]`: `document.js:47,364,380,
-   635,852`, `project.js:124,227`, `boundary.js:32`, `seed/transform.js:36,202`,
-   `merge/project.js:195` (the last two are `ADMIN_ROLES` aliases, unaffected but re-checked) — each
-   to the level it means today, unpublished `readForLevel(2)` and published `readForLevel(4)`, or
-   newly private rows would lose their `staff` token and read as level 1. `api-key.js:31`
-   `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ {compliance, public}`
-   or `staff` keys become unmintable. `compliance` stays in that list; who may grant it is a
-   separate per-caller gate in the mint path (§1 Level 0, condition 3). Dropping `staff` from `SECURE_ROLES` is also not enough
-   on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
-   `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` (§1, Superuser) or staff
-   loses every authenticated route and `demi-service-read` loses the API.
-6. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
+   named party over named records, on the ROW plane (§1, `src/middleware/credentials.js`). Dials
+   stay integers; `src/vis/groups.js` does not exist.
+3. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
    wrong on both halves. Model in §1.
+
 ### Still valid
 
-- §2 items 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 stand as written.
-- §2 item 11 stands: `visible()` is the only scalar comparison.
-- Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
-  search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
-  item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for
-  `systemAccess()`, and the frontend must gate on `staffUi` from `/api/me` rather than on
-  `privileged`, which goes false for staff. `level`/`tier` cannot stand in for it either: `staff`
-  and `compliance` are both level 2, tier `public`
-  (`frontend/src/app/services/registry-state.service.ts`, P2-5).
-- §3 questions 2, 3, 4 stay closed. Questions 9-16 (§3, 2026-08-28b) are answered.
+- §2 stands as written; item 11 holds: `visible()` is the only scalar comparison.
+- Catalogs, redactor, `selectFor`, PUT hidden-key guard, search drift ratchets, query-param gate
+  and `/api/me` stand. The projection `selectFor(entity, access, partitionField)` returns `'*'`
+  only at level 0, which only `systemAccess()` carries.
+- The frontend gates staff UI on `staffUi` from `/api/me`, falling back to `hasStaffRole()` when
+  `/api/me` gives none (`frontend/src/session/SessionProvider.tsx`). It never gates on
+  `privileged` or `level`, because `staff` and `compliance` are both level 2.
+- §3 questions 2, 3, 4 stay closed, and the follow-up questions 9-16 are answered.

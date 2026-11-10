@@ -13,7 +13,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, actorOf, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { COMMENT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
@@ -64,8 +64,6 @@ const STATUS_SCHEMA = Object.freeze({ status: { ...STATUS, required: true } });
 const STAMPED = ['dateUpdated'];
 
 const NO_PERIOD = 'The comment has no comment period.';
-
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 
 function auditOf(action, fields) {
   return (saved, from) => {
@@ -214,9 +212,7 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const refused = refusedWriteKeys(comments.CONTAINER, checked.value, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const { eaoStatus: status, ...rest } = checked.value;
   const period = status === undefined ? null : await periodOf(existing);

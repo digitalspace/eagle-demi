@@ -124,7 +124,7 @@ test('ai-search query construction', async (t) => {
       'accented letters must survive or French place names become unsearchable');
   });
 
-  // Found by the first real run of score-retrieval.js against the live index, on a corpus phrase:
+  // Found against the live index, on a corpus phrase:
   // "EAST TOBA AND MONTROSE HYDROELECTRIC PROJECT" came back
   // `Failed to parse query string at line 1, column 42` — column 42 is exactly where the bare AND
   // lands. Any public query containing a standalone AND/OR/NOT was answering HTTP 400.
@@ -1160,7 +1160,7 @@ test('semantic reranking', async (t) => {
   // semantic IS requested would pass for the wrong reason — or fail depending on file order.
   t.beforeEach(() => aiSearch.resetSemanticExhausted());
 
-  await t.test('on by default for chunks — it is the shipped ranking', async (tt) => {
+  await t.test('always on for chunks — it is the shipped ranking', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
     await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
@@ -1184,16 +1184,6 @@ test('semantic reranking', async (t) => {
 
     assert.ok(calls[0].url.includes('/indexes/chunks/docs/search'), 'the renamed index is queried');
     assert.strictEqual(calls[0].body.semanticConfiguration, 'chunks-semantic');
-  });
-
-  await t.test('semantic: false opts out — the scorecard needs a BM25 arm', async (tt) => {
-    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
-
-    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false });
-
-    assert.strictEqual(calls[0].body.semanticQuery, undefined);
-    assert.strictEqual(calls[0].body.semanticConfiguration, undefined);
-    assert.strictEqual(calls[0].body.semanticErrorHandling, undefined);
   });
 
   await t.test('NEVER on projects or documents — those indexes have no semantic configuration, ' +
@@ -1314,7 +1304,7 @@ test('semantic reranking', async (t) => {
       const calls = captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
 
       await assert.rejects(
-        () => aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false }),
+        () => aiSearch.searchProjects({ filter: null, keywords: 'peace river' }),
         /HTTP 402/
       );
       assert.strictEqual(calls.length, 1, 'nothing to strip, so nothing to retry');

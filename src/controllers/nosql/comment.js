@@ -16,17 +16,14 @@ const comments = require('../../repositories/comments');
 const commentPeriods = require('../../repositories/comment-periods');
 const { eagleReadUnder } = require('../../seed/transform');
 const { systemAccess, canRead } = require('../../helpers/access-sql');
-const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
+const { DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
-const { auditEvent } = require('../../utils/audit');
 const {
   eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode
 } = require('../../helpers/parent-admit');
-const {
-  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
 
-/** Eagle's staff-side review fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side review fields. */
 function staffFields(doc) {
   return {
     datePosted: doc.datePosted || null,
@@ -158,44 +155,16 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
 exports.mirrorFromEagle = mirrorFromEagle;
 exports.staffFields = staffFields;
 
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });
-    if (!mirrored) {
-      return res.status(404).json({ error: 'Parent comment period not found', code: refusalCode(doc.period) });
-    }
-    if (mirrored.status === 'conflict') {
-      return pushConflict(res, { label: 'Comment Controller', eagleId });
-    }
-    const { saved, existing, ignored } = mirrored;
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: 'Comment Controller', action: 'comment.push', targetType: 'comment',
-        current: existing, projectId: existing.projectId, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'comment.push',
-      targetType: 'comment',
-      targetId: saved.id,
-      projectId: saved.projectId,
-      detail: {
-        eagleId,
-        periodId: saved.periodId,
-        isPublishedFrom: existing ? existing.isPublished : null,
-        isPublishedTo: saved.isPublished
-      }
-    });
-
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'comment controller failed');
-  }
-};
+exports.upsertFromEagle = pushHandler({
+  label: 'Comment Controller', action: 'comment.push', targetType: 'comment', projectScoped: true,
+  mirror: (eagleId, doc, options) => mirrorFromEagle(eagleId, doc, undefined, options),
+  refuse: (mirrored, doc, res) => !mirrored
+    && res.status(404).json({ error: 'Parent comment period not found', code: refusalCode(doc.period) }),
+  detail: (saved, existing, eagleId) => ({
+    eagleId,
+    periodId: saved.periodId,
+    isPublishedFrom: existing ? existing.isPublished : null,
+    isPublishedTo: saved.isPublished
+  }),
+  failure: 'comment controller failed'
+});

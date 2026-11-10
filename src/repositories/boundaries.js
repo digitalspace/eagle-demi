@@ -31,6 +31,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { selectWhere, countWhere, pageOptions, eq } = require('./_sql');
+const { firstByIdAcross } = require('./_first-by-id');
 const { canRead } = require('../helpers/access-sql');
 
 const CONTAINER = 'boundaries';
@@ -85,14 +86,7 @@ async function getById(access, id, type) {
     return canRead(doc, access, SCOPE_FIELD) ? doc : null;
   }
 
-  const spec = selectWhere({
-    access,
-    partitionField: SCOPE_FIELD,
-    criteria: [eq('id', String(id), '@id')]
-  });
-  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
-  // the row exists, and the caller reads that as "no such boundary".
-  return await cosmos.queryFirst(CONTAINER, spec, {});
+  return firstByIdAcross(CONTAINER, access, SCOPE_FIELD, id);
 }
 
 /**

@@ -5,14 +5,10 @@
 
 const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
-const { mirrorError } = require('../../helpers/duplicate-id');
-const { auditEvent } = require('../../utils/audit');
 const { DEMI_OWNED_FIELDS } = require('../../ownership/organization');
-const {
-  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
 
-/** Eagle's staff-side organization fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side organization fields. */
 function staffFields(doc) {
   return {
     description: doc.description || '',
@@ -77,39 +73,7 @@ async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
 exports.mirrorFromEagle = mirrorFromEagle;
 exports.staffFields = staffFields;
 
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (written.status === 'conflict') {
-      return pushConflict(res, { label: 'Organization Controller', eagleId });
-    }
-    const { saved, existing, ignored } = written;
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: 'Organization Controller', action: 'organization.push',
-        targetType: 'organization', current: existing, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'organization.push',
-      targetType: 'organization',
-      targetId: saved.id,
-      detail: {
-        eagleId,
-        isPublishedFrom: existing ? existing.isPublished : null,
-        isPublishedTo: saved.isPublished
-      }
-    });
-
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'organization controller failed');
-  }
-};
+exports.upsertFromEagle = pushHandler({
+  label: 'Organization Controller', action: 'organization.push', targetType: 'organization',
+  mirror: mirrorFromEagle, failure: 'organization controller failed'
+});

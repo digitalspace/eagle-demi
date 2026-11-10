@@ -17,13 +17,9 @@
 const inspections = require('../../repositories/inspections');
 const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
 const { sameAccess } = require('../../helpers/access-sql');
-const { mirrorError } = require('../../helpers/duplicate-id');
-const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
-} = require('./eagle-mirror');
+const { upsertWithRetry, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 
 const { KINDS, ENTITY } = inspections;
@@ -170,42 +166,22 @@ async function mirrorFromEagle(kind, eagleId, doc, { pushedAt = null } = {}) {
 function upsertHandler(kind) {
   const targetType = ENTITY[kind];
   const action = `${targetType}.push`;
-  return async (req, res) => {
-    try {
-      const push = eaglePush(req);
-      if (!push) {
-        return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-      }
-      const { eagleId, doc, pushedAt } = push;
-
-      const written = await mirrorFromEagle(kind, eagleId, doc, { pushedAt });
+  return pushHandler({
+    label: LABEL, action, targetType, projectScoped: true,
+    mirror: (eagleId, doc, options) => mirrorFromEagle(kind, eagleId, doc, options),
+    refuse: (written, doc, res) => {
       if (written.missing === 404) {
         return res.status(404).json({ error: 'Parent project not found', code: refusalCode(doc.project) });
       }
       if (written.missing === 503) {
         return res.status(503).json({ error: 'No stored parent lists this record yet. Push it again.' });
       }
-      if (written.status === 'conflict') return pushConflict(res, { label: LABEL, eagleId });
-      const { saved, existing, ignored, cascadeError } = written;
-      if (ignored) {
-        return ignoreStalePush(req, res, {
-          label: LABEL, action, targetType, current: existing, projectId: existing.projectId, pushedAt
-        });
-      }
-
-      auditEvent(req, {
-        action,
-        targetType,
-        targetId: saved.id,
-        projectId: saved.projectId,
-        detail: { eagleId, inspection: saved.inspection, isDeleted: saved.isDeleted }
-      });
-      if (cascadeError) return res.status(500).json({ error: cascadeError });
-      return res.json({ id: saved.id, action: 'upsert' });
-    } catch (err) {
-      return mirrorError(res, err, 'inspection controller failed');
-    }
-  };
+      return undefined;
+    },
+    detail: (saved, _existing, eagleId) => ({ eagleId, inspection: saved.inspection, isDeleted: saved.isDeleted }),
+    after: ({ cascadeError }, res) => cascadeError && res.status(500).json({ error: cascadeError }),
+    failure: 'inspection controller failed'
+  });
 }
 
 function readers(kind, notFound) {

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * reconcile-engage against a fake eagle-api, a fake ENGAGE API, an in-memory repository and a
- * recording enqueue. What matters is what is reported and what is re-queued: only `--repair`
- * queues, and only the rows Eagle disagrees with.
+ * reconcile-engage against fake eagle-api and ENGAGE APIs, an in-memory repository and a recording
+ * enqueue. Only `--repair` queues, and only the rows Eagle disagrees with.
  */
 
 process.env.NODE_ENV = 'test';
@@ -241,7 +240,29 @@ test('DEMI vs Eagle', async (t) => {
     ] } });
     const report = await run({ deps });
     assert.deepStrictEqual(report.duplicates,
-      [{ eagleProjectId: EAGLE_PROJECT, metURL: EAGLE_COPY.metURL, eagleIds: ['cp-42', 'cp-43'] }]);
+      [{ eagleProjectId: EAGLE_PROJECT, metURLs: [EAGLE_COPY.metURL, EAGLE_COPY.metURL], eagleIds: ['cp-42', 'cp-43'] }]);
+  });
+
+  await t.test('two Eagle periods on one engagement path under different hosts are a duplicate', async (tt) => {
+    const { deps } = setup(tt, { fetchOpts: { byProject: [
+      { _id: 'cp-42', metURL: 'https://engage.eao.gov.bc.ca/nicomen-wind' },
+      { _id: 'cp-43', metURL: 'https://test.engage.eao.gov.bc.ca/nicomen-wind/' }
+    ] } });
+    const report = await run({ deps });
+    assert.deepStrictEqual(report.duplicates, [{
+      eagleProjectId: EAGLE_PROJECT,
+      metURLs: ['https://engage.eao.gov.bc.ca/nicomen-wind', 'https://test.engage.eao.gov.bc.ca/nicomen-wind/'],
+      eagleIds: ['cp-42', 'cp-43']
+    }]);
+  });
+
+  await t.test('two periods on different URLs with no path are not a duplicate', async (tt) => {
+    const { deps } = setup(tt, { fetchOpts: { byProject: [
+      { _id: 'cp-42', metURL: 'https://engage.eao.gov.bc.ca/' },
+      { _id: 'cp-43', metURL: 'https://other.eao.gov.bc.ca/' }
+    ] } });
+    const report = await run({ deps });
+    assert.deepStrictEqual(report.duplicates, []);
   });
 
   await t.test('a row sync-out marked conflict is reported with its candidate and never re-queued', async (tt) => {

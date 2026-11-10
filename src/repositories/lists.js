@@ -9,6 +9,7 @@ const {
   eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll, oneRowOf,
   EAGLE_SYNC_PENDING
 } = require('./_sql');
+const { firstByIdAcross } = require('./_first-by-id');
 
 const CONTAINER = 'lists';
 const PARTITION_FIELD = 'kind';
@@ -35,14 +36,7 @@ async function getById(access, id, kind) {
     return canRead(item, access, SCOPE_FIELD) ? item : null;
   }
 
-  const spec = selectWhere({
-    access,
-    partitionField: SCOPE_FIELD,
-    criteria: [eq('id', String(id), '@id')]
-  });
-  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
-  // the row exists, and the caller reads that as "no such list".
-  return await cosmos.queryFirst(CONTAINER, spec, {});
+  return firstByIdAcross(CONTAINER, access, SCOPE_FIELD, id);
 }
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */

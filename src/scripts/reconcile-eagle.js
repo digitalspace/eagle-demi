@@ -811,8 +811,8 @@ function report(summary, { json } = {}) {
         s.retired);
     }
     if (s.trackOnly.length) {
-      lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
-        'public search — that is close-unpublished-track-projects.js, not the push');
+      lines.push(`  ${s.trackOnly.length} Track-only project(s) are gone from Eagle's public search ` +
+        'but are still in DEMI; the push never unpublishes or deletes them');
     }
   }
   for (const label of STORED_LABELS) {

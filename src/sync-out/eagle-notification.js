@@ -5,18 +5,15 @@
 
 const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
-const { DEFAULTS } = require('../domain/notifications');
+const { FIELDS } = require('../domain/notification-fields');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
+  requireSettings, putRecord, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
 
 const NAME = 'eagle';
 const KIND = 'notification';
 const NATIVE = 'demi';
 const ROUTE = '/projectNotification';
-
-/** The fields eagle-api's PUT maps, each reset to its default when absent. */
-const FIELDS = Object.freeze(Object.keys(DEFAULTS));
 
 // eagle-api sets the level from `?publish=` on both POST and PUT; it has no publish route for notifications.
 const withLevel = (path, row) => `${path}?publish=${isPublic(row.read)}`;
@@ -31,13 +28,7 @@ function bodyFor(row) {
 }
 
 /** PUT the row's fields and level; false when Eagle has no notification under the id. */
-async function put(s, eagleId, row, body, logFields) {
-  const path = withLevel(pathOf(eagleId), row);
-  const res = await call(s, 'PUT', path, body, logFields);
-  if (res.status === 404) return false;
-  if (!res.ok) throw failure('PUT', path, res);
-  return true;
-}
+const put = async (s, eagleId, row, body, logFields) => putRecord(s, withLevel(pathOf(eagleId), row), body, logFields);
 
 const owned = row => Boolean(row && row.sourceSystem === NATIVE);
 const wants = row => owned(row) && Boolean(row.eagleId || settings.eagle.nativeEnabled);

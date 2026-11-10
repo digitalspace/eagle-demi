@@ -5,6 +5,7 @@ const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 const { nextSyncVersion } = require('../sync-out/kinds');
+const syncOut = require('../sync-out');
 
 /**
  * The one write path for domain modules: etag-guarded, rebuilt from the stored row on every lost
@@ -52,8 +53,7 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
 
 /** `written`, after a landed write is queued for sync-out as `kind`; each consumer's `wants` picks the rows it sends. */
 async function queued(written, kind) {
-  // Required here: sync-out consumers import domain schemas, so a top-level require would be a cycle.
-  if (written.status === 'ok') await require('../sync-out').enqueueQuietly(written.value, { kind });
+  if (written.status === 'ok') await syncOut.enqueueQuietly(written.value, { kind });
   return written;
 }
 
@@ -68,4 +68,17 @@ function readWith(read, published) {
   return published ? ['public', ...base] : base;
 }
 
-module.exports = { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ };
+const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
+
+/** `(action, fields) => audit builder` for `targetType`; `project: false` leaves `projectId` out. */
+function auditFor(targetType, { project = true } = {}) {
+  return (action, fields) => (saved) => ({
+    action, targetType, targetId: saved.id, ...(project && { projectId: saved.projectId }), ...(fields && { detail: { fields } })
+  });
+}
+
+/** The answer for keys a per-project dial hides from this caller. */
+const notWritable = (keys) =>
+  ({ status: 'invalid', fields: Object.fromEntries(keys.map(key => [key, 'is not writable by this caller'])) });
+
+module.exports = { writeRow, queued, readWith, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ };

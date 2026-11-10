@@ -3,13 +3,14 @@
 Not scheduled. Added 2026-08-26.
 
 - **The Track mapper must keep `ea_certificate`.** `trackApiToExtract` (`src/seed/sources.js`) names every column DEMI takes off the live feed, so a column dropped there empties that field on every record. `ea_certificate` is the one to watch: 342 of the 382 rows in the 2026-08-31 export carried a value, and the column holds certificate state as well as numbers ("Withdrawn", "In progress"), which DEMI stores verbatim.
-- **One place for API keys, roles and permissions.** Today: keys minted by `POST /admin/api-keys`
-  (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry), roles from Keycloak realm roles,
-  `project:<id>` roles for scope, `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`.
-  Field-level roles and levels are designed in `docs/rbac-architecture.md` (work in `TODO-rbac.md`).
-  No UI, no single view of who holds what; eagle-api has its own separate `INTERNAL_API_KEY`
-  mechanism that skips scope checks. Target: one admin surface (likely in the demo frontend's
-  auth-guarded area) listing keys, roles, scopes, expiry, last use; revoke; mint.
+- **One place for API keys, roles and permissions.** Target: one admin surface (likely in the demo
+  frontend's auth-guarded area) listing keys, roles, scopes, expiry and last use, with revoke and
+  mint, because no UI shows who holds what. The pieces it gathers:
+  - keys minted by `POST /admin/api-keys` (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry)
+  - Keycloak realm roles, and `project:<id>` roles for scope
+  - `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`; field-level roles and levels
+    designed in `docs/rbac-architecture.md`
+  - eagle-api's separate `INTERNAL_API_KEY`, which skips scope checks
 - **One engine for data sources with visible syncs.** Today each source is bespoke: Track nightly
   over its API (`sync-track-projects.js`) + `merge/project.js`, Eagle via seed (`seed-nosql.js`, on
   demand) and push (`/eagle/*` routes), wildfire via `sync-wildfires.js` (manual POST). No registry

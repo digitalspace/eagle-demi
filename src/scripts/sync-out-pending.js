@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Runs one sync-out kind's reconcile hook: lists rows with a version not yet sent, and `--repair` re-queues
- * them. For comment periods the ENGAGE checks of reconcile-engage.js run first. Runs on the devbox via
- * `demi-run`, like reconcile-engage.js.
+ * Runs one sync-out kind's reconcile hook: lists rows with a version not yet sent; `--repair` re-queues them.
+ * Comment periods run the ENGAGE checks first. Runs on the devbox via `demi-run`.
  */
 
-const { KINDS, kindOf } = require('../sync-out/kinds');
+const { KINDS } = require('../sync-out/kinds');
+const { reconcileOf } = require('../sync-out/reconcile');
 const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
@@ -25,7 +25,7 @@ function parseArgs(argv) {
   return args;
 }
 
-async function run({ kind, repair }, reconcile = kindOf(kind).reconcile) {
+async function run({ kind, repair }, reconcile = reconcileOf(kind)) {
   const report = await reconcile({ repair });
   const engage = report.engage || {};
   const problems = [

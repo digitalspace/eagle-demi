@@ -9,6 +9,7 @@ const {
 } = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
+const { queueBody } = require('../utils/queue-message');
 const { isScanCleared } = require('../repositories/documents');
 const comments = require('../repositories/comments');
 const updates = require('../repositories/updates');
@@ -108,15 +109,7 @@ async function queueHeldOn(row, kind, listHeld) {
 }
 
 function parseMessage(message) {
-  let body = message;
-  if (Buffer.isBuffer(message) || typeof message === 'string') {
-    const text = Buffer.isBuffer(message) ? message.toString('utf8') : message;
-    try {
-      body = JSON.parse(text);
-    } catch (err) {
-      throw new Error(`sync-out message is not JSON: ${err.message}`, { cause: err });
-    }
-  }
+  const body = queueBody(message, 'sync-out');
   if (!body || typeof body !== 'object' || !body.consumer || !body.id) {
     throw new Error('sync-out message carries no consumer or id');
   }

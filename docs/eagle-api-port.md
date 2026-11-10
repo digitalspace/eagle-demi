@@ -79,8 +79,17 @@ Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind
 
 1. Route entry. Decides who may call, by role only. Guards per route come from the eagle-api `x-security-scopes`, using `requireRole(...names)`, which admits any one listed role and keeps the list on the guard as `roles` (`src/middleware/require-roles.js:53-70`). Each ported route sits under its slice's `// port: <kind>` anchor in the "Ported objects" section at the end of the route table. No new staff guard. `requireAdmin` is not reused, because it admits `demi-admin` (`access-sql.js:193`).
 2. Controller, `src/controllers/native/<kind>.js`. An HTTP adapter. It builds the read `SPEC` and uses `listHandler` and `getHandler` (`controllers/native/organizations.js:12-26`). Each write is one line, `writeHandler(domainFn, { entity })`, from `src/controllers/native/write.js`; `entity` is the catalog entity that redacts the saved row. That helper calls `resolveAccess`, calls the domain function, maps `ok`, `invalid`, `forbidden`, `not-found` and `conflict` to 200 or 201, 400, 403, 404 and 409, then runs `redactForAccess` and `serverError`. It also maps `busy` (the etag retries of `writeGuarded` ran out) to 503 with body `{ error: 'The record is being written by another request. Try again.' }`, the body the project writes already answer. Every refusal logs a warning through `src/utils/logger.js`; an invalid body logs field names, never values. A controller that imports `domain/` never writes `res.status` or `res.json`. It never imports `db/*`. It imports a repository only for the read `SPEC`.
-3. Domain, `src/domain/<kind>.js`. New directory. It is not `src/services/`, which holds outbound clients. It exports plain functions: `create(ctx, input)`, `update(ctx, id, changes)`, `remove(ctx, id)` and named actions such as `publish` and `setStatus`. `ctx` is `{ access, req }`; `req` is used only for the audit identity. Each function runs these steps in order: check the `SCHEMA` allowlist (unknown key gives 400); load the row through the repository with `access` (an unreadable row is not-found); call `refusedWriteKeys`; apply the named rules; write through `_write.js`. It may import repositories, `helpers/access-sql`, `helpers/etag-write`, `helpers/eagle-acl`, `vis/redact.refusedWriteKeys`, `domain/_schema` and `domain/_write`. It never imports `http/*` or `db/*`, and never touches `res`.
-4. Repository. Storage only. Reads go through `cosmosKind` (`helpers/native-query.js:255`) or `nativeKind` (`lists.js:136`). Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
+3. Domain, `src/domain/<kind>.js`. It is not `src/services/`, which holds outbound clients. It exports plain functions: `create(ctx, input)`, `update(ctx, id, changes)`, `remove(ctx, id)` and named actions such as `publish` and `setStatus`.
+
+   `ctx` is `{ access, req }`; `req` is used only for the audit identity. Each function runs these steps in order: check the `SCHEMA` allowlist (unknown key gives 400); load the row through the repository with `access` (an unreadable row is not-found). Then it calls `refusedWriteKeys`, applies the named rules and writes through `_write.js`.
+
+   It may import repositories, `helpers/access-sql`, `helpers/etag-write`, `helpers/eagle-acl`, `vis/redact.refusedWriteKeys`, `domain/_schema`, `domain/_write` and the field leaf modules `src/domain/<kind>-fields.js`. It never imports `http/*` or `db/*`, and never touches `res`.
+
+   A `SCHEMA` or defaults that a sync-out consumer reads lives in a leaf module with no requires. The module sits beside the domain file and is named with the singular kind plus `-fields.js`, as in `src/domain/notification-fields.js` and `src/domain/organization-fields.js`. The domain module and the consumer both import it from there, so sync-out never loads `domain/_write`.
+
+4. Repository. Storage only. Reads go through `cosmosKind` (`helpers/native-query.js`) or `nativeKind` (`lists.js:136`).
+
+   Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
 
 ### Where authorization lives
 
@@ -101,8 +110,10 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Sync-out
 
-- `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything. `queued(written, kind)` in the same file queues a landed write through `enqueueQuietly`. `src/domain/comment-periods.js`, `notifications.js` and `organizations.js` call it after create, update, publish and unpublish; `updates.js` calls it after create, update and remove, before its image bookkeeping; `comments.js` calls it after create, update and status.
-- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Seven kinds are registered: `comment`, `commentPeriod`, `document`, `notification`, `organization`, `project` and `update`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
+- `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything. `queued(written, kind)` in `src/domain/_write.js` queues a landed write through `enqueueQuietly`.
+
+  `src/domain/comment-periods.js`, `notifications.js` and `organizations.js` call it after create, update, publish and unpublish. `updates.js` calls it after create, update and remove, before its image bookkeeping. `comments.js` calls it after create, update and status.
+- `src/sync-out/kinds.js` maps each kind to its repository and the names of the consumers that send it; `HOOKS` in `src/sync-out/reconcile.js` holds each kind's reconcile hook. Seven kinds are registered: `comment`, `commentPeriod`, `document`, `notification`, `organization`, `project` and `update`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
 - Every kind reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent, a send claim (`creating`) whose lease lapsed included.
 - `commentPeriod` first runs the ENGAGE checks in `src/scripts/reconcile-engage.js`, then the pending hook, which alone sees DEMI-native periods. When the ENGAGE pass throws, the hook logs an error and runs the pending pass anyway. A row both passes queue gets two messages; the worker skips the second as current, so the row is sent once.
 - With `{ repair: true }` the hook queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`, which runs the kind's hook, so `--kind commentPeriod` runs the ENGAGE checks too). The timer only lists them.
@@ -192,7 +203,7 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 1. Tracker row: rules with eagle-api `file:line`, role scopes per route, field ownership per phase.
 2. New fields in `src/vis/catalog/<entity>.js`, and `catalog/index.js` if the entity is new.
 3. `src/repositories/<kind>.js`.
-4. `src/domain/<kind>.js`: `SCHEMA`, write functions, rules, and `writeRow` with audit actions.
+4. `src/domain/<kind>.js`: `SCHEMA`, write functions, rules, and `writeRow` with audit actions. Fields that a sync-out consumer reads follow the rule in "The four layers" under Layering.
 5. `src/controllers/native/<kind>.js`: read `SPEC` and `writeHandler` wrappers.
 6. `src/http/routes.js` entries under the slice's `// port: <kind>` anchor, with guards per route.
 7. `src/swagger/swagger.yaml`.

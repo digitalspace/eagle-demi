@@ -279,13 +279,12 @@ function recordDropped(update, eagleId) {
   });
 }
 
-async function put(s, eagleId, body, logFields) {
-  const path = `/commentperiod/${encodeURIComponent(eagleId)}`;
-  const res = await call(s, 'PUT', path, body, { ...logFields, eagleId });
-  if (missingOnPut(res)) return false;
-  if (!res.ok) throw failure('PUT', path, res);
-  return true;
+async function putRecord(s, path, body, logFields, isMissing = (res) => res.status === 404) {
+  const res = await call(s, 'PUT', path, body, logFields);
+  if (!res.ok && !isMissing(res)) throw failure('PUT', path, res);
+  return !isMissing(res);
 }
+const put = async (s, id, body, logFields) => putRecord(s, `/commentperiod/${encodeURIComponent(id)}`, body, { ...logFields, eagleId: id }, missingOnPut);
 
 /** DELETE one Eagle period; a 404 counts as deleted. */
 async function remove(s, eagleId, logFields) {
@@ -628,6 +627,7 @@ module.exports = {
   call,
   failure,
   missingOnPut,
+  putRecord,
   token,
   clearToken,
   mintEagleId,

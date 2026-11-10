@@ -1,9 +1,7 @@
 'use strict';
 
 /**
- * `PUT /engage/engagements/:engagementId`: the ENGAGE ingest of comment periods.
- *
- * Asserted on the stored row and the response, since the ownership split is silent when it breaks:
+ * `PUT /engage/engagements/:engagementId`. Asserted on the stored row and the response:
  * a push that clobbers Eagle's fields or misses `sources.engage.read` still answers 2xx.
  */
 
@@ -70,12 +68,23 @@ function eagleRow() {
   };
 }
 
+/** An Eagle period on the path of `engagement()`, under another host. */
+function periodOnPath(overrides) {
+  return {
+    ...eagleRow(),
+    metURL: 'https://test.engage.gov.bc.ca/nicomen-wind',
+    dateStarted: '2026-10-01T07:00:00.000Z',
+    dateCompleted: '2026-10-31T06:59:00.000Z',
+    ...overrides
+  };
+}
+
 /**
  * Stage the parent, an in-memory comment period store and the sync-out queue.
  * @returns {{ store: Map, queued: object[], cascades: object[] }}
  */
 function stage(t, {
-  rows = [], parent = storedProject(), notification = null, enqueue, deleteById, readByEngagement,
+  rows = [], parent = storedProject(), notification = null, enqueue, deleteById, readByEngagement, beforeWrite,
   cascade = { succeeded: 0, failed: 0 }
 } = {}) {
   const store = new Map(rows.map(row => [row.id, { ...row }]));
@@ -94,7 +103,15 @@ function stage(t, {
     return tied.find(r => r.projectId === projectId) || tied[0] || null;
   }));
   t.mock.method(commentPeriods, 'readForWrite', async (id) => store.get(String(id)) || null);
-  t.mock.method(commentPeriods, 'upsert', async (item) => { store.set(item.id, item); return item; });
+  // The partition is the store's, not the test's: a read that drops it sees every project's rows.
+  t.mock.method(cosmos, 'query', async (_container, _spec, { partitionKey } = {}) => ({
+    items: [...store.values()].filter(r => !partitionKey || r.projectId === partitionKey)
+  }));
+  t.mock.method(commentPeriods, 'upsert', async (item, existing) => {
+    if (beforeWrite) beforeWrite(existing, store);
+    store.set(item.id, item);
+    return item;
+  });
   t.mock.method(commentPeriods, 'deleteById', deleteById || (async () => {}));
   t.mock.method(syncOut, 'enqueue', enqueue || (async (row) => { queued.push(row); return ['eagle']; }));
   return { store, queued, cascades };
@@ -139,6 +156,237 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.strictEqual(row.metBannerImageUrl, 'https://engage.gov.bc.ca/banner.jpg');
     assert.strictEqual('bannerUrl' in row, false, 'the banner lives in metBannerImageUrl and sources.engage only');
     assert.deepStrictEqual(queued.map(r => r.id), ['engage-42']);
+  });
+
+  await t.test('an Eagle period on the same path under another host is adopted, with no engage row', async () => {
+    const { store, queued } = stage(t, { rows: [periodOnPath({ metURL: 'http://test.engage.gov.bc.ca/nicomen-wind/' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, PERIOD_EAGLE_ID);
+    assert.strictEqual(store.has('engage-42'), false);
+    const row = store.get(PERIOD_EAGLE_ID);
+    assert.strictEqual(row.sourceSystem, 'engage');
+    assert.strictEqual(row.engagementId, '42');
+    assert.strictEqual(row.eagleId, PERIOD_EAGLE_ID);
+    assert.strictEqual(row.metURL, 'https://engage.gov.bc.ca/nicomen-wind');
+    assert.deepStrictEqual(queued.map(r => r.id), [PERIOD_EAGLE_ID]);
+  });
+
+  await t.test('a period on the same path under another project is not joined', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ projectId: '999' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a period on another path is not joined and the engagement gets its own row', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ metURL: 'https://engage.gov.bc.ca/other-wind' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('two candidates join neither: the row is created and the ambiguity warned once', async () => {
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => warned.push({ message, meta }));
+    const { store } = stage(t, { rows: [
+      periodOnPath(),
+      periodOnPath({ id: 'cp-second', eagleId: 'cp-second', metURL: 'https://engage.eao.gov.bc.ca/nicomen-wind' })
+    ] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+    assert.strictEqual(store.get('cp-second').sourceSystem, 'eagle');
+    assert.strictEqual(warned.length, 1);
+    assert.match(warned[0].message, /ambiguous/);
+    assert.deepStrictEqual(warned[0].meta.ids, [PERIOD_EAGLE_ID, 'cp-second']);
+  });
+
+  await t.test('a staff-only period on the path is not joined, so the push cannot publish it', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ read: ['staff', 'sysadmin'], isPublished: false })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.deepStrictEqual(store.get(PERIOD_EAGLE_ID).read, ['staff', 'sysadmin']);
+  });
+
+  await t.test('a bare-host push does not join a period with an empty metURL', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ metURL: '' })] });
+
+    const res = await push(pushOf({ metURL: 'https://engage.gov.bc.ca/' }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a push ending the moment the period starts joins it', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({
+      dateStarted: '2026-10-31T06:59:00.000Z', dateCompleted: '2026-11-30T00:00:00.000Z'
+    })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, PERIOD_EAGLE_ID);
+    assert.strictEqual(store.has('engage-42'), false);
+  });
+
+  await t.test('a deleted period on the path is not revived by the join', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ isDeleted: true })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).isDeleted, true);
+  });
+
+  await t.test('a deleted engagement claims no period by URL', async () => {
+    const { store } = stage(t, { rows: [periodOnPath()] });
+
+    const res = await push(pushOf({ isDeleted: true }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).isDeleted, false);
+  });
+
+  await t.test('a draft engagement claims no period by URL', async () => {
+    const { store } = stage(t, { rows: [periodOnPath()] });
+
+    const res = await push(pushOf({ isPublished: false }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a DEMI-owned period on the path is skipped and the row is created', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ sourceSystem: 'demi' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'demi');
+  });
+
+  await t.test('a period another engagement owns is skipped and the row is created', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ engagementId: '41' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).engagementId, '41');
+  });
+
+  await t.test('a period that ended before this engagement starts is skipped', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({
+      dateStarted: '2026-01-01T00:00:00.000Z', dateCompleted: '2026-01-31T00:00:00.000Z'
+    })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a period that starts after this engagement ends is skipped', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({
+      dateStarted: '2027-01-01T00:00:00.000Z', dateCompleted: '2027-01-31T00:00:00.000Z'
+    })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a period with no start date is skipped', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ dateStarted: undefined })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a period with an unparseable end date is skipped', async () => {
+    const { store } = stage(t, { rows: [periodOnPath({ dateCompleted: 'not a date' })] });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('an engagement with no end date joins nothing', async () => {
+    const { store } = stage(t, { rows: [periodOnPath()] });
+
+    const res = await push(pushOf({ end: null }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a push with a tracking id never joins by URL', async () => {
+    const { store } = stage(t, { rows: [periodOnPath()] });
+
+    const res = await push(pushOf({ trackingId: '5a1f2c3d4e5f6a7b8c9d0e1f' }));
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get(PERIOD_EAGLE_ID).sourceSystem, 'eagle');
+  });
+
+  await t.test('a URL join writes on the stored _etag, retries a 412 from the reread row and logs once', async () => {
+    const infos = [];
+    t.mock.method(logger, 'info', (message, meta) => infos.push({ message, meta }));
+    const etags = [];
+    const { store } = stage(t, {
+      rows: [periodOnPath({ _etag: 'etag-1' })],
+      beforeWrite: (existing, rows) => {
+        etags.push(existing._etag);
+        if (etags.length > 1) return;
+        rows.set(PERIOD_EAGLE_ID, { ...rows.get(PERIOD_EAGLE_ID), _etag: 'etag-2' });
+        throw Object.assign(new Error('etag moved'), { code: 412 });
+      }
+    });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(etags, ['etag-1', 'etag-2']);
+    assert.strictEqual(store.has('engage-42'), false);
+    assert.deepStrictEqual(infos.filter(entry => /by URL path/.test(entry.message)).map(entry => entry.meta),
+      [{ id: PERIOD_EAGLE_ID, engagementId: '42', path: '/nicomen-wind' }]);
+  });
+
+  await t.test('adopting by tracking id is not logged as a URL join', async () => {
+    const infos = [];
+    t.mock.method(logger, 'info', (message) => infos.push(message));
+    stage(t, { rows: [periodOnPath()] });
+
+    await push(pushOf({ trackingId: PERIOD_EAGLE_ID }));
+
+    assert.deepStrictEqual(infos.filter(message => /by URL path/.test(message)), []);
   });
 
   await t.test('a tracking id adopts the Eagle period and keeps its id', async () => {

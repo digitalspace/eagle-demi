@@ -13,6 +13,7 @@ const { logger } = require('../utils/logger');
 const { filterFor, inClause } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
+const { sortEntries } = require('../search/sort-entries');
 const { updatesIndexAcl } = require('../search/native-index');
 const { documentsAcl } = require('../search/document-query');
 const chunkQuery = require('../search/chunk-query');
@@ -603,7 +604,7 @@ async function periodList({ access, keywords, status, pageNum, pageSize, sortBy 
 
 /** The `sortBy` entries a period read did not order by: it takes the first allowed key only. */
 function periodSortDropped(sortBy) {
-  const names = eagleQuery.sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
+  const names = sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
   const used = names.find(name => commentPeriodsRepo.SORTABLE.includes(name));
   return names.filter(name => name !== used);
 }
@@ -737,7 +738,7 @@ async function homeFeed({ access, query }) {
 
 /** `sortBy` keys a read fixed on `c.id` did not apply (a mirror field may be absent; see `orderByFrom`). */
 function sortKeysDropped(sortBy) {
-  return eagleQuery.sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
+  return sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
 }
 
 /** These mirrors have no text index: keywords are refused rather than answered with every row. */
@@ -1682,7 +1683,6 @@ exports.search = async (req, res) => {
               // before dropping it: 0 of 2,000 sampled documents render this placeholder.
               documentFileName: doc.documentFileName || 'document.pdf',
               documentType: doc.type || 'PDF Document',
-              // Emitted because search-diff no longer accepts them as eagle-only columns.
               isFeatured: doc.isFeatured === true,
               documentSource: doc.documentSource || '',
               // Bytes, under Eagle's name: eagle-public sizes a bulk download off `internalSize`.

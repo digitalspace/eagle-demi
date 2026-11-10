@@ -15,6 +15,7 @@ const notifications = require('../../repositories/notifications');
 const { listHandler, getHandler, NO_STORE } = require('../nosql/mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { resolveAccess } = require('../../helpers/access-sql');
+const { withProjectNames } = require('../../helpers/native-query');
 const { assertFilterable } = require('../../repositories/_sql');
 const { redactAllForAccess } = require('../../vis/redact');
 const { serverError } = require('../../helpers/response');
@@ -34,15 +35,7 @@ async function updateParentJoin(access, rows) {
 
   const parents = new Map(redactAllForAccess('projects', await projects.listByEagleIds(access, ids), access)
     .map(parent => [String(parent.eagleId), parent]));
-  return rows.map((row) => {
-    const parent = row && parents.get(String(row.projectId));
-    if (!parent) return row;
-    return {
-      ...row,
-      ...(parent.name !== undefined ? { projectName: parent.name } : {}),
-      ...(parent.eagleId !== undefined ? { projectEagleId: parent.eagleId } : {})
-    };
-  });
+  return withProjectNames(rows, parents);
 }
 
 const SPEC = Object.freeze({
