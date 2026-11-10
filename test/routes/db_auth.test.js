@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const apiRoutes = require('../../src/http/routes');
 const dbController = require('../../src/controllers/db');
 const { withServer } = require('../helpers/with-server');
@@ -31,9 +31,7 @@ async function callProtected(t, headers) {
 }
 
 function bearer(t, roles) {
-  const keycloakEnabled = config.keycloakEnabled;
-  config.keycloakEnabled = false;
-  t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+  useConfig(t, { keycloakEnabled: false });
   const token = jwt.sign({ preferred_username: 'suite-user', realm_access: { roles } }, 'suite-only');
   return { authorization: `Bearer ${token}` };
 }

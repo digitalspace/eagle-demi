@@ -7,11 +7,10 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const jwt = require('jsonwebtoken');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const users = require('../../../src/repositories/users');
-const { withServer } = require('../../helpers/with-server');
+const { send } = require('../../helpers/with-server');
 
 const USER_ID = '5c1f7a3e9b1d2c0012380001';
 const STORED = Object.freeze({
@@ -27,20 +26,6 @@ function fakeStore(t, stored = STORED) {
   return written;
 }
 
-async function send(method, path, roles, body) {
-  const token = jwt.sign({ sub: 'kc-1', preferred_username: 'idir-user', realm_access: { roles } }, 'suite-only');
-  let result;
-  await withServer(async (call) => {
-    const res = await call(`/api${path}`, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify(body)
-    });
-    result = { status: res.status, body: await res.json() };
-  });
-  return result;
-}
-
 const ROUTES = {
   create: (roles, body = { firstName: 'Bo', email: 'bo@example.ca' }) => send('POST', '/users', roles, body),
   update: (roles, body = { firstName: 'Ada', email: 'ada@example.ca' }, id = USER_ID) =>
@@ -49,9 +34,7 @@ const ROUTES = {
 
 test('user write routes', async (t) => {
   t.beforeEach((t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
   });
   t.afterEach(() => t.mock.restoreAll());
 

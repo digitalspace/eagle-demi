@@ -13,7 +13,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const engageController = require('../../src/controllers/nosql/engage-comment-period');
 const organizationController = require('../../src/controllers/nosql/organization');
 const commentPeriods = require('../../src/repositories/comment-periods');
@@ -61,9 +61,7 @@ test('the ENGAGE ingest admits ENGAGE and nobody else', async (t) => {
 
   await t.test('a Keycloak token is refused, even one claiming keyId apim:engage', async (t) => {
     const reached = stubHandler(t);
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign({
       preferred_username: 'key:engage', keyId: 'apim:engage', realm_access: { roles: ['staff', 'demi-service-write'] }
     }, 'suite-only');

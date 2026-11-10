@@ -7,16 +7,7 @@ const assert = require('node:assert');
 
 const userdata = require('../../../src/repositories/userdata');
 const controller = require('../../../src/controllers/nosql/userdata');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
+const { mockRes } = require('../../helpers/mock-res');
 
 /** Mixed case on purpose: the partition key is lowercased so one user cannot end up with two. */
 const STAFF = { sub: 'kc-sub-1', preferred_username: 'Staff.Person' };

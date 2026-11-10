@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const controller = require('../../src/controllers/nosql/pdf-title');
 const { withServer } = require('../helpers/with-server');
 const { setEnv, presentedKey, stubRegistry } = require('../helpers/registry-callers');
@@ -59,9 +59,7 @@ test('the PDF title routes admit only the named worker principal', async (t) => 
 
   await t.test('a staff login is refused', async (t) => {
     const reached = stubAll(t);
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign({ preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only');
 
     assert.deepStrictEqual(await callAll({ authorization: `Bearer ${token}` }), [403, 403, 403, 403, 403]);

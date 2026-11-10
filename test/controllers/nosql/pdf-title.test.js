@@ -17,6 +17,7 @@ const path = require('path');
 const { Readable } = require('stream');
 
 const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const documents = require('../../../src/repositories/documents');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const storage = require('../../../src/storage');
@@ -242,9 +243,7 @@ test('pdf title lease API', async (t) => {
 
   await t.test('every route refuses on a store without ETag and version semantics', async (t) => {
     const w = world(t);
-    const backend = config.storageBackend;
-    config.storageBackend = 'azure';
-    t.after(() => { config.storageBackend = backend; });
+    useConfig(t, { storageBackend: 'azure' });
     for (const handler of [controller.listPending, controller.sweep, controller.lease, controller.commit, controller.report]) {
       const res = await call(handler, { body: {} });
       assert.equal(res.status, 503);

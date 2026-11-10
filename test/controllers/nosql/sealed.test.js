@@ -24,7 +24,7 @@ const path = require('node:path');
 const jwt = require('jsonwebtoken');
 
 const audit = require('../../../src/utils/audit');
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
@@ -38,6 +38,7 @@ const routes = require('../../../src/http/routes');
 const { readForLevel } = require('../../../src/helpers/access-sql');
 const { naturalSortKey } = require('../../../src/helpers/natural-sort');
 const { code } = require('../../helpers/router-source');
+const { mockRes } = require('../../helpers/mock-res');
 
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'src', 'scripts');
 
@@ -72,17 +73,6 @@ let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch.map(row => ({ ...row, stream }))); });
 
 const auditRows = () => rows.filter(row => row.stream === audit.AUDIT_STREAM);
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code_) { this.statusCode = code_; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(name, value) { this.headers[name] = value; }
-  };
-}
 
 const routeFor = (method, routePath) =>
   routes.find(r => r.method === method && r.path === routePath);
@@ -179,8 +169,8 @@ test('the sealed compartment routes', async (t) => {
     }
   });
 
-  await t.test('a compliance-only token reaches the sealed routes and nothing else', async () => {
-    config.keycloakEnabled = false;
+  await t.test('a compliance-only token reaches the sealed routes and nothing else', async (tt) => {
+    useConfig(tt, { keycloakEnabled: false });
     t.mock.method(jwt, 'decode', () => COMPLIANCE);
 
     for (const [method, routePath] of SEALED_ROUTES) {

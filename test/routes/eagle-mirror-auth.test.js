@@ -16,7 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const organizationController = require('../../src/controllers/nosql/organization');
 const { logger } = require('../../src/utils/logger');
 const { withServer } = require('../helpers/with-server');
@@ -54,9 +54,7 @@ test('the Eagle mirror admits eagle-api and nobody else', async (t) => {
 
   await t.test('a staff user is refused', async (t) => {
     const reached = stubMirror(t);
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign(
       { preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only'
     );
@@ -70,9 +68,7 @@ test('the Eagle mirror admits eagle-api and nobody else', async (t) => {
   await t.test('a token claiming keyId apim:eagle-api and demi-service-write is refused', async (t) => {
     // A token's claims become req.user wholesale, so a claim must not be able to name a principal.
     const reached = stubMirror(t);
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign({
       preferred_username: 'key:eagle-api',
       keyId: 'apim:eagle-api',

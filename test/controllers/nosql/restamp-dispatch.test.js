@@ -17,7 +17,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { Readable } = require('node:stream');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const documents = require('../../../src/repositories/documents');
 const chunks = require('../../../src/repositories/chunks');
 const aiSearch = require('../../../src/search/ai-search');
@@ -41,9 +41,7 @@ const retype = (controller, res = mockRes()) => controller.updateDocument({
 }, res);
 
 function withInline(t, on) {
-  const previous = config.chunkRestampInline;
-  config.chunkRestampInline = on;
-  t.after(() => { config.chunkRestampInline = previous; });
+  useConfig(t, { chunkRestampInline: on });
 }
 
 /** The write itself, mocked, plus recorders for both re-stamp paths and for the flag. */

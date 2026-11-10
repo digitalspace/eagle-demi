@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const controller = require('../../src/controllers/report');
 const projects = require('../../src/repositories/projects');
 const config = require('../../src/config');
+const { mockRes } = require('../helpers/mock-res');
 
 /**
  * Header and two rows copied byte for byte from eagle-api `GET /api/reports?type=bcgw`: one full
@@ -50,18 +51,6 @@ const DEMI_ROWS = [
     decisionDate: null
   }
 ];
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    headers: {},
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    set(name, value) { this.headers[name.toLowerCase()] = value; return this; },
-    json(data) { this.body = data; return this; },
-    send(body) { this.body = body; return this; }
-  };
-}
 
 test('BCGW report', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

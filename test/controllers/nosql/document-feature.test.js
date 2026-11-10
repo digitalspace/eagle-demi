@@ -11,21 +11,12 @@ const config = require('../../../src/config');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const documents = require('../../../src/repositories/documents');
 const documentController = require('../../../src/controllers/nosql/document');
+const { mockRes } = require('../../helpers/mock-res');
 
 const STAFF = { sub: 'kc-sub-1', preferred_username: 'staff', realm_access: { roles: ['staff'] } };
 const STORED = Object.freeze({
   id: 'd1', projectId: '207', displayName: 'Application', read: ['public', 'staff'], isPublished: true, isFeatured: false
 });
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
 
 /** Stores `row`, answers `featured` to the cap count, and returns what was written. */
 function store(t, row, featured) {

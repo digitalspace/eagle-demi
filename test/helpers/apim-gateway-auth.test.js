@@ -14,7 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const apiKeys = require('../../src/repositories/api-keys');
-const config = require('../../src/config');
+const { useConfig } = require('./use-config');
 const { authenticate, forgetCachedKey } = require('../../src/helpers/auth');
 const { ready } = require('../../src/utils/rotating-secret');
 const { freshUri, fakeVault } = require('./fake-vault');
@@ -80,10 +80,8 @@ test('the right secret plus a subscription name authenticates as that consumer',
 test('standby value accepted', async (t) => {
   // Mid-rotation APIM may stamp either value, so the standby copy in the vault must pass too.
   withSecret(t, SECRET);
-  const saved = config.apimGatewaySecretUri;
   const uri = freshUri();
-  config.apimGatewaySecretUri = uri;
-  t.after(() => { config.apimGatewaySecretUri = saved; });
+  useConfig(t, { apimGatewaySecretUri: uri });
   fakeVault(t, { [uri]: 'next-gateway-value-in-vault', [`${uri}-standby`]: 'standby-gateway-value' });
   stubRegistry(t, { [ROW_ID]: row() });
   await ready();

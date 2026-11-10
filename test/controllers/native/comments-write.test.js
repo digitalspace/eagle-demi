@@ -7,12 +7,11 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const jwt = require('jsonwebtoken');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const comments = require('../../../src/repositories/comments');
 const commentPeriods = require('../../../src/repositories/comment-periods');
-const { withServer } = require('../../helpers/with-server');
+const { send } = require('../../helpers/with-server');
 
 const PROJECT_ID = 'p-public';
 const PERIOD_ID = '5c1f7a3e9b1d2c0012340001';
@@ -34,20 +33,6 @@ function fakeStore(t, stored = STORED) {
   return store;
 }
 
-async function send(method, path, roles, body) {
-  const token = jwt.sign({ sub: 'kc-1', preferred_username: 'idir-user', realm_access: { roles } }, 'suite-only');
-  let result;
-  await withServer(async (call) => {
-    const res = await call(`/api${path}`, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
-    result = { status: res.status, body: await res.json() };
-  });
-  return result;
-}
-
 const ROUTES = {
   create: (roles, body = { periodId: PERIOD_ID, comment: 'Protect the creek' }) => send('POST', '/comments', roles, body),
   update: (roles, body = { eaoNotes: 'checked' }, id = COMMENT_ID) => send('PUT', `/comments/${id}`, roles, body),
@@ -56,9 +41,7 @@ const ROUTES = {
 
 test('comment writes', async (t) => {
   t.beforeEach((t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
   });
   t.afterEach(() => t.mock.restoreAll());
 

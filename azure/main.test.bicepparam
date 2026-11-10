@@ -171,8 +171,8 @@ param contactEmails = [
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
-// React beta site on test until the cutover.
-param linkBaseUrl = 'https://eagle-public-next-test-gtaqa6dvexc6edhg.a02.azurefd.net'
+// React test site on its custom domain; passes the default LINK_ALLOWED_HOSTS (gov.bc.ca).
+param linkBaseUrl = 'https://test.projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
 // The frontend and admin console are the same client — this file sets no keycloakClientId, so the API
@@ -230,7 +230,7 @@ param roleSyncClientId = 'demi-role-sync'
 // Where a published Update is announced. The key is the vault's `notify-api-key`, named in
 // optionalSecretNames above.
 param notifyApiBase = 'https://notify-api-test.azurewebsites.net'
-// linkBaseUrl on test is the React beta site, which serves /updates/:id.
+// linkBaseUrl on test is the React site, which serves /updates/:id.
 param notifyUpdateReaderLinks = true
 
 // ── Public site access curtain ─────────────────────────────────────────────────────────────────

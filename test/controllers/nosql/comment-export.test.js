@@ -11,6 +11,7 @@ const commentPeriods = require('../../../src/repositories/comment-periods');
 const projects = require('../../../src/repositories/projects');
 const audit = require('../../../src/utils/audit');
 const { recordEvents } = require('../../helpers/record-events');
+const { mockRes } = require('../../helpers/mock-res');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -60,18 +61,6 @@ function fakeCosmos(t, commentRows) {
   });
   t.mock.method(commentPeriods, 'getById', async () => structuredClone(PERIOD));
   t.mock.method(projects, 'getById', async () => structuredClone(PROJECT));
-}
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    headers: {},
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    set(name, value) { this.headers[name.toLowerCase()] = value; return this; },
-    json(data) { this.body = data; return this; },
-    send(body) { this.body = body; return this; }
-  };
 }
 
 /** RFC 4180 parse of the whole body: rows of fields. */

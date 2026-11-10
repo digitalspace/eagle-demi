@@ -15,6 +15,7 @@ const {
   projectTarget, isWrongHostDefault, releaseCreatedCode, repointProjectLinks, claimCode
 } = require('../../src/helpers/short-links');
 const config = require('../../src/config');
+const { useConfig } = require('./use-config');
 const { logger } = require('../../src/utils/logger');
 
 /**
@@ -460,9 +461,7 @@ test('projectTarget is the custom target, else the public page', () => {
 });
 
 test('isWrongHostDefault', async (t) => {
-  const base = config.linkBaseUrl;
-  t.after(() => { config.linkBaseUrl = base; });
-  config.linkBaseUrl = 'https://eagle-test.apps.silver.devops.gov.bc.ca';
+  useConfig(t, { linkBaseUrl: 'https://eagle-test.apps.silver.devops.gov.bc.ca' });
   const eagleId = '58851172aaecd9001b820335';
 
   await t.test('the project page on the prod host, on test, is wrong-host', () => {
