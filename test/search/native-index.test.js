@@ -577,6 +577,13 @@ test('documents list over the paged index', async (t) => {
     assert.ok(!queries[1].query.includes('c.vis["documentFileName"]'), queries[1].query);
   });
 
+  await t.test('re-read checks the dial of the sort field', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    await callDocs('typeId=t1&sort=displayName');
+    assert.strictEqual(searches[0].orderby, 'displayNameSort asc, id');
+    assert.ok(queries[0].query.includes('c.vis["displayName"]'), queries[0].query);
+  });
+
   await t.test('baseCriteria narrow the re-read', async (t) => {
     const { queries } = fakeDocStores(t);
     await callDocs('q=report');
