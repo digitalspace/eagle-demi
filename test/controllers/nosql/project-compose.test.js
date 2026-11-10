@@ -13,6 +13,8 @@ const documents = require('../../../src/repositories/documents');
 const commentPeriods = require('../../../src/repositories/comment-periods');
 const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
+const { composedRow } = require('../../../src/controllers/nosql/project-compose');
+const { ASSESSMENT_WORK_TYPE } = require('../../../src/merge/assessment-work');
 const { withoutAdded } = require('../../../src/scripts/check-works-parity');
 const { logger } = require('../../../src/utils/logger');
 const { mockRes, STAFF, PROJECT_EAGLE_ID } = require('../../helpers/eagle-mirror-fixtures');
@@ -68,6 +70,22 @@ test('project reads and writes with WORKS_READ on', async (t) => {
 
     assert.deepStrictEqual(body.phases.map(p => [p.name, p.startPlanned, p.endPlanned]),
       [['Early Engagement', false, false], ['Readiness Decision', true, true]]);
+  });
+
+  await t.test('works with no Assessment work leave the stored phases', () => {
+    const row = { id: '207', phases: [{ name: 'Stored' }] };
+
+    const composed = composedRow(row, [{ trackWorkId: 40, workTypeId: 5, phases: [] }]);
+
+    assert.deepStrictEqual(composed.phases, row.phases);
+  });
+
+  await t.test('an Assessment work with no phases leaves the stored phases', () => {
+    const row = { id: '207', phases: [{ name: 'Stored' }] };
+
+    const composed = composedRow(row, [{ trackWorkId: 31, workTypeId: ASSESSMENT_WORK_TYPE, phases: [] }]);
+
+    assert.deepStrictEqual(composed.phases, row.phases);
   });
 
   await t.test('an anonymous read of a row whose works dial is below public gets no works', async () => {

@@ -8940,7 +8940,8 @@ components:
         is not a positive integer), `RECORD_ID_MISMATCH` (the record's `id` differs from the
         path, or is missing on POST), `PROJECT_ID_MISMATCH` (`work.project_id` differs from the
         path), `PUSHED_AT_INVALID`, `WORK_TYPE_INVALID` or `PAYLOAD_INVALID` (the record is
-        missing, or a new work lacks `phases[]` or a phase's `events[]`).
+        missing, a phase or event has no positive integer `work_id`, or a new work lacks
+        `phases[]` or a phase's `events[]`).
     TrackRecordNotFound:
       description: >-
         Nothing was written. On POST and PUT `code` is `PARENT_NOT_FOUND`: DEMI holds no project

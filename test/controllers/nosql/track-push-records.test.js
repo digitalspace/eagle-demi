@@ -73,6 +73,17 @@ test('Track work, phase and event routes', async (t) => {
     assert.strictEqual(res.body.code, 'DERIVED_CONFLICT');
   });
 
+  await t.test('a write whose derived patch is lost is still audited, since its retry answers unchanged', async (t) => {
+    await seeded(t);
+    const rows = recordEvents(t);
+    t.mock.method(projects, 'patchDerived', async () => ({ status: 'conflict' }));
+    t.mock.method(logger, 'error', () => {});
+
+    await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
+
+    assert.strictEqual((await rows(config.auditStream)).length, 1);
+  });
+
   await t.test('a work document that keeps losing its etag answers 503 and logs the record at error', async (t) => {
     await seeded(t);
     t.mock.method(works, 'save', async () => { throw Object.assign(new Error('moved'), { code: 412 }); });
@@ -208,6 +219,18 @@ test('Track work, phase and event routes', async (t) => {
     delete record.work.phases;
 
     const res = await call('postTrackWork', { body: record });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'PAYLOAD_INVALID']);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a phase with no work_id answers 400 PAYLOAD_INVALID, not a server fault', async (t) => {
+    const store = await seeded(t);
+    t.mock.method(logger, 'error', () => {});
+    const record = phaseRecord();
+    delete record.phase.work_id;
+
+    const res = await call('postTrackPhase', { body: record });
 
     assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'PAYLOAD_INVALID']);
     assert.deepStrictEqual(store.writes, []);

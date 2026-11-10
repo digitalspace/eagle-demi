@@ -181,8 +181,8 @@ const RECORD_REFUSALS = {
 const PROJECT_PENDING = [404, 'PARENT_NOT_FOUND', 'DEMI holds no project row for this record yet.'];
 
 /** The answer to a write that reached the writer; only a write a reader can see is audited. */
-function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, status) {
-  if (status === RESULT.APPLIED) {
+function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, { status, written }) {
+  if (status === RESULT.APPLIED || written) {
     auditEvent(req, {
       action: 'project.push',
       targetType: kind,
@@ -190,8 +190,8 @@ function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }
       projectId: pid,
       detail: { sourceSystem: 'track', record: kind, method, pushedAt }
     });
-    return res.json({ id: recordId, action: 'applied' });
   }
+  if (status === RESULT.APPLIED) return res.json({ id: recordId, action: 'applied' });
   if (status === RESULT.UNCHANGED) return res.json({ id: recordId, action: 'unchanged' });
   if (status === RESULT.API_ROW) {
     logger.warn(`[track-push] skipped id=${label} reason=apiRow`);
@@ -223,6 +223,9 @@ function childBody(kind, method, { pid, id }, body) {
   }
   if (!validStamp(pushedAt)) return STAMP_REFUSAL;
   if (!Number.isInteger(workTypeId) || workTypeId < 1) return refusal('WORK_TYPE_INVALID', 'workTypeId must be a positive integer');
+  if (kind !== 'work' && !isTrackId(record.work_id)) {
+    return refusal('PAYLOAD_INVALID', `body.${kind}.work_id must be a positive integer`);
+  }
   if (kind === 'work' && method === 'POST' && !nestedListsOf(record)) {
     return refusal('PAYLOAD_INVALID', 'a new work must carry phases[], each with events[]');
   }
@@ -257,8 +260,8 @@ const recordRoute = (kind, method) => async (req, res) => {
 
   try {
     const body = method === 'DELETE' ? { pushedAt, workTypeId, id } : req.body;
-    const { status } = await writeTrackRecord(kind, method, pid, body);
-    return answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, status);
+    const result = await writeTrackRecord(kind, method, pid, body);
+    return answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, result);
   } catch (err) {
     return failed(res, label, method.toLowerCase(), err);
   }

@@ -115,7 +115,8 @@ async function writeTrackRecord(kind, method, trackProjectId, body) {
   const derived = await projects.patchDerived(row.id, { inputsFor: deriveInputs });
   if (derived.status === RESULT.CONFLICT) {
     logger.error(`[track-push] derived patch lost id=${projectId}/work:${workId}`);
-    return { status: RESULT.DERIVED_CONFLICT };
+    // The retry finds the document saved and answers unchanged, so only this call can audit the write.
+    return { status: RESULT.DERIVED_CONFLICT, written: saved.status === RESULT.APPLIED };
   }
   return { status: saved.status };
 }
