@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The field redactor. One loop, one comparison, applied at the response boundary — never inside a
- * repository read, because eight controller paths read with the caller's access and spread the
- * result back into an upsert (docs/rbac-architecture.md §2 item 1).
- */
+// The field redactor, run at the response boundary and never in a repository read: controllers spread
+// what they read back into an upsert (docs/rbac-architecture.md §2 item 1).
 
 const { catalogFor, CATALOGS } = require('./catalog');
 const { LEVELS, levelOf } = require('./level');
@@ -112,9 +109,8 @@ function redactForAccess(entity, doc, access) {
     if (children) out[key] = children;
   }
 
-  // `highlighted` is a marked-up COPY of the fields it names, so it must never be wider than the
-  // row it came from: `markedField` falls back to the WHOLE raw value when the analyzer produced
-  // no fragment, which shipped a withheld field back verbatim under its highlight key.
+  // `highlighted` copies the fields it names, and `markedField` falls back to the whole raw value
+  // when there is no fragment, so it keeps only fields the row still holds.
   if (out.highlighted && typeof out.highlighted === 'object') {
     out.highlighted = Object.fromEntries(
       Object.entries(out.highlighted).filter(([field]) => Object.hasOwn(out, field)));
