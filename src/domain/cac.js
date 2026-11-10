@@ -14,7 +14,7 @@ const projects = require('../repositories/projects');
 const notify = require('../services/notify');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow, queued } = require('./_write');
+const { writeRow, queued, notWritable } = require('./_write');
 const { PROJECT } = require('../sync-out/kinds');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
@@ -59,7 +59,7 @@ function refusal(ctx, project) {
     ctx.access, project);
   if (!refused.length) return null;
   logger.warn('[CAC] write refused: field hidden from caller', { projectId: project.id, fields: refused });
-  return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
+  return notWritable(refused);
 }
 
 /** The write's result for a NotifyError, logged; any other error is not ours to map. */

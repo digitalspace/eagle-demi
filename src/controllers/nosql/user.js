@@ -13,11 +13,7 @@
 
 const users = require('../../repositories/users');
 const { eagleBaseAcl } = require('../../seed/transform');
-const { mirrorError } = require('../../helpers/duplicate-id');
-const { auditEvent } = require('../../utils/audit');
-const {
-  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict, underDeleteCeiling, refId
-} = require('./eagle-mirror');
+const { upsertKeepingDemiRows, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 
 const LABEL = 'User Controller';
@@ -78,34 +74,11 @@ function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
 exports.mirrorFromEagle = mirrorFromEagle;
 exports.storedRead = storedRead;
 
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (written.status === 'conflict') return pushConflict(res, { label: LABEL, eagleId });
-    const { saved, existing, ignored } = written;
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: LABEL, action: 'user.push', targetType: 'user', current: existing, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'user.push',
-      targetType: 'user',
-      targetId: saved.id,
-      detail: { eagleId, isDeleted: saved.isDeleted }
-    });
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'user controller failed');
-  }
-};
+exports.upsertFromEagle = pushHandler({
+  label: LABEL, action: 'user.push', targetType: 'user', mirror: mirrorFromEagle,
+  detail: (saved, _existing, eagleId) => ({ eagleId, isDeleted: saved.isDeleted }),
+  failure: 'user controller failed'
+});
 
 // Staff reads of people are audited, as eagle-api records them; `q` (names, emails) never reaches analytics.
 const USERS = {

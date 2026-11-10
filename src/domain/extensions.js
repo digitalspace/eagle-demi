@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const projects = require('../repositories/projects');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow, queued } = require('./_write');
+const { writeRow, queued, actorOf, notWritable } = require('./_write');
 const { PROJECT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 const { EXTENSION_LIST_FIELDS, withoutBlockLists } = require('../ownership/project');
@@ -73,7 +73,6 @@ function locate(row, extId) {
   return null;
 }
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 const readProject = (ctx, id) => projects.getById(ctx.access, id);
 
 /** The project repository in the `upsert(row, current)` shape `writeRow` calls. */
@@ -93,7 +92,7 @@ function refusal(ctx, project, lists) {
     ctx.access, project);
   if (!refused.length) return null;
   logger.warn('[Extension] write refused: list hidden from caller', { projectId: project.id, lists: refused });
-  return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
+  return notWritable(refused);
 }
 
 function checkItem(input) {

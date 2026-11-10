@@ -17,7 +17,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { COMMENT_PERIOD } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
@@ -59,14 +59,8 @@ const IGNORED_ON_UPDATE = ['read', 'isPublished'];
 const ENGAGE_OWNED = 'This comment period is run in ENGAGE. Change it there.';
 const ABOVE_PROJECT = 'Cannot publish a comment period above the level of its project.';
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 const readPeriod = (ctx, id) => commentPeriods.getById(ctx.access, id);
-
-function auditOf(action, fields) {
-  return (saved) => ({
-    action, targetType: 'commentPeriod', targetId: saved.id, projectId: saved.projectId, ...(fields && { detail: { fields } })
-  });
-}
+const auditOf = auditFor('commentPeriod');
 
 /** `check` plus the two lists, every field error in one result. */
 function checkBody(schema, input, options) {
@@ -227,9 +221,7 @@ async function update(ctx, id, changes) {
   if (refusal) return refusal;
 
   const refused = refusedWriteKeys(commentPeriods.CONTAINER, checked.value, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const actor = actorOf(ctx);
   const takeover = takeoverLog();

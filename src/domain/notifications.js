@@ -11,7 +11,7 @@ const notifications = require('../repositories/notifications');
 const updates = require('../repositories/updates');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, readWith, actorOf, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { NOTIFICATION } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 const { SCHEMA, NUMBER_FIELDS, FIELDS, DEFAULTS } = require('./notification-fields');
@@ -23,8 +23,6 @@ const CREATE_SCHEMA = Object.freeze({ ...SCHEMA, isPublished: { type: 'boolean' 
 const IGNORED_ON_UPDATE = ['read', 'isPublished'];
 
 const readNotification = (ctx, id) => notifications.getById(ctx.access, id);
-
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 
 /** `schema` plus the number fields, every field error in one result. */
 function checkBody(schema, input) {
@@ -127,9 +125,7 @@ async function update(ctx, id, changes) {
   const fillsDate = !{ ...existing, ...next }.notificationReceivedDate;
   const refused = refusedWriteKeys(notifications.CONTAINER,
     fillsDate ? { ...next, notificationReceivedDate: null } : next, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const actor = actorOf(ctx);
   return queued(await writeRow({

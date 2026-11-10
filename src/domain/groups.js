@@ -11,7 +11,7 @@ const { deriveAcls } = require('../helpers/acl-cascade');
 const { constrainToProject, DELETED_CEILING } = require('../repositories/documents');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { writeRow, actorOf, notWritable } = require('./_write');
 const { logger } = require('../utils/logger');
 
 /** eagle-api's group ACL (projectGroup.js:22-24). Never public: a group lists people. */
@@ -33,7 +33,6 @@ const MEMBERS_SCHEMA = Object.freeze({ members: { type: 'idArray', max: 100, req
 
 const USER_ID_SCHEMA = Object.freeze({ userId: { type: 'id', required: true } });
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 const readGroup = (ctx, id) => groups.getById(ctx.access, id);
 const membersOf = (row) => (Array.isArray(row.members) ? row.members.map(String) : []);
 
@@ -137,9 +136,7 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const refused = refusedWriteKeys(groups.CONTAINER, checked.value, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   return writeRow({
     ctx,
