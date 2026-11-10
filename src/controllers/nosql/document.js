@@ -36,6 +36,7 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
+const { fromEdge } = require('../../utils/caller-ip');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument } = require('../../seed/transform');
 const { naturalSortKey } = require('../../helpers/natural-sort');
@@ -818,9 +819,8 @@ async function headDownload(req, res) {
 }
 
 /**
- * `?inline=1` without `redirect=1`: the bytes from this origin, so the address bar keeps a link
- * that never expires and the edge can cache it. Same visibility check as the other modes. A file
- * that cannot be streamed gets the 302 the redirect mode sends, never JSON: a browser asked.
+ * `?inline=1` without `redirect=1`: the bytes from this origin, so the link never expires and the
+ * edge can cache it. Else the redirect mode's 302, or a 503 to a mid-file edge piece; never JSON.
  */
 async function inlineDownload(req, res) {
   try {
@@ -830,6 +830,8 @@ async function inlineDownload(req, res) {
     const stat = type && config.downloadStreamMaxBytes > 0 && await streamableStat(found.doc.s3Key);
     const sent = stat && await sendBytes(req, res, found, type, stat);
     if (sent) return sent;
+    // Past byte 0 the edge has already sent the start of a 200: a 302 would be spliced into it.
+    if (midFileEdgePiece(req)) return res.set('Retry-After', '5').status(503).send('');
     const { body } = await presignDownload(req, found, type);
     return res.redirect(302, body.url);
   } catch (err) {
@@ -838,17 +840,13 @@ async function inlineDownload(req, res) {
   }
 }
 
-/** The store's stat when the object fits the stream cap and has both validators, else null. */
+/** The store's stat when the object has both validators, else null. */
 async function streamableStat(key) {
   let stat;
   try {
     stat = await statBounded(key);
   } catch (err) {
     logger.warn(`[Document Controller] stream stat failed, redirecting instead: ${err.message}`);
-    return null;
-  }
-  if (stat && stat.size > config.downloadStreamMaxBytes) {
-    logger.info(`[Document Controller] ${stat.size} bytes is over the stream cap, redirecting`);
     return null;
   }
   // Front Door revalidates by Last-Modified only, so no date means no stream.
@@ -873,14 +871,15 @@ function notModified(req, etag, lastModified) {
 }
 
 const UNSATISFIABLE = 'unsatisfiable';
+const RANGE = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/;
+const midFileEdgePiece = req => Number(RANGE.exec(req.headers.range)?.[1]) > 0 && fromEdge(req.headers);
 
 /**
  * The one byte range to send, `UNSATISFIABLE`, or null for the whole file. A malformed or
  * multi-part Range, or an If-Range that no longer matches, is ignored as RFC 9110 14.2 allows.
  */
 function byteRange(req, size, etag, lastModified) {
-  const header = req.headers.range;
-  const m = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/.exec(String(header || ''));
+  const m = RANGE.exec(String(req.headers.range || ''));
   if (!m || (!m[1] && !m[2])) return null;
 
   const ifRange = req.headers['if-range'];
@@ -936,16 +935,12 @@ async function openStream(key, opts) {
     // Released whenever the open settles, in case it is still pending.
     started.then(s => s.destroy(), () => {});
     if (stream) stream.destroy();
-    logger.warn(`[Document Controller] stream open failed, redirecting instead: ${err.message}`);
+    logger.warn(`[Document Controller] stream open failed: ${err.message}`);
     return null;
   }
 }
 
-/**
- * The 200, 206, 304 or 416. Null when the instance is at its stream cap or the store will not
- * start the read; the caller then sends the 302, and nothing set here survives it but headers that
- * answer overwrites.
- */
+/** The 200, 206, 304 or 416; null, with no header set, where the caller answers instead. */
 async function sendBytes(req, res, { doc, fileName }, type, stat) {
   const { size } = stat;
   // A rename or a visibility change moves the record, not the object, and Front Door revalidates
@@ -974,17 +969,22 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     return res.status(416).send('');
   }
 
-  const release = takeStreamSlot();
+  const { start, end } = range || { start: 0, end: size - 1 };
+  const length = end - start + 1;
+  if (length > config.downloadStreamMaxBytes) {
+    logger.info(`[Document Controller] ${length} bytes is over the stream cap, redirecting`);
+    return null;
+  }
+  // Front Door fetches a file as ranged pieces in turn and reads fast, so a piece takes no slot.
+  const release = range && fromEdge(req.headers) ? () => {} : takeStreamSlot();
   if (!release) {
     logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
     return null;
   }
-
-  const { start, end } = range || { start: 0, end: size - 1 };
   // Pinned to the stat's version, or in an unversioned store to its etag, so a replace between
   // the stat and the read cannot send bytes the headers do not describe.
   const body = await openStream(doc.s3Key, {
-    offset: start, length: end - start + 1, versionId: stat.versionId || undefined,
+    offset: start, length, versionId: stat.versionId || undefined,
     ifMatch: stat.versionId ? undefined : stat.etag
   });
   if (!body) {
@@ -1000,7 +1000,7 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
   res.set('Accept-Ranges', 'bytes');
   res.set('Content-Disposition', disposition);
   // Always a length: Front Door will not chunk a large object sent with chunked encoding.
-  res.set('Content-Length', String(end - start + 1));
+  res.set('Content-Length', String(length));
   if (range) res.set('Content-Range', `bytes ${start}-${end}/${size}`);
   return res.stream(body, { status: range ? 206 : 200 });
 }
