@@ -11,9 +11,14 @@ const { publicWorksOf } = require('../seed/track-mappers');
  */
 async function deriveInputs(row) {
   if (!config.worksRead) return {};
+  return loadWorks(row);
+}
+
+/** `deriveInputs` whatever WORKS_READ says, for the parity check run before reads switch. */
+async function loadWorks(row) {
   const loaded = await phaseCatalog.load();
   const catalog = Object.values(loaded).some(entries => entries.length) ? loaded : undefined;
   return { worksForDerive: publicWorksOf(await works.listByProject(row.id), row, { catalog }), catalog };
 }
 
-module.exports = { deriveInputs };
+module.exports = { deriveInputs, loadWorks };

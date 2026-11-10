@@ -203,8 +203,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
     'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
-    // The project read joins its works after canRead; a work's ACL is its project's.
-    'controllers/nosql/project-compose.js',
+    // The twin restore: it must find the `eagle-<id>` copy a DEMI delete narrowed, whatever its level.
+    'controllers/nosql/project-rows.js',
     // A Track delete must find a row hidden from the machine principal, as the Eagle push does.
     'controllers/nosql/track-push.js',
     'controllers/nosql/update.js',
