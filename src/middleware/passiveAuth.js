@@ -5,8 +5,8 @@ const { logger } = require('../utils/logger');
 const { maskIds } = require('./http-logger');
 
 /**
- * Public reads continue as anonymous on a bad credential; the read ACL limits what they see. A 5xx,
- * and in `strict` a rejected Bearer, is answered so the client retries instead of reading the public view.
+ * Public reads continue as anonymous on a bad credential; the read ACL limits what they see. A 5xx is
+ * answered so the client retries, and in `strict` a rejected Bearer's 401 makes it refresh its token.
  */
 function passiveAuth({ rejectBearer = false } = {}) {
   return (req, res, next) => {
@@ -18,7 +18,6 @@ function passiveAuth({ rejectBearer = false } = {}) {
       },
       (status, error) => {
         const bearer = String(req.header('Authorization') || '').startsWith('Bearer ');
-        // An outage says nothing about the credential, so a keyed caller retries instead of reading the public view.
         const refuse = status >= 500 || (rejectBearer && bearer);
 
         const presented = req.header('Authorization') || req.header('X-Api-Key');

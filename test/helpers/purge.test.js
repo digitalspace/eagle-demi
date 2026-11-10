@@ -17,6 +17,7 @@ const storage = require('../../src/storage');
 const { logger } = require('../../src/utils/logger');
 const { purgeDocument } = require('../../src/helpers/purge');
 const { DefaultAzureCredential } = require('@azure/identity');
+const { setEnv } = require('./registry-callers');
 
 // Taken before any case runs: restoreAll does not unwind a method mocked twice in one case.
 const realDeleteFromIndex = aiSearch.deleteFromIndex;
@@ -184,9 +185,9 @@ test('purgeDocument keeps the row when its chunks are not all removed', async (t
     stubAll(t);
     t.mock.method(aiSearch, 'deleteFromIndex', realDeleteFromIndex);
     t.mock.method(aiSearch, 'config', () => ({ configured: true }));
-    const endpoint = process.env.SEARCH_ENDPOINT;
-    process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
-    t.after(() => { process.env.SEARCH_ENDPOINT = endpoint ?? ''; });
+    setEnv(t, 'SEARCH_ENDPOINT', 'https://demi-search-test.search.windows.net');
+    setEnv(t, 'AZURE_CLIENT_ID', undefined);
+    setEnv(t, 'IDENTITY_ENDPOINT', undefined);
     t.mock.method(DefaultAzureCredential.prototype, 'getToken',
       async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 3600000 }));
     t.mock.method(global, 'fetch', async () => ({

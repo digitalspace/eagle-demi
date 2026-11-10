@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Selected Credentials (docs/rbac-architecture.md §1): a grant lets a named party see records. It
- * never changes a record, anyone else's access, or the field plane; the read predicate is in access-sql.js and access-odata.js.
+ * Selected Credentials (docs/rbac-architecture.md §1): a grant lets a named party see records, never
+ * changes one, anyone else's access, or the field plane; read predicate: access-sql.js, access-odata.js.
  */
 
 /** A person logging in (BCeID Business), a realm group, or a registry API key. */
