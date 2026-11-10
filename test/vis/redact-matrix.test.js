@@ -51,9 +51,8 @@ test('redactForAccess', async (t) => {
   });
 
   await t.test('level 0 runs the same loop', () => {
-    // `0 <= effVis` holds for every field, so level 0 sees them all (doc §2 item 4) — the loop is
-    // still what puts them there. An `if (level === 0) return record` shortcut fails on the
-    // uncatalogued key and on the derived isPublished below.
+    // Level 0 sees every field, but through the loop: an `if (level === 0) return record`
+    // shortcut fails on the uncatalogued key and the derived isPublished below.
     const row = storedRow({ notInTheCatalog: 'x', read: ['staff'], isPublished: true });
     const out = redactForAccess('projects', row, { level: 0 });
     assert.strictEqual('notInTheCatalog' in out, false);

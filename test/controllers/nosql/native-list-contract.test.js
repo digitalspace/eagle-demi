@@ -1,9 +1,7 @@
 'use strict';
 
-// The native list contract every `/api/<kind>` read is built from (helpers/native-query.js through
-// mirror-reads.js). Driven through the real handler, the real `cosmosKind` repository and a fake
-// Cosmos that serves a fixed container, so paging, counting and redaction are observed in the
-// response rather than in calls.
+// The native list contract behind every `/api/<kind>` read, through the real handler and `cosmosKind`
+// over a fake Cosmos, so paging, counting and redaction are observed in the response.
 
 process.env.NODE_ENV = 'test';
 
