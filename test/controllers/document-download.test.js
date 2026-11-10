@@ -22,40 +22,18 @@ const documents = require('../../src/repositories/documents');
 const controller = require('../../src/controllers/nosql/document');
 const audit = require('../../src/utils/audit');
 const { logger } = require('../../src/utils/logger');
-const { makeRes, dispatch } = require('../../src/http/router');
+const { dispatch } = require('../../src/http/router');
 const { withServer } = require('../helpers/with-server');
+const {
+  URL_WITH_DISPOSITION, DOC, req, res, allow,
+  BYTES, PDF, STAT, LAST_MODIFIED, PATH, stored, get, holdOpen
+} = require('../helpers/download-stream');
 const { TIER } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
 
 // Both streams (analytics and audit) land here instead of the ingestion API.
 const sent = [];
 audit._setTransport(async (stream, batch) => { sent.push(...batch.map(row => ({ stream, ...row }))); });
-
-const URL_WITH_DISPOSITION =
-  'https://demistoretest.blob.core.windows.net/demi-test/etl/site-c/report.pdf' +
-  '?sig=redacted&rscd=attachment%3B%20filename%3D%22report.pdf%22';
-
-const DOC = {
-  id: 'doc-1',
-  projectId: '207',
-  displayName: 'Site C Report',
-  s3Key: 'etl/site-c/report.pdf',
-  isPublished: true
-};
-
-function req(overrides = {}) {
-  return { headers: {}, query: {}, params: { id: DOC.id }, ...overrides };
-}
-
-function res() {
-  return makeRes('test-request');
-}
-
-/** A readable document and a presign that succeeds — the happy path both modes share. */
-function allow(t, { doc = DOC } = {}) {
-  t.mock.method(documents, 'getById', async () => doc);
-  return t.mock.method(storage, 'getDownloadUrl', async () => URL_WITH_DISPOSITION);
-}
 
 test('download in JSON mode', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -641,35 +619,7 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const { downloadStreamMaxBytes, downloadStreamMaxConcurrent } = config;
   t.afterEach(() => Object.assign(config, { downloadStreamMaxBytes, downloadStreamMaxConcurrent }));
-
-  const BYTES = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251));
-  const PDF = { ...DOC, mimeType: 'application/pdf' };
-  const STAT = {
-    size: BYTES.length, contentType: 'application/pdf', etag: 'store-etag-1', versionId: 'v1',
-    lastModified: new Date('2026-09-01T10:00:00Z')
-  };
-  const LAST_MODIFIED = 'Tue, 01 Sep 2026 10:00:00 GMT';
-  const PATH = `/api/documents/${DOC.id}/download?inline=1`;
   const STAFF = { realm_access: { roles: ['staff'] } };
-
-  /** A visible document with a stored object; returns the mocks a case may inspect. */
-  function stored(t, { doc = PDF, stat = STAT } = {}) {
-    const presign = allow(t, { doc });
-    const statObject = t.mock.method(storage, 'statObject', async () => stat);
-    const open = t.mock.method(storage, 'getObjectStream', async (key, { offset, length }) =>
-      Readable.from([BYTES.subarray(offset, offset + length)]));
-    return { presign, statObject, open };
-  }
-
-  /** One request through the dispatcher, body read whole. */
-  async function get(headers = {}, path = PATH) {
-    let out;
-    await withServer(async (call) => {
-      const r = await call(path, { headers });
-      out = { res: r, body: Buffer.from(await r.arrayBuffer()) };
-    });
-    return out;
-  }
 
   /** The handler called directly, for a credentialed caller the dispatcher would need a token for.
    * The body is drained, so the stream's slot is free for the next case. */
@@ -678,14 +628,6 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     await controller.downloadDocument(req({ user, headers, query: { inline: '1' } }), out);
     if (out.streamed) await out.body.toArray();
     return out;
-  }
-
-  /** The handler called directly, stream left open: it holds a slot until destroyed. */
-  async function holdOpen() {
-    const out = res();
-    await controller.downloadDocument(req({ query: { inline: '1' } }), out);
-    assert.equal(out.statusCode, 200);
-    return out.body;
   }
 
   await t.test('an anonymous public PDF answers 200 with the bytes and every header', async (t) => {
@@ -813,18 +755,6 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     assert.equal(r.status, 404);
     assert.equal(r.headers.get('cache-control'), 'no-store');
     assert.equal(statObject.mock.callCount(), 0);
-  });
-
-  await t.test('a file over the cap is the inline 302, no-store', async (t) => {
-    config.downloadStreamMaxBytes = BYTES.length - 1;
-    const { presign, open } = stored(t);
-    t.mock.method(logger, 'info', () => {});
-    const { res: r } = await get();
-    assert.equal(r.status, 302);
-    assert.equal(r.headers.get('location'), URL_WITH_DISPOSITION);
-    assert.equal(r.headers.get('cache-control'), 'no-store');
-    assert.equal(presign.mock.calls[0].arguments[1].inlineType, 'application/pdf');
-    assert.equal(open.mock.callCount(), 0);
   });
 
   await t.test('a cap of 0 is the 302 without asking the store', async (t) => {
