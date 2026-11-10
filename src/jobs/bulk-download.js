@@ -26,7 +26,7 @@ const bulkDownloads = require('../repositories/bulk-downloads');
 const credentials = require('../repositories/credentials');
 const projects = require('../repositories/projects');
 const { liveCredentials } = require('../helpers/credentials');
-const { clean, fileNameFor } = require('../helpers/file-name');
+const { clean, fileNameFor, trimEnds } = require('../helpers/file-name');
 const { logger } = require('../utils/logger');
 
 // Ids per lookup. Both reads are cross-partition — a bulk job carries no project context — so the
@@ -284,7 +284,7 @@ async function buildPart({
       ahead.fill(i);
       const opened = ahead.take(i);
 
-      const folder = clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH) ||
+      const folder = trimEnds(clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH)) ||
         UNKNOWN_PROJECT;
       const name = uniqueName(taken, folder, fileNameFor(doc, access));
       let truncated = null;
@@ -388,7 +388,7 @@ async function projectNamesFor(access, docs) {
 function labelFor(ids, projectNames) {
   if (ids.size > 1) return `${ids.size} projects`;
   const [id] = ids;
-  return clean(projectNames.get(id)).slice(0, MAX_FOLDER_LENGTH).trim();
+  return trimEnds(clean(projectNames.get(id)).slice(0, MAX_FOLDER_LENGTH));
 }
 
 /**

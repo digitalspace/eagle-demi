@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { fileNameFor, pdfTitleFor } = require('../../src/helpers/file-name');
+const { clean, fileNameFor, pdfTitleFor } = require('../../src/helpers/file-name');
 
 const DOC = {
   id: '5f1e2d3c4b5a69788796a5b4',
@@ -55,4 +55,24 @@ test('fileNameFor turns a lone surrogate into U+FFFD', () => {
     assert.equal(name, 'Report \uFFFD draft.pdf');
     assert.doesNotThrow(() => encodeURIComponent(name));
   }
+});
+
+test('clean', async (t) => {
+  await t.test('drops the characters Windows refuses in a file name', () => {
+    assert.equal(clean('Site C: Final? <v2> "draft" a|b*.pdf'), 'Site C Final v2 draft ab.pdf');
+  });
+
+  await t.test('strips dots and spaces from both ends', () => {
+    assert.equal(clean('Report.. '), 'Report');
+    assert.equal(clean(' ..'), '');
+  });
+});
+
+test('fileNameFor names a dot-only file by its id', () => {
+  assert.equal(fileNameFor({ ...DOC, documentFileName: ' ..', displayName: '' }, {}), DOC.id);
+});
+
+test('fileNameFor leaves no dot or space where the name was cut', () => {
+  const name = fileNameFor({ ...DOC, documentFileName: `${'a'.repeat(144)} . report.pdf` }, {});
+  assert.equal(name, `${'a'.repeat(144)}.pdf`);
 });

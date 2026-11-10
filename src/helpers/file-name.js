@@ -22,23 +22,25 @@ const isExtension = ext => EXTENSION.test(ext) && /[A-Za-z]/.test(ext);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/g;
 
+/** Strip dots and whitespace from both ends: Windows drops a trailing one when it extracts. */
+const trimEnds = value => value.replace(/^[\s.]+|[\s.]+$/g, '');
+
 /**
- * Strip what a file or zip entry path must not carry: separators, control and bidi characters, dots.
+ * Strip what a file or zip entry path must not carry: separators, characters Windows refuses,
+ * control and bidi characters, dots and spaces at either end.
  * A lone surrogate becomes U+FFFD, so the name can be URI-encoded into a Content-Disposition.
  */
 function clean(value) {
-  return String(value == null ? '' : value)
+  return trimEnds(String(value == null ? '' : value)
     .toWellFormed()
     .replace(CONTROL, '')
-    .replace(/[/\\]/g, '')
-    .replace(BIDI, '')
-    .replace(/^\.+/, '')
-    .trim();
+    .replace(/[/\\<>:"|?*]/g, '')
+    .replace(BIDI, ''));
 }
 
 /** The recorded type wins: `Application Report v1.2` has no extension, whatever extname says. */
 function extensionOf(name, fileExt) {
-  const declared = `.${clean(fileExt).replace(/^\.+/, '')}`;
+  const declared = `.${clean(fileExt)}`;
   if (isExtension(declared)) return declared;
   const found = path.extname(name);
   return isExtension(found) ? found : '';
@@ -60,7 +62,7 @@ function fileNameFor(doc, access, fallback = '') {
     : name;
   // A cut between the halves of a surrogate pair leaves a string encodeURIComponent throws on.
   const cut = base.slice(0, Math.max(1, MAX_NAME_LENGTH - ext.length)).replace(/[\uD800-\uDBFF]$/, '');
-  return cut + ext;
+  return trimEnds(cut) + ext;
 }
 
 /**
@@ -77,4 +79,4 @@ function pdfTitleFor(doc) {
     .trim() || null;
 }
 
-module.exports = { clean, fileNameFor, pdfTitleFor };
+module.exports = { clean, fileNameFor, pdfTitleFor, trimEnds };
