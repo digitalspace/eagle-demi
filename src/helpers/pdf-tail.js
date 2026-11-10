@@ -324,6 +324,7 @@ function checkXmp(data, wanted) {
   let liText = null;
   const at = (k) => stack[stack.length - k];
   const inTitleLi = () => at(1) === 'rdf:li' && at(2) === 'rdf:Alt' && at(3) === 'dc:title';
+  const stray = (t) => !isInertText(t) || (/\S/.test(t) && (at(1) === 'dc:title' || (at(1) === 'rdf:Alt' && at(2) === 'dc:title')));
   const match = (re, pos) => { re.lastIndex = pos; return re.exec(text); };
   for (let pos = 0; pos < text.length;) {
     const lt = text.indexOf('<', pos);
@@ -333,7 +334,7 @@ function checkXmp(data, wanted) {
         // The raw bytes are what a content-stream lexer would see; the decoded text is the title.
         if (!isInertText(chunk) || !sameTitle(xmlText(chunk), wanted)) bad();
         liText = chunk;
-      } else if (stack.length ? !isInertText(chunk) : /\S/.test(chunk)) {
+      } else if (stack.length ? stray(chunk) : /\S/.test(chunk)) {
         bad();
       }
     }
@@ -400,9 +401,7 @@ function checkTrailer(dict, facts, info, allowed, highest) {
 function xrefStreamEntries(dict, data) {
   const w = dict.get('W');
   const widths = w && w.array && w.array.map(x => x.number);
-  if (!widths || widths.length !== 3 || widths[0] !== 1 || widths[2] !== 2 || !(widths[1] >= 1 && widths[1] <= 8)) {
-    refuse('tail-xref');
-  }
+  if (!widths || widths.length !== 3 || widths[0] !== 1 || widths[2] !== 2 || !(widths[1] >= 1 && widths[1] <= 8)) refuse('tail-xref');
   const index = dict.get('Index');
   const pairs = index && index.array ? index.array.map(x => x.number) : refuse('tail-xref');
   const row = 1 + widths[1] + 2;

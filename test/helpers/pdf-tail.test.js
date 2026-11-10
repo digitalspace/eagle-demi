@@ -173,7 +173,8 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
       .replace(/^<\?xpacket[^>]*>/, OLD_HEADER)
       .replace('<?xpacket end="w"?>', '<?xpacket end=\'r\'?>'),
     'a header with an encoding': packet().replace('kc9d"?>', 'kc9d" encoding="UTF-8"?>'),
-    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>')
+    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>'),
+    'whitespace between dc:title and rdf:Alt': packet().replace('<dc:title><rdf:Alt>', '<dc:title>\n  <rdf:Alt>')
   };
   for (const [label, body] of Object.entries(accepted)) {
     await t.test(`accepted: ${label}`, () => assert.equal(check(body), null));
@@ -213,6 +214,8 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'an empty dc:title': packet().replace(`>${TITLE}<`, '><'),
     'no dc:title at all': packet().replace(/<dc:title>.*<\/dc:title>/, ''),
     'a dc:title attribute with another title': packet(TITLE, '<x:a dc:title="Other"/>'),
+    'text directly under dc:title': packet(TITLE, '<dc:title>Other</dc:title>'),
+    'text directly under rdf:Alt in dc:title': packet().replace('<rdf:Alt>', '<rdf:Alt>Other'),
     'a DOCTYPE with an entity': `<!DOCTYPE x [<!ENTITY e "BT">]>${packet()}`,
     'an undeclared entity': packet(TITLE, '<x:a>&e;</x:a>'),
     'CDATA': packet(TITLE, '<x:a><![CDATA[BT]]></x:a>'),
