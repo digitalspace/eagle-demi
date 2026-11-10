@@ -12,6 +12,9 @@ const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
+const apiKeys = require('../../src/repositories/api-keys');
+const { generateKey } = require('../../src/helpers/api-key');
+const { forgetCachedKey } = require('../../src/helpers/auth');
 
 test('Passive Auth Middleware Tests', async (t) => {
 
@@ -211,6 +214,21 @@ test('Passive Auth Middleware Tests', async (t) => {
     const lines = warn.mock.calls.map(call => JSON.stringify(call.arguments));
     assert.ok(lines.some(line => line.includes('Rejected credential on GET /api/suggest (')), lines.join('\n'));
     assert.ok(!lines.some(line => /q=|secret/.test(line)), lines.join('\n'));
+  });
+
+  await t.test('a key lookup outage is not served the anonymous view', async () => {
+    const { keyId, plaintext } = generateKey(config.environmentName);
+    t.mock.method(apiKeys, 'getById', async () => { throw Object.assign(new Error('busy'), { code: 429 }); });
+    const req = { header: (name) => (name === 'X-Api-Key' ? plaintext : null) };
+    const res = makeRes('req-outage');
+    let nextCalled = false;
+
+    passiveAuthMiddleware(req, res, () => { nextCalled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 503);
+    forgetCachedKey(keyId);
   });
 
   await t.test('strict: no credential still continues as anonymous', () => {

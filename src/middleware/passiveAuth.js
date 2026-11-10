@@ -25,7 +25,8 @@ function passiveAuth({ rejectBearer = false } = {}) {
       },
       (status, error) => {
         const bearer = String(req.header('Authorization') || '').startsWith('Bearer ');
-        const refuse = rejectBearer && bearer;
+        // An outage says nothing about the credential, so a keyed caller retries instead of reading the public view.
+        const refuse = status >= 500 || (rejectBearer && bearer);
 
         const presented = req.header('Authorization') || req.header('X-Api-Key');
         if (presented) {
