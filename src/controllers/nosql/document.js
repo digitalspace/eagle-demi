@@ -819,9 +819,8 @@ async function headDownload(req, res) {
 }
 
 /**
- * `?inline=1` without `redirect=1`: the bytes from this origin, so the address bar keeps a link
- * that never expires and the edge can cache it. Same visibility check as the other modes. A file
- * that cannot be streamed gets the 302 the redirect mode sends, never JSON: a browser asked.
+ * `?inline=1` without `redirect=1`: the bytes from this origin, so the link never expires and the
+ * edge can cache it. Else the redirect mode's 302, or a 503 to a mid-file edge piece; never JSON.
  */
 async function inlineDownload(req, res) {
   try {
@@ -831,6 +830,8 @@ async function inlineDownload(req, res) {
     const stat = type && config.downloadStreamMaxBytes > 0 && await streamableStat(found.doc.s3Key);
     const sent = stat && await sendBytes(req, res, found, type, stat);
     if (sent) return sent;
+    // Past byte 0 the edge has already sent the start of a 200: a 302 would be spliced into it.
+    if (midFileEdgePiece(req)) return res.set('Retry-After', '5').status(503).send('');
     const { body } = await presignDownload(req, found, type);
     return res.redirect(302, body.url);
   } catch (err) {
@@ -870,14 +871,15 @@ function notModified(req, etag, lastModified) {
 }
 
 const UNSATISFIABLE = 'unsatisfiable';
+const RANGE = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/;
+const midFileEdgePiece = req => Number(RANGE.exec(req.headers.range)?.[1]) > 0 && fromEdge(req.headers);
 
 /**
  * The one byte range to send, `UNSATISFIABLE`, or null for the whole file. A malformed or
  * multi-part Range, or an If-Range that no longer matches, is ignored as RFC 9110 14.2 allows.
  */
 function byteRange(req, size, etag, lastModified) {
-  const header = req.headers.range;
-  const m = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/.exec(String(header || ''));
+  const m = RANGE.exec(String(req.headers.range || ''));
   if (!m || (!m[1] && !m[2])) return null;
 
   const ifRange = req.headers['if-range'];
@@ -938,7 +940,7 @@ async function openStream(key, opts) {
   }
 }
 
-/** The 200, 206, 304, 416 or 503; null, with no header set, where the caller sends the 302. */
+/** The 200, 206, 304 or 416; null, with no header set, where the caller answers instead. */
 async function sendBytes(req, res, { doc, fileName }, type, stat) {
   const { size } = stat;
   // A rename or a visibility change moves the record, not the object, and Front Door revalidates
@@ -974,8 +976,7 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     return null;
   }
   // Front Door fetches a file as ranged pieces in turn and reads fast, so a piece takes no slot.
-  const edgePiece = Boolean(range) && fromEdge(req.headers);
-  const release = edgePiece ? () => {} : takeStreamSlot();
+  const release = range && fromEdge(req.headers) ? () => {} : takeStreamSlot();
   if (!release) {
     logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
     return null;
@@ -988,8 +989,7 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
   });
   if (!body) {
     release();
-    // Past byte 0 the edge has already sent the start of a 200: a 302 here would be spliced into it.
-    return edgePiece && start > 0 ? res.set('Retry-After', '5').status(503).send('') : null;
+    return null;
   }
   // Closes on end, error or destroy; the router destroys it when the caller goes away.
   body.once('close', release);

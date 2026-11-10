@@ -3328,7 +3328,7 @@ paths:
         stamped by the edge (`X-Edge-Secret`) takes no stream slot. Any other case, including a
         store that cannot be read or sends no bytes within 10 seconds, gets the 302 above, never
         JSON, except that a ranged request stamped by the edge and starting past byte 0 answers 503
-        with `Retry-After: 5` when the store cannot be read. A single byte range answers 206;
+        with `Retry-After: 5` instead of that 302. A single byte range answers 206;
         a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
         range starting past the end answers 416 with `Content-Range: bytes */<size>`. A matching
         `If-None-Match`, or an `If-Modified-Since` at or after `Last-Modified` and not in the
