@@ -1644,15 +1644,21 @@ without revisiting that grant. A missing grant fails the first step of
    and `webOrigins`, and PUTs the whole object back. Appending to what it just read is the only
    safe shape, because the admin API replaces each array it is given.
 
-   The script targets client `eagle-admin-console` in realm `eao-epic` on test. Set `CLIENT_ID` for
-   another client and `ENV=prod` for the prod realm, and pass `--dry-run` to see the change first.
-   It adds:
+   You need an `oc` context that can read that secret. The script uses the `github-cicd` service
+   account context by default; set `OC_CONTEXT` to use another, for example `OC_CONTEXT=epic-test`.
+
+   The script targets client `eagle-admin-console` in realm `eao-epic` on test Keycloak. Set
+   `CLIENT_ID` for another client and `ENV=prod` for prod Keycloak; the realm stays `eao-epic`.
+   Pass `--dry-run` anywhere on the command line to see the change without writing it.
+
+   The script adds:
 
    - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`
    - Web Origins: `https://<afd-endpoint>` — the token and userinfo XHRs are checked against this
 
-   **Remove any `demi-frontend-<env>.azurewebsites.net` entries.** That name is back in Azure's
-   global pool, so a redirect URI on it points at whoever claims it next.
+   **Remove any `demi-frontend-<env>.azurewebsites.net` entries by hand** in the Keycloak admin
+   console; the script only adds. That name is back in Azure's global pool, so a redirect URI on it
+   points at whoever claims it next.
 
    Failure signature if this is skipped: clicking Log In lands on Keycloak's
    `Invalid parameter: redirect_uri` error page. Worse, once a user has `isLoggedIn` set on the new
