@@ -4,11 +4,12 @@
 // (`assessment-stages.ts`, `use-timeline-model.ts`), so both draw the same phases.
 
 const { LEGISLATIONS, EAGLE_DATE_FLOOR, isRegistryYear, yearOf } = require('../domain/project-legislation');
+const {
+  normalizeName, phaseIdOf, phaseHistoryIds, entryForTrackCode, entryForEagleId, entryForName
+} = require('../domain/phase-catalog');
 const { redactForAccess } = require('../vis/redact');
-
-const ASSESSMENT_WORK_TYPE = 6;
-// Track holds only the 2018 Act.
-const TRACK_ACT_YEAR = 2018;
+const { TRACK_ACT_YEAR, actYearOf } = require('./assessment-work');
+const { worksOf, trackPhasesOf, activeWorkOf } = require('./track-derived');
 /** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
 const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
@@ -37,10 +38,6 @@ const ROW_ALIASES = Object.freeze({
     Referral: 'Referral and Decision'
   }
 });
-
-/** Folds case, punctuation and `&` against `and`, so names match as Track and Eagle write them. */
-const normalizeName = (name) =>
-  String(name).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
 
 const isPostDecision = (name) => name.startsWith('Post Decision') || name === 'Complete';
 const isOffRail = (name) => OFF_RAIL_PHASES.includes(name);
@@ -80,15 +77,6 @@ function actAt(years, time, startOf) {
   return begun.length ? begun[begun.length - 1] : years.length ? years[0] : null;
 }
 
-/** The Act a label such as "2018 Act" names: the exact label, else the whole year in it. */
-function actYearOf(label) {
-  if (typeof label !== 'string' || !label) return null;
-  const exact = Object.keys(LEGISLATIONS).find(year => LEGISLATIONS[year].label === label);
-  if (exact) return Number(exact);
-  const year = Number((/\b(19|20)\d{2}\b/.exec(label) || [])[0]);
-  return isRegistryYear(year) ? year : null;
-}
-
 const ascending = (years) => [...new Set(years)].filter(isRegistryYear).sort((a, b) => a - b);
 
 const rowId = (row) => row.id ?? row._id ?? null;
@@ -106,18 +94,6 @@ function listedYears(view) {
   return year === null ? [] : [year];
 }
 
-const worksOf = (view) =>
-  (Array.isArray(view.works) ? view.works : []).filter(work => work && typeof work === 'object');
-
-/** The oldest assessment work's phases, else the row's own `phases`. */
-function trackPhasesOf(view) {
-  const oldest = worksOf(view)
-    .filter(work => work.workTypeId === ASSESSMENT_WORK_TYPE && Array.isArray(work.phases) && work.phases.length)
-    .sort((a, b) => (timeOf(a.startDate) ?? 0) - (timeOf(b.startDate) ?? 0))[0];
-  const phases = oldest ? oldest.phases : Array.isArray(view.phases) ? view.phases : [];
-  return phases.filter(phase => phase && typeof phase.name === 'string' && phase.name);
-}
-
 /** The years an assessment can be under, and the Act each Track phase or work belongs to. */
 function actContext(view) {
   const listed = listedYears(view);
@@ -125,8 +101,8 @@ function actContext(view) {
   // A phase that names no Act belongs to the Track Act, else to the current block the row has.
   const trackYear = listed.includes(TRACK_ACT_YEAR) ? TRACK_ACT_YEAR : currentYear;
   const yearOfTrack = (actName) => actYearOf(actName) ?? trackYear;
-  const trackPhases = trackPhasesOf(view);
-  const blocks = ascending([...listed, ...trackPhases.map(phase => yearOfTrack(phase.eaActName))]);
+  const trackPhases = trackPhasesOf(view, yearOfTrack);
+  const blocks = ascending([...listed, ...trackPhases.map(one => one.year)]);
   return { currentYear, yearOfTrack, trackPhases, blocks };
 }
 
@@ -207,22 +183,19 @@ function datePhasesFromDocuments(documents, periods, phaseRows, acts) {
 /** A list ref as `{ id, name }`; a bare id takes its name from `lists`, else from `kept` of the same id. */
 function refOf(ref, lists, kept) {
   if (ref === null || ref === undefined || ref === '') return null;
-  const id = typeof ref === 'object' ? ref._id ?? ref.id ?? null : String(ref);
+  const id = phaseIdOf(ref);
   const named = typeof ref === 'object' && typeof ref.name === 'string' && ref.name ? ref.name : null;
-  const listed = id === null ? null : (lists || []).find(row => row && String(rowId(row)) === String(id));
-  const known = kept && id !== null && kept.id === String(id) && typeof kept.name === 'string' ? kept.name : null;
-  return { id: id === null ? null : String(id), name: named ?? (listed && listed.name) ?? known };
+  const listed = id === null ? null : (lists || []).find(row => row && String(rowId(row)) === id);
+  const known = kept && id !== null && kept.id === id && typeof kept.name === 'string' ? kept.name : null;
+  return { id, name: named ?? (listed && listed.name) ?? known };
 }
-
-const refId = (ref) => (ref && typeof ref === 'object' ? ref._id ?? ref.id : ref);
 
 /** Every phase id the row's blocks and assessments name, non-empty strings, once each. */
 function phaseIdsOf(view, assessments) {
   const ids = [];
   for (const block of [view, ...Object.keys(LEGISLATIONS).map(year => view[`legislation_${year}`])]) {
     if (!block || typeof block !== 'object') continue;
-    ids.push(refId(block.currentPhaseName));
-    if (Array.isArray(block.phaseHistory)) ids.push(...block.phaseHistory.map(refId));
+    ids.push(phaseIdOf(block.currentPhaseName), ...phaseHistoryIds(block.phaseHistory));
   }
   for (const assessment of assessments) {
     for (const phase of assessment.phases) ids.push(...phase.phaseIds);
@@ -230,27 +203,88 @@ function phaseIdsOf(view, assessments) {
   return [...new Set(ids.filter(id => typeof id === 'string' && id))];
 }
 
+/** One Act's stored documents phases. */
+const documentEntries = (year, own) => own.filter(entry => entry.commentPeriodId === undefined)
+  .map(entry => ({ phaseIds: [...(entry.phaseIds || [])], stage: entry.stage ?? null,
+    stageRank: stageRank(year, entry.stage), name: entry.name, startDate: entry.startDate,
+    endDate: entry.endDate ?? null, source: 'documents', documentCount: entry.documentCount }));
+
+const trackEntry = (year, phase, stage) => ({ phaseIds: [], stage, stageRank: stageRank(year, stage),
+  name: phase.name, startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: 'track' });
+
+/** Documents listed first, so Eagle wins a tie; a Track phase on a stage documents date is dropped. */
+function datedPhases(documents, track) {
+  const documentStages = new Set(documents.map(phase => phase.stage).filter(Boolean));
+  return [...documents, ...track.filter(phase => !(phase.stage && documentStages.has(phase.stage)))];
+}
+
+const finiteOr = (value, fallback) => (Number.isFinite(value) ? value : fallback);
+
+/** Stage rank, then catalog order, then start date; NaN from two missing values ties. */
+const bySequence = (a, b) => a.stageRank - b.stageRank || finiteOr(a.order, Infinity) - finiteOr(b.order, Infinity) ||
+  (timeOf(a.startDate) ?? Infinity) - (timeOf(b.startDate) ?? Infinity) || 0;
+
+const catalogDocument = (catalog, year, phase) => {
+  const entry = entryForName(catalog, year, phase.name) ||
+    phase.phaseIds.map(id => entryForEagleId(catalog, year, id)).find(Boolean);
+  return { ...phase, catalogId: entry ? entry.catalogId : null, name: entry ? entry.name : phase.name,
+    order: entry ? entry.order ?? null : null, trackWorkId: null };
+};
+
+/** A Track phase by its Track code, then its name; one the catalog lacks keeps Track's name and sort order. */
+function catalogTrack(catalog, year, { phase, work }) {
+  const entry = entryForTrackCode(catalog, year, phase.phaseCodeId) || entryForName(catalog, year, phase.name);
+  const code = phase.phaseCodeId ?? null;
+  return { ...trackEntry(year, phase, entry ? entry.stage ?? null : null),
+    catalogId: entry ? entry.catalogId : code === null ? null : `track-${code}`,
+    name: entry ? entry.name : phase.name,
+    order: entry ? entry.order ?? null : phase.sortOrder ?? null,
+    trackWorkId: work ? work.trackWorkId ?? null : null };
+}
+
+/** One undated entry per `phaseHistory` id, less those whose stage, else catalog id, a dated phase holds. */
+function eagleEntries(catalog, year, block, lists, dated) {
+  return [...new Set(phaseHistoryIds(block.phaseHistory))].flatMap((id) => {
+    const entry = entryForEagleId(catalog, year, id);
+    const stage = entry ? entry.stage ?? null : null;
+    const catalogId = entry ? entry.catalogId : id;
+    if (dated.some(phase => (stage ? phase.stage === stage : phase.catalogId === catalogId))) return [];
+    return [{ phaseIds: [id], catalogId, stage, stageRank: stageRank(year, stage),
+      order: entry ? entry.order ?? null : null, name: entry ? entry.name : refOf(id, lists).name,
+      startDate: null, endDate: null, source: 'eagle', trackWorkId: null }];
+  });
+}
+
 /**
- * The live work with a Track id, an assessment first, then the newest; null when there is none.
- * Its phase is Eagle's current phase name when the work is under the current Act, else its first open phase.
+ * `current` is the phase the block's current phase names, by id, else by name, else the first open Track
+ * phase; before it is `done`, after it `planned`. With none, the current phase's catalog place splits them.
  */
-function activeWorkOf(view, current) {
-  const [work] = worksOf(view)
-    .filter(one => one.isActive === true && Number.isFinite(one.trackWorkId))
-    .sort((a, b) => (b.workTypeId === ASSESSMENT_WORK_TYPE) - (a.workTypeId === ASSESSMENT_WORK_TYPE) ||
-      b.trackWorkId - a.trackWorkId);
-  if (!work) return null;
-  const open = (Array.isArray(work.phases) ? work.phases : []).find(phase => phase && phase.isCompleted !== true);
-  // Not yearOfTrack: its current-block fallback would hand a work with no Act another Act's Eagle phase.
-  const workYear = actYearOf(work.eaAct) ?? TRACK_ACT_YEAR;
-  const eaglePhase = current && current.currentPhase && workYear === current.legislationYear
-    ? current.currentPhase.name : null;
-  return {
-    trackWorkId: work.trackWorkId,
-    eaAct: work.eaAct ?? null,
-    workType: work.workType ?? null,
-    currentPhase: eaglePhase || (open && open.name) || null
-  };
+function markStatus(phases, { catalog, year, currentPhase, completed }) {
+  const id = currentPhase ? currentPhase.id : null;
+  const entry = entryForEagleId(catalog, year, id) || entryForName(catalog, year, currentPhase && currentPhase.name);
+  let at = phases.findIndex(phase => (entry && phase.catalogId === entry.catalogId) || phase.phaseIds.includes(id));
+  if (at < 0) at = phases.findIndex(phase => phase.source === 'track' && !completed.has(phase));
+  const place = entry && { stageRank: stageRank(year, entry.stage ?? null), order: entry.order, startDate: null };
+  const split = at >= 0 ? at : place ? phases.filter(phase => bySequence(phase, place) <= 0).length : 0;
+  phases.forEach((phase, index) => {
+    if (index === at) phase.status = 'current';
+    else if (phase.source === 'eagle') phase.status = 'undated';
+    else phase.status = completed.has(phase) || index < split ? 'done' : 'planned';
+  });
+  return phases;
+}
+
+/** One Act's phase sequence: catalog names, Eagle's history beside the dated phases, and a status each. */
+function sequenceOf(year, { own, track, block, catalog, lists, currentPhase }) {
+  const completed = new Set();
+  const trackPhases = track.map((one) => {
+    const phase = catalogTrack(catalog, year, one);
+    if (one.phase.isCompleted === true) completed.add(phase);
+    return phase;
+  });
+  const dated = datedPhases(documentEntries(year, own).map(phase => catalogDocument(catalog, year, phase)), trackPhases);
+  const phases = [...dated, ...eagleEntries(catalog, year, block, lists, dated)].sort(bySequence);
+  return markStatus(phases, { catalog, year, currentPhase, completed });
 }
 
 const BLOCK_MILESTONES = [
@@ -263,10 +297,12 @@ const BLOCK_MILESTONES = [
  * `assessments`, `phaseIds` and `activeWork` from the anonymous view, so a dial removes what it fed.
  * `documentPhases` comes off the raw row: the view drops it, and the pass built it from public rows.
  */
-function deriveAssessments(row, { lists, previous } = {}) {
-  const view = redactForAccess('projects', row || {}, null);
+function deriveAssessments(row, { lists, previous, worksForDerive, catalog } = {}) {
+  const source = row || {};
+  const view = redactForAccess('projects', { ...source, works: worksForDerive ?? source.works }, null);
   const stored = Array.isArray(row && row.documentPhases) ? row.documentPhases : [];
   const { currentYear, yearOfTrack, trackPhases, blocks } = actContext(view);
+  const trackOf = (year) => trackPhases.filter(one => one.year === year);
   const years = ascending([...blocks, ...stored.map(entry => Number(entry.legislationYear))]);
   const transitions = transitionsOf(view);
   const kept = lists ? [] : (Array.isArray(previous) ? previous : []).filter(Boolean);
@@ -275,17 +311,13 @@ function deriveAssessments(row, { lists, previous } = {}) {
   const assessments = years.map((year) => {
     const block = view[`legislation_${year}`] || (year === currentYear ? view : {});
     const own = stored.filter(entry => Number(entry.legislationYear) === year);
-    const documents = own
-      .filter(entry => entry.commentPeriodId === undefined)
-      .map(entry => ({ phaseIds: [...(entry.phaseIds || [])], stage: entry.stage ?? null,
-        stageRank: stageRank(year, entry.stage), name: entry.name, startDate: entry.startDate,
-        endDate: entry.endDate ?? null, source: 'documents', documentCount: entry.documentCount }));
-    const documentStages = new Set(documents.map(phase => phase.stage).filter(Boolean));
-    const track = trackPhases.filter(phase => yearOfTrack(phase.eaActName) === year).map((phase) => {
-      const stage = stageRowFor(year, phase.name);
-      return { phaseIds: [], stage, stageRank: stageRank(year, stage), name: phase.name,
-        startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: 'track' };
-    }).filter(phase => !(phase.stage && documentStages.has(phase.stage)));
+    const before = kept.find(one => Number(one.legislationYear) === year) || {};
+    const currentPhase = refOf(block.currentPhaseName, lists, before.currentPhase);
+    const phases = catalog
+      ? sequenceOf(year, { own, track: trackOf(year), block, catalog, lists, currentPhase })
+      : datedPhases(documentEntries(year, own),
+        trackOf(year).map(({ phase }) => trackEntry(year, phase, stageRowFor(year, phase.name))))
+        .sort((a, b) => a.stageRank - b.stageRank);
 
     const milestones = [
       ...BLOCK_MILESTONES.flatMap(([name, field]) => {
@@ -299,14 +331,12 @@ function deriveAssessments(row, { lists, previous } = {}) {
     ].sort((a, b) => timeOf(a.date) - timeOf(b.date));
 
     const transition = transitions.find(one => Number(one.fromYear) === year);
-    const before = kept.find(one => Number(one.legislationYear) === year) || {};
     return {
       legislationYear: year,
       act: LEGISLATIONS[year].label,
-      // Stable sort, documents listed first, so Eagle wins a tie in rank.
-      phases: [...documents, ...track].sort((a, b) => a.stageRank - b.stageRank),
+      phases,
       milestones,
-      currentPhase: refOf(block.currentPhaseName, lists, before.currentPhase),
+      currentPhase,
       decision: refOf(block.eacDecision, lists, before.decision),
       decisionDate: isoOf(block.decisionDate),
       certificate: null,
@@ -345,4 +375,4 @@ function actBlocks(row) {
   });
 }
 
-module.exports = { ASSESSMENT_WORK_TYPE, DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments };
+module.exports = { DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments };

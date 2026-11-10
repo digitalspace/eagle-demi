@@ -7,7 +7,8 @@ const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
 const { DELETED_CEILING } = require('../repositories/documents');
 const { beforeDateFloor } = require('../domain/project-legislation');
-const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
+const { deriveAssessments } = require('./assessments');
+const { legislationTransitions } = require('./track-derived');
 const {
   TRACK_PRECEDENCE, SOURCE_FIRST, STAFF_EDITED_AT, STAFF_HELD_FIELDS, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
   EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS, DEMI_OWNED_AT, EXTENSION_LIST_FIELDS, CAC_FIELDS,
@@ -71,32 +72,6 @@ function nullEagleJunkDates(merged) {
     if (LEGISLATION_KEY.test(key) && block && typeof block === 'object') nullJunkDates(block);
   }
   return merged;
-}
-
-const TRANSITION_MILESTONE = 'Project Transitioning FROM';
-
-/**
- * One `{fromYear, toYear, date}` per change of Act. Eagle stores no date, so it comes from Track's
- * optional "Project Transitioning FROM the EA Act (2002)" milestone, matched on the year it names.
- */
-function legislationTransitions(yearList, works) {
-  const years = [...new Set((Array.isArray(yearList) ? yearList : []).map(Number))]
-    .filter(Number.isInteger)
-    .sort((a, b) => a - b);
-  const pairs = years.slice(1).map((toYear, i) => ({ fromYear: years[i], toYear }));
-
-  const dateByFromYear = new Map();
-  for (const work of works) {
-    if (!work || work.workTypeId !== ASSESSMENT_WORK_TYPE || !Array.isArray(work.milestones)) continue;
-    for (const milestone of work.milestones) {
-      if (!milestone || typeof milestone.name !== 'string' ||
-          !milestone.name.startsWith(TRANSITION_MILESTONE) || !hasValue(milestone.actualDate)) continue;
-      const year = Number((/\b(\d{4})\b/.exec(milestone.name) || [])[1]);
-      if (year && !dateByFromYear.has(year)) dateByFromYear.set(year, milestone.actualDate);
-    }
-  }
-
-  return pairs.map(pair => ({ ...pair, date: dateByFromYear.get(pair.fromYear) ?? null }));
 }
 
 /**
@@ -222,7 +197,7 @@ function holdStaffEdits(merged, existing, { drop = [] } = {}) {
  * Carry DEMI's fields off the stored row, then derive assessments: a held row's `read` only narrows (`heldRead`),
  * an owned one keeps its Eagle side and `switchTo` year (`holdOwnedFields`), staff saves stand (`holdStaffEdits`).
  */
-function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop, switchTo } = {}) {
+function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop, switchTo, worksForDerive, catalog } = {}) {
   if (!merged) return merged;
   const owned = isDemiOwnedProject(existing);
   if (!owned) seedEagleFields(merged, existing);
@@ -241,7 +216,8 @@ function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop
     }
     holdStaffEdits(merged, existing, { drop });
   }
-  return Object.assign(merged, deriveAssessments(merged, { previous: existing && existing.assessments }));
+  return Object.assign(merged, deriveAssessments(merged,
+    { previous: existing && existing.assessments, worksForDerive, catalog }));
 }
 
 /**
@@ -456,6 +432,17 @@ function carryDelete(row, existing) {
   return row;
 }
 
+/** Each `TRACK_PRECEDENCE` field from the source `SOURCE_FIRST` names, else the other one. */
+function applyTrackPrecedence(merged, track, eagle) {
+  for (const [target, trackField, eagleField] of TRACK_PRECEDENCE) {
+    const trackValue = track[trackField];
+    const eagleValue = eagleField && eagle ? eagle[eagleField] : undefined;
+    const ordered = SOURCE_FIRST[target] === 'eagle' ? [eagleValue, trackValue] : [trackValue, eagleValue];
+    const value = ordered.find(hasValue);
+    if (value !== undefined) merged[target] = value;
+  }
+}
+
 /**
  * Merge one Track project with its optional Eagle counterpart.
  *
@@ -464,8 +451,10 @@ function carryDelete(row, existing) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
- * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
+ * @param {Array}       [opts.works]   this project's stored Track works (seed/sources.js); absent when
  *                                     not fetched, which also leaves `legislationTransitions` out
+ * @param {Array}       [opts.worksForDerive] the works list in the public shape; wins over `works`
+ *                                     for `legislationTransitions`
  * @param {boolean}     [opts.complete] the lists are all of Track's (a push), so an empty one clears
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
@@ -497,13 +486,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
     updatedAt: now
   };
 
-  for (const [target, trackField, eagleField] of TRACK_PRECEDENCE) {
-    const trackValue = track[trackField];
-    const eagleValue = eagleField && eagle ? eagle[eagleField] : undefined;
-    const ordered = SOURCE_FIRST[target] === 'eagle' ? [eagleValue, trackValue] : [trackValue, eagleValue];
-    const value = ordered.find(hasValue);
-    if (value !== undefined) merged[target] = value;
-  }
+  applyTrackPrecedence(merged, track, eagle);
 
   // Eagle fills the gaps Track cannot.
   if (eagle) Object.assign(merged, pickEagleBlocks(eagle));
@@ -514,9 +497,10 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (Array.isArray(opts.phases) && (complete || opts.phases.length)) merged.phases = opts.phases;
   // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
   // since an empty list still says Track has no transition date.
-  if (Array.isArray(opts.works)) {
-    if (complete || opts.works.length) merged.works = opts.works;
-    merged.legislationTransitions = legislationTransitions(merged.legislationYearList, opts.works);
+  if (Array.isArray(opts.works) && (complete || opts.works.length)) merged.works = opts.works;
+  const transitionWorks = opts.worksForDerive ?? opts.works;
+  if (Array.isArray(transitionWorks)) {
+    merged.legislationTransitions = legislationTransitions(merged.legislationYearList, transitionWorks);
   }
   nullEagleJunkDates(merged);
   trimLabels(merged);
