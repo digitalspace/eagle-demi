@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * HTML entities to the characters they stand for, and markup to plain text. Shared by the federal
- * registry reader, the eagle-notify sender and the Updates mirror: each turns markup into plain
- * text a person reads.
+ * HTML entities to characters and markup to plain text, for the federal registry reader, the
+ * eagle-notify sender and the Updates mirror.
  */
 
 /** The punctuation entities that show up in registry markup and in editor-written Update content. */
@@ -14,9 +13,8 @@ const NAMED_ENTITIES = {
 };
 
 /**
- * Accented letters, written by name. BC is bilingual and Nations are named in their own
- * orthography — "Stk'eml&uacute;psemc te Secw&eacute;pemc" — so leaving these escaped quotes the
- * escape back at a reader.
+ * Accented letters by name: BC is bilingual and Nations are named in their own orthography
+ * ("Stk'eml&uacute;psemc te Secw&eacute;pemc"), so an escape left in place reaches a reader.
  */
 const LOWER_LETTERS = {
   agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å', ccedil: 'ç',
