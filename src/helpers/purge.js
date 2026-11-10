@@ -9,12 +9,40 @@ const { systemAccess } = require('./access-sql');
 const aiSearch = require('../search/ai-search');
 const { logger } = require('../utils/logger');
 
-// Index first, row last, so a retried DELETE finds the chunks again; a chunk removal that threw or
-// left chunks keeps the row (`rowKept: true`). Index cleanup is reported, never thrown.
-async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
-  const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id);
+/** Index removal; with search configured, `indexRemovalError` names whatever may still be searchable. */
+async function removeFromSearch(id) {
+  const strict = aiSearch.config().configured;
+  let removedChunksFromSearch;
+  let indexRemovalError = null;
+  try {
+    removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id, { strict });
+  } catch (err) {
+    if (err.code !== 'INDEX_DELETE_INCOMPLETE') throw err;
+    removedChunksFromSearch = err.deleted;
+    indexRemovalError = err.message;
+  }
   const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
-  const report = { removedChunks: 0, removedFromSearch, removedChunksFromSearch, storedFileRetained: Boolean(s3Key) };
+  if (strict && removedFromSearch === 0) indexRemovalError ??= `document ${id} is still in the search index`;
+  return { removedFromSearch, removedChunksFromSearch, indexRemovalError };
+}
+
+/** The stamp moves _ts, so the document indexer puts the kept row back in document search. */
+async function keepRow(id, projectId, report, step, error) {
+  logger.error(`[purge] ${step} for document ${id}, row kept: ${error}`);
+  await documents.patchExtraction(id, projectId, { chunkPurgeFailedAt: new Date().toISOString() })
+    .catch(err => logger.error(`[purge] could not stamp kept document ${id}: ${err.message}`));
+  return { ...report, rowKept: true };
+}
+
+// Index first, row last, so a retried DELETE finds everything again. An incomplete chunk removal, or
+// with search configured an incomplete index removal, keeps the row (`rowKept: true`).
+async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
+  const { indexRemovalError, ...removed } = await removeFromSearch(id);
+  const report = { removedChunks: 0, ...removed, storedFileRetained: Boolean(s3Key) };
+  if (indexRemovalError) {
+    const kept = await keepRow(id, projectId, report, 'search index removal incomplete', indexRemovalError);
+    return { ...kept, indexRemovalError };
+  }
 
   let chunkRemovalError = null;
   try {
@@ -25,12 +53,9 @@ async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
     chunkRemovalError = err.message;
   }
   if (chunkRemovalError) {
-    logger.error(`[purge] chunk removal failed for document ${id}, row kept: ${chunkRemovalError}`);
-    // Indexers re-read only rows whose _ts moved: the stamp puts the kept row back in document
-    // search. Its leftover chunks keep their old _ts and stay out of chunk search until a retry.
-    await documents.patchExtraction(id, projectId, { chunkPurgeFailedAt: new Date().toISOString() })
-      .catch(err => logger.error(`[purge] could not stamp kept document ${id}: ${err.message}`));
-    return { ...report, rowKept: true, chunkRemovalError };
+    // Leftover chunks keep their old _ts, so they stay out of chunk search until a retry.
+    const kept = await keepRow(id, projectId, report, 'chunk removal failed', chunkRemovalError);
+    return { ...kept, chunkRemovalError };
   }
 
   if (pdfTitle) {

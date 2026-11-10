@@ -28,10 +28,13 @@ Step 1 leaves the row in the index under a narrowed ACL. Removing it outright is
 plus `deleteChunksForDocument` in `src/search/ai-search.js`; nothing runs them on a schedule,
 because AI Search indexers are a `_ts` high-water mark and never see a delete.
 
-What calls them today: `src/helpers/purge.js`, behind `DELETE /api/documents/:id` and
-`DELETE /api/projects/:id`. That deletes the Cosmos record too, so use it only when the record must
-not exist. For chunks alone, `node src/scripts/purge-extraction.js`. No path touches the stored file
-in object storage.
+`src/helpers/purge.js` calls them, behind `DELETE /api/documents/:id` and the seed's `--reconcile`.
+It deletes the Cosmos record too, so use it only when the record must not exist. With search
+configured, a failed index delete keeps the record and the DELETE answers 503, so a retry can finish.
+
+`DELETE /api/projects/:id` only flags the project and narrows it to staff; it purges nothing. For
+chunks alone, run `node src/scripts/purge-extraction.js`. No path touches the stored file in object
+storage.
 
 ## 3. Invalidate the Front Door cache
 

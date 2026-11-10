@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * DELETE /documents/:id when the purge keeps the row because some chunks could not be removed:
- * a retryable 503, the row untouched, and a failure audit row, because the search-index entries
- * are already gone by then.
+ * DELETE /documents/:id when the purge keeps the row: a retryable 503, the row untouched, and a
+ * failure audit row, because some search-index entries may already be gone by then.
  */
 
 process.env.NODE_ENV = 'test';

@@ -127,6 +127,39 @@ test('purgeDocument keeps the row when its chunks are not all removed', async (t
     assert.match(errors.mock.calls[1].arguments[0], /could not stamp kept document d1: 412/);
   });
 
+  await t.test('with search configured, an incomplete chunk index delete keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async (id, opts) => {
+      if (!opts?.strict) return 0;
+      throw Object.assign(new Error('index still holds chunks'), { code: 'INDEX_DELETE_INCOMPLETE', deleted: 3 });
+    });
+    t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0,
+      'the row is the only handle a retried purge has on the index entries left behind');
+    assert.strictEqual(result.rowKept, true);
+    assert.strictEqual(result.removedChunksFromSearch, 3);
+    assert.match(result.indexRemovalError, /index still holds chunks/);
+    assert.strictEqual(documents.patchExtraction.mock.callCount(), 1);
+  });
+
+  await t.test('with search configured, a document index delete that fails keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
+    t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0);
+    assert.strictEqual(result.rowKept, true);
+    assert.strictEqual(result.removedFromSearch, 0);
+    assert.ok(result.indexRemovalError);
+  });
+
   await t.test('every chunk removed deletes the row and reports it gone', async (t) => {
     stubAll(t);
     t.mock.method(chunks, 'removeForDocument', async () => ({ succeeded: 4, failed: 0 }));
