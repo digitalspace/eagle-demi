@@ -24,7 +24,7 @@ const path = require('node:path');
 const jwt = require('jsonwebtoken');
 
 const audit = require('../../../src/utils/audit');
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
@@ -169,8 +169,8 @@ test('the sealed compartment routes', async (t) => {
     }
   });
 
-  await t.test('a compliance-only token reaches the sealed routes and nothing else', async () => {
-    config.keycloakEnabled = false;
+  await t.test('a compliance-only token reaches the sealed routes and nothing else', async (tt) => {
+    useConfig(tt, { keycloakEnabled: false });
     t.mock.method(jwt, 'decode', () => COMPLIANCE);
 
     for (const [method, routePath] of SEALED_ROUTES) {
