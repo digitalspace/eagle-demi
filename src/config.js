@@ -484,16 +484,14 @@ const config = {
   // Empty registers no reconcileEngage timer. A getter: the trigger suites reload api/index.js per value.
   get reconcileEngageSchedule() { return envTrim('RECONCILE_ENGAGE_SCHEDULE'); },
 
-  // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
-  // client-credentials identities in the realm above: one reads Track, one holds
-  // `realm-management`. Empty everywhere the sync is not scheduled, which is every environment
-  // until SYNC_TEAMS_SCHEDULE is set.
+  // Two client-credentials identities in the realm above (src/scripts/sync-track-teams.js): one
+  // reads Track, one holds `realm-management`. Empty wherever SYNC_TEAMS_SCHEDULE is unset.
   trackApiBase:              process.env.TRACK_API_BASE || '',
   trackClientId:             process.env.TRACK_CLIENT_ID || '',
   trackClientSecret:         secretFromEnv('TRACK_CLIENT_SECRET'),
-  // The nightly sync also mirrors every public Track work type with its milestones (`works[]`).
   trackWorksSync:            process.env.TRACK_WORKS_SYNC === 'true',
-  // Then dates each project's assessments (src/scripts/date-assessment-phases.js).
+  worksWrite:                process.env.WORKS_WRITE === 'true',
+  worksRead:                 process.env.WORKS_READ === 'true',
   assessmentPass:            process.env.ASSESSMENT_PASS === 'true',
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
   keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),

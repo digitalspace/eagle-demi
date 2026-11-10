@@ -277,10 +277,11 @@ test('the Updates publishDate sort fallback stays on unless set to the exact str
   assert.deepStrictEqual(['true', '', 'FALSE', 'off', 'false'].map(read), [true, true, true, true, false]);
 });
 
-// Azure always sets TRACK_WORKS_SYNC, as the string 'false' until the works pull is turned on.
-test('the Track works pull runs only when TRACK_WORKS_SYNC is the exact string true', () => {
-  const read = (value) => readConfig({ TRACK_WORKS_SYNC: value }, c => c.trackWorksSync);
-  assert.deepStrictEqual(['false', '', 'TRUE', 'true'].map(read), [false, false, false, true]);
+// Azure sets TRACK_WORKS_SYNC as the string 'false' while it is off.
+test('each works flag is on only when its variable is the exact string true', () => {
+  const flags = { TRACK_WORKS_SYNC: 'trackWorksSync', WORKS_WRITE: 'worksWrite', WORKS_READ: 'worksRead' };
+  const read = ([name, key]) => ['false', '', 'TRUE', 'true'].map(value => readConfig({ [name]: value }, c => c[key]));
+  assert.deepStrictEqual(Object.entries(flags).map(read), Object.values(flags).map(() => [false, false, false, true]));
 });
 
 // Azure always sets ASSESSMENT_PASS too, as the string 'false' in prod.

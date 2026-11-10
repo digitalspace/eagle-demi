@@ -16,6 +16,7 @@ const WORKS_MODULE = path.join(ROOT, 'src', 'repositories', 'works');
 /** Works have no read[], so every file that loads them is a gate decision, named here. */
 const MAY_REQUIRE = new Set([
   'src/controllers/nosql/project-compose.js',
+  'src/domain/works-derive.js',
   'src/repositories/projects.js',
   'src/scripts/date-assessment-phases.js',
   'src/scripts/sync-works.js',
