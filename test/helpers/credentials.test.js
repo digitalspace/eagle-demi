@@ -75,6 +75,11 @@ test('a grant without an end is refused', () => {
   assert.strictEqual(grantError(grant()), null);
 });
 
+test('a grant whose start is not before its end is refused', () => {
+  assert.match(grantError(grant({ start: IN_A_YEAR })), /start must be before end/);
+  assert.match(grantError(grant({ start: IN_A_YEAR, end: IN_A_YEAR })), /start must be before end/);
+});
+
 test('an expired credential grants nothing', () => {
   const expired = grant({ end: YESTERDAY });
 

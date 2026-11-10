@@ -78,11 +78,17 @@ function grantError(body, now = Date.now()) {
       `${GRANTABLE_LEVELS.join(', ')} only (0 is sealed, 4 is public and needs no credential)`;
   }
 
+  return windowError(grant, now);
+}
+
+/** Why the grant's `start`/`end` window is refused, or null. */
+function windowError(grant, now) {
   if (!grant.end) return 'end is required — a credential without one never expires';
   if (!isIsoDate(grant.end)) return 'end must be a date';
   if (Date.parse(grant.end) <= now) return 'end must be in the future';
-  if (grant.start !== undefined && !isIsoDate(grant.start)) return 'start must be a date';
-
+  if (grant.start === undefined) return null;
+  if (!isIsoDate(grant.start)) return 'start must be a date';
+  if (Date.parse(grant.start) >= Date.parse(grant.end)) return 'start must be before end';
   return null;
 }
 
