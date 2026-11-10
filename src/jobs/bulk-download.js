@@ -15,7 +15,7 @@ const bulkDownloads = require('../repositories/bulk-downloads');
 const credentials = require('../repositories/credentials');
 const projects = require('../repositories/projects');
 const { liveCredentials } = require('../helpers/credentials');
-const { clean, fileNameFor, trimEnds } = require('../helpers/file-name');
+const { clean, fileNameFor, fitName } = require('../helpers/file-name');
 const { logger } = require('../utils/logger');
 
 // Ids per lookup. Both reads are cross-partition — a bulk job carries no project context — so the
@@ -39,6 +39,7 @@ const MAX_FOLDER_LENGTH = 100;
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 const UNKNOWN_PROJECT = 'unknown-project';
+const ERRORS_FILE = 'errors.txt';
 
 /**
  * The only reasons a caller is ever told. A driver message would leak the object store's shape and
@@ -244,8 +245,8 @@ async function buildPart({
       ahead.fill(i);
       const opened = ahead.take(i);
 
-      const folder = trimEnds(clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH)) ||
-        UNKNOWN_PROJECT;
+      const fitted = fitName(clean(projectNames.get(String(doc.projectId))), MAX_FOLDER_LENGTH) || UNKNOWN_PROJECT;
+      const folder = fitted.toLowerCase() === ERRORS_FILE ? `${fitted} (project)` : fitted;
       const name = uniqueName(taken, folder, fileNameFor(doc, access));
       let truncated = null;
 
@@ -289,7 +290,7 @@ async function buildPart({
 
   // errors.txt rides in the last part, which is the one that ran out of documents rather than room.
   if (i >= docs.length && errors.length > 0) {
-    await orDie(addEntry(archive, Buffer.from(errorsText(errors), 'utf8'), 'errors.txt'));
+    await orDie(addEntry(archive, Buffer.from(errorsText(errors), 'utf8'), ERRORS_FILE));
   }
 
   archive.finish();
@@ -347,7 +348,7 @@ async function projectNamesFor(access, docs) {
 function labelFor(ids, projectNames) {
   if (ids.size > 1) return `${ids.size} projects`;
   const [id] = ids;
-  return trimEnds(clean(projectNames.get(id)).slice(0, MAX_FOLDER_LENGTH));
+  return fitName(clean(projectNames.get(id)), MAX_FOLDER_LENGTH);
 }
 
 /**

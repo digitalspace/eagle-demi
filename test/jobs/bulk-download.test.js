@@ -647,6 +647,26 @@ test('the bulk download worker', async (t) => {
       'a folder ending in a dot or space extracts under a different name than the zip lists');
   });
 
+  await t.test('a project folder cut short never keeps half of a character', async (tt) => {
+    const docs = [doc('d1')];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(projects, 'listByIds', async () => [{ id: PROJECT.id, name: `${'A'.repeat(99)}\u{1F4C4}` }]);
+
+    await worker.run('job-1');
+
+    assert.ok(zipText([...uploads.keys()][0]).includes(`${'A'.repeat(99)}/d1.pdf`));
+  });
+
+  await t.test('a project named errors.txt does not collide with the error list', async (tt) => {
+    const docs = [doc('d1')];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(projects, 'listByIds', async () => [{ id: PROJECT.id, name: 'Errors.TXT' }]);
+
+    await worker.run('job-1');
+
+    assert.match(zipText([...uploads.keys()][0]), /Errors\.TXT \(project\)\/d1\.pdf/);
+  });
+
   await t.test('a right-to-left override cannot disguise the extension', async () => {
     // "invoice‮fdp.exe" renders as "invoiceexe.pdf" in every file manager that honours it.
     const docs = [doc('d1', { documentFileName: 'invoice‮fdp.exe', fileExt: 'exe' })];
@@ -910,6 +930,16 @@ test('the bulk download worker', async (t) => {
 
     assert.strictEqual(readyPatch(patches).label, 'A'.repeat(98),
       'the label names the downloaded zip, and a trailing dot or space is lost on save');
+  });
+
+  await t.test('a project label cut short never keeps half of a character', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(projects, 'listByIds', async () => [{ id: PROJECT.id, name: `${'A'.repeat(99)}\u{1F4C4}` }]);
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).label, 'A'.repeat(99));
   });
 
   await t.test('a job cancelled before the worker dequeued it does no work', async (tt) => {
