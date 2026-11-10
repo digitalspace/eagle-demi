@@ -4536,6 +4536,35 @@ paths:
         '503':
           description: The row changed repeatedly while the push was retried. The caller retries.
 
+  /api/track/projects:
+    post:
+      summary: Store a project Track created
+      description: |-
+        Same body and answers as `PUT /api/track/projects/{id}`, with the id taken from
+        `project.id`. Both upsert, so a POST repeated after a timeout lands as an update.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        $ref: '#/components/requestBodies/TrackProject'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackProjectWritten'
+        '201':
+          $ref: '#/components/responses/TrackProjectCreated'
+        '400':
+          $ref: '#/components/responses/TrackProjectInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '409':
+          $ref: '#/components/responses/TrackProjectRefused'
+        '500':
+          description: The write failed.
+        '503':
+          $ref: '#/components/responses/TrackProjectRetry'
+
   /api/track/projects/{id}:
     parameters:
       - name: id
@@ -4545,76 +4574,35 @@ paths:
         schema:
           type: string
     put:
-      summary: Store a project pushed by Track
+      summary: Store a project's own fields pushed by Track
       description: |-
-        Receives one whole Track project with its works, phases and events nested, and writes it
-        under the same merge rules as the nightly sync. A project DEMI does not hold is created
-        at level 1. A field staff saved in DEMI is kept. Only the `apim:track` principal may call
-        this route.
+        Writes the Track project row under the same merge rules as the nightly sync. Works,
+        phases and events arrive as their own records, so this writes no work document. A
+        project DEMI does not hold is created at level 1. A field staff saved in DEMI is kept.
+        Only the `apim:track` principal may call this route, and it works whether or not
+        `WORKS_WRITE` is on.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [pushedAt, project]
-              properties:
-                pushedAt:
-                  type: integer
-                  format: int64
-                  description: >-
-                    Track's commit clock, epoch milliseconds. A push older than the stored one
-                    is refused with 409; an equal one is written.
-                project:
-                  type: object
-                  required: [id, works]
-                  description: The Track project row, with `works[].phases[].events[]` nested.
-                  properties:
-                    id:
-                      type: integer
-                      description: Must equal the `id` in the path.
-                    works:
-                      type: array
-                      items:
-                        type: object
+        $ref: '#/components/requestBodies/TrackProject'
       responses:
         '200':
-          description: >-
-            `action` is `updated` or `unchanged`, or `skipped` with `reason` `nativeClash` (a
-            native project holds this Eagle id) or `apiRow` (the row has no Track source).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrackPushResult'
+          $ref: '#/components/responses/TrackProjectWritten'
         '201':
-          description: A new row was written. `action` is `created` or `relinked`.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrackPushResult'
+          $ref: '#/components/responses/TrackProjectCreated'
         '400':
-          description: >-
-            Nothing was written. `code` is `PROJECT_ID_INVALID` (`id` is not a positive integer),
-            `PROJECT_ID_MISMATCH`, `PUSHED_AT_INVALID` (not a number, or over 5 minutes ahead) or
-            `PAYLOAD_INVALID` (a `works`, `phases` or `events` list is missing).
+          $ref: '#/components/responses/TrackProjectInvalid'
         '401':
           description: Unauthorized.
         '403':
           $ref: '#/components/responses/TrackForbidden'
         '409':
-          description: >-
-            Nothing was written. `code` is `STALE_PUSH` (a newer push already landed),
-            `CREATED_BEHIND` (another push created the row during this one; send it again) or
-            `DUPLICATE_ID` (the project's Eagle id is held by more than one row).
+          $ref: '#/components/responses/TrackProjectRefused'
         '500':
           description: The write failed.
         '503':
-          description: >-
-            The row changed repeatedly while the push was retried, or the `eagle-<id>` copy could
-            not be handed over. The caller retries, which repeats the hand-over.
+          $ref: '#/components/responses/TrackProjectRetry'
     delete:
       summary: Unpublish a project Track deleted
       description: |-
@@ -4622,7 +4610,7 @@ paths:
         the caller is still found. The documents follow. A row holding an Eagle copy is left
         untouched. An Eagle push cannot republish a deleted row. Undo with
         `PUT /api/projects/{id}/restore`, then `PUT /api/projects/{id}/level`. Any request body
-        is ignored.
+        is ignored. It reads no stamp, so it never answers `STALE_PUSH`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -4648,6 +4636,288 @@ paths:
             retries.
         '503':
           description: The row changed repeatedly while the delete was retried. The caller retries.
+
+  /api/track/projects/{pid}/works:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+    post:
+      summary: Store a work Track created, with its phases and events
+      description: |-
+        Writes the work document whole: phases and events it lacks are taken out, each only
+        where its own stamp is not newer. Then the project row's derived fields are patched
+        where they moved. A POST and a PUT both upsert by record id.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackWorkRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+
+  /api/track/projects/{pid}/works/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+      - $ref: '#/components/parameters/TrackRecordId'
+    put:
+      summary: Store a work's own fields pushed by Track
+      description: Replaces the work's fields and keeps its stored phases and events.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackWorkRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+    delete:
+      summary: Remove a work Track deleted
+      description: Leaves a tombstone holding the work's stamps, so no older record of it lands later.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TrackPushedAtQuery'
+        - $ref: '#/components/parameters/TrackWorkTypeIdQuery'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+
+  /api/track/projects/{pid}/phases:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+    post:
+      summary: Store a phase Track created
+      description: Writes the phase into the work its `work_id` names, keeping the phase's stored events.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackPhaseRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+
+  /api/track/projects/{pid}/phases/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+      - $ref: '#/components/parameters/TrackRecordId'
+    put:
+      summary: Store a phase Track changed
+      description: Replaces the phase's fields in its work document, keeping its stored events.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackPhaseRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+    delete:
+      summary: Remove a phase Track deleted, with its events
+      description: Track sends no call for the phase's events; each keeps a stamp so an older PUT cannot bring it back.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TrackPushedAtQuery'
+        - $ref: '#/components/parameters/TrackWorkTypeIdQuery'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+
+  /api/track/projects/{pid}/events:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+    post:
+      summary: Store an event Track created
+      description: Writes the event under the phase its `work_phase_id` names. A HIDDEN event is taken out instead.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackEventRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+
+  /api/track/projects/{pid}/events/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TrackProjectPid'
+      - $ref: '#/components/parameters/TrackRecordId'
+    put:
+      summary: Store an event Track changed
+      description: Replaces the event under the phase its `work_phase_id` names. A HIDDEN event is taken out instead.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackEventRecord'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
+    delete:
+      summary: Remove an event Track deleted
+      description: Takes the milestone out of its work document; its stamp stays.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TrackPushedAtQuery'
+        - $ref: '#/components/parameters/TrackWorkTypeIdQuery'
+      responses:
+        '200':
+          $ref: '#/components/responses/TrackRecordAnswered'
+        '400':
+          $ref: '#/components/responses/TrackRecordInvalid'
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/TrackForbidden'
+        '404':
+          $ref: '#/components/responses/TrackRecordNotFound'
+        '409':
+          $ref: '#/components/responses/TrackRecordRefused'
+        '500':
+          description: The write failed. The caller retries.
+        '503':
+          $ref: '#/components/responses/TrackRecordRetry'
 
   /api/eagle/comments/{eagleId}:
     put:
@@ -8404,6 +8674,35 @@ components:
         401. Test and prod set it to `demi-api`. Empty means the claim is not checked.
 
   parameters:
+    TrackProjectPid:
+      name: pid
+      in: path
+      required: true
+      description: The Track project id the record belongs to.
+      schema:
+        type: string
+    TrackRecordId:
+      name: id
+      in: path
+      required: true
+      description: The Track record id. Must equal the record's `id` in the body.
+      schema:
+        type: string
+    TrackPushedAtQuery:
+      name: pushedAt
+      in: query
+      required: true
+      description: Track's commit clock, epoch milliseconds. Missing or empty answers 400.
+      schema:
+        type: integer
+        format: int64
+    TrackWorkTypeIdQuery:
+      name: workTypeId
+      in: query
+      required: true
+      description: The work's Track type. A type the nightly leaves out answers 200 `skipped`.
+      schema:
+        type: integer
     ProjectState:
       name: projectState
       in: query
@@ -8593,6 +8892,90 @@ components:
         Forbidden. Only Track may call the push: the caller must be a registry principal listed
         in `DEMI_TRACK_PRINCIPALS` (default `apim:track`), hold `demi-service-write`, and carry
         no project scope. An empty setting refuses everyone.
+    TrackProjectWritten:
+      description: >-
+        `action` is `updated` or `unchanged`, or `skipped` with `reason` `nativeClash` (a
+        native project holds this Eagle id) or `apiRow` (the row has no Track source).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TrackPushResult'
+    TrackProjectCreated:
+      description: A new row was written. `action` is `created` or `relinked`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TrackPushResult'
+    TrackProjectInvalid:
+      description: >-
+        Nothing was written. `code` is `PROJECT_ID_INVALID` (an id is not a positive integer),
+        `PROJECT_ID_MISMATCH` (`project.id` differs from the path) or `PUSHED_AT_INVALID` (not
+        integer epoch milliseconds, or over 5 minutes ahead).
+    TrackProjectRefused:
+      description: >-
+        Nothing was written. `code` is `STALE_PUSH` (a newer push already landed),
+        `CREATED_BEHIND` (another push created the row during this one; send it again) or
+        `DUPLICATE_ID` (the project's Eagle id is held by more than one row).
+    TrackProjectRetry:
+      description: >-
+        The row changed repeatedly while the push was retried, or the `eagle-<id>` copy could
+        not be handed over. The caller retries, which repeats the hand-over.
+    TrackRecordAnswered:
+      description: >-
+        `action` is `applied`, or `skipped` with `reason` `unmirrored` (the nightly leaves this
+        work type out of DEMI, so nothing was written).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TrackRecordResult'
+    TrackRecordInvalid:
+      description: >-
+        Nothing was written. `code` is `PROJECT_ID_INVALID` or `RECORD_ID_INVALID` (a path id
+        is not a positive integer), `RECORD_ID_MISMATCH` (the record's `id` differs from the
+        path, or is missing on POST), `PROJECT_ID_MISMATCH` (`work.project_id` differs from the
+        path), `PUSHED_AT_INVALID`, `WORK_TYPE_INVALID` or `PAYLOAD_INVALID` (the record is
+        missing, or a new work lacks `phases[]` or a phase's `events[]`).
+    TrackRecordNotFound:
+      description: >-
+        Nothing was written. `code` is `PROJECT_NOT_FOUND` (DEMI holds no project row with this
+        id) or `PARENT_NOT_FOUND` (no live work, or no phase, holds this record). The caller
+        retries a missing parent once, since it may still be in flight.
+    TrackRecordRefused:
+      description: >-
+        Nothing was written. `code` is `STALE_PUSH` (a newer push for this record already
+        landed) or `NOT_BACKFILLED` (`WORKS_WRITE` is off, so DEMI does not take Track works
+        yet; repeating the call does not help).
+    TrackRecordRetry:
+      description: >-
+        `code` is `WRITE_CONFLICT` (the work document changed on every try; nothing was
+        written) or `DERIVED_CONFLICT` (the work document was written but the project row's
+        derived fields were not). The caller retries; the same record applies again.
+
+  requestBodies:
+    TrackProject:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [pushedAt, project]
+            properties:
+              pushedAt:
+                type: integer
+                format: int64
+                description: >-
+                  Track's commit clock, epoch milliseconds. A push older than the stored one is
+                  refused with 409; an equal one is written.
+              project:
+                type: object
+                required: [id]
+                description: >-
+                  The Track project row's own fields (`name`, `proponent`, `type`,
+                  `project_state` and the rest). No `works`: those arrive as their own records.
+                properties:
+                  id:
+                    type: integer
+                    description: Must equal the `id` in the path, where there is one.
 
   schemas:
     RequestStats:
@@ -9938,6 +10321,84 @@ components:
           type: string
           enum: [nativeClash, apiRow, demiOwned, eagleLinked]
           description: Only when `action` is `skipped`.
+
+    TrackRecordResult:
+      type: object
+      required: [id, action]
+      properties:
+        id:
+          type: string
+          description: The Track record id.
+        action:
+          type: string
+          enum: [applied, skipped]
+        reason:
+          type: string
+          enum: [unmirrored]
+          description: Only when `action` is `skipped`.
+
+    TrackWorkRecord:
+      type: object
+      required: [pushedAt, workTypeId, work]
+      properties:
+        pushedAt:
+          type: integer
+          format: int64
+          description: Track's commit clock, epoch milliseconds, at most 5 minutes ahead.
+        workTypeId:
+          type: integer
+        work:
+          type: object
+          required: [id, project_id]
+          description: >-
+            The Track work row. On POST it also carries `phases[]`, each with `events[]`, and
+            both lists are required.
+          properties:
+            id:
+              type: integer
+            project_id:
+              type: integer
+              description: Must equal `pid` in the path.
+
+    TrackPhaseRecord:
+      type: object
+      required: [pushedAt, workTypeId, phase]
+      properties:
+        pushedAt:
+          type: integer
+          format: int64
+        workTypeId:
+          type: integer
+        phase:
+          type: object
+          required: [id, work_id]
+          description: The Track work phase row, with its phase code nested as `phase`.
+          properties:
+            id:
+              type: integer
+            work_id:
+              type: integer
+
+    TrackEventRecord:
+      type: object
+      required: [pushedAt, workTypeId, event]
+      properties:
+        pushedAt:
+          type: integer
+          format: int64
+        workTypeId:
+          type: integer
+        event:
+          type: object
+          required: [id, work_id, work_phase_id]
+          description: The Track event row, with its `event_configuration` nested.
+          properties:
+            id:
+              type: integer
+            work_id:
+              type: integer
+            work_phase_id:
+              type: integer
 
     EngagePushResult:
       type: object

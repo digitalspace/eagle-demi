@@ -411,10 +411,10 @@ test('with the flag off only the assessment phases are read and works stays empt
   assert.strictEqual(works.size, 0);
 });
 
-/** A fresh copy of Track's push payload, so no test can change what the next one sees. */
-const pushPayload = () => structuredClone(require('../fixtures/track-push-payload.json'));
+/** Track's nested new work, as a fresh copy, so no test can change what the next one sees. */
+const nestedWorks = () => ({ works: [structuredClone(require('../fixtures/track-records/new_work.json').work)] });
 
-/** The same project as the per-work routes serve it: outcome names become ids on their configuration. */
+/** The same works as the per-work routes serve them: outcome names become ids on their configuration. */
 function perWorkReads(payload) {
   const reads = { works: [], phasesByWork: {}, eventsByPhase: {}, outcomesByConfiguration: {} };
   const outcomeId = (configurationId, name) => {
@@ -436,19 +436,15 @@ function perWorkReads(payload) {
   return reads;
 }
 
-/** The mapped push, once its `works` and `phases` are proven equal to the per-work reads of the same payload. */
-async function pushMatchingReads(payload) {
-  const { trackPushToSync } = require('../../src/seed/sources');
+/** Project 1001's works and assessment phases as the nightly reads them. */
+async function readsOf(payload) {
   const reads = await pullWorks(fakeTrackWorks(perWorkReads(payload)));
-  const pushed = trackPushToSync(payload);
-  assert.deepStrictEqual(pushed.works, reads.works.get('1001'));
-  assert.deepStrictEqual(pushed.phases, reads.phases.get('1001'));
-  return pushed;
+  return { works: reads.works.get('1001'), phases: reads.phases.get('1001') };
 }
 
-/** Track's fixture with an inactive amendment, the higher work id, listed before the assessment. */
+/** The fixture with an inactive amendment, the higher work id, listed before the assessment. */
 function amendmentListedFirst() {
-  const payload = pushPayload();
+  const payload = nestedWorks();
   const [assessment] = payload.works;
   const amendment = structuredClone(assessment);
   Object.assign(amendment, { id: 2003, is_active: false, work_type_id: 7, work_type: { id: 7, name: 'Amendment' } });
@@ -457,56 +453,39 @@ function amendmentListedFirst() {
   return payload;
 }
 
-/** Track's fixture with a later assessment phase listed before the first. */
+/** The fixture with a later assessment phase listed before the first. */
 function laterPhaseListedFirst() {
-  const payload = pushPayload();
+  const payload = nestedWorks();
   const [phase] = payload.works[0].phases;
   payload.works[0].phases.unshift({ ...structuredClone(phase), id: 3002, sort_order: 7, events: [] });
   return payload;
 }
 
-/** Track's fixture with the END event listed before the START event. */
+/** The fixture with the END event listed before the START event. */
 function decisionListedFirst() {
-  const payload = pushPayload();
+  const payload = nestedWorks();
   const [phase] = payload.works[0].phases;
   phase.events.reverse();
   return payload;
 }
 
-test('a Track push orders its works by id and keeps an inactive mirrored one', async () => {
-  const pushed = await pushMatchingReads(amendmentListedFirst());
+test('the nightly orders works by id and keeps an inactive mirrored one', async () => {
+  const { works } = await readsOf(amendmentListedFirst());
 
-  assert.deepStrictEqual(pushed.works.map(w => [w.trackWorkId, w.isActive]), [[2001, true], [2003, false]]);
+  assert.deepStrictEqual(works.map(w => [w.trackWorkId, w.isActive]), [[2001, true], [2003, false]]);
 });
 
-test('a Track push orders its phases by sort order', async () => {
-  const pushed = await pushMatchingReads(laterPhaseListedFirst());
+test('the nightly orders a work\'s phases by sort order', async () => {
+  const { works, phases } = await readsOf(laterPhaseListedFirst());
 
-  assert.deepStrictEqual(pushed.phases.map(p => p.sortOrder), [1, 7]);
-  assert.deepStrictEqual(pushed.works[0].phases.map(p => p.sortOrder), [1, 7]);
+  assert.deepStrictEqual(phases.map(p => p.sortOrder), [1, 7]);
+  assert.deepStrictEqual(works[0].phases.map(p => p.sortOrder), [1, 7]);
 });
 
-test('a Track push orders its events by template order', async () => {
-  const pushed = await pushMatchingReads(decisionListedFirst());
+test('the nightly orders events by template order', async () => {
+  const { works } = await readsOf(decisionListedFirst());
 
-  assert.deepStrictEqual(pushed.works[0].milestones.map(m => m.name), ['Assessment start template', 'Decision template']);
-});
-
-test('a Track push maps to the same works and phases as the per-work reads', async () => {
-  const pushed = await pushMatchingReads(pushPayload());
-
-  assert.deepStrictEqual(pushed.works.map(w => w.trackWorkId), [2001], 'the type 4 work dropped');
-  assert.strictEqual(pushed.works[0].outcome, 'Certificate Issued');
-  assert.deepStrictEqual(pushed.works[0].milestones.map(m => m.name),
-    ['Assessment start template', 'Decision template'], 'the HIDDEN event dropped');
-});
-
-test('a Track push with no works list is refused rather than read as no works', () => {
-  const { trackPushToSync } = require('../../src/seed/sources');
-  const { works, ...bare } = pushPayload();
-
-  assert.ok(works.length, 'the fixture has works to lose');
-  assert.throws(() => trackPushToSync(bare), /project 1001 works is not a list/);
+  assert.deepStrictEqual(works[0].milestones.map(m => m.name), ['Assessment start template', 'Decision template']);
 });
 
 // eagle-api allows 200 requests a minute, so 429 handling decides whether a comment sweep

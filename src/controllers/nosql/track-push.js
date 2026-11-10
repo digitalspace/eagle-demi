@@ -1,14 +1,15 @@
 'use strict';
 
-// Track's writes as they commit: `PUT` and `DELETE /track/projects/:id`, under the nightly run's merge rules.
-// Failures log a `[track-push]` line at error, which the alert matches; a race Track can repeat logs at warn.
+// Track's writes as they commit, one record per call under `/track/projects`. Refusals log `[track-push]` at
+// error, which the alert matches; a race Track repeats, a missing parent and the works flag off log at warn.
 
 const projects = require('../../repositories/projects');
 const { levelOfRead } = require('../../helpers/access-sql');
 const { DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { isDemiOwnedProject } = require('../../merge/project');
-const { trackPushToSync } = require('../../seed/sources');
+const { isMirrored } = require('../../seed/track-mappers');
 const { writeTrackProject } = require('../../scripts/sync-track-projects');
+const { RESULT, writeTrackRecord } = require('../../scripts/track-record-write');
 const { TRACK_PUSHED_AT } = require('../../ownership/project');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
@@ -21,15 +22,19 @@ const MAX_PUSH_AHEAD_MS = 5 * 60 * 1000;
 // Below this a stamp is in seconds, and every later push in milliseconds would outrank it.
 const MIN_PUSHED_AT = 1e12;
 
-/** Logged at error: nothing was written. */
-function refuse(res, id, status, code, error) {
-  logger.error(`[track-push] refused id=${id} code=${code}`, { error });
-  return res.status(status).json({ error, code, id });
+const isTrackId = (value) => TRACK_ID.test(String(value ?? ''));
+const refusal = (code, message) => ({ refusal: [code, message] });
+
+/** Logged at warn for the two answers Track expects in normal running, at error otherwise: nothing was written. */
+function refuse(res, id, status, code, error, answerId = id) {
+  const level = code === 'PARENT_NOT_FOUND' || code === 'NOT_BACKFILLED' ? 'warn' : 'error';
+  logger[level](`[track-push] refused id=${id} code=${code}`, { error });
+  return res.status(status).json({ error, code, id: answerId });
 }
 
 /** The path segment is untrusted until it passes `TRACK_ID`, so it is encoded before it reaches the log. */
-const refuseId = (res, id) =>
-  refuse(res, encodeURIComponent(id), 400, 'PROJECT_ID_INVALID', 'The :id in the path must be a positive integer');
+const refuseId = (res, id, code = 'PROJECT_ID_INVALID') =>
+  refuse(res, encodeURIComponent(id), 400, code, 'The ids in the path must be positive integers');
 
 /** A 500 with no detail in the body; only the log holds what went wrong. */
 function failed(res, id, verb, err) {
@@ -37,37 +42,36 @@ function failed(res, id, verb, err) {
   return res.status(500).json({ error: 'Internal server error', id });
 }
 
-/** `{ project, pushedAt }`, or `{ refusal: [code, message] }` when the body and path disagree. */
-function trackPush(id, body) {
+// A stamp far ahead would make every real push look stale until the clock caught up.
+const validStamp = (pushedAt) =>
+  Number.isInteger(pushedAt) && pushedAt >= MIN_PUSHED_AT && pushedAt <= Date.now() + MAX_PUSH_AHEAD_MS;
+const STAMP_REFUSAL = refusal('PUSHED_AT_INVALID', 'pushedAt must be integer epoch milliseconds, at most 5 minutes ahead');
+
+/** The project record of `{ pushedAt, project }`, or a refusal; `id` is the path id, absent on POST. */
+function projectRecord(body, id) {
   const { project, pushedAt } = body || {};
-  if (!project || typeof project !== 'object' || String(project.id ?? '') !== id) {
-    return { refusal: ['PROJECT_ID_MISMATCH', 'body.project.id must match the :id in the path'] };
+  if (!project || typeof project !== 'object' || !isTrackId(project.id)) {
+    return refusal('PROJECT_ID_INVALID', 'body.project.id must be a positive integer');
   }
-  // A stamp far ahead would make every real push look stale until the clock caught up.
-  if (!Number.isFinite(pushedAt) || pushedAt < MIN_PUSHED_AT || pushedAt > Date.now() + MAX_PUSH_AHEAD_MS) {
-    return { refusal: ['PUSHED_AT_INVALID', 'body.pushedAt must be epoch milliseconds, at most 5 minutes ahead'] };
+  if (id !== undefined && String(project.id) !== id) {
+    return refusal('PROJECT_ID_MISMATCH', 'body.project.id must match the :id in the path');
   }
-  return { project, pushedAt };
+  if (!validStamp(pushedAt)) return STAMP_REFUSAL;
+  // The row writer takes only the project's own fields; works arrive as their own records.
+  const { works: _works, ...fields } = project;
+  return { project: fields, pushedAt };
 }
 
-/** `PUT /track/projects/:id`: creates the row when absent. */
-exports.putTrackProject = async (req, res) => {
-  const id = String(req.params.id);
-  if (!TRACK_ID.test(id)) return refuseId(res, id);
+/** POST and PUT of a project row, created at level 1 when absent. */
+async function writeProject(req, res, pathId) {
+  const label = pathId ?? String((req.body && req.body.project && req.body.project.id) ?? '');
   try {
-    const push = trackPush(id, req.body);
-    if (push.refusal) return refuse(res, id, 400, ...push.refusal);
+    const record = projectRecord(req.body, pathId);
+    if (record.refusal) return refuse(res, encodeURIComponent(label), 400, ...record.refusal);
+    const { project, pushedAt } = record;
+    const id = String(project.id);
 
-    let mapped;
-    try {
-      mapped = trackPushToSync(push.project);
-    } catch (err) {
-      return refuse(res, id, 400, 'PAYLOAD_INVALID', err.message);
-    }
-
-    const { pushedAt } = push;
-    const { project, phases, works } = mapped;
-    const result = await writeTrackProject(project, { phases, works, pushedAt });
+    const result = await writeTrackProject(project, { pushedAt });
     const { action, reason, held = [], stateMove = null } = result;
     const audit = (auditedAction) => auditEvent(req, {
       action: 'project.push',
@@ -92,15 +96,25 @@ exports.putTrackProject = async (req, res) => {
     }
     if (action === 'skipped') return res.json({ id, action, reason });
 
-    logger.info(`[track-push] put id=${id} action=${action}`, { held, stateMove, [TRACK_PUSHED_AT]: pushedAt });
+    logger.info(`[track-push] ${req.method === 'POST' ? 'post' : 'put'} id=${id} action=${action}`,
+      { held, stateMove, [TRACK_PUSHED_AT]: pushedAt });
     if (WRITTEN_STATUS[action]) audit(action);
     return res.status(WRITTEN_STATUS[action] || 200).json({ id, action });
   } catch (err) {
     if (err.code === DUPLICATE_ID) {
-      return refuse(res, id, 409, DUPLICATE_ID, 'This project\'s Eagle id is stored more than once. Nothing was written.');
+      return refuse(res, label, 409, DUPLICATE_ID, 'This project\'s Eagle id is stored more than once. Nothing was written.');
     }
-    return failed(res, id, 'put', err);
+    return failed(res, encodeURIComponent(label), 'write', err);
   }
+}
+
+/** `POST /track/projects`: the id comes from the body. */
+exports.postTrackProject = (req, res) => writeProject(req, res, undefined);
+
+/** `PUT /track/projects/:id`. */
+exports.putTrackProject = (req, res) => {
+  const id = String(req.params.id);
+  return isTrackId(id) ? writeProject(req, res, id) : refuseId(res, id);
 };
 
 /** Why a Track delete leaves this row alone: no Track source, DEMI's own, or linked to Eagle, whose admin must not feel it. */
@@ -113,7 +127,7 @@ function skipReason(row) {
 /** `DELETE /track/projects/:id`: unpublishes and keeps the row. Reads no body and no stamp. */
 exports.deleteTrackProject = async (req, res) => {
   const id = String(req.params.id);
-  if (!TRACK_ID.test(id)) return refuseId(res, id);
+  if (!isTrackId(id)) return refuseId(res, id);
   try {
     const result = await deleteProjectRow(req, id, {
       // Unfiltered, like the Eagle push: a row hidden from this principal still has to come down.
@@ -150,3 +164,96 @@ exports.deleteTrackProject = async (req, res) => {
     return failed(res, id, 'delete', err);
   }
 };
+
+/** Writer results that write nothing: `[status, code, message]`. */
+const RECORD_REFUSALS = {
+  [RESULT.STALE]: [409, 'STALE_PUSH', 'A newer push for this record has already been written.'],
+  [RESULT.PARENT_NOT_FOUND]: [404, 'PARENT_NOT_FOUND', 'DEMI holds no live work or phase for this record.'],
+  [RESULT.PROJECT_NOT_FOUND]: [404, 'PROJECT_NOT_FOUND', 'Project not found'],
+  [RESULT.NOT_BACKFILLED]: [409, 'NOT_BACKFILLED', 'DEMI does not take Track works yet.'],
+  [RESULT.CONFLICT]: [503, 'WRITE_CONFLICT', RETRY],
+  [RESULT.DERIVED_CONFLICT]: [503, 'DERIVED_CONFLICT', RETRY]
+};
+
+/** Whether a new work carries its `phases[].events[]` lists; a missing one would clear the stored ones. */
+const nestedListsOf = (work) =>
+  Array.isArray(work.phases) && work.phases.every(phase => phase && Array.isArray(phase.events));
+
+/** A child POST or PUT body checked against its path: `{ pushedAt, workTypeId }`, or a refusal. */
+function childBody(kind, method, { pid, id }, body) {
+  const { pushedAt, workTypeId, [kind]: record } = body || {};
+  if (!record || typeof record !== 'object') return refusal('PAYLOAD_INVALID', `body.${kind} must be an object`);
+  if (method === 'POST' ? !isTrackId(record.id) : String(record.id) !== id) {
+    return refusal('RECORD_ID_MISMATCH', `body.${kind}.id must be a positive integer equal to any :id in the path`);
+  }
+  if (kind === 'work' && String(record.project_id) !== pid) {
+    return refusal('PROJECT_ID_MISMATCH', 'body.work.project_id must match the :pid in the path');
+  }
+  if (!validStamp(pushedAt)) return STAMP_REFUSAL;
+  if (!Number.isInteger(workTypeId) || workTypeId < 1) return refusal('WORK_TYPE_INVALID', 'workTypeId must be a positive integer');
+  if (kind === 'work' && method === 'POST' && !nestedListsOf(record)) {
+    return refusal('PAYLOAD_INVALID', 'a new work must carry phases[], each with events[]');
+  }
+  return { pushedAt, workTypeId };
+}
+
+/** A child DELETE's `?pushedAt=&workTypeId=`; both required, since an empty value would parse to 0. */
+function childQuery(query = {}) {
+  const pushedAt = /^\d+$/.test(String(query.pushedAt ?? '')) ? Number(query.pushedAt) : NaN;
+  if (!validStamp(pushedAt)) return STAMP_REFUSAL;
+  if (!isTrackId(query.workTypeId)) return refusal('WORK_TYPE_INVALID', 'workTypeId must be a positive integer');
+  return { pushedAt, workTypeId: Number(query.workTypeId) };
+}
+
+/** One work, phase or event record written into its work document. */
+const recordRoute = (kind, method) => async (req, res) => {
+  const { pid } = req.params;
+  const id = req.params.id === undefined ? undefined : String(req.params.id);
+  if (!isTrackId(pid)) return refuseId(res, pid);
+  if (id !== undefined && !isTrackId(id)) return refuseId(res, id, 'RECORD_ID_INVALID');
+
+  const checked = method === 'DELETE' ? childQuery(req.query) : childBody(kind, method, { pid, id }, req.body);
+  const recordId = id ?? String((((req.body || {})[kind]) || {}).id ?? '');
+  const label = `${pid}/${kind}:${encodeURIComponent(recordId)}`;
+  if (checked.refusal) return refuse(res, label, 400, ...checked.refusal, recordId);
+  const { pushedAt, workTypeId } = checked;
+  // The nightly leaves these work types out of DEMI, so their records have nowhere to land.
+  if (!isMirrored({ work_type_id: workTypeId })) {
+    logger.info(`[track-push] skipped id=${label} reason=unmirrored workTypeId=${workTypeId}`);
+    return res.json({ id: recordId, action: 'skipped', reason: 'unmirrored' });
+  }
+
+  try {
+    const body = method === 'DELETE' ? { pushedAt, workTypeId, id } : req.body;
+    const { status } = await writeTrackRecord(kind, method, pid, body);
+    if (status === RESULT.APPLIED) {
+      auditEvent(req, {
+        action: 'project.push',
+        targetType: kind,
+        targetId: recordId,
+        projectId: pid,
+        detail: { sourceSystem: 'track', record: kind, method, pushedAt }
+      });
+      return res.json({ id: recordId, action: 'applied' });
+    }
+    const [httpStatus, code, error] = RECORD_REFUSALS[status];
+    if (status === RESULT.STALE) logger.info(`[track-push] stale id=${label}`, { [TRACK_PUSHED_AT]: pushedAt });
+    else if (status === RESULT.CONFLICT) {
+      logger.error(`[track-push] ${method === 'DELETE' ? 'delete lost its etag race' : 'write failed'} id=${label}`);
+    } else if (status !== RESULT.DERIVED_CONFLICT) return refuse(res, label, httpStatus, code, error, recordId);
+    // The writer logged the lost derived patch.
+    return res.status(httpStatus).json({ error, code, id: recordId });
+  } catch (err) {
+    return failed(res, label, method.toLowerCase(), err);
+  }
+};
+
+exports.postTrackWork = recordRoute('work', 'POST');
+exports.putTrackWork = recordRoute('work', 'PUT');
+exports.deleteTrackWork = recordRoute('work', 'DELETE');
+exports.postTrackPhase = recordRoute('phase', 'POST');
+exports.putTrackPhase = recordRoute('phase', 'PUT');
+exports.deleteTrackPhase = recordRoute('phase', 'DELETE');
+exports.postTrackEvent = recordRoute('event', 'POST');
+exports.putTrackEvent = recordRoute('event', 'PUT');
+exports.deleteTrackEvent = recordRoute('event', 'DELETE');

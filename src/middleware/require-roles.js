@@ -115,7 +115,7 @@ const requireEagleMirror = namedWriter(() => config.eagleMirrorPrincipals, 'Eagl
 /** The ENGAGE ingest, PUT /engage/*. Same terms as the Eagle mirror, its own list (`config.engagePrincipals`). */
 const requireEngageWriter = namedWriter(() => config.engagePrincipals, 'ENGAGE');
 
-/** The Track push, /track/projects/:id. Same terms, its own list (`config.trackPrincipals`). */
+/** The Track push, /track/projects and its works, phases and events. Same terms, its own list (`config.trackPrincipals`). */
 const requireTrackWriter = namedWriter(() => config.trackPrincipals, 'Track');
 
 /**

@@ -1,21 +1,13 @@
 'use strict';
 
-/**
- * In-memory `documents`, `projects`, `lists`, `notifications`, `updates`, `commentPeriods` and `comments`
- * containers for the Eagle mirror's existence reads.
- *
- * The one predicate it evaluates is the seal exclusion every ACL-gated read carries,
- * `NOT ARRAY_CONTAINS(c.read, '<sealed>')`, with Cosmos semantics: on a row with no `read[]` the
- * term is undefined and the row drops out. That is what makes a gated read miss a read-less or
- * sealed row while an unfiltered one finds it. Any other parameter throws, so a query shape this
- * store does not understand fails loudly instead of matching everything.
- */
+// In-memory Cosmos containers (`PARTITION` names them). Of predicates only the seal term runs, dropping a row with
+// no `read[]` as Cosmos does; any other parameter throws, so an unknown query shape fails instead of matching all.
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
 const PARTITION = {
   documents: 'projectId', projects: 'id', lists: 'kind', notifications: 'id', updates: 'id', commentPeriods: 'projectId',
-  comments: 'periodId'
+  comments: 'periodId', works: 'projectId'
 };
 const FIELD_OF_PARAM = { '@id': 'id', '@eagleId': 'eagleId', '@projectId': 'projectId', '@kind': 'kind', '@periodId': 'periodId' };
 

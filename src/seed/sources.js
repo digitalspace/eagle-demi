@@ -337,30 +337,6 @@ const worksBudgetMs = 10 * 60 * 1000;
 /** Projects whose works are read at once. */
 const WORKS_CONCURRENCY = 8;
 
-/** A list the push must send; a missing one would read as "none" and clear the stored rows. */
-function pushedList(value, what) {
-  if (!Array.isArray(value)) throw new Error(`[track-push] ${what} is not a list`);
-  return value;
-}
-
-/** Track's push, one project with `works[].phases[].events[]` nested, mapped to what the per-work reads
- * of `fetchTrackWorks` give that project. `project` is the raw row the sync takes. */
-function trackPushToSync(payload) {
-  const { works: pushed, ...project } = payload;
-  const projectWorks = pushedList(pushed, `project ${project.id} works`).map(work => ({
-    ...work,
-    project_id: project.id,
-    phases: pushedList(work.phases, `work ${work.id} phases`).map(wp =>
-      ({ ...wp, events: pushedList(wp.events, `work phase ${wp.id} events`) }))
-  }));
-
-  const assessment = assessmentWorkByProject(projectWorks).get(String(project.id));
-  const phases = assessment ? phaseEventsOf(assessment).map(p => p.phase) : [];
-  const works = projectWorks.filter(isMirrored).sort((a, b) => a.id - b.id)
-    .map(work => trackWorkToPublic(work, phaseEventsOf(work)));
-  return { project, phases, works };
-}
-
 /**
  * Assessment phases and, with `opts.works`, every mirrored work, keyed by Track project id: `works` in the
  * row's public shape, `nested` as Track's `phases[].events[]`. A failed read leaves only that project out.
@@ -555,7 +531,6 @@ module.exports = {
   fetchTrackProjects,
   loadTrackProjects,
   fetchTrackWorks,
-  trackPushToSync,
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,

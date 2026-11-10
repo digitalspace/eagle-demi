@@ -11,7 +11,7 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
 const {
-  requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requireTrackWriter, requirePdfTitleWorker
+  requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requirePdfTitleWorker
 } = require('../middleware/require-roles');
 // Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
 // grant can widen what one caller sees — see middleware/credentials.js.
@@ -42,7 +42,6 @@ const documentController = () => require('../controllers/nosql/document');
 const updateController = () => require('../controllers/nosql/update');
 const commentPeriodController = () => require('../controllers/nosql/comment-period');
 const engageCommentPeriodController = () => require('../controllers/nosql/engage-comment-period');
-const trackPushController = () => require('../controllers/nosql/track-push');
 const commentController = () => require('../controllers/nosql/comment');
 const organizationController = () => require('../controllers/nosql/organization');
 const notificationController = () => require('../controllers/nosql/notification');
@@ -269,9 +268,7 @@ const routes = [
   // (src/sync-out). Pinned to DEMI_ENGAGE_PRINCIPALS on the same terms as the Eagle mirror.
   { method: 'put', path: '/engage/engagements/:engagementId', guards: [authMiddleware, requireWrite, requireEngageWriter], load: () => engageCommentPeriodController().upsertFromEngage },
 
-  // Track push: each Track write sends the whole project. Pinned to DEMI_TRACK_PRINCIPALS, same terms.
-  { method: 'put', path: '/track/projects/:id', guards: [authMiddleware, requireWrite, requireTrackWriter], load: () => trackPushController().putTrackProject },
-  { method: 'delete', path: '/track/projects/:id', guards: [authMiddleware, requireWrite, requireTrackWriter], load: () => trackPushController().deleteTrackProject },
+  ...require('./routes-track'),
 
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
@@ -415,8 +412,6 @@ const routes = [
   { method: 'post', path: '/projects/:id/extensions', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').createExtension },
   { method: 'put', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').updateExtension },
   { method: 'delete', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').deleteExtension },
-
-  // port: project-legislation
 
   // port: sitemap
   { method: 'get', path: '/sitemap.xml', guards: [], load: () => require('../controllers/sitemap').getSitemap },

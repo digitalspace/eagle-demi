@@ -23,6 +23,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROUTER_PATH = path.join(__dirname, '..', '..', 'src', 'http', 'routes.js');
+// Route files `routes.js` spreads in; their entries are part of the one table.
+const ROUTE_PARTS = ['routes-track.js'].map(name => path.join(path.dirname(ROUTER_PATH), name));
 
 /** Strip comments so a gate named only in prose cannot satisfy an assertion about code. */
 function code(source) {
@@ -32,13 +34,14 @@ function code(source) {
 }
 
 /**
- * Every route declared in `src/http/routes.js`, comments already stripped.
+ * Every route declared in `src/http/routes.js` and the files it spreads in, comments already stripped.
  *
  * @returns {{method: string, path: string, chain: string}[]} `chain` is the guard list as written —
  *   what a `\bauthMiddleware\b` test asserts against.
  */
 function routeChains(source) {
-  const table = code(source === undefined ? fs.readFileSync(ROUTER_PATH, 'utf8') : source);
+  const read = () => [ROUTER_PATH, ...ROUTE_PARTS].map(file => fs.readFileSync(file, 'utf8')).join('\n');
+  const table = code(source === undefined ? read() : source);
   return [...table.matchAll(/method:\s*'(\w+)',\s*path:\s*'([^']+)',\s*guards:\s*\[([^\]]*)\]/g)]
     .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
 }
