@@ -1,23 +1,7 @@
 'use strict';
 
-/**
- * Reading the ROUTE TABLE SOURCE, for the assertions the runtime table cannot make.
- *
- * A guard is a function value in `guards: [...]`, so at runtime a table entry cannot say whether it
- * holds `authMiddleware` or `passiveAuthMiddleware` — the second attaches an anonymous access
- * object instead of rejecting, and swapping one for the other turns a privileged route into a
- * public one while a guard COUNT stays satisfied. The distinction survives only in the source.
- *
- * Both halves of this module exist because a source scan has one failure of its own: source text
- * includes comments, so a guard named in prose reads exactly like a guard that is called. Stripping
- * is not optional — a route whose guard has been deleted and replaced by a comment naming it still
- * matches, while running no auth at all. `access-coverage.test.js` proves the stripper works rather
- * than assuming it ("a gate named only in a comment does not count"); keep that test here.
- *
- * This scans text; it does not parse an AST. Someone determined to defeat it can. That is
- * deliberate — the failure that actually happens is forgetting, and a text scan catches forgetting.
- * A parser would cost a dependency to defend against an adversary who already has commit access.
- */
+// The route table's source: at runtime a guard is a function, so `authMiddleware` and `passiveAuthMiddleware`
+// look alike. Comments are stripped first, or a guard named in prose would pass for one that runs.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -46,13 +30,7 @@ function routeChains(source) {
     .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
 }
 
-/**
- * The ARGUMENT text of every call `opener` matches, read to its MATCHING paren rather than to the
- * end of the line — a call that spans lines is most of them in these controllers, and a
- * line-bounded scan silently misses `deleted: <row>` three lines below its `res.json(`.
- *
- * Comments are stripped first, so a call site named only in prose cannot satisfy an assertion.
- */
+/** The argument text of every call `opener` matches, read to its matching paren: most calls here span lines. */
 function balancedArgs(source, opener) {
   const body = code(source);
   const args = [];
