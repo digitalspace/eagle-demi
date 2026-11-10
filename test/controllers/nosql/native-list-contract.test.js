@@ -162,6 +162,14 @@ test('native list contract', async (t) => {
     assert.strictEqual((await call(list, 'sort=dateAdded,-author', { user: STAFF })).status, 400);
   });
 
+  await t.test('a row whose own dial hides the sort field is left out', () => {
+    const access = { authenticated: true, roles: ['staff'], level: 2 };
+    const parsed = parseNativeQuery(SPEC, { sort: 'author' }, access);
+    const clauses = nativeCriteria(SPEC, parsed, access).criteria.map(c => c.clause).join(' AND ');
+    const rows = [{ id: 'hid', author: 'A', vis: { author: 1 } }, { id: 'shown', author: 'B' }];
+    assert.deepStrictEqual(rows.filter(row => !clauses || evaluate(clauses, row, {})).map(row => row.id), ['shown']);
+  });
+
   await t.test(`ids above ${MAX_IDS} are refused`, async (t) => {
     fakeCosmos(t);
     const ids = Array.from({ length: MAX_IDS + 1 }, (_, i) => `id${i}`).join(',');
