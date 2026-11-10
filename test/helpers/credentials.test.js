@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * Selected Credentials — the grant, the window, and the one extra OR arm.
- *
- * The dangerous direction here is a grant that reaches further than it says: further in ids,
- * further in levels, or further in time. Every case below is written against that, and the SQL and
- * OData assertions exist because `canRead` alone cannot see the two predicates a list read and a
- * search actually run.
- */
+// Each case guards a grant reaching further than it says, in ids, levels or time. SQL and OData
+// are asserted too because `canRead` cannot see the predicates list reads and searches run.
 
 process.env.NODE_ENV = 'test';
 
