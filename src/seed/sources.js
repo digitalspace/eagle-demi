@@ -12,6 +12,11 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const { clientCredentialsToken } = require('../services/keycloak-client-token');
 const { mapLimit } = require('../utils/worker-pool');
+const { pickAssessmentWork } = require('../merge/assessment-work');
+const {
+  nameOf, workTypeIdOf, isMirrored, projectKeyOf, isoOrNull, trackWorkToPublic, orderedPhases, shownEvents,
+  phaseEventsOf
+} = require('./track-mappers');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
@@ -256,9 +261,6 @@ async function eagleRowLive(dataset, id, fetchPage = searchPage) {
   return found;
 }
 
-/** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */
-const nameOf = (v) => (v && typeof v === 'object' ? v.name : v);
-
 /**
  * One live Track project in the flat shape of the checked-in export that `merge/project.js` reads.
  * A plain literal, so the two shapes can be diffed by eye.
@@ -306,132 +308,34 @@ function fetchTrackProjects(token, get = fetchJson) {
   return get(`${config.trackApiBase}/api/v1/projects`, { Authorization: `Bearer ${token}` });
 }
 
-/** Track's `WorkTypeEnum.ASSESSMENT` (models/work_type.py). The EA work whose phases are the rail. */
-const ASSESSMENT_WORK_TYPE_ID = 6;
-
-const workTypeIdOf = (work) => Number(work.work_type_id ?? (work.work_type || {}).id);
-
-/** A work's Track project id as the string the Maps key on, or null when it names none. */
-function projectKeyOf(work) {
-  const projectId = work.project_id ?? (work.project || {}).id;
-  return projectId === undefined || projectId === null ? null : String(projectId);
-}
-
-/** Track sends timestamps with a zone; anything unparseable lands as null rather than a bad date. */
-function isoOrNull(value) {
-  if (!value) return null;
-  const at = new Date(value);
-  return isNaN(at.getTime()) ? null : at.toISOString();
-}
-
 /**
- * One `GET /works/<id>/phases` row in the public shape. `work_phase.name` wins over the phase
- * code's: Track lets a work rename its phase, and staff and reports use the renamed one.
- */
-function trackPhaseToPublic(row) {
-  const wp = (row && row.work_phase) || {};
-  const phase = wp.phase || {};
-  const eaAct = phase.ea_act || {};
-  return {
-    name: wp.name || phase.name || null,
-    eaActId: phase.ea_act_id ?? eaAct.id ?? null,
-    eaActName: eaAct.name || null,
-    workType: (phase.work_type || {}).name || null,
-    startDate: isoOrNull(wp.start_date),
-    endDate: isoOrNull(wp.end_date),
-    numberOfDays: wp.number_of_days ?? null,
-    legislated: wp.legislated ?? null,
-    sortOrder: wp.sort_order ?? null,
-    isCompleted: wp.is_completed === true
-  };
-}
-
-/**
- * The one Assessment work per Track project id whose phases are the progress rail.
- * Between two assessment works the live one wins, then the most recent.
+ * The one Assessment work per Track project id whose phases are the progress rail, picked by
+ * `pickAssessmentWork` so the derived fields read the same work.
  */
 function assessmentWorkByProject(works) {
-  const preferred = (candidate, held) =>
-    (candidate.is_active === true) !== (held.is_active === true)
-      ? candidate.is_active === true
-      : Number(candidate.id) > Number(held.id);
-
   const byProject = new Map();
   for (const work of works || []) {
-    if (workTypeIdOf(work) !== ASSESSMENT_WORK_TYPE_ID) continue;
     const key = projectKeyOf(work);
     if (key === null) continue;
-
-    const held = byProject.get(key);
-    if (!held || preferred(work, held)) byProject.set(key, work);
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push({
+      trackWorkId: work.id, workTypeId: workTypeIdOf(work), isActive: work.is_active === true,
+      startDate: isoOrNull(work.start_date), eaAct: nameOf(work.ea_act) || null, work
+    });
   }
-  return byProject;
+  const picked = new Map();
+  for (const [key, candidates] of byProject) {
+    const chosen = pickAssessmentWork(candidates);
+    if (chosen) picked.set(key, chosen.work);
+  }
+  return picked;
 }
-
-/** Track `WorkTypeEnum` ids mirrored into `works[]`; 4, 8, 12, 13 and 14 stay out. */
-const MIRRORED_WORK_TYPE_IDS = new Set([1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 16]);
 
 /** No new project's works are read once the works pull has run this long. */
 const worksBudgetMs = 10 * 60 * 1000;
 
 /** Projects whose works are read at once. */
 const WORKS_CONCURRENCY = 8;
-
-
-/** One milestone event in the public `works[].milestones[]` shape. Nothing else leaves Track.
- *  The template name wins over the event name because staff rename events freely. */
-function trackMilestoneToPublic(event, outcome) {
-  const conf = event.event_configuration || {};
-  return {
-    name: conf.name || event.name || null,
-    position: conf.event_position || null,
-    eventType: conf.event_type_id ?? null,
-    actualDate: isoOrNull(event.actual_date),
-    anticipatedDate: isoOrNull(event.anticipated_date),
-    outcome: outcome ?? null,
-    numberOfDays: event.number_of_days ?? null
-  };
-}
-
-/**
- * One Track work in the public `works[]` shape: a literal, so no staff note or reference rides along.
- * Outcome = last phase's END milestone with an outcome; type-10 works end earlier phases with none.
- */
-function trackWorkToPublic(work, phaseEvents) {
-  const last = phaseEvents.length ? phaseEvents[phaseEvents.length - 1].milestones : [];
-  const decided = last.filter(m => m.position === 'END' && m.outcome !== null);
-  return {
-    trackWorkId: work.id,
-    workTypeId: workTypeIdOf(work),
-    workType: nameOf(work.work_type) || null,
-    title: work.title || work.simple_title || null,
-    eaAct: nameOf(work.ea_act) || null,
-    startDate: isoOrNull(work.start_date),
-    isActive: work.is_active === true,
-    workState: work.work_state || null,
-    decisionDate: isoOrNull(work.work_decision_date),
-    anticipatedDecisionDate: isoOrNull(work.anticipated_decision_date),
-    outcome: decided.length ? decided[decided.length - 1].outcome : null,
-    phases: phaseEvents.map(p => p.phase),
-    milestones: phaseEvents.flatMap(p => p.milestones)
-  };
-}
-
-const bySortOrder = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0);
-
-const isMirrored = (work) => MIRRORED_WORK_TYPE_IDS.has(workTypeIdOf(work));
-
-/** `{work_phase}` rows by sort order, each beside its public shape. */
-const orderedPhases = (rows) => (rows || [])
-  .map(row => ({ row, phase: trackPhaseToPublic(row) }))
-  .sort((a, b) => bySortOrder(a.phase, b.phase));
-
-/** The events `milestones[]` shows: HIDDEN dropped, by template order, then id. */
-function shownEvents(events) {
-  const order = (e) => (e.event_configuration || {}).sort_order || 0;
-  return (events || []).filter(e => (e.event_configuration || {}).visibility !== 'HIDDEN')
-    .sort((a, b) => order(a) - order(b) || a.id - b.id);
-}
 
 /** A list the push must send; a missing one would read as "none" and clear the stored rows. */
 function pushedList(value, what) {
@@ -443,18 +347,17 @@ function pushedList(value, what) {
  * of `fetchTrackWorks` give that project. `project` is the raw row the sync takes. */
 function trackPushToSync(payload) {
   const { works: pushed, ...project } = payload;
-  const projectWorks = pushedList(pushed, `project ${project.id} works`)
-    .map(work => ({ ...work, project_id: project.id }));
-  const phaseRows = (work) => pushedList(work.phases, `work ${work.id} phases`).map(wp => ({ work_phase: wp }));
+  const projectWorks = pushedList(pushed, `project ${project.id} works`).map(work => ({
+    ...work,
+    project_id: project.id,
+    phases: pushedList(work.phases, `work ${work.id} phases`).map(wp =>
+      ({ ...wp, events: pushedList(wp.events, `work phase ${wp.id} events`) }))
+  }));
 
   const assessment = assessmentWorkByProject(projectWorks).get(String(project.id));
-  const phases = assessment ? orderedPhases(phaseRows(assessment)).map(p => p.phase) : [];
-  const works = projectWorks.filter(isMirrored).sort((a, b) => a.id - b.id).map(work =>
-    trackWorkToPublic(work, orderedPhases(phaseRows(work)).map(({ row, phase }) => ({
-      phase,
-      milestones: shownEvents(pushedList(row.work_phase.events, `work phase ${row.work_phase.id} events`))
-        .map(e => trackMilestoneToPublic(e, e.outcome_name))
-    }))));
+  const phases = assessment ? phaseEventsOf(assessment).map(p => p.phase) : [];
+  const works = projectWorks.filter(isMirrored).sort((a, b) => a.id - b.id)
+    .map(work => trackWorkToPublic(work, phaseEventsOf(work)));
   return { project, phases, works };
 }
 
@@ -508,22 +411,25 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
     return outcomeNames.get(configurationId);
   };
 
-  const milestonesOf = async (workPhaseId) => {
+  const eventsOf = async (workPhaseId) => {
     const events = await counted(`${base}/milestones/workphases/${workPhaseId}/events`);
     return Promise.all(shownEvents(events).map(async (e) => {
       const configurationId = e.event_configuration_id ?? (e.event_configuration || {}).id;
       const outcome = e.outcome_id == null ? null
         : (await outcomeNamesFor(configurationId)).get(e.outcome_id);
-      return trackMilestoneToPublic(e, outcome);
+      return { ...e, outcome_name: outcome ?? null };
     }));
   };
 
+  // The same nested shape Track's push sends, so one mapper serves both.
   const workOf = async (work) => {
-    const phaseEvents = [];
-    for (const { row, phase } of orderedPhases(await phaseRowsOf(work.id))) {
-      phaseEvents.push({ phase, milestones: await milestonesOf((row.work_phase || {}).id) });
+    const phases = [];
+    for (const { row } of orderedPhases(await phaseRowsOf(work.id))) {
+      const wp = row.work_phase || {};
+      phases.push({ ...wp, events: await eventsOf(wp.id) });
     }
-    return trackWorkToPublic(work, phaseEvents);
+    const nested = { ...work, phases };
+    return trackWorkToPublic(nested, phaseEventsOf(nested));
   };
 
   const byProject = new Map();

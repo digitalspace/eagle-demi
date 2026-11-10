@@ -170,7 +170,7 @@ test('fetchTrackWorks maps a phase to the public shape, dates as ISO', async () 
   }, 'exactly the listed fields — internal notes, ids and day counts stay in Track');
 });
 
-test('fetchTrackWorks sorts by sort order and keeps an unfinished phase open', async () => {
+test('fetchTrackWorks sorts by sort order, then id, and keeps an unfinished phase open', async () => {
   const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get } = fakeTrack({
     works: [work(11, 207, ASSESSMENT)],
@@ -178,7 +178,8 @@ test('fetchTrackWorks sorts by sort order and keeps an unfinished phase open', a
       11: [
         phaseRow({ name: 'Application Review', sort_order: 3, end_date: null, is_completed: false }),
         phaseRow(),
-        phaseRow({ name: 'Process Planning', sort_order: 2 })
+        phaseRow({ name: 'Process Planning', sort_order: 2 }),
+        phaseRow({ id: 899, name: 'Same order, lower id' })
       ]
     }
   });
@@ -186,28 +187,29 @@ test('fetchTrackWorks sorts by sort order and keeps an unfinished phase open', a
   const phases = (await fetchTrackWorks('track-token', get)).phases.get('207');
 
   assert.deepStrictEqual(phases.map(p => p.name),
-    ['Early Engagement', 'Process Planning', 'Application Review']);
-  assert.strictEqual(phases[2].endDate, null, 'a phase still running has no end date');
-  assert.strictEqual(phases[2].isCompleted, false);
+    ['Same order, lower id', 'Early Engagement', 'Process Planning', 'Application Review'],
+    'a sort order tie goes to the Track phase id, as the stored work document orders it');
+  assert.strictEqual(phases[3].endDate, null, 'a phase still running has no end date');
+  assert.strictEqual(phases[3].isCompleted, false);
 });
 
-test('fetchTrackWorks prefers the live assessment work, then the most recent', async () => {
+test('fetchTrackWorks prefers the live assessment work, then the latest start', async () => {
   const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get, paths } = fakeTrack({
     works: [
       work(11, 207, ASSESSMENT, { is_active: false }),
       work(21, 207, ASSESSMENT, { is_active: true }),
-      work(31, 354, ASSESSMENT, { is_active: false }),
-      work(41, 354, ASSESSMENT, { is_active: false })
+      work(31, 354, ASSESSMENT, { is_active: false, start_date: '2024-03-01T00:00:00+00:00' }),
+      work(41, 354, ASSESSMENT, { is_active: false, start_date: '2022-03-01T00:00:00+00:00' })
     ],
-    phasesByWork: { 21: [phaseRow()], 41: [phaseRow()] }
+    phasesByWork: { 21: [phaseRow()], 31: [phaseRow()] }
   });
 
   await fetchTrackWorks('track-token', get);
 
   assert.deepStrictEqual(paths.slice(1),
-    ['/api/v1/works/21/phases', '/api/v1/works/41/phases'],
-    'one call per project: the active work, else the highest work id');
+    ['/api/v1/works/21/phases', '/api/v1/works/31/phases'],
+    'one call per project: the active work, else the latest start, as the derived fields pick it');
 });
 
 test('one work whose phases fail does not cost the other projects theirs', async () => {
