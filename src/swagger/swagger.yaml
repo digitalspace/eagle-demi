@@ -8926,8 +8926,10 @@ components:
         not be handed over. The caller retries, which repeats the hand-over.
     TrackRecordAnswered:
       description: >-
-        `action` is `applied`, or `skipped` with `reason` `unmirrored` (the nightly leaves this
-        work type out of DEMI, so nothing was written).
+        `action` is `applied`, `unchanged` (a reader sees no difference; only moved stamps were
+        stored, and the project row's derived fields were still checked), or `skipped` with
+        `reason` `unmirrored` (the nightly leaves this work type out of DEMI) or `apiRow` (the
+        project row has no Track source). Only `applied` is audited.
       content:
         application/json:
           schema:
@@ -8941,9 +8943,11 @@ components:
         missing, or a new work lacks `phases[]` or a phase's `events[]`).
     TrackRecordNotFound:
       description: >-
-        Nothing was written. `code` is `PROJECT_NOT_FOUND` (DEMI holds no project row with this
-        id) or `PARENT_NOT_FOUND` (no live work, or no phase, holds this record). The caller
-        retries a missing parent once, since it may still be in flight.
+        Nothing was written. On POST and PUT `code` is `PARENT_NOT_FOUND`: DEMI holds no project
+        row, live work or phase for this record. The caller retries once, since the parent may
+        still be in flight. On DELETE `code` is `PROJECT_NOT_FOUND` (no project row) or, for a
+        phase or event, `RECORD_NOT_FOUND` (no live work holds it); either way nothing is left
+        to remove, and the body carries `id`.
     TrackRecordRefused:
       description: >-
         Nothing was written. `code` is `STALE_PUSH` (a newer push for this record already
@@ -10335,10 +10339,10 @@ components:
           description: The Track record id.
         action:
           type: string
-          enum: [applied, skipped]
+          enum: [applied, unchanged, skipped]
         reason:
           type: string
-          enum: [unmirrored]
+          enum: [unmirrored, apiRow]
           description: Only when `action` is `skipped`.
 
     TrackWorkRecord:

@@ -17,6 +17,8 @@ const { mirrorStore } = require('../../helpers/mirror-store');
 const { mockRes } = require('../../helpers/mock-res');
 const { useConfig } = require('../../helpers/use-config');
 const { STAFF } = require('../../helpers/eagle-mirror-fixtures');
+const { recordEvents } = require('../../helpers/record-events');
+const config = require('../../../src/config');
 
 const PID = '1001';
 const LATER = 1762675200000 + 1000;
@@ -24,11 +26,13 @@ const LATER = 1762675200000 + 1000;
 const fixture = (name) => structuredClone(require(`../../fixtures/track-records/${name}.json`));
 const writesTo = (store, container) => store.writes.filter(w => w.container === container);
 
-/** The fixture's first phase as a phase record, stamped `pushedAt`. */
-function phaseRecord(pushedAt = LATER) {
+/** The fixture's first phase as a phase record with a changed length, stamped `pushedAt`. */
+function phaseRecord(pushedAt = LATER, changes = { number_of_days: 120 }) {
   const { events: _events, ...phase } = fixture('new_work').work.phases[0];
-  return { pushedAt, workTypeId: 6, phase: { ...phase, work_id: 2001 } };
+  return { pushedAt, workTypeId: 6, phase: { ...phase, work_id: 2001, ...changes } };
 }
+
+const TRACK_ROW = { container: 'projects', id: PID, name: 'Payload Contract Mine', read: ['public'], sources: { track: { track_project_id: 1001 } } };
 
 async function call(handler, { params = {}, query = {}, body } = {}) {
   const res = mockRes();
@@ -37,7 +41,7 @@ async function call(handler, { params = {}, query = {}, body } = {}) {
 }
 
 /** Flag on, the project row stored, and the fixture work posted through its route; `writes` emptied after. */
-async function seeded(t, { rows = [{ container: 'projects', id: PID, name: 'Payload Contract Mine', read: ['public'] }] } = {}) {
+async function seeded(t, { rows = [TRACK_ROW] } = {}) {
   useConfig(t, { worksWrite: true });
   t.mock.method(lists, 'readCatalog', async () => null);
   const store = mirrorStore(t, rows);
@@ -93,13 +97,54 @@ test('Track work, phase and event routes', async (t) => {
     assert.deepStrictEqual(store.writes, []);
   });
 
-  await t.test('a record for a project DEMI lacks answers 404 PROJECT_NOT_FOUND', async (t) => {
+  await t.test('a record ahead of its project row answers PARENT_NOT_FOUND, which Track retries', async (t) => {
     await seeded(t, { rows: [] });
-    t.mock.method(logger, 'error', () => {});
+    t.mock.method(logger, 'warn', () => {});
 
     const res = await call('putTrackWork', { params: { id: '2001' }, body: fixture('work') });
 
-    assert.deepStrictEqual([res.statusCode, res.body.code], [404, 'PROJECT_NOT_FOUND']);
+    assert.deepStrictEqual([res.statusCode, res.body.code], [404, 'PARENT_NOT_FOUND']);
+  });
+
+  await t.test('a DELETE under a project DEMI lacks answers 404 with the id, which Track counts as gone', async (t) => {
+    await seeded(t, { rows: [] });
+    const query = { pushedAt: String(LATER), workTypeId: '6' };
+
+    const res = await call('deleteTrackWork', { params: { id: '2001' }, query });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code, res.body.id], [404, 'PROJECT_NOT_FOUND', '2001']);
+  });
+
+  await t.test('a phase DELETE whose work DEMI lacks answers 404 RECORD_NOT_FOUND with the id, not a retry', async (t) => {
+    await seeded(t);
+    const query = { pushedAt: String(LATER), workTypeId: '6' };
+    await call('deleteTrackWork', { params: { id: '2001' }, query });
+
+    const res = await call('deleteTrackPhase', { params: { id: '3001' }, query: { ...query, pushedAt: String(LATER + 1) } });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code, res.body.id], [404, 'RECORD_NOT_FOUND', '3001']);
+  });
+
+  await t.test('a row with no Track source answers 200 skipped apiRow and writes nothing', async (t) => {
+    const store = mirrorStore(t, [{ ...TRACK_ROW, sources: {} }]);
+    useConfig(t, { worksWrite: true });
+    t.mock.method(logger, 'warn', () => {});
+
+    const res = await call('postTrackWork', { body: fixture('new_work') });
+
+    assert.deepStrictEqual(res.body, { id: '2001', action: 'skipped', reason: 'apiRow' });
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('only a write a reader can see is audited', async (t) => {
+    await seeded(t);
+    const rows = recordEvents(t);
+
+    const changed = await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
+    const again = await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
+
+    assert.deepStrictEqual([changed.body.action, again.body.action], ['applied', 'unchanged']);
+    assert.strictEqual((await rows(config.auditStream)).length, 1);
   });
 
   await t.test('an older record answers 409 STALE_PUSH and writes nothing', async (t) => {

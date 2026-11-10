@@ -19,7 +19,8 @@ const DERIVED_PATHS = ['/legislationTransitions', '/assessments', '/phaseIds', '
 
 const fixture = (name) => structuredClone(require(`../fixtures/track-records/${name}.json`));
 
-const row = () => ({ container: 'projects', id: PROJECT, name: 'North Pit', read: ['public'], legislationYearList: [2002, 2018] });
+const row = (overrides = {}) => ({ container: 'projects', id: PROJECT, name: 'North Pit', read: ['public'],
+  legislationYearList: [2002, 2018], sources: { track: { track_project_id: 1001 } }, ...overrides });
 
 /** The transition milestone (named by its configuration) on the fixture work's phase, dated `actual`. */
 function transitionEvent(actual) {
@@ -39,11 +40,6 @@ async function seeded(t, { worksRead = true, rows = [row()] } = {}) {
   Object.assign(config, { worksWrite: true, worksRead });
   t.mock.method(lists, 'readCatalog', async () => null);
   const store = mirrorStore(t, rows);
-  // mirrorStore keys `works` by id alone; a point read there passes the partition too.
-  const read = cosmos.readItem;
-  t.mock.method(cosmos, 'readItem', async (container, id, pk) => (container === 'works'
-    ? structuredClone(store.rows('works').find(r => r.id === id && r.projectId === pk) ?? null)
-    : read(container, id, pk)));
   if (rows.length) assert.strictEqual((await writeTrackRecord('work', 'POST', PROJECT, fixture('new_work'))).status, 'applied');
   store.writes.length = 0;
   return store;
@@ -66,10 +62,68 @@ test('track record writer', async (t) => {
     const store = await seeded(t);
     const { events: _events, ...phase } = fixture('new_work').work.phases[0];
 
-    const result = await writeTrackRecord('phase', 'PUT', PROJECT, { pushedAt: LATER, workTypeId: 6, phase: { ...phase, work_id: 2001 } });
+    const result = await writeTrackRecord('phase', 'PUT', PROJECT,
+      { pushedAt: LATER, workTypeId: 6, phase: { ...phase, number_of_days: 120, work_id: 2001 } });
 
     assert.strictEqual(result.status, 'applied');
     assert.deepStrictEqual([writesTo(store, 'works').length, writesTo(store, 'projects').length], [1, 0]);
+  });
+
+  await t.test('a record sent again skips the document save and still repairs the row', async (t) => {
+    const store = await seeded(t);
+    await writeTrackRecord('event', 'POST', PROJECT, transitionEvent('2023-05-01T07:00:00+00:00'));
+    await cosmos.upsert('projects', { ...storedRow(store), legislationTransitions: [] });
+    store.writes.length = 0;
+
+    const result = await writeTrackRecord('event', 'POST', PROJECT, transitionEvent('2023-05-01T07:00:00+00:00'));
+
+    assert.strictEqual(result.status, 'unchanged');
+    assert.strictEqual(writesTo(store, 'works').length, 0);
+    assert.strictEqual(storedRow(store).legislationTransitions[0].date, '2023-05-01T07:00:00.000Z');
+  });
+
+  await t.test('a newer stamp on the same content is saved but reported unchanged', async (t) => {
+    const store = await seeded(t);
+    const { events: _events, ...phase } = fixture('new_work').work.phases[0];
+
+    const result = await writeTrackRecord('phase', 'PUT', PROJECT, { pushedAt: LATER, workTypeId: 6, phase: { ...phase, work_id: 2001 } });
+
+    assert.strictEqual(result.status, 'unchanged');
+    assert.strictEqual(storedWork(store).pushStamps['phase:3001'], LATER);
+  });
+
+  await t.test('a work DELETE for a work DEMI never held leaves a tombstone and reports unchanged', async (t) => {
+    const store = await seeded(t);
+
+    const result = await writeTrackRecord('work', 'DELETE', PROJECT, { pushedAt: LATER, workTypeId: 6, id: 2999 });
+
+    assert.strictEqual(result.status, 'unchanged');
+    assert.strictEqual(store.rows('works').find(r => r.id === 'track-2999').deleted, true);
+  });
+
+  await t.test('a row with no Track source answers api-row and writes nothing', async (t) => {
+    const store = await seeded(t, { rows: [] });
+    await cosmos.upsert('projects', { id: PROJECT, read: ['public'], sources: {} });
+    store.writes.length = 0;
+
+    const result = await writeTrackRecord('work', 'POST', PROJECT, fixture('new_work'));
+
+    assert.strictEqual(result.status, 'api-row');
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a phase or event DELETE whose work DEMI lacks is gone and writes nothing', async (t) => {
+    const store = await seeded(t);
+    await writeTrackRecord('work', 'DELETE', PROJECT, { pushedAt: LATER, workTypeId: 6, id: 2001 });
+    store.writes.length = 0;
+
+    const results = [
+      await writeTrackRecord('phase', 'DELETE', PROJECT, { pushedAt: LATER + 1, workTypeId: 6, id: 3001 }),
+      await writeTrackRecord('event', 'DELETE', PROJECT, { pushedAt: LATER + 1, workTypeId: 6, id: 4001 })
+    ].map(r => r.status);
+
+    assert.deepStrictEqual(results, ['gone', 'gone']);
+    assert.deepStrictEqual(store.writes, []);
   });
 
   await t.test('an event that dates the Act transition patches only derived paths on the row', async (t) => {

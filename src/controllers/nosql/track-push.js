@@ -25,9 +25,11 @@ const MIN_PUSHED_AT = 1e12;
 const isTrackId = (value) => TRACK_ID.test(String(value ?? ''));
 const refusal = (code, message) => ({ refusal: [code, message] });
 
-/** Logged at warn for the two answers Track expects in normal running, at error otherwise: nothing was written. */
+const REFUSAL_LEVEL = { PARENT_NOT_FOUND: 'warn', NOT_BACKFILLED: 'warn', RECORD_NOT_FOUND: 'info', PROJECT_NOT_FOUND: 'info' };
+
+/** Nothing was written. Error, which the alert matches, unless Track expects the answer in normal running. */
 function refuse(res, id, status, code, error, answerId = id) {
-  const level = code === 'PARENT_NOT_FOUND' || code === 'NOT_BACKFILLED' ? 'warn' : 'error';
+  const level = REFUSAL_LEVEL[code] || 'error';
   logger[level](`[track-push] refused id=${id} code=${code}`, { error });
   return res.status(status).json({ error, code, id: answerId });
 }
@@ -169,11 +171,41 @@ exports.deleteTrackProject = async (req, res) => {
 const RECORD_REFUSALS = {
   [RESULT.STALE]: [409, 'STALE_PUSH', 'A newer push for this record has already been written.'],
   [RESULT.PARENT_NOT_FOUND]: [404, 'PARENT_NOT_FOUND', 'DEMI holds no live work or phase for this record.'],
+  [RESULT.GONE]: [404, 'RECORD_NOT_FOUND', 'DEMI holds no live work with this record, so nothing is left to remove.'],
   [RESULT.PROJECT_NOT_FOUND]: [404, 'PROJECT_NOT_FOUND', 'Project not found'],
   [RESULT.NOT_BACKFILLED]: [409, 'NOT_BACKFILLED', 'DEMI does not take Track works yet.'],
   [RESULT.CONFLICT]: [503, 'WRITE_CONFLICT', RETRY],
   [RESULT.DERIVED_CONFLICT]: [503, 'DERIVED_CONFLICT', RETRY]
 };
+// Track retries PARENT_NOT_FOUND once after 5 s, which covers a project row still in flight from another thread.
+const PROJECT_PENDING = [404, 'PARENT_NOT_FOUND', 'DEMI holds no project row for this record yet.'];
+
+/** The answer to a write that reached the writer; only a write a reader can see is audited. */
+function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, status) {
+  if (status === RESULT.APPLIED) {
+    auditEvent(req, {
+      action: 'project.push',
+      targetType: kind,
+      targetId: recordId,
+      projectId: pid,
+      detail: { sourceSystem: 'track', record: kind, method, pushedAt }
+    });
+    return res.json({ id: recordId, action: 'applied' });
+  }
+  if (status === RESULT.UNCHANGED) return res.json({ id: recordId, action: 'unchanged' });
+  if (status === RESULT.API_ROW) {
+    logger.warn(`[track-push] skipped id=${label} reason=apiRow`);
+    return res.json({ id: recordId, action: 'skipped', reason: 'apiRow' });
+  }
+  const [httpStatus, code, error] = status === RESULT.PROJECT_NOT_FOUND && method !== 'DELETE'
+    ? PROJECT_PENDING : RECORD_REFUSALS[status];
+  if (status === RESULT.STALE) logger.info(`[track-push] stale id=${label}`, { [TRACK_PUSHED_AT]: pushedAt });
+  else if (status === RESULT.CONFLICT) {
+    logger.error(`[track-push] ${method === 'DELETE' ? 'delete lost its etag race' : 'write failed'} id=${label}`);
+  } else if (status !== RESULT.DERIVED_CONFLICT) return refuse(res, label, httpStatus, code, error, recordId);
+  // The writer logged the lost derived patch.
+  return res.status(httpStatus).json({ error, code, id: recordId });
+}
 
 /** Whether a new work carries its `phases[].events[]` lists; a missing one would clear the stored ones. */
 const nestedListsOf = (work) =>
@@ -226,23 +258,7 @@ const recordRoute = (kind, method) => async (req, res) => {
   try {
     const body = method === 'DELETE' ? { pushedAt, workTypeId, id } : req.body;
     const { status } = await writeTrackRecord(kind, method, pid, body);
-    if (status === RESULT.APPLIED) {
-      auditEvent(req, {
-        action: 'project.push',
-        targetType: kind,
-        targetId: recordId,
-        projectId: pid,
-        detail: { sourceSystem: 'track', record: kind, method, pushedAt }
-      });
-      return res.json({ id: recordId, action: 'applied' });
-    }
-    const [httpStatus, code, error] = RECORD_REFUSALS[status];
-    if (status === RESULT.STALE) logger.info(`[track-push] stale id=${label}`, { [TRACK_PUSHED_AT]: pushedAt });
-    else if (status === RESULT.CONFLICT) {
-      logger.error(`[track-push] ${method === 'DELETE' ? 'delete lost its etag race' : 'write failed'} id=${label}`);
-    } else if (status !== RESULT.DERIVED_CONFLICT) return refuse(res, label, httpStatus, code, error, recordId);
-    // The writer logged the lost derived patch.
-    return res.status(httpStatus).json({ error, code, id: recordId });
+    return answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }, status);
   } catch (err) {
     return failed(res, label, method.toLowerCase(), err);
   }

@@ -3,6 +3,7 @@
 // One Track work, phase or event record: one work document written, then the project row's derived
 // fields patched only where they moved. Answers plain `{ status }` values; the routes map them to HTTP.
 
+const { isDeepStrictEqual } = require('node:util');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const projects = require('../repositories/projects');
@@ -15,11 +16,25 @@ const {
 
 const RESULT = Object.freeze({
   ...STATUS,
+  UNCHANGED: 'unchanged',
+  GONE: 'gone',
+  API_ROW: 'api-row',
   NOT_BACKFILLED: 'not-backfilled',
   PROJECT_NOT_FOUND: 'project-not-found',
   CONFLICT: 'conflict',
   DERIVED_CONFLICT: 'derived-conflict'
 });
+
+/** The document as stored, without Cosmos' own fields and the write time. */
+const storedFields = (doc) => Object.fromEntries(Object.entries(doc || {})
+  .filter(([key]) => !key.startsWith('_') && key !== 'updatedAt'));
+
+/** What a reader sees of a document: a tombstone and an absent work show nothing, and stamps are not shown. */
+function visible(doc) {
+  if (!doc || doc.deleted === true) return null;
+  const { pushStamps: _stamps, ...fields } = storedFields(doc);
+  return fields;
+}
 
 const holdsPhase = (id) => (doc) => doc.phases.some(p => p.trackPhaseId === Number(id));
 const holdsEvent = (id) => (doc) => doc.phases.some(p => p.milestones.some(m => m.trackEventId === Number(id)));
@@ -53,7 +68,10 @@ async function workIdOf(projectId, step) {
   return holder ? holder.trackWorkId : null;
 }
 
-/** Applies the step to the stored document and saves it under its etag; a lost race re-reads and re-applies. */
+/**
+ * Applies the step to the stored document and saves it under its etag; a lost race re-reads and re-applies.
+ * `unchanged` when a reader would see no difference: the save then only carries moved stamps, or is skipped.
+ */
 async function saveWork(projectId, workId, step) {
   const read = () => works.get(projectId, `track-${workId}`);
   return writeGuarded({
@@ -62,8 +80,11 @@ async function saveWork(projectId, workId, step) {
     attempt: async (doc) => {
       const { status, doc: next } = step.apply(doc);
       if (status !== RESULT.APPLIED) return { status };
-      await works.save({ ...next, updatedAt: new Date().toISOString() }, { etag: doc ? doc._etag : undefined });
-      return { status };
+      const changed = !isDeepStrictEqual(visible(doc), visible(next));
+      if (!changed && isDeepStrictEqual(storedFields(doc), storedFields(next))) return { status: RESULT.UNCHANGED };
+      const updatedAt = changed ? new Date().toISOString() : next.updatedAt;
+      await works.save({ ...next, updatedAt }, { etag: doc ? doc._etag : undefined });
+      return { status: changed ? RESULT.APPLIED : RESULT.UNCHANGED };
     }
   });
 }
@@ -77,20 +98,26 @@ async function writeTrackRecord(kind, method, trackProjectId, body) {
   const projectId = String(trackProjectId);
   const row = await projects.readForWrite(projectId);
   if (!row) return { status: RESULT.PROJECT_NOT_FOUND };
+  // Same skip as the project writer: stamping Track's works onto an API row would pass it off as a Track row.
+  if (!(row.sources || {}).track) return { status: RESULT.API_ROW };
 
+  // A phase or event DELETE with no live work holding it has nothing left to remove.
+  const missing = method === 'DELETE' && kind !== 'work' ? RESULT.GONE : RESULT.PARENT_NOT_FOUND;
   const step = STEPS[kind][method](body, { projectId: row.id });
   const workId = await workIdOf(row.id, step);
-  if (workId === null) return { status: RESULT.PARENT_NOT_FOUND };
+  if (workId === null) return { status: missing };
 
   const saved = await saveWork(row.id, workId, step);
-  if (saved.status !== RESULT.APPLIED) return saved;
+  if (saved.status === RESULT.PARENT_NOT_FOUND) return { status: missing };
+  if (saved.status !== RESULT.APPLIED && saved.status !== RESULT.UNCHANGED) return saved;
 
+  // Runs on an unchanged document too: a retry after a lost patch carries the same stamp and must still repair the row.
   const derived = await projects.patchDerived(row.id, { inputsFor: deriveInputs });
   if (derived.status === RESULT.CONFLICT) {
     logger.error(`[track-push] derived patch lost id=${projectId}/work:${workId}`);
     return { status: RESULT.DERIVED_CONFLICT };
   }
-  return { status: RESULT.APPLIED };
+  return { status: saved.status };
 }
 
 module.exports = { RESULT, writeTrackRecord };
