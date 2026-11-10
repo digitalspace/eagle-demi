@@ -755,8 +755,8 @@ test('prod names its backup account and keeps the default container', () => {
 });
 
 // Reader links only where the link base serves /updates/:id (eagle-public's React line): test's
-// base is the React beta host; prod stays on the Angular site, off, until the cutover.
-const REACT_BETA_TEST_HOST = /^https:\/\/eagle-public-next-test-[a-z0-9]+\.[a-z0-9]+\.azurefd\.net$/;
+// base is the React test site; prod stays on the Angular site, off, until the cutover.
+const REACT_TEST_HOST = /^https:\/\/test\.projects\.eao\.gov\.bc\.ca$/;
 
 test('update reader links reach the app setting and are on only where the link base serves /updates', () => {
   assert.match(MAIN, /^\s+notifyUpdateReaderLinks: notifyUpdateReaderLinks$/m,
@@ -767,9 +767,9 @@ test('update reader links reach the app setting and are on only where the link b
   const testReaderLinks = /^param notifyUpdateReaderLinks = true/m.test(TEST_PARAMS);
   const testLinkBase = /^param linkBaseUrl = '([^']*)'$/m.exec(TEST_PARAMS);
   assert.ok(testLinkBase, 'test must state linkBaseUrl');
-  assert.ok(!testReaderLinks || REACT_BETA_TEST_HOST.test(testLinkBase[1]),
-    `test turns reader links on with linkBaseUrl ${testLinkBase[1]}, which is not the React beta ` +
-    'host and has no /updates route');
+  assert.ok(!testReaderLinks || REACT_TEST_HOST.test(testLinkBase[1]),
+    `test turns reader links on with linkBaseUrl ${testLinkBase[1]}, which is not the React test ` +
+    'site and has no /updates route');
   assert.doesNotMatch(PROD_PARAMS, /^param notifyUpdateReaderLinks = true/m,
     'projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
 });

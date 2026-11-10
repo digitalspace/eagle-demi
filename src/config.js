@@ -193,9 +193,8 @@ const config = {
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
 
-  // Largest file GET /documents/:id/download?inline=1 streams itself; bigger ones get the 302.
-  // 32 MiB is ~5 s at the measured 6.4 MB/s store read, under APIM Consumption's 30 s request cap
-  // and Front Door's 60 s origin timeout. 0 turns streaming off.
+  // Largest single answer (whole file or range) ?inline=1 streams; bigger ones get the 302. 32 MiB
+  // is ~5 s at 6.4 MB/s, under APIM's 30 s and Front Door's 240 s origin timeout. 0 = no streaming.
   downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
   // Streams one instance serves at once; past it the 302. Bounds what slow readers or cache-busting
   // query strings can hold open. 0 = no limit.

@@ -715,10 +715,11 @@ until both `NOTIFY_API_BASE` and `NOTIFY_API_KEY` are set. The CAC delete and me
 need both too and answer 503 without them (see `port: cac` above).
 
 The email links to `LINK_BASE_URL` plus a path. By default the path is the project page
-(`/p/<projectId>/project-details`), or `/news` for an update with no project. Set
-`NOTIFY_UPDATE_READER_LINKS=true` (Bicep param `notifyUpdateReaderLinks`) to link the update's own
-page, `/updates/<id>`, instead. Only the React line of eagle-public has that page. Keep the flag off
-while `LINK_BASE_URL` serves the Angular site, which is the case in test and prod today.
+(`/p/<projectId>/project-details`), or `/news` for an update with no project.
+
+Set `NOTIFY_UPDATE_READER_LINKS=true` (Bicep param `notifyUpdateReaderLinks`) to link the update's
+own page, `/updates/<id>`, instead. Only the React line of eagle-public has that page. Keep the flag
+off while `LINK_BASE_URL` serves the Angular site.
 
 ### Eagle read ladder backfill
 

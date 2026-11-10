@@ -3320,11 +3320,15 @@ paths:
         (stream mode, below). Only a 200 redirects: a 404 or 500 answers JSON in every mode.
 
         STREAM MODE serves the bytes from this URL, so the link never expires and an edge cache can
-        hold it. It applies when the file may open in the browser (see `inline`) and the stored
-        object is no larger than `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB; 0 turns the mode
-        off), and the instance is serving fewer than `DOWNLOAD_STREAM_MAX_CONCURRENT` streams
-        (default 8; 0 = no limit). Any other case, including a store that cannot be read or sends
-        no bytes within 10 seconds, gets the 302 above, never JSON. A single byte range answers 206;
+        hold it. It applies when the file may open in the browser (see `inline`) and the bytes this
+        answer would send, the whole file or the requested range, are no more than
+        `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB; 0 turns the mode off), so a range of a larger
+        file still streams. The instance must also be serving fewer than
+        `DOWNLOAD_STREAM_MAX_CONCURRENT` streams (default 8; 0 = no limit); a ranged request
+        stamped by the edge (`X-Edge-Secret`) takes no stream slot. Any other case, including a
+        store that cannot be read or sends no bytes within 10 seconds, gets the 302 above, never
+        JSON, except that a ranged request stamped by the edge and starting past byte 0 answers 503
+        with `Retry-After: 5` instead of that 302. A single byte range answers 206;
         a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
         range starting past the end answers 416 with `Content-Range: bytes */<size>`. A matching
         `If-None-Match`, or an `If-Modified-Since` at or after `Last-Modified` and not in the
