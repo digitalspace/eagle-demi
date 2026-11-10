@@ -5,15 +5,8 @@ const { logger } = require('../utils/logger');
 const { maskIds } = require('./http-logger');
 
 /**
- * Passive auth: populate req.user when credentials are valid, otherwise continue as
- * anonymous. Used on public read routes, where visibility is enforced by the read ACL
- * (see helpers/access-sql.js for Cosmos reads, helpers/access-odata.js for AI Search) rather
- * than by rejecting the request.
- *
- * A REJECTED credential is not the same as no credential — log it, so a forged or expired
- * token is distinguishable from a logged-out visitor. `strict` (GET /me, the native kind routes
- * and the by-id reads) also answers a rejected Bearer with its 401, so a client refreshes rather
- * than reading the public view under a 200. The default stays lenient on the routes not yet moved.
+ * Public reads continue as anonymous on a bad credential; the read ACL limits what they see. A 5xx is
+ * answered so the client retries, and in `strict` a rejected Bearer's 401 makes it refresh its token.
  */
 function passiveAuth({ rejectBearer = false } = {}) {
   return (req, res, next) => {
@@ -25,7 +18,7 @@ function passiveAuth({ rejectBearer = false } = {}) {
       },
       (status, error) => {
         const bearer = String(req.header('Authorization') || '').startsWith('Bearer ');
-        const refuse = rejectBearer && bearer;
+        const refuse = status >= 500 || (rejectBearer && bearer);
 
         const presented = req.header('Authorization') || req.header('X-Api-Key');
         if (presented) {

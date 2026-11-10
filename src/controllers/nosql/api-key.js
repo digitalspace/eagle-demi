@@ -13,7 +13,7 @@
  */
 
 const apiKeys = require('../../repositories/api-keys');
-const { generateKey, defaultExpiry } = require('../../helpers/api-key');
+const { generateKey, defaultExpiry, isStorableId } = require('../../helpers/api-key');
 const {
   AUTHENTICATED_ROLES, SECURE_ROLES, WRITE_ROLES, SEALED_TOKEN, rolesFor, holdsSealed
 } = require('../../helpers/access-sql');
@@ -94,7 +94,7 @@ exports.createApiKey = async (req, res) => {
       return res.status(400).json({ error: 'expiresAt must be a future date' });
     }
 
-    if (id !== undefined && (typeof id !== 'string' || !APIM_ROW_ID.test(id))) {
+    if (id !== undefined && !(isStorableId(id) && APIM_ROW_ID.test(id))) {
       return res.status(400).json({
         error: 'id may only be an APIM subscription identity: apim:<subscription-name>'
       });
