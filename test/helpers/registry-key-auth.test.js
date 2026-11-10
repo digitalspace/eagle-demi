@@ -79,6 +79,17 @@ test('a revoked key is rejected, and the rejection does not say which half was w
   forgetCachedKey(record.id);
 });
 
+test('a key lookup outage answers a retryable 503, not a bad-key 401', async (t) => {
+  const { plaintext, record } = stored();
+  t.mock.method(apiKeys, 'getById', async () => { throw Object.assign(new Error('busy'), { code: 429 }); });
+
+  const { status, error } = await run(plaintext);
+
+  assert.strictEqual(status, 503);
+  assert.match(error, /Retry/);
+  forgetCachedKey(record.id);
+});
+
 test('the usage stamp is by id and happens once per cache TTL, not once per request', async (t) => {
   // It used to pass the whole cached RECORD to an upsert, which rewrote every field — including
   // putting `revokedAt: null` back from a copy cached before the revocation. Passing the id is

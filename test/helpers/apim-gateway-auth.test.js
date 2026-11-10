@@ -145,6 +145,18 @@ test('a subscription with no registry row gets no identity', async (t) => {
   assert.match(error, /API Management subscription/);
 });
 
+test('a subscription lookup outage answers a retryable 503, not a 401', async (t) => {
+  withSecret(t, SECRET);
+  t.mock.method(apiKeys, 'getById', async () => { throw Object.assign(new Error('busy'), { code: 429 }); });
+  forgetCachedKey(ROW_ID);
+
+  const { status, error } = await run({ 'X-Gateway-Secret': SECRET, 'X-APIM-Subscription': 'eagle-api' });
+
+  assert.strictEqual(status, 503);
+  assert.match(error, /Retry/);
+  forgetCachedKey(ROW_ID);
+});
+
 test('a revoked row is refused even though APIM accepted the key', async (t) => {
   withSecret(t, SECRET);
   stubRegistry(t, { [ROW_ID]: row({ revokedAt: new Date().toISOString() }) });

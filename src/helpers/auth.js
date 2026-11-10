@@ -195,6 +195,14 @@ async function isValidApiKey(apiKey) {
   }
 }
 
+/** Catch for a failed registry read: an outage, not a bad credential, so the caller may retry. */
+function lookupFailed(what, onFailure) {
+  return (err) => {
+    logger.error(`[demi-api] ${what} lookup failed`, { error: err.message, stack: err.stack });
+    return onFailure(503, 'Authentication is unavailable. Retry the request.');
+  };
+}
+
 /**
  * Authenticates request via X-Api-Key or Keycloak Bearer token.
  *
@@ -226,10 +234,7 @@ function authenticate(req, onSuccess, onFailure) {
         logger.info(`[demi-api] Authenticated ${user.preferred_username} via APIM (${subscription})`);
         return onSuccess(user);
       })
-      .catch((err) => {
-        logger.error(`[demi-api] APIM subscription lookup failed: ${err.message}`);
-        return onFailure(401, 'Unauthorized. Unknown API Management subscription.');
-      });
+      .catch(lookupFailed('APIM subscription', onFailure));
     return;
   }
 
@@ -262,10 +267,7 @@ function authenticate(req, onSuccess, onFailure) {
         logger.info(`[demi-api] Authenticated ${user.preferred_username} (key ${user.keyId})`);
         return onSuccess(user);
       })
-      .catch((err) => {
-        logger.error(`[demi-api] API key lookup failed: ${err.message}`);
-        return onFailure(401, 'Unauthorized. Invalid, expired or revoked API key.');
-      });
+      .catch(lookupFailed('API key', onFailure));
     return;
   }
 
