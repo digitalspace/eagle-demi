@@ -94,7 +94,7 @@ test('a key id Cosmos could never store is a bad key, not an outage', async (t) 
   // What the Cosmos SDK does with such an id: throw with no status code.
   t.mock.method(apiKeys, 'getById', async () => { throw new Error('Illegal characters in Resource ID'); });
 
-  for (const keyId of ['a#b', 'a/b', 'a\\b', 'a?b', 'x'.repeat(256)]) {
+  for (const keyId of ['a#b', 'a/b', 'a\\b', 'a?b', 'x'.repeat(256), ' ', '\t', '.', '..', '\u00a0']) {
     const { status, error } = await run(`demi_${environmentName}_${keyId}_secret`);
     assert.strictEqual(status, 401, keyId);
     assert.doesNotMatch(error, /Retry/, keyId);

@@ -234,16 +234,19 @@ test('Passive Auth Middleware Tests', async (t) => {
   await t.test('a key id Cosmos could never store reads the anonymous view, not a 503', async () => {
     t.mock.method(apiKeys, 'getById', async () => { throw new Error('Illegal characters in Resource ID'); });
     t.mock.method(logger, 'warn', () => {});
-    const req = { header: (name) => (name === 'X-Api-Key' ? `demi_${config.environmentName}_a#b_x` : null) };
-    const res = makeRes('req-illegal-id');
-    let nextCalled = false;
+    for (const keyId of ['a#b', ' ', '\t', '.', '..', ' ']) {
+      const key = `demi_${config.environmentName}_${keyId}_x`;
+      const req = { header: (name) => (name === 'X-Api-Key' ? key : null) };
+      const res = makeRes('req-illegal-id');
+      let nextCalled = false;
 
-    passiveAuthMiddleware(req, res, () => { nextCalled = true; });
-    await new Promise(resolve => setImmediate(resolve));
+      passiveAuthMiddleware(req, res, () => { nextCalled = true; });
+      await new Promise(resolve => setImmediate(resolve));
 
-    assert.strictEqual(nextCalled, true);
-    assert.notStrictEqual(res.statusCode, 503);
-    assert.strictEqual(req.user, undefined);
+      assert.strictEqual(nextCalled, true, JSON.stringify(keyId));
+      assert.notStrictEqual(res.statusCode, 503, JSON.stringify(keyId));
+      assert.strictEqual(req.user, undefined, JSON.stringify(keyId));
+    }
     assert.strictEqual(apiKeys.getById.mock.callCount(), 0);
   });
 

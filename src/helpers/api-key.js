@@ -27,9 +27,9 @@ const KEY_ID_BYTES = 8;
 /** Ninety days, matching the landing zone's maximum secret lifetime. */
 const DEFAULT_TTL_DAYS = 90;
 
-/** Could Cosmos hold an item with this id? The SDK throws, with no status code, on any other. */
+/** Allow-list: the SDK throws on some ids (no status code) and rewrites `.` and `..` as paths. */
 function isStorableId(id) {
-  return typeof id === 'string' && id.length > 0 && id.length <= 255 && !/[/\\#?]/.test(id);
+  return typeof id === 'string' && /^[A-Za-z0-9:-]{1,255}$/.test(id);
 }
 
 function sha256(value) {

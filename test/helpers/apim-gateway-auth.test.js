@@ -149,7 +149,8 @@ test('a subscription name Cosmos could never store is unknown, with no lookup', 
   withSecret(t, SECRET);
   stubRegistry(t, {});
 
-  for (const name of ['a#b', 'a/b', 'a\\b', 'a?b', 'x'.repeat(256)]) {
+  for (const name of ['a#b', 'a/b', 'a\\b', 'a?b', 'x'.repeat(256), 'a b', 'a\tb', 'a\u00a0b',
+    '.', '..']) {
     const { status, error } = await run({ 'X-Gateway-Secret': SECRET, 'X-APIM-Subscription': name });
     assert.strictEqual(status, 401, name);
     assert.match(error, /Unknown API Management subscription/, name);
