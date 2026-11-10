@@ -89,14 +89,20 @@ async function publishOpenedImages(projectEagleId, items, derived, result) {
   const opened = items.filter(item => item.sourceSystem === 'demi' && readOf.has(String(item.id)) &&
     images.imageIds(item).length > 0);
   if (opened.length === 0) return;
+  let parent;
   try {
-    const parent = await updateParent.readParent(String(projectEagleId));
-    for (const item of opened) {
-      await images.publishFor({ req: null }, { ...item, id: String(item.id), read: readOf.get(String(item.id)) },
-        parent && parent.id);
-    }
+    parent = await updateParent.readParent(String(projectEagleId));
   } catch (err) {
     logger.error('[update-acl] images of an opened update not published', { projectEagleId, error: err.message, stack: err.stack });
+    return;
+  }
+  for (const item of opened) {
+    const id = String(item.id);
+    try {
+      await images.publishFor({ req: null }, { ...item, id, read: readOf.get(id) }, parent && parent.id);
+    } catch (err) {
+      logger.error('[update-acl] images of an opened update not published', { projectEagleId, id, error: err.message, stack: err.stack });
+    }
   }
 }
 
