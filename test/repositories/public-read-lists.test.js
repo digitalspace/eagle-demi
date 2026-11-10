@@ -422,6 +422,7 @@ test('updates publish gate', async (t) => {
 
 test('updates publishDate ordering', async (t) => {
   const config = require('../../src/config');
+  const { SPEC } = require('../../src/controllers/native/updates');
   const flag = config.updatesPublishDateFallback;
   t.afterEach(() => {
     t.mock.restoreAll();
@@ -464,7 +465,6 @@ test('updates publishDate ordering', async (t) => {
   await t.test('before it, a native publishDate sort is gated by the dateAdded dial in list, count and re-read', async () => {
     config.updatesPublishDateFallback = true;
     const seen = serve();
-    const { SPEC } = require('../../src/controllers/native/updates');
     const parsed = parseNativeQuery(SPEC, { sort: 'publishDate', count: 'true' }, ANON);
     const { criteria, orderBy } = nativeCriteria(SPEC, parsed, ANON);
     await updates.nativeRepository.list(ANON, { criteria, orderBy, pageNum: 0, pageSize: 10, parsed });
@@ -473,6 +473,20 @@ test('updates publishDate ordering', async (t) => {
     const reads = seen.filter(q => q.includes('c.vis["publishDate"]'));
     assert.strictEqual(reads.length, 3);
     for (const query of reads) assert.ok(query.includes('c.vis["dateAdded"]'), query);
+  });
+
+  await t.test('another sort, or a publishDate sort after the backfill, adds no dateAdded dial', async () => {
+    const seen = serve();
+    for (const [sort, fallback] of [['headline', true], ['publishDate', false]]) {
+      config.updatesPublishDateFallback = fallback;
+      const parsed = parseNativeQuery(SPEC, { sort, count: 'true' }, ANON);
+      const { criteria, orderBy } = nativeCriteria(SPEC, parsed, ANON);
+      await updates.nativeRepository.list(ANON, { criteria, orderBy, pageNum: 0, pageSize: 10, parsed });
+      await updates.nativeRepository.count(ANON, { criteria, parsed });
+    }
+    const reads = seen.filter(q => /c\.vis\["(headline|publishDate)"\]/.test(q));
+    assert.strictEqual(reads.length, 4);
+    for (const query of reads) assert.ok(!query.includes('c.vis["dateAdded"]'), query);
   });
 });
 
