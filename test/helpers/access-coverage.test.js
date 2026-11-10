@@ -73,7 +73,12 @@ const UNGATED = {
     'The partition key IS the access rule: every function takes the owner as its first argument ' +
     'and the controller only ever passes the caller\'s own token username, so a row of another ' +
     'user is unreachable rather than filtered out. Rows carry no read[] and no tier can see part ' +
-    'of one, so there is nothing for visibilityFor or canRead to compose.'
+    'of one, so there is nothing for visibilityFor or canRead to compose.',
+  'works.js':
+    'Never a response source. Rows are read only to build or derive a project field after the ' +
+    'caller holds that project\'s row: a canRead-gated read on the response path, or a ' +
+    'read-for-write or systemAccess read on writer paths that answer no row. The composed field ' +
+    'and every derived field pass the projects field catalog. No route serves a work document.'
 };
 
 /**
