@@ -22,7 +22,9 @@ async function removeFromSearch(id) {
     indexRemovalError = err.message;
   }
   const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
-  if (strict && removedFromSearch === 0) indexRemovalError ??= `document ${id} is still in the search index`;
+  if (strict && removedFromSearch === 0) {
+    indexRemovalError = [indexRemovalError, `document ${id} is still in the search index`].filter(Boolean).join('; ');
+  }
   return { removedFromSearch, removedChunksFromSearch, indexRemovalError };
 }
 
