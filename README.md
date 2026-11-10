@@ -1639,9 +1639,10 @@ without revisiting that grant. A missing grant fails the first step of
 
    You need an `oc` context that can read that secret. The script uses the `github-cicd` service
    account context by default; set `OC_CONTEXT` to use another, for example `OC_CONTEXT=epic-test`.
+   `KC_ADMIN_SECRET` names a different secret, and `KC_URL_OVERRIDE` replaces its token host.
 
    The script targets client `eagle-admin-console` in realm `eao-epic` on test Keycloak. Set
-   `CLIENT_ID` for another client and `ENV=prod` for prod Keycloak; the realm stays `eao-epic`.
+   `KC_CLIENT_ID` for another client and `ENV=prod` for prod Keycloak; the realm stays `eao-epic`.
    Pass `--dry-run` anywhere on the command line to see the change without writing it.
 
    The script adds:

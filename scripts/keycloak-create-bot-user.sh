@@ -2,18 +2,23 @@
 set -euo pipefail
 
 usage() {
-  cat <<'EOF'
+  local out=1
+  [[ "${1:-0}" -eq 0 ]] || out=2
+  cat >&"$out" <<'EOF'
 Create or reset a bot user in realm eao-epic on test Keycloak, for browser end-to-end tests.
 Its generated password goes to OpenShift secret <username> in 6cdc9e-test, never to output.
+eagle-demi-admin/scripts/e2e-smoke.mjs reads it from there.
 
   scripts/keycloak-create-bot-user.sh <username> <realm-role> [email]
 
+  OC_CONTEXT       oc context that can read the admin secret in 6cdc9e-test
   KC_ADMIN_SECRET  admin credential secret (default demi-keycloak-admin)
-  OC_CONTEXT       oc context that can read it in 6cdc9e-test
+  KC_URL_OVERRIDE  token host to use instead of the secret's KEYCLOAK_URL
 EOF
   exit "${1:-0}"
 }
-[[ "${1:-}" == "--help" || "${1:-}" == "-h" || $# -lt 2 ]] && usage 1
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+[[ $# -ge 2 ]] || usage 1
 
 BOT="$1"; ROLE="$2"; EMAIL="${3:-$BOT@eao-epic.test.invalid}"
 ENV="${ENV:-test}"
@@ -25,8 +30,8 @@ esac
 OC_CONTEXT="${OC_CONTEXT:-$NS/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd}"
 
 # shellcheck source=lib/keycloak-admin.sh
-source "${BASH_SOURCE[0]%/*}/lib/keycloak-admin.sh"
-token=$(kc_admin_token "$OC_CONTEXT" "$NS" "${KC_ADMIN_SECRET:-demi-keycloak-admin}")
+source "$(dirname "${BASH_SOURCE[0]}")/lib/keycloak-admin.sh"
+token=$(kc_admin_token "$OC_CONTEXT" "$NS")
 auth=(-H "Authorization: Bearer $token" -H 'Content-Type: application/json')
 api="$KC_BASE/admin/realms/$REALM"
 

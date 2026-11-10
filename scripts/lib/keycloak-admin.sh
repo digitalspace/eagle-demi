@@ -1,12 +1,16 @@
 # shellcheck shell=bash
-# Sourced, not run. kc_admin_token <oc-context> <namespace> [secret] prints an admin access token.
-# Used by scripts/keycloak-add-redirect.sh and scripts/keycloak-create-bot-user.sh.
+# Sourced, not run. kc_admin_token <oc-context> <namespace> prints an admin access token, using
+# secret $KC_ADMIN_SECRET (default demi-keycloak-admin). Used by scripts/keycloak-*.sh.
 kc_admin_token() {
-  local ctx="$1" ns="$2" secret="${3:-demi-keycloak-admin}" v token url
+  local ctx="$1" ns="$2" secret="${KC_ADMIN_SECRET:-demi-keycloak-admin}" json v token url
   # Declared empty so a USERNAME or similar from the caller's shell never stands in for the secret.
   local USERNAME='' PASSWORD='' KEYCLOAK_CLIENT_ID='' KEYCLOAK_CLIENT_SECRET='' KEYCLOAK_URL='' KEYCLOAK_REALM=''
-  eval "$(oc --context "$ctx" get secret "$secret" -n "$ns" -o json \
-    | jq -r '.data | to_entries[] | "\(.key)=\(.value|@base64d|@sh)"')"
+  json=$(oc --context "$ctx" get secret "$secret" -n "$ns" -o json) \
+    || { echo "cannot read secret $secret in $ns via $ctx" >&2; return 1; }
+  # Only these keys: any other key would be eval'd too and could clobber PATH or echo a value.
+  eval "$(jq -r '.data | with_entries(select(.key | IN("USERNAME", "PASSWORD", "KEYCLOAK_CLIENT_ID",
+    "KEYCLOAK_CLIENT_SECRET", "KEYCLOAK_URL", "KEYCLOAK_REALM"))) | to_entries[]
+    | "\(.key)=\(.value | @base64d | @sh)"' <<<"$json")"
   for v in KEYCLOAK_URL KEYCLOAK_REALM; do
     [[ -n "${!v}" ]] || { echo "secret is missing $v" >&2; return 1; }
   done

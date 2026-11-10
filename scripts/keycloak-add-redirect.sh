@@ -4,20 +4,24 @@
 set -euo pipefail
 
 usage() {
-  cat <<'EOF'
+  local out=1
+  [[ "${1:-0}" -eq 0 ]] || out=2
+  cat >&"$out" <<'EOF'
 Add <origin>/* to redirectUris and <origin> to webOrigins on a client in realm eao-epic.
 
   scripts/keycloak-add-redirect.sh [--dry-run] <origin>
 
-  CLIENT_ID   client to change (default eagle-admin-console)
-  ENV         test or prod Keycloak (default test)
-  OC_CONTEXT  oc context that can read secret demi-keycloak-admin in 6cdc9e-<env>
+  KC_CLIENT_ID     client to change (default eagle-admin-console)
+  ENV              test or prod Keycloak (default test)
+  OC_CONTEXT       oc context that can read the admin secret in 6cdc9e-<env>
+  KC_ADMIN_SECRET  admin credential secret (default demi-keycloak-admin)
+  KC_URL_OVERRIDE  token host to use instead of the secret's KEYCLOAK_URL
 EOF
   exit "${1:-0}"
 }
 
 ENV="${ENV:-test}"
-CLIENT_ID="${CLIENT_ID:-eagle-admin-console}"
+CLIENT_ID="${KC_CLIENT_ID:-eagle-admin-console}"
 REALM="eao-epic"
 DRY_RUN=0
 args=()
@@ -42,7 +46,7 @@ esac
 OC_CONTEXT="${OC_CONTEXT:-$NS/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd}"
 
 # shellcheck source=lib/keycloak-admin.sh
-source "${BASH_SOURCE[0]%/*}/lib/keycloak-admin.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/keycloak-admin.sh"
 token=$(kc_admin_token "$OC_CONTEXT" "$NS")
 # Header and body go through /dev/fd and stdin: the token and client JSON never show in ps.
 auth_header() { printf 'Authorization: Bearer %s\n' "$token"; }
