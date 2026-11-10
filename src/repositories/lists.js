@@ -2,6 +2,7 @@
 
 // `List` and `Organization` rows share one container, partitioned by `/kind`: a few thousand tiny
 // rows read a kind at a time. Neither is project data, so role ACL applies and project scope does not.
+// `PhaseCatalog` items sit here too but carry no `read[]`, so no caller-facing read returns them.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
@@ -16,7 +17,7 @@ const PARTITION_FIELD = 'kind';
 /** Null is load-bearing, not a placeholder — see the header. */
 const SCOPE_FIELD = null;
 
-const KINDS = Object.freeze({ LIST: 'List', ORGANIZATION: 'Organization' });
+const KINDS = Object.freeze({ LIST: 'List', ORGANIZATION: 'Organization', PHASE_CATALOG: 'PhaseCatalog' });
 
 // Per kind: an ORDER BY on a field a kind's rows lack drops every row. Each key must be an
 // included path in the `lists` indexing policy (azure/modules/cosmos-nosql.bicep).
@@ -42,6 +43,13 @@ async function getById(access, id, kind) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, kind) {
   return cosmos.readItem(CONTAINER, String(id), String(kind));
+}
+
+const catalogItemId = (year) => `phase-catalog-${year}`;
+
+/** One Act's phase catalog item, or null; server-side only, so no access check. */
+async function readCatalog(year) {
+  return cosmos.readItem(CONTAINER, catalogItemId(year), KINDS.PHASE_CATALOG);
 }
 
 /**
@@ -178,6 +186,8 @@ module.exports = {
   getById,
   readForWrite,
   readForWriteByEagleId,
+  catalogItemId,
+  readCatalog,
   listByIds,
   listOrganizationLabels,
   listByKind,
