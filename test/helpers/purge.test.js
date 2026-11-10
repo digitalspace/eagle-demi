@@ -16,6 +16,10 @@ const aiSearch = require('../../src/search/ai-search');
 const storage = require('../../src/storage');
 const { logger } = require('../../src/utils/logger');
 const { purgeDocument } = require('../../src/helpers/purge');
+const { DefaultAzureCredential } = require('@azure/identity');
+
+// Taken before any case runs: restoreAll does not unwind a method mocked twice in one case.
+const realDeleteFromIndex = aiSearch.deleteFromIndex;
 
 const ROW = Object.freeze({
   id: 'd1', projectId: '207', s3Key: 'etl/site-c/1389817063122_20d7490a.pdf',
@@ -174,6 +178,29 @@ test('purgeDocument keeps the row when its chunks are not all removed', async (t
     assert.strictEqual(result.rowKept, true);
     assert.match(result.indexRemovalError, /index still holds chunks/);
     assert.match(result.indexRemovalError, /document d1 is still in the search index/);
+  });
+
+  await t.test('with search configured, a 207 from the document index delete keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'deleteFromIndex', realDeleteFromIndex);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    const endpoint = process.env.SEARCH_ENDPOINT;
+    process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
+    t.after(() => { process.env.SEARCH_ENDPOINT = endpoint ?? ''; });
+    t.mock.method(DefaultAzureCredential.prototype, 'getToken',
+      async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 3600000 }));
+    t.mock.method(global, 'fetch', async () => ({
+      ok: true, status: 207,
+      json: async () => ({ value: [{ key: 'd1', status: false, statusCode: 503, errorMessage: 'throttled' }] })
+    }));
+    const errors = t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(result.removedFromSearch, 0);
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0);
+    assert.strictEqual(result.rowKept, true);
+    assert.match(errors.mock.calls[0].arguments[0], /could not remove .*d1 .*throttled/);
   });
 
   await t.test('with search configured, a complete index removal deletes the row', async (t) => {

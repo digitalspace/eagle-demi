@@ -1868,15 +1868,15 @@ async function deleteFromIndex(index, id) {
   }
 
   try {
-    await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
+    const { value = [] } = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
       value: [{ '@search.action': 'delete', id: String(id) }]
     });
+    // A 207 is `ok` with a per-row verdict; a 404 row is already out of the index.
+    const rejected = value.find(row => row && row.status === false && row.statusCode !== 404);
+    if (rejected) throw new Error(`HTTP ${rejected.statusCode} ${rejected.errorMessage || 'no message'}`);
     return 1;
   } catch (err) {
-    logger.error(
-      `[ai-search] could not remove ${index}/${id} (${err.message}). ` +
-      'It remains searchable until this is retried.'
-    );
+    logger.error(`[ai-search] could not remove ${index}/${id} (${err.message}). It remains searchable until this is retried.`);
     return 0;
   }
 }
