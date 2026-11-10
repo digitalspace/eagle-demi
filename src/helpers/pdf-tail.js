@@ -258,7 +258,7 @@ function pdfText(bytes) {
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return bytes.subarray(2).swap16().toString('utf16le');
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString('utf8');
   const codes = [...bytes].map(b => (b in PDFDOC ? PDFDOC[b] : b));
-  return codes.includes(null) ? null : String.fromCodePoint(...codes);
+  return codes.includes(null) ? null : codes.map(c => String.fromCodePoint(c)).join('');
 }
 
 /**

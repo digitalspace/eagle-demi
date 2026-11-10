@@ -278,6 +278,15 @@ test('Info /Title decodes to the wanted title', () => {
   ]);
 });
 
+test('a long PDFDocEncoding /Title is compared, not thrown on', async () => {
+  const { original } = load('classic-info');
+  const facts = await readFacts(original);
+  const trailer = `/Size ${facts.size} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+  const kept = '/Producer (Acrobat Distiller 6.0.1) /ModDate (D:20040102030405)';
+  const long = 'a'.repeat(250000);
+  assert.equal(checkTail(classicTail(original, [[1, `<< ${kept} /Title (${long}) >>`]], trailer), original.length, facts, long), null);
+});
+
 test('a revised Info changes only /Title; a new Info holds only /Title', async (t) => {
   const { original } = load('classic-info');
   const facts = await readFacts(original);
