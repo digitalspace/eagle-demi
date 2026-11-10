@@ -10,7 +10,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { HEAL_CAP, run, syncProjects, trackChanges, writeTrackProject } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { run, syncProjects } = require('../../src/scripts/sync-track-run');
+const {
+  NOW, API_PROJECT, FLAT, storedProject, eagleOnlyProject, conflict, preconditionFailed, fakeLinks, fakeProjects
+} = require('../helpers/track-sync-fakes');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
@@ -18,146 +22,8 @@ const config = require('../../src/config');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 const { logger } = require('../../src/utils/logger');
 
-const NOW = '2026-09-02T00:00:00.000Z';
-
-/** One row of `GET /api/v1/projects`, fields as Track test returns them. */
-const API_PROJECT = {
-  id: 207,
-  name: 'Nicomen Wind Energy',
-  description: 'Proponent proposes to construct 35 - 2.0 MW wind turbines.',
-  epic_guid: '58851172aaecd9001b820335',
-  latitude: '50.2',
-  longitude: '-121.4',
-  address: 'Lytton',
-  abbreviation: 'NICWIN',
-  is_active: true,
-  is_project_closed: true,
-  project_state: { name: 'Closed' },
-  project_state_id: 6,
-  type: { name: 'Energy - Electricity' },
-  sub_type: { name: 'Power Plants' },
-  proponent: { name: 'Premier Renewable Energy' },
-  ea_certificate: 'Withdrawn',
-  eac_expires: null,
-  eac_signed: null,
-  region_env: 'Thompson-Okanagan',
-  region_flnro: 'Thompson / Okanagan',
-  created_at: '2019-11-04T20:23:41.664000'
-};
-
-const FLAT = trackApiToExtract(API_PROJECT);
-
-/**
- * A stored record as the merge writes it, then widened to level 4 and classified — i.e. what the
- * ladder and the sysadmin own, which no re-merge may touch.
- */
-function storedProject(overrides = {}) {
-  return {
-    ...mergeTrackProject(FLAT, null, { now: '2026-08-01T00:00:00.000Z' }),
-    read: readForLevel(4),
-    isPublished: true,
-    // Already minted from the name: a row without one, or on a pre-slug random code, is the
-    // migration case, tested on its own below.
-    shortCode: 'nicomen-wind-energy',
-    shortCodeSource: 'name',
-    vis: { eacExpires: 3 },
-    regionalDistrict: 'Thompson-Nicola',
-    ...overrides
-  };
-}
-
-const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
-const preconditionFailed = () => Object.assign(new Error('Precondition failed'), { code: 412 });
-
-// The links repository, in memory: a second create of a code is a 409, a write on a stale
-// revision is a 412. `seed` records are already there.
-function fakeLinks(seed = []) {
-  let revision = 0;
-  const stamp = (record) => ({ ...record, _etag: `"l${++revision}"` });
-  const created = [];
-  const byId = new Map(seed.map(record => [record.id, stamp(record)]));
-  const guard = (id, etag) => {
-    if (etag && byId.get(id)._etag !== etag) throw preconditionFailed();
-  };
-  return {
-    created, byId,
-    create: async (record) => {
-      if (byId.has(record.id)) throw conflict();
-      const saved = stamp(record);
-      created.push(saved);
-      byId.set(record.id, saved);
-      return saved;
-    },
-    getById: async (id) => byId.get(id) || null,
-    repoint: async (id, url, { etag } = {}) => {
-      if (!byId.has(id)) return null;
-      guard(id, etag);
-      const saved = stamp({ ...byId.get(id), url });
-      byId.set(id, saved);
-      return saved;
-    },
-    remove: async (id, { etag } = {}) => {
-      if (!byId.has(id)) return false;
-      guard(id, etag);
-      return byId.delete(id);
-    }
-  };
-}
-
 /** A shared link record, as `/links` or an older mint left it. */
 const linkRecord = (id, url) => ({ id, url, personal: false, createdBy: 'system' });
-
-// The projects repository, in memory, with Cosmos's etag rule (stale revision = 412). `midRun`
-// lands another writer's change after the list read; `deleteById` throws, as nothing is deleted.
-function fakeProjects(rows = [], { midRun } = {}) {
-  let revision = 0;
-  const stamp = (row) => ({ ...structuredClone(row), _etag: `"${++revision}"` });
-  const items = structuredClone(rows);
-  const writes = [];
-  const patches = [];
-  const find = (id) => items.find(p => String(p.id) === String(id)) || null;
-  const store = (row) => {
-    const saved = stamp(row);
-    const at = items.findIndex(p => String(p.id) === String(row.id));
-    if (at >= 0) items[at] = saved; else items.push(saved);
-    return structuredClone(saved);
-  };
-  const guard = (id, etag) => {
-    const current = find(id);
-    if (current && current._etag !== etag) {
-      throw Object.assign(new Error('Precondition failed'), { code: 412 });
-    }
-  };
-  return {
-    items, writes, patches, store,
-    listVisible: async () => {
-      const snapshot = structuredClone(items);
-      if (midRun) midRun(store, find);
-      return { items: snapshot };
-    },
-    getById: async (_access, id) => structuredClone(find(id)),
-    readForWrite: async (id) => structuredClone(find(id)),
-    // The Track row beside its `eagle-<id>` twin wins, as in the repository.
-    readForWriteByEagleId: async (eagleId) => structuredClone(
-      items.find(p => p.eagleId === eagleId && !String(p.id).startsWith('eagle-')) ||
-      items.find(p => p.eagleId === eagleId) || null),
-    upsert: async (row, { etag, create } = {}) => {
-      if (create && find(row.id)) throw conflict();
-      guard(row.id, etag);
-      writes.push(row);
-      return store(row);
-    },
-    patchShortLink: async (id, { shortCode, shortCodeSource, legacyShortCodes }, etag) => {
-      guard(id, etag);
-      patches.push({ id, shortCode, shortCodeSource, legacyShortCodes });
-      return store({ ...find(id), shortCode, shortCodeSource, legacyShortCodes });
-    },
-    listShortCodeOwners: async (code) => items
-      .filter(p => p.shortCode === code || (p.legacyShortCodes || []).includes(code))
-      .map(p => String(p.id)),
-    deleteById: async () => { throw new Error('the project sync must never delete'); }
-  };
-}
 
 test('the mapper flattens a live project into the shape the merge reads', () => {
   assert.deepStrictEqual(trackApiToExtract(API_PROJECT), {
@@ -717,23 +583,6 @@ test('a row created through POST /projects is left alone, not reclassified', asy
   assert.deepStrictEqual(after, stored, 'byte-identical');
 });
 
-/** The Eagle-only row the merge writes when Track has no counterpart yet. */
-function eagleOnlyProject(overrides = {}) {
-  return {
-    id: `eagle-${API_PROJECT.epic_guid}`,
-    trackProjectId: null,
-    eagleId: API_PROJECT.epic_guid,
-    sourceSystem: 'eagle',
-    name: 'Nicomen Wind Energy',
-    read: readForLevel(4),
-    isPublished: true,
-    vis: { eacExpires: 3 },
-    regionalDistrict: 'Thompson-Nicola',
-    sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy' } },
-    ...overrides
-  };
-}
-
 test('a Track project naming a native project\'s Eagle id is not created beside it', async (t) => {
   const native = {
     id: '0f8fad5b-d9cb-469f-a165-70867728950e', trackProjectId: null, sourceSystem: 'demi',
@@ -982,7 +831,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, derivedDrift: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 
@@ -1238,38 +1087,6 @@ test('the projects poll', async (t) => {
     assert.deepStrictEqual(track.adminCalls, []);
   });
 
-  await t.test('a row a newer push wrote is left alone and not counted', async (t) => {
-    quiet(t);
-    const projects = fakeProjects([storedProject({ trackPushedAt: Date.now() + 60000 })]);
-
-    const summary = await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
-
-    assert.deepStrictEqual(projects.writes, []);
-    assert.deepStrictEqual([summary.updated, summary.stale], [0, 1]);
-  });
-
-  await t.test('a run writes no push stamp', async (t) => {
-    quiet(t);
-    const projects = fakeProjects([storedProject()]);
-
-    await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
-
-    assert.ok(!('trackPushedAt' in projects.writes[0]));
-  });
-
-  await t.test('a push older than the run still lands on a row the run wrote', async (t) => {
-    quiet(t);
-    const projects = fakeProjects([storedProject()]);
-    const pushedAt = Date.now() - 60000;
-    await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
-
-    const result = await writeTrackProject({ ...API_PROJECT, name: 'Pushed name' },
-      { phases: [], works: [], pushedAt, deps: { projects, links: fakeLinks() } });
-
-    assert.strictEqual(result.action, 'updated');
-    assert.strictEqual(projects.writes.at(-1).name, 'Pushed name');
-  });
-
   await t.test('counts an orphan without logging its id', async (t) => {
     quiet(t);
     const warn = t.mock.method(logger, 'warn', () => {});
@@ -1376,93 +1193,5 @@ test('the projects poll', async (t) => {
     assert.deepStrictEqual(projects.writes, []);
     assert.strictEqual(errors.mock.calls[0].arguments[1].error, 'HTTP 503');
     assert.match(info.mock.calls.at(-1).arguments[0], /failures=1$/);
-  });
-});
-
-test('the Track push', async (t) => {
-  const PUSHED_AT = 1762650000000;
-  const PHASES = [{ name: 'Application Review', sortOrder: 4, isCompleted: false }];
-  const push = (projects, opts = {}) =>
-    writeTrackProject(API_PROJECT, { phases: [], works: [], deps: { projects, links: fakeLinks() }, ...opts });
-  const quiet = (t) => t.mock.method(logger, 'warn', () => {});
-
-  await t.test('empty lists clear the stored works and phases and keep the Eagle snapshot', async () => {
-    const eagle = { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy' };
-    const projects = fakeProjects([storedProject({ works: trackWorks(), phases: PHASES, sources: { track: FLAT, eagle } })]);
-
-    const result = await push(projects);
-
-    assert.strictEqual(result.action, 'updated');
-    const [written] = projects.writes;
-    assert.deepStrictEqual(written.works, []);
-    assert.deepStrictEqual(written.phases, []);
-    assert.deepStrictEqual(written.sources.eagle, eagle);
-  });
-
-  await t.test('empty lists over a row holding none are no change', async () => {
-    const projects = fakeProjects([storedProject()]);
-
-    const result = await push(projects);
-
-    assert.strictEqual(result.action, 'unchanged');
-    assert.deepStrictEqual(projects.writes, []);
-  });
-
-  await t.test('a push older than the stored one is stale and writes nothing', async () => {
-    const projects = fakeProjects([storedProject({ trackPushedAt: PUSHED_AT })]);
-
-    const result = await writeTrackProject({ ...API_PROJECT, name: 'Renamed' },
-      { phases: [], works: [], pushedAt: PUSHED_AT - 1, deps: { projects, links: fakeLinks() } });
-
-    assert.strictEqual(result.action, 'stale');
-    assert.deepStrictEqual(projects.writes, []);
-  });
-
-  await t.test('a push that writes stamps the row with its time', async () => {
-    const projects = fakeProjects([storedProject({ trackPushedAt: PUSHED_AT })]);
-
-    await writeTrackProject({ ...API_PROJECT, name: 'Renamed' },
-      { phases: [], works: [], pushedAt: PUSHED_AT + 1, deps: { projects, links: fakeLinks() } });
-
-    assert.strictEqual(projects.writes[0].trackPushedAt, PUSHED_AT + 1);
-  });
-
-  await t.test('a project naming a native project\'s Eagle id is skipped', async (t) => {
-    const warn = quiet(t);
-    const native = {
-      id: '0f8fad5b-d9cb-469f-a165-70867728950e', trackProjectId: null, sourceSystem: 'demi',
-      eagleId: API_PROJECT.epic_guid, sources: {}, read: readForLevel(1)
-    };
-    const projects = fakeProjects([native]);
-
-    const result = await push(projects);
-
-    assert.strictEqual(result.action, 'skipped');
-    assert.strictEqual(result.reason, 'nativeClash');
-    assert.deepStrictEqual(projects.writes, []);
-    assert.ok(warn.mock.calls.some(c => /\[track-push\] project skipped/.test(c.arguments[0])));
-  });
-
-  await t.test('a row created through POST /projects is skipped', async (t) => {
-    quiet(t);
-    const projects = fakeProjects([storedProject({ sources: {} })]);
-
-    const result = await push(projects);
-
-    assert.strictEqual(result.reason, 'apiRow');
-    assert.deepStrictEqual(projects.writes, []);
-  });
-
-  await t.test('an Eagle-only twin is re-keyed and hands its ownership to the Track row', async () => {
-    const projects = fakeProjects([eagleOnlyProject({ demiOwnedAt: NOW, syncVersion: 3 })]);
-
-    const result = await push(projects, { pushedAt: PUSHED_AT });
-
-    assert.strictEqual(result.action, 'relinked');
-    const row = projects.items.find(p => p.id === '207');
-    assert.deepStrictEqual(row.read, readForLevel(4), 'a re-key must not move a level');
-    assert.strictEqual(row.trackPushedAt, PUSHED_AT);
-    const twin = projects.items.find(p => p.id === `eagle-${API_PROJECT.epic_guid}`);
-    assert.strictEqual(Object.hasOwn(twin, 'demiOwnedAt'), false);
   });
 });

@@ -9,7 +9,7 @@
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
 const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorks } = require('../seed/sources');
-const { syncProjects } = require('./sync-track-projects');
+const { syncProjects } = require('./sync-track-run');
 const { logger } = require('../utils/logger');
 
 /** Keycloak's admin API caps a listing page; anything longer has to be walked with `first=`. */
@@ -46,6 +46,12 @@ function credentialsRepository() {
 }
 
 const countRoles = (entries) => entries.reduce((n, e) => n + e.roles.length, 0);
+
+/** Summary field and the mirror count it shows. */
+const MIRROR_FIELDS = [['trackProjects', 'trackProjects'], ['created', 'created'], ['updated', 'updated'],
+  ['orphaned', 'orphaned'], ['relinked', 'relinked'], ['skippedApiRows', 'skippedApiRows'], ['trackPhases', 'phases'],
+  ['shortLinks', 'shortLinks'], ['stale', 'stale'], ['derivedDrift', 'derivedDrift']];
+const mirrorCounts = (mirrored) => Object.fromEntries(MIRROR_FIELDS.map(([to, from]) => [to, mirrored[from] || 0]));
 const byUsername = (a, b) => a.username.localeCompare(b.username);
 
 /**
@@ -220,13 +226,7 @@ async function sync(argv = [], deps = {}) {
     unmatched: decided.unmatched.length,
     closedProjects: 0,
     credentialsRevoked: 0,
-    trackProjects: 0,
-    created: 0,
-    updated: 0,
-    orphaned: 0,
-    relinked: 0,
-    skippedApiRows: 0,
-    trackPhases: 0,
+    ...mirrorCounts({}),
     trackWorks: 0,
     trackWorksFailed: 0,
     failures: 0,
@@ -284,9 +284,10 @@ async function sync(argv = [], deps = {}) {
     // them only, and `mergeTrackProject` then leaves the stored ones alone rather than blanking them.
     let phases = new Map();
     let works = new Map();
+    let nested = new Map();
     try {
       const pulled = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
-      ({ phases, works } = pulled);
+      ({ phases, works, nested } = pulled);
       summary.trackWorks = pulled.stats.works;
       summary.trackWorksFailed = pulled.stats.failures;
     } catch (err) {
@@ -297,17 +298,8 @@ async function sync(argv = [], deps = {}) {
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
-      const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, pushedAt });
-      Object.assign(summary, {
-        trackProjects: mirrored.trackProjects,
-        created: mirrored.created,
-        updated: mirrored.updated,
-        orphaned: mirrored.orphaned,
-        relinked: mirrored.relinked,
-        skippedApiRows: mirrored.skippedApiRows,
-        trackPhases: mirrored.phases,
-        shortLinks: mirrored.shortLinks
-      });
+      const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, nested, pushedAt });
+      Object.assign(summary, mirrorCounts(mirrored));
       summary.failures += mirrored.failures;
     } catch (err) {
       summary.failures++;
@@ -372,7 +364,7 @@ function summaryLine(s) {
     `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
     `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
     `trackPhases=${s.trackPhases} trackWorks=${s.trackWorks} trackWorksFailed=${s.trackWorksFailed} ` +
-    `failures=${s.failures}`;
+    `stale=${s.stale} derivedDrift=${s.derivedDrift} failures=${s.failures}`;
 }
 
 /**

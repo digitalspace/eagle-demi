@@ -362,8 +362,8 @@ function trackPushToSync(payload) {
 }
 
 /**
- * Assessment phases and, with `opts.works`, every mirrored work, keyed by Track project id.
- * A failed read is logged and leaves only that project out, so the sync keeps its stored rows.
+ * Assessment phases and, with `opts.works`, every mirrored work, keyed by Track project id: `works` in the
+ * row's public shape, `nested` as Track's `phases[].events[]`. A failed read leaves only that project out.
  * @param {function} [get] test seam, and the sync's own `deps.fetchJson`
  * @param {object} [opts] {works} pull works too, {now} clock seam, {budgetMs}
  */
@@ -396,8 +396,9 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   }
 
   const works = new Map();
+  const nested = new Map();
   const stats = { projects: 0, works: 0, requests: 0, elapsedMs: 0, failures: 0, budgetHit: false };
-  if (!withWorks) return { phases, works, stats };
+  if (!withWorks) return { phases, works, nested, stats };
 
   const counted = (url) => { requests++; return get(url, headers); };
   // Track refuses `/outcome-configurations/` without `configuration_id`: one read per config.
@@ -428,8 +429,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
       const wp = row.work_phase || {};
       phases.push({ ...wp, events: await eventsOf(wp.id) });
     }
-    const nested = { ...work, phases };
-    return trackWorkToPublic(nested, phaseEventsOf(nested));
+    return { ...work, phases };
   };
 
   const byProject = new Map();
@@ -448,7 +448,8 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
     try {
       const rows = [];
       for (const work of projectWorks.sort((a, b) => a.id - b.id)) rows.push(await workOf(work));
-      works.set(projectId, rows);
+      nested.set(projectId, rows);
+      works.set(projectId, rows.map(work => trackWorkToPublic(work, phaseEventsOf(work))));
       stats.works += rows.length;
     } catch (err) {
       stats.failures++;
@@ -464,7 +465,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   }
   logger.info(`[seed] works pull: projects=${stats.projects} works=${stats.works} ` +
     `requests=${stats.requests} elapsedMs=${stats.elapsedMs} failures=${stats.failures}`);
-  return { phases, works, stats };
+  return { phases, works, nested, stats };
 }
 
 /**

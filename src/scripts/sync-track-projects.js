@@ -16,10 +16,11 @@ const {
 } = require('../merge/project');
 const { isStalePush, stampPush } = require('../controllers/nosql/eagle-mirror');
 const { deriveAssessments } = require('../merge/assessments');
+const { deriveInputs } = require('../domain/works-derive');
+const { syncWorkDocs } = require('./sync-works');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
 const { TWIN_CARRY_FIELDS, DEMI_OWNED_AT, TRACK_PUSHED_AT } = require('../ownership/project');
-const { clientToken, fetchTrackProjects, trackApiToExtract } = require('../seed/sources');
-const config = require('../config');
+const { trackApiToExtract } = require('../seed/sources');
 const linksRepository = require('../repositories/links');
 const { logger } = require('../utils/logger');
 
@@ -62,8 +63,14 @@ function feedChanges(existing, merged) {
 const eagleOf = (row) => (row.sources || {}).eagle || null;
 
 /** `row` with `assessments`, `phaseIds` and `activeWork` derived again, keeping names off `stored`'s. */
-const withDerived = (row, stored) =>
-  Object.assign(row, deriveAssessments(row, { previous: stored && stored.assessments }));
+const withDerived = (row, stored, inputs = {}) =>
+  Object.assign(row, deriveAssessments(row, { previous: stored && stored.assessments, ...inputs }));
+
+const DRIFT_FIELDS = ['assessments', 'phaseIds', 'activeWork', 'legislationTransitions'];
+/** The works derive other values than stored while Track moved nothing else. Never with WORKS_READ off. */
+const drifted = (inputs, changes, row, stored) => Boolean(inputs.worksForDerive) &&
+  Object.keys(changes).every(field => DRIFT_FIELDS.includes(field)) &&
+  DRIFT_FIELDS.some(field => JSON.stringify(row[field] ?? null) !== JSON.stringify(stored[field] ?? null));
 
 /** A row with a public page and no code yet, or still on a pre-slug random one. */
 const owesLink = (row) => Boolean(row.eagleId) && (!row.shortCode || needsSlugMigration(row));
@@ -91,13 +98,6 @@ function dryLinks(links) {
       return moved;
     }
   };
-}
-
-/** Cosmos is private-endpoint-only, so a CLI dry run off-platform has no repository to ask. */
-function projectsRepository() {
-  if (process.env.COSMOS_ENDPOINT) return require('../repositories/projects');
-  logger.warn('[track-projects] COSMOS_ENDPOINT not set: project sync reported as 0');
-  return null;
 }
 
 /**
@@ -233,39 +233,57 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
   const stamp = (row, pushedAt, current) => stampPush(row, push ? pushedAt : undefined, current, TRACK_PUSHED_AT);
 
   /**
-   * One `GET /api/v1/projects` row; {pushedAt} is a push's epoch ms. Resolves `{action}`: created, relinked,
-   * updated, unchanged, stale, skipped with `reason`, or failed with `status`.
+   * One `GET /api/v1/projects` row; {pushedAt} is a push's epoch ms or the run's start; {nested} Track's nested
+   * works. Resolves `{action}`: created, relinked, updated, unchanged, stale, skipped with `reason`, or failed.
    */
-  const write = async (apiProject, { phases, works, complete = false, pushedAt = null } = {}) => {
+  const write = async (apiProject, { phases, works, nested, pushedAt = null } = {}) => {
     const track = trackApiToExtract(apiProject);
     const id = String(track.track_project_id);
     const existing = await lookup.stored(id);
     const guid = track.epic_guid ? String(track.epic_guid) : null;
     const relink = !existing && guid ? await lookup.eagleOnly(guid) : null;
-    // Every merge below takes the same options; the phase and work lists are per project, so they
-    // are read once.
-    const mergeOpts = { now, phases, works, complete };
+    const mergeOpts = { now, phases, works };
+    // Before the row, so its derived values read the documents this run wrote.
+    const writeDocs = async () => {
+      const { stale: staleDocs, failed } = await syncWorkDocs(id, nested, { pushedAt, live, now });
+      Object.assign(summary, { stale: summary.stale + staleDocs, failures: summary.failures + failed });
+    };
+    const inputs = () => deriveInputs({ id, sources: { track } });
+    /** The row Track and the works give for `current`, and whether only its derived values drifted. */
+    const rebuild = async (current) => {
+      const derive = await inputs();
+      const { changes, held } = trackChanges(current, mergeTrackProject(track, eagleOf(current), { ...mergeOpts, ...derive }));
+      const row = withDerived(stamp({ ...current, ...changes, sources: { ...current.sources, track } }, pushedAt, current),
+        current, derive);
+      return { changes, held, row, drift: drifted(derive, changes, row, current) };
+    };
     const countLists = () => {
       if (phases) summary.phases++;
       if (works) summary.works++;
     };
     const landed = (inserted) => !live || inserted === 'saved';
+    const stale = () => {
+      summary.stale++;
+      return { action: 'stale' };
+    };
 
     if (relink) {
       // A re-key, not a new record: it keeps the level and stamps; the `eagle-<id>` row stays,
       // as in the seed; only the seed's `--reconcile` retires one.
       onRelink(relink);
       await heal(relink);
+      await writeDocs();
       // The twin as stored now, not at run start: a tags PUT or a narrowing since must carry.
       const inserted = await insert(id, async () => {
         const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
-        const merged = mergeTrackProject(track, eagleOf(twin), mergeOpts);
+        const derive = await inputs();
+        const merged = mergeTrackProject(track, eagleOf(twin), { ...mergeOpts, ...derive });
         // The Track row is a new record: it must not inherit the twin's sync-out state.
         const carried = Object.fromEntries(Object.entries(twin).filter(([k]) => !SYNC_STATE_FIELDS.includes(k)));
         const row = stamp({ ...carried, ...merged, read: twin.read, isPublished: twin.isPublished }, pushedAt, null);
         // An owned twin's Eagle side and delete state are DEMI's: its Eagle copy must not replace them.
-        if (!isDemiOwnedProject(twin)) return withDerived(holdStaffEdits(row, twin), twin);
-        return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS), twin);
+        if (!isDemiOwnedProject(twin)) return withDerived(holdStaffEdits(row, twin), twin, derive);
+        return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS, derive), twin);
       });
       if (inserted === 'conflict') return { action: 'failed', status: 'conflict' };
       if (inserted === 'exists') return { action: 'skipped', reason: 'createdBehind' };
@@ -284,13 +302,16 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     }
 
     if (!existing) {
-      const merged = stamp(mergeTrackProject(track, null, mergeOpts), pushedAt, null);
-      // Admission is level 1: the merge's default for an unmatched Track project is level 2,
-      // and no job may widen anything.
-      merged.read = readForLevel(1);
-      merged.isPublished = false;
-      withDerived(merged, null);
-      const inserted = await insert(id, async () => merged);
+      await writeDocs();
+      const inserted = await insert(id, async () => {
+        const derive = await inputs();
+        const merged = stamp(mergeTrackProject(track, null, { ...mergeOpts, ...derive }), pushedAt, null);
+        // Admission is level 1: the merge's default for an unmatched Track project is level 2,
+        // and no job may widen anything.
+        merged.read = readForLevel(1);
+        merged.isPublished = false;
+        return withDerived(merged, null, derive);
+      });
       if (inserted === 'conflict') return { action: 'failed', status: 'conflict' };
       if (inserted === 'exists') return { action: 'skipped', reason: 'createdBehind' };
       if (landed(inserted)) {
@@ -309,31 +330,30 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     // A retry repairs a relink whose first try left the twin owned.
     const twinOwed = push && guid ? await disownFailure(eagleOnlyProjectId(guid)) : null;
     if (twinOwed) return twinOwed;
-    if (isStalePush(pushedAt, existing, TRACK_PUSHED_AT)) {
-      summary.stale++;
-      return { action: 'stale' };
-    }
+    await writeDocs();
+    if (isStalePush(pushedAt, existing, TRACK_PUSHED_AT)) return stale();
     if (push && existing.isDeleted === true) logger.warn(`[track-push] push on a deleted row id=${id}`);
 
-    const { changes: found, held } = trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts));
+    const { changes: found, held, drift } = await rebuild(existing);
     const stateMove = 'projectState' in found
       ? `${JSON.stringify(existing.projectState ?? null)} -> ${JSON.stringify(found.projectState)}`
       : null;
     const result = { held, stateMove };
     const changed = Object.keys(found).length > 0;
-    const tally = () => {
+    const tally = (drifted) => {
       countLists();
       if (held.length) summary.held++;
       if (stateMove) summary.stateMoved++;
+      if (drifted) summary.derivedDrift++;
     };
     // A row owing a slug code is written even when Track says nothing new; the migration stamps
     // `shortCodeSource`, so the next night skips it.
-    if (!changed && !owes(existing)) {
+    if (!changed && !drift && !owes(existing)) {
       tally();
       return { action: 'unchanged', ...result };
     }
     if (!live) {
-      tally();
+      tally(drift);
       if (changed) summary.updated++;
       // A migration with no free slug keeps its code, so only a real move counts.
       if (owesLink(existing) && await mint({ ...existing })) summary.shortLinks++;
@@ -345,24 +365,17 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     const written = await writeMinting(id, existing, async (current, mintRow) => {
       if (!current) return { status: 'missing' };
       if (isStalePush(pushedAt, current, TRACK_PUSHED_AT)) return { status: 'stale' };
-      const { changes } = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
+      const { changes, row, drift: repaired } = await rebuild(current);
       const moved = Object.keys(changes).length > 0;
-      if (!moved && !owes(current)) return { status: 'unchanged' };
-      const row = withDerived(
-        stamp({ ...current, ...changes, sources: { ...current.sources, track } }, pushedAt, current), current);
+      if (!moved && !repaired && !owes(current)) return { status: 'unchanged' };
       if (moved) row.updatedAt = now;
       const minted = await mintRow(row);
       await repo.upsert(row, { etag: current._etag });
-      return { status: 'saved', minted, moved };
+      return { status: 'saved', minted, moved, repaired };
     });
-    if (written.status === 'conflict' || written.status === 'missing') {
-      return { action: 'failed', status: written.status };
-    }
-    if (written.status === 'stale') {
-      summary.stale++;
-      return { action: 'stale' };
-    }
-    tally();
+    if (['conflict', 'missing'].includes(written.status)) return { action: 'failed', status: written.status };
+    if (written.status === 'stale') return stale();
+    tally(written.repaired);
     // A mint alone is not an update: it counts in `shortLinks` and leaves `updatedAt` alone.
     if (written.moved) summary.updated++;
     return { action: written.status === 'saved' ? 'updated' : 'unchanged', ...result };
@@ -397,7 +410,7 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
       }
     }
   });
-  const result = await writer.write(apiProject, { phases, works, complete: true, pushedAt });
+  const result = await writer.write(apiProject, { phases, works, pushedAt });
   if (result.action === 'skipped') {
     logger.warn('[track-push] project skipped', { id: String(apiProject.id), reason: result.reason });
   }
@@ -405,162 +418,8 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
 }
 
 const emptySummary = (trackProjects) => ({
-  trackProjects,
-  created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
-  shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, failures: 0
+  trackProjects, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
+  shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, derivedDrift: 0, failures: 0
 });
 
-/**
- * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
- * @param {object} [opts]       {live}, {deps} {projects, links}, {now}, {phases}/{works} Maps
- *                              by Track project id, {skipLinkUpkeep} skip link heal, slugs, Eagle-only pass,
- *                              {pushedAt} epoch ms the run started, before it read Track
- */
-async function syncProjects(apiProjects, opts = {}) {
-  const { live = false, deps = {}, phases = new Map(), works = new Map(), skipLinkUpkeep = false, pushedAt = null } = opts;
-  const rows = apiProjects || [];
-  const summary = emptySummary(rows.length);
-  const stateMoves = new Map();
-
-  const repo = deps.projects || projectsRepository();
-  if (!repo) return summary;
-  const now = opts.now || new Date().toISOString();
-  // systemAccess(), because a scoped context would list only what it can see and then create a
-  // second copy of every record it was not shown.
-  const { items } = await repo.listVisible(systemAccess(), {});
-  const stored = new Map(items.map(p => [String(p.id), p]));
-  // An Eagle-only row (`sourceSystem === 'eagle'`, as in `listEagleOnlyIds`) whose guid Track lists
-  // is the same project under its pre-Track key, as `buildRegistry` matches on `epic_guid`.
-  const eagleOnly = new Map(
-    items.filter(p => p.sourceSystem === 'eagle' && p.eagleId).map(p => [String(p.eagleId), p])
-  );
-  const listed = new Set();
-  // An Eagle-only row whose project now lives under a Track id is dead weight; its code moved too.
-  const rekeyed = new Set(
-    items.filter(p => p.sourceSystem !== 'eagle' && p.eagleId).map(p => String(p.eagleId))
-  );
-  // A second row holding a native row's Eagle id makes the Eagle id lookup throw DUPLICATE_ID.
-  const nativeByEagleId = new Map(
-    items.filter(p => isNativeProject(p) && p.eagleId).map(p => [String(p.eagleId), p])
-  );
-  const nativeClashes = [];
-
-  const writer = rowWriter({
-    repo,
-    links: deps.links || linksRepository,
-    live,
-    now,
-    skipLinkUpkeep,
-    summary,
-    lookup: {
-      stored: (id) => stored.get(id),
-      eagleOnly: (guid) => eagleOnly.get(guid),
-      native: (guid) => nativeByEagleId.get(guid)
-    },
-    onRelink: (relink) => rekeyed.add(String(relink.eagleId))
-  });
-
-  for (const apiProject of rows) {
-    const id = String(apiProject.id);
-    listed.add(id);
-    try {
-      const result = await writer.write(apiProject, { phases: phases.get(id), works: works.get(id), pushedAt });
-      if (result.reason === 'nativeClash') {
-        nativeClashes.push({ trackProjectId: id, nativeId: result.nativeId, eagleId: result.eagleId });
-      }
-      if (result.stateMove) stateMoves.set(result.stateMove, (stateMoves.get(result.stateMove) || 0) + 1);
-      if (result.action === 'failed') {
-        summary.failures++;
-        logger.error(`[track-projects] project ${id} not written`, { status: result.status });
-      }
-    } catch (err) {
-      summary.failures++;
-      logger.error(`[track-projects] project ${id} failed`, { error: err.message, stack: err.stack });
-    }
-  }
-
-  // `/projects` hides soft-deleted rows, so a Track delete that landed is not an orphan. A Track delete
-  // skips a row holding an Eagle copy, so that row stays live for good and is listed apart.
-  const unlisted = [...stored].filter(([id, project]) =>
-    !listed.has(id) && project.sourceSystem === 'track' && project.isDeleted !== true);
-  const eagleLinked = ([, project]) => Boolean(project.sources && project.sources.eagle);
-  const orphans = unlisted.filter(row => !eagleLinked(row)).map(([id]) => id);
-  const eagleLinkedIds = unlisted.filter(eagleLinked).map(([id]) => id);
-  summary.orphaned = orphans.length;
-  if (unlisted.length && !skipLinkUpkeep) {
-    logger.warn('[track-projects] DEMI rows Track no longer lists', { ids: orphans, eagleLinkedIds });
-  }
-  if (nativeClashes.length) {
-    logger.warn('[track-projects] Track projects name the Eagle id of a native project; not created',
-      { clashes: nativeClashes });
-  }
-
-  // Eagle-only rows are in no Track row, so this is the only nightly pass that heals, mints or
-  // migrates their codes.
-  for (const row of skipLinkUpkeep ? [] : eagleOnly.values()) {
-    if (rekeyed.has(String(row.eagleId))) continue;
-    await writer.heal(row);
-    if (!owesLink(row)) continue;
-    try {
-      if (!live) {
-        if (await writer.mint({ ...row })) summary.shortLinks++;
-        continue;
-      }
-      const written = await writer.writeMinting(row.id, row, async (current, mintRow) => {
-        if (!current || !owesLink(current)) return { status: 'skipped' };
-        const next = { ...current };
-        const minted = await mintRow(next);
-        // A patch of the three fields: nothing else on an Eagle-only row is this job's to write.
-        await repo.patchShortLink(current.id, next, current._etag);
-        return { status: 'saved', minted };
-      });
-      if (written.status === 'conflict') {
-        summary.failures++;
-        logger.error(`[track-projects] project ${row.id} short code not migrated`, { status: written.status });
-      }
-    } catch (err) {
-      summary.failures++;
-      logger.error(`[track-projects] project ${row.id} short code migration failed`, { error: err.message, stack: err.stack });
-    }
-  }
-
-  if (writer.healLeftOver()) {
-    logger.warn('[track-projects] heal cap reached, the rest wait for the next run', { cap: HEAL_CAP });
-  }
-  if (stateMoves.size) {
-    logger.info(`[track-projects] projectState moves ${[...stateMoves].map(([move, n]) => `${move} x${n}`).join('; ')}`);
-  }
-  return summary;
-}
-
-const POLL_FIELDS = ['trackProjects', 'created', 'updated', 'relinked', 'skippedApiRows', 'orphaned',
-  'shortLinks', 'nativeClash', 'held', 'stateMoved', 'failures'];
-
-/** The line a log alert matches. A run that failed before the mirror reports its counts as 0. */
-const pollLine = (s) => `[track-projects-poll] mode=${s.mode} ` +
-  POLL_FIELDS.map(field => `${field}=${s[field] || 0}`).join(' ');
-
-/**
- * The projects-only poll: one Track token, one `GET /api/v1/projects`, then the mirror.
- *
- * @param {object} [opts] {live} write, {deps} test seam {kc, fetchJson, projects, links}
- */
-async function run({ live = false, deps = {} } = {}) {
-  const kc = deps.kc || { clientToken };
-  // Before the read: a push that lands after it holds a newer stamp, so this snapshot cannot overwrite it.
-  const pushedAt = Date.now();
-  let summary;
-  try {
-    const token = await kc.clientToken(config.trackClientId, config.trackClientSecret);
-    const projects = await fetchTrackProjects(token, deps.fetchJson);
-    summary = await syncProjects(projects, { live, deps, skipLinkUpkeep: true, pushedAt });
-  } catch (err) {
-    logger.error('[track-projects-poll] run failed', { error: err.message, stack: err.stack });
-    summary = { failures: 1 };
-  }
-  summary.mode = live ? 'live' : 'dry-run';
-  logger.info(pollLine(summary));
-  return summary;
-}
-
-module.exports = { HEAL_CAP, trackChanges, syncProjects, writeTrackProject, run };
+module.exports = { HEAL_CAP, trackChanges, writeTrackProject, rowWriter, emptySummary, owesLink };

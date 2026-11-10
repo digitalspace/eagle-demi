@@ -40,7 +40,7 @@ const TIMERS = [
   {
     name: 'syncTrackProjects',
     setting: 'SYNC_PROJECTS_SCHEDULE',
-    module: '../src/scripts/sync-track-projects',
+    module: '../src/scripts/sync-track-run',
     exportsFor: run => ({ run }),
     args: [{ live: true }],
     failure: { message: '[track-projects-poll] run failed', meta: {} }

@@ -144,7 +144,7 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
     'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
-    'relinked=0 skippedApiRows=0 trackPhases=0 trackWorks=0 trackWorksFailed=0 failures=0');
+    'relinked=0 skippedApiRows=0 trackPhases=0 trackWorks=0 trackWorksFailed=0 stale=0 derivedDrift=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -338,6 +338,7 @@ test('the nightly leaves alone a row a newer push wrote', async () => {
 
   assert.ok(!written.includes('1'));
   assert.strictEqual(summary.updated, 0);
+  assert.ok(summaryLine(summary).includes(' stale=1 derivedDrift=0 '), summaryLine(summary));
 });
 
 test('the project list is read once and feeds both the mirror and the credential sweep', async () => {
@@ -416,8 +417,29 @@ test('with TRACK_WORKS_SYNC on, the run pulls works and reports them', async (t)
   const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
 
   assert.strictEqual(summary.trackWorks, 1);
-  assert.ok(summaryLine(summary).includes('trackWorks=1 trackWorksFailed=0 failures=0'),
+  assert.ok(summaryLine(summary).includes('trackWorks=1 trackWorksFailed=0 '),
     summaryLine(summary));
+});
+
+test('with WORKS_WRITE on, the nightly writes each pulled work as a document', async (t) => {
+  const config = require('../../src/config');
+  const { fakeWorks, useWorks } = require('../helpers/track-sync-fakes');
+  const held = { trackWorksSync: config.trackWorksSync, worksWrite: config.worksWrite };
+  Object.assign(config, { trackWorksSync: true, worksWrite: true });
+  t.after(() => Object.assign(config, held));
+  const works = useWorks(t, fakeWorks());
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const get = async (url) => {
+    if (url.endsWith('/team-members')) return TEAMS;
+    if (url.endsWith('/api/v1/works')) return [{ id: 12, project_id: 1, work_type_id: 7, is_active: true }];
+    if (url.endsWith('/works/12/phases')) return [];
+    return CLOSED_AND_OPEN;
+  };
+
+  await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  assert.deepStrictEqual(works.saved.map(doc => [doc.id, doc.projectId]), [['track-12', '1']]);
 });
 
 test('with TRACK_WORKS_SYNC off, a mirrored work costs Track no milestone or outcome read', async (t) => {

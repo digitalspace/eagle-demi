@@ -455,7 +455,6 @@ function applyTrackPrecedence(merged, track, eagle) {
  *                                     not fetched, which also leaves `legislationTransitions` out
  * @param {Array}       [opts.worksForDerive] the works list in the public shape; wins over `works`
  *                                     for `legislationTransitions`
- * @param {boolean}     [opts.complete] the lists are all of Track's (a push), so an empty one clears
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
@@ -493,11 +492,10 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
 
   // Track's dated phases, beside Eagle's own `currentPhaseName` and `phaseHistory`; omitted, not
   // emptied, when Track has none, so an absent feed never blanks a stored one.
-  const { complete = false } = opts;
-  if (Array.isArray(opts.phases) && (complete || opts.phases.length)) merged.phases = opts.phases;
+  if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
   // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
   // since an empty list still says Track has no transition date.
-  if (Array.isArray(opts.works) && (complete || opts.works.length)) merged.works = opts.works;
+  if (Array.isArray(opts.works) && opts.works.length) merged.works = opts.works;
   const transitionWorks = opts.worksForDerive ?? opts.works;
   if (Array.isArray(transitionWorks)) {
     merged.legislationTransitions = legislationTransitions(merged.legislationYearList, transitionWorks);
