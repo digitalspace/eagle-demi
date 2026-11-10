@@ -77,7 +77,7 @@
   "test/controllers/search.test.js": {"max-lines":[2761]},
   "test/helpers/updates-store.js": {"complexity":[23]},
   "test/http/dispatch.test.js": {"max-lines":[870]},
-  "test/jobs/bulk-download.test.js": {"max-lines":[1259]},
+  "test/jobs/bulk-download.test.js": {"max-lines":[1164]},
   "test/merge/project.test.js": {"max-lines":[1408]},
   "test/repositories/repositories.test.js": {"max-lines":[846]},
   "test/scripts/backfill-chunk-parent-fields.test.js": {"max-lines":[1164]},
