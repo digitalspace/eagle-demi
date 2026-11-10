@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Add a redirect URI to the eagle-admin-console Keycloak client in realm eao-epic.
+# Add an origin to a Keycloak client in realm eao-epic: `<origin>/*` to redirectUris and
+# `<origin>` to webOrigins. Default client: eagle-admin-console.
 #
 # The client is configured outside every repo, and the admin API replaces whole arrays on PUT.
-# So this reads the client, appends to redirectUris in place, and PUTs the entire object back.
+# So this reads the client, appends to both arrays in place, and PUTs the entire object back.
 # A hand-written list would silently drop the other entries.
 #
 # Credentials come from the demi-keycloak-admin secret in OpenShift 6cdc9e-<env>. Run it
@@ -12,12 +13,13 @@
 #   scripts/keycloak-add-redirect.sh https://demi-admin-test-xxxx.a02.azurefd.net
 #   ENV=test scripts/keycloak-add-redirect.sh <origin>       # default env: test
 #   scripts/keycloak-add-redirect.sh --dry-run <origin>       # show the change, no PUT
+#   CLIENT_ID=epic-notify scripts/keycloak-add-redirect.sh <origin>   # other client
 set -euo pipefail
 
-usage() { sed -n '2,15p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '2,16p' "$0"; exit "${1:-0}"; }
 
 ENV="${ENV:-test}"
-CLIENT_ID="eagle-admin-console"
+CLIENT_ID="${CLIENT_ID:-eagle-admin-console}"
 REALM="eao-epic"
 DRY_RUN=0
 [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
@@ -55,15 +57,19 @@ uuid=$(jq -r .id <<<"$client")
 [[ "$uuid" == "null" ]] && { echo "client $CLIENT_ID not found in $REALM" >&2; exit 1; }
 
 uri="$ORIGIN/*"
-if jq -e --arg u "$uri" '.redirectUris | index($u)' <<<"$client" >/dev/null; then
-  echo "already present: $uri"
+updated=$(jq --arg u "$uri" --arg o "$ORIGIN" '
+  .redirectUris = ((.redirectUris // []) | if index($u) then . else . + [$u] end)
+  | .webOrigins = ((.webOrigins // []) | if index($o) then . else . + [$o] end)' <<<"$client")
+if [[ "$(jq -S . <<<"$updated")" == "$(jq -S . <<<"$client")" ]]; then
+  echo "already present on $CLIENT_ID: $uri and $ORIGIN"
   exit 0
 fi
 
-updated=$(jq --arg u "$uri" '.redirectUris += [$u]' <<<"$client")
-echo "redirectUris after change:"
-jq -r '.redirectUris[]' <<<"$updated" | sed 's/^/  /'
+for k in redirectUris webOrigins; do
+  echo "$k after change:"
+  jq -r --arg k "$k" '.[$k][]' <<<"$updated" | sed 's/^/  /'
+done
 [[ $DRY_RUN -eq 1 ]] && { echo "(dry run, not written)"; exit 0; }
 
 curl -fsS -X PUT "${auth[@]}" -H 'Content-Type: application/json' "$api/clients/$uuid" -d "$updated"
-echo "added $uri to $CLIENT_ID ($REALM, $ENV)"
+echo "added $uri and $ORIGIN to $CLIENT_ID ($REALM, $ENV)"

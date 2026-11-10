@@ -1639,12 +1639,14 @@ without revisiting that grant. A missing grant fails the first step of
    directly before believing otherwise; the test environment's AFD host was registered on 2026-08-14
    and staff login confirmed working the same day.
 
-   **This does not need another team.** The `demi-keycloak-admin` secret in `6cdc9e-test` holds
-   credentials that can update the client directly, and doing so is a single admin-API call. Read
-   the client, append to `redirectUris` and `webOrigins`, PUT the whole object back — appending to
-   what you just read is the only safe shape, because the API replaces the arrays it is given and a
-   hand-written one silently drops the other dozen entries. Add, on client `eagle-admin-console` in
-   realm `eao-epic`, in the realm matching the environment's `KEYCLOAK_URL`:
+   **This does not need another team.** `scripts/keycloak-add-redirect.sh <origin>` reads the
+   client with the `demi-keycloak-admin` credentials in `6cdc9e-<env>`, appends to `redirectUris`
+   and `webOrigins`, and PUTs the whole object back. Appending to what it just read is the only
+   safe shape, because the admin API replaces each array it is given.
+
+   The script targets client `eagle-admin-console` in realm `eao-epic` on test. Set `CLIENT_ID` for
+   another client and `ENV=prod` for the prod realm, and pass `--dry-run` to see the change first.
+   It adds:
 
    - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`
    - Web Origins: `https://<afd-endpoint>` — the token and userinfo XHRs are checked against this
