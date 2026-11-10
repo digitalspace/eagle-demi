@@ -90,6 +90,19 @@ test('an expired credential grants nothing', () => {
   assert.strictEqual(canRead(LEVEL_2, accessWith([future]), 'id'), false);
 });
 
+test('a stored credential whose start does not parse grants nothing', () => {
+  const malformed = grant({ start: 'not a date' });
+
+  assert.strictEqual(isLive(malformed), false);
+  assert.strictEqual(canRead(LEVEL_2, accessWith([malformed]), 'id'), false);
+});
+
+test('a stored credential without a start is live until its end', () => {
+  const { start: _dropped, ...noStart } = grant();
+
+  assert.strictEqual(isLive(noStart), true);
+});
+
 test('a revoked credential grants nothing', () => {
   const revoked = grant({ revokedAt: new Date().toISOString() });
 

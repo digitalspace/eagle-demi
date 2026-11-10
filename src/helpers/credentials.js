@@ -89,7 +89,8 @@ function grantError(body, now = Date.now()) {
 /** Is this stored grant in force right now? Revoked, not yet started and expired all read false. */
 function isLive(credential, now = Date.now()) {
   if (!credential || credential.revokedAt) return false;
-  if (credential.start && Date.parse(credential.start) > now) return false;
+  // NaN fails every comparison, so `> now` would let a start that does not parse grant.
+  if (credential.start && !(Date.parse(credential.start) <= now)) return false;
   return isIsoDate(credential.end) && Date.parse(credential.end) > now;
 }
 
