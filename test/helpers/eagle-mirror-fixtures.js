@@ -33,6 +33,7 @@ const groupController = require('../../src/controllers/nosql/group');
 const inspectionController = require('../../src/controllers/nosql/inspection');
 
 const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
+const { mockRes } = require('./mock-res');
 
 /** The two callers every mirror assertion is about: the visitor it must hide a row from, and the
  * staff caller it must keep it visible to. */
@@ -465,16 +466,6 @@ const MIRRORS = {
     eagleId: ITEM_EAGLE_ID, fixture: eagleInspectionItem, parent: storedElement
   }
 };
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
 
 const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { roles: ['sysadmin'] } };
 
