@@ -22,6 +22,7 @@ const notifications = require('../../src/repositories/notifications');
 const lists = require('../../src/repositories/lists');
 const updates = require('../../src/repositories/updates');
 const { TIER } = require('../../src/helpers/access-sql');
+const { parseNativeQuery, nativeCriteria } = require('../../src/helpers/native-query');
 
 const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [], level: 4 };
 
@@ -469,6 +470,20 @@ test('updates publishDate ordering', async (t) => {
     await updates.list(ANON, { sortBy: '+publishDate' });
     assert.deepStrictEqual(seen.map(q => /ORDER BY (.+)$/.exec(q)[1]),
       ['c.dateAdded DESC', 'c.dateAdded DESC', 'c.dateAdded ASC']);
+  });
+
+  await t.test('before it, a native publishDate sort is gated by the dateAdded dial in list, count and re-read', async () => {
+    config.updatesPublishDateFallback = true;
+    const seen = serve();
+    const { SPEC } = require('../../src/controllers/native/updates');
+    const parsed = parseNativeQuery(SPEC, { sort: 'publishDate', count: 'true' }, ANON);
+    const { criteria, orderBy } = nativeCriteria(SPEC, parsed, ANON);
+    await updates.nativeRepository.list(ANON, { criteria, orderBy, pageNum: 0, pageSize: 10, parsed });
+    await updates.nativeRepository.count(ANON, { criteria, parsed });
+    await updates.nativeRepository.readAll(ANON, { criteria, orderBy });
+    const reads = seen.filter(q => q.includes('c.vis["publishDate"]'));
+    assert.strictEqual(reads.length, 3);
+    for (const query of reads) assert.ok(query.includes('c.vis["dateAdded"]'), query);
   });
 });
 

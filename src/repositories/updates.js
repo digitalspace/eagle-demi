@@ -18,6 +18,7 @@ const projects = require('./projects');
 const notifications = require('./notifications');
 const { readParent } = require('../helpers/update-parent');
 const { presenceClause } = require('../helpers/native-query');
+const { dialAllows } = require('../helpers/dial');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
@@ -45,6 +46,10 @@ const SORT_ALIASES = { score: 'dateAdded' };
 function publishOrderField() {
   return config.updatesPublishDateFallback ? 'dateAdded' : 'publishDate';
 }
+
+// A `publishDate` sort may run on `dateAdded`, so that field's dial gates the row too.
+const orderDial = (access, publishSorted) => (publishSorted && config.updatesPublishDateFallback
+  ? [{ clause: dialAllows('dateAdded', levelOf(access)), params: [] }] : []);
 
 /**
  * The three states `pinned` can be stored in. The mirror now writes a boolean, but a row written
@@ -520,7 +525,8 @@ async function nativeSpec(access, criteria, orderBy) {
   return selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: [...liveCriteria(access), ...criteria, ...await parentCriteria(access)],
+    criteria: [...liveCriteria(access), ...criteria, ...orderDial(access, /^c\.publishDate /.test(orderBy || '')),
+      ...await parentCriteria(access)],
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy: orderBy && orderBy.replace(/^c\.publishDate /, `c.${publishOrderField()} `)
   });
@@ -530,11 +536,12 @@ const nativeRepository = Object.freeze({
   async list(access, { criteria, orderBy, pageNum, pageSize }) {
     return readPage(CONTAINER, await nativeSpec(access, criteria, orderBy || DEFAULT_ORDER), { pageNum, pageSize });
   },
-  async count(access, { criteria }) {
+  async count(access, { criteria, parsed }) {
     const spec = countWhere({
       access: await inEagleIdSpace(access),
       partitionField: SCOPE_FIELD,
-      criteria: [...liveCriteria(access), ...criteria, ...await parentCriteria(access)]
+      criteria: [...liveCriteria(access), ...criteria, ...orderDial(access, parsed?.sort?.field === 'publishDate'),
+        ...await parentCriteria(access)]
     });
     const { items } = await cosmos.query(CONTAINER, spec, {});
     return items[0] || 0;
