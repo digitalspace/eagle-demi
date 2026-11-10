@@ -23,6 +23,7 @@ const audit = require('../../src/utils/audit');
 const cosmos = require('../../src/db/cosmos-nosql');
 const controller = require('../../src/controllers/nosql/credentials');
 const apiRoutes = require('../../src/http/routes');
+const { mockRes } = require('../helpers/mock-res');
 
 const SYSADMIN = {
   sub: 'kc-sub-1', preferred_username: 'sys.admin', realm_access: { roles: ['sysadmin'] }
@@ -32,16 +33,6 @@ const STAFF = {
 };
 
 const IN_A_YEAR = new Date(Date.now() + 365 * 86400000).toISOString();
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
 
 function stored(id, batchId, partyId) {
   return {

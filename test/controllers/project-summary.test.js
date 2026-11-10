@@ -9,6 +9,7 @@ const controller = require('../../src/controllers/project-summary');
 const projectsRepo = require('../../src/repositories/projects');
 const summariesRepo = require('../../src/repositories/projectSummaries');
 const config = require('../../src/config');
+const { mockRes } = require('../helpers/mock-res');
 
 const RECORD = {
   id: '272', projectId: '272', generatedAt: '2026-09-09T02:00:00Z',
@@ -20,16 +21,6 @@ const RECORD = {
   sections: { status: { sentence: 'A sentence.', citations: [1] } },
   citations: [{ n: 1, chunkId: 'docB::p2::c0', documentId: 'docB', pageNumber: 2 }]
 };
-
-function mockRes() {
-  const res = {
-    body: null,
-    statusCode: 200,
-    status(code) { res.statusCode = code; return res; },
-    json(body) { res.body = body; return res; }
-  };
-  return res;
-}
 
 const req = (id, body) => ({ params: { id }, query: {}, body });
 

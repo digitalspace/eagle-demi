@@ -33,17 +33,7 @@ const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
 const { gatewayCaller, stubRegistry } = require('../helpers/registry-callers');
 const { logger } = require('../../src/utils/logger');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    set(name, value) { this.headers[String(name).toLowerCase()] = value; return this; },
-    json(data) { this.body = data; return this; }
-  };
-}
+const { mockRes } = require('../helpers/mock-res');
 
 const REQ = { query: {}, params: {}, body: {} };
 

@@ -10,16 +10,7 @@ const documentsRepo = require('../../src/repositories/documents');
 const chunksRepo = require('../../src/repositories/chunks');
 const routes = require('../../src/http/routes');
 const { MAX_PAGE_SIZE } = require('../../src/helpers/access-sql');
-
-function mockRes() {
-  const res = {
-    body: null,
-    statusCode: 200,
-    status(code) { res.statusCode = code; return res; },
-    json(body) { res.body = body; return res; }
-  };
-  return res;
-}
+const { mockRes } = require('../helpers/mock-res');
 
 /** A stored chunk row, carrying the fields a chunk row really has. */
 const row = (page) => ({
