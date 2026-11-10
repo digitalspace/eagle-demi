@@ -37,17 +37,11 @@ const SCOPE_FIELD = 'projectId';
 
 const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate', 'headline', 'type', 'pinned', 'status'];
 const DEFAULT_ORDER = 'c.dateAdded DESC';
-/**
- * eagle-public's news search asks for `-score`, the relevance rank its Mongo text search produced.
- * A Cosmos read has no rank, and newest-first is the order the same page shows without a query.
- */
+// eagle-public's news search asks for `-score`, a Mongo text rank; Cosmos has none, so newest first.
 const SORT_ALIASES = { score: 'dateAdded' };
 
-/**
- * The field a sort on `publishDate` runs on. An ORDER BY leaves out every row that lacks its field,
- * so until src/scripts/backfill-update-publish-date.js has filled the rows written before mirrorItem
- * filled it, `config.updatesPublishDateFallback` keeps such sorts on `dateAdded`.
- */
+// ORDER BY leaves out rows lacking its field, so until backfill-update-publish-date.js fills
+// `publishDate` on older rows, `config.updatesPublishDateFallback` keeps its sorts on `dateAdded`.
 function publishOrderField() {
   return config.updatesPublishDateFallback ? 'dateAdded' : 'publishDate';
 }
@@ -520,11 +514,8 @@ async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   return [...pinned, ...unpinned.slice(0, Math.max(0, limit - pinned.length))];
 }
 
-/**
- * The read `GET /updates` goes through (`helpers/native-query.js`): the contract's criteria under
- * every gate `list` applies, Eagle-id scope, publish gate and parent gate. `readAll` is the unpaged
- * read-back of a keyword list (`search/native-index.js`).
- */
+// `GET /updates` (helpers/native-query.js) under the gates `list` applies: Eagle-id scope, publish
+// and parent. `readAll` is the unpaged re-read of a keyword list (search/native-index.js).
 async function nativeSpec(access, criteria, orderBy) {
   return selectWhere({
     access: await inEagleIdSpace(access),
