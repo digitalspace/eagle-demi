@@ -22,20 +22,10 @@ const chunks = require('../../../src/repositories/chunks');
 const aiSearch = require('../../../src/search/ai-search');
 const documentController = require('../../../src/controllers/nosql/document');
 const { logger } = require('../../../src/utils/logger');
+const { mockRes } = require('../../helpers/mock-res');
 
 let rows = [];
 audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(k, v) { this.headers[k] = v; }
-  };
-}
 
 test('a delete whose chunks are not all removed', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

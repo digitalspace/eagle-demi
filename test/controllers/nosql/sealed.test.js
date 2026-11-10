@@ -38,6 +38,7 @@ const routes = require('../../../src/http/routes');
 const { readForLevel } = require('../../../src/helpers/access-sql');
 const { naturalSortKey } = require('../../../src/helpers/natural-sort');
 const { code } = require('../../helpers/router-source');
+const { mockRes } = require('../../helpers/mock-res');
 
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'src', 'scripts');
 
@@ -72,17 +73,6 @@ let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch.map(row => ({ ...row, stream }))); });
 
 const auditRows = () => rows.filter(row => row.stream === audit.AUDIT_STREAM);
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code_) { this.statusCode = code_; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(name, value) { this.headers[name] = value; }
-  };
-}
 
 const routeFor = (method, routePath) =>
   routes.find(r => r.method === method && r.path === routePath);

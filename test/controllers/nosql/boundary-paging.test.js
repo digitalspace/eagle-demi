@@ -9,18 +9,7 @@ const boundaries = require('../../../src/repositories/boundaries');
 const boundaryController = require('../../../src/controllers/nosql/boundary');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const { logger } = require('../../../src/utils/logger');
-
-function mockRes() {
-  const res = {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(k, v) { this.headers[k] = v; }
-  };
-  return res;
-}
+const { mockRes } = require('../../helpers/mock-res');
 
 // The read is anonymous and cross-partition. Without a pageSize, cosmos.query takes its
 // fetchAll() branch and drains the whole container — survivable only because there are 281 rows.
