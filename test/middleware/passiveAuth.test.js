@@ -14,7 +14,6 @@ const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
-const { forgetCachedKey } = require('../../src/helpers/auth');
 
 test('Passive Auth Middleware Tests', async (t) => {
 
@@ -217,8 +216,10 @@ test('Passive Auth Middleware Tests', async (t) => {
   });
 
   await t.test('a key lookup outage is not served the anonymous view', async () => {
-    const { keyId, plaintext } = generateKey(config.environmentName);
+    const { plaintext } = generateKey(config.environmentName);
     t.mock.method(apiKeys, 'getById', async () => { throw Object.assign(new Error('busy'), { code: 429 }); });
+    t.mock.method(logger, 'error', () => {});
+    t.mock.method(logger, 'warn', () => {});
     const req = { header: (name) => (name === 'X-Api-Key' ? plaintext : null) };
     const res = makeRes('req-outage');
     let nextCalled = false;
@@ -228,7 +229,6 @@ test('Passive Auth Middleware Tests', async (t) => {
 
     assert.strictEqual(nextCalled, false);
     assert.strictEqual(res.statusCode, 503);
-    forgetCachedKey(keyId);
   });
 
   await t.test('a key id Cosmos could never store reads the anonymous view, not a 503', async () => {
