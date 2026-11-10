@@ -8,16 +8,20 @@
 const projects = require('../repositories/projects');
 const { levelOfRead, sameAccess } = require('./access-sql');
 const { writeGuarded } = require('./etag-write');
+const { eagleBaseAcl } = require('./eagle-acl');
 const { logger } = require('../utils/logger');
 const { auditEvent } = require('../utils/audit');
 const { eagleOnlyProjectId, deletedBy, markDeleted, clearDeleted } = require('../merge/project');
 const { refusedWriteKeys } = require('../vis/redact');
 
-/** The twin's roles the Track row also names, else the Track row's read; null when either is not a list or the twin's is empty. */
+/**
+ * The twin's roles the Track row also names, else admin-only: the cap's own list would widen it.
+ * Null when either is not a list or the twin's is empty.
+ */
 function sharedRead(own, cap) {
   if (!Array.isArray(own) || !Array.isArray(cap) || own.length === 0) return null;
   const shared = own.filter(role => cap.includes(role));
-  return shared.length > 0 ? shared : cap;
+  return shared.length > 0 ? shared : eagleBaseAcl([]);
 }
 
 /**

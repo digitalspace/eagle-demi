@@ -670,6 +670,21 @@ test('the project push finds the row whatever its ACL', async (t) => {
     assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351', TWIN]);
   });
 
+  await t.test('a twin sharing no role with the Track row at its level narrows to admin-only', async () => {
+    const store = mirrorStore(t,
+      [twin({ name: 'Twin', read: ['project-proponent'], isPublished: false }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ read: ['project-team'] }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.strictEqual(levelOfRead(byId['351'].read), levelOfRead(['project-proponent']));
+    assert.deepStrictEqual(byId[TWIN].read, ['sysadmin']);
+    assert.ok(!byId[TWIN].read.includes('project-team'));
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351', TWIN]);
+  });
+
   // Each case: the Track row's stored read, then the twin left as it was, unwritten and uncascaded.
   const sameLevelTwinKept = (twinRead, pushedRead) => async () => {
     const store = mirrorStore(t, [twin({ name: 'Twin', read: twinRead, isPublished: false }), track('351')]);
@@ -693,6 +708,9 @@ test('the project push finds the row whatever its ACL', async (t) => {
 
   await t.test('a twin holding every role of a Track row at its level keeps them all',
     sameLevelTwinKept(['staff', 'project-proponent'], ['staff', 'project-proponent']));
+
+  await t.test('an admin-only twin is not opened to team by a Track row at its level',
+    sameLevelTwinKept(['sysadmin'], ['team']));
 
   await t.test('a twin owed a cascade gets it, and its marker is removed', async () => {
     const store = mirrorStore(t, [
