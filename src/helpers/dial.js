@@ -6,8 +6,15 @@ const { CATALOGS } = require('../vis/catalog');
 const topField = field => field.split('.')[0];
 
 // A top-level key with `dialOf` is a stored copy of that field, so its dial reaches the copy too.
-const SOURCE_OF = new Map(Object.values(CATALOGS).flatMap(Object.entries)
-  .filter(([field, entry]) => !field.includes('.') && entry && entry.dialOf).map(([field, entry]) => [field, entry.dialOf]));
+// Keyed by field name across kinds, so one name may copy only one source.
+const SOURCE_OF = new Map();
+for (const [field, entry] of Object.values(CATALOGS).flatMap(Object.entries)) {
+  if (field.includes('.') || !entry || !entry.dialOf) continue;
+  if (SOURCE_OF.has(field) && SOURCE_OF.get(field) !== entry.dialOf) {
+    throw new Error(`[vis] ${field} copies both ${SOURCE_OF.get(field)} and ${entry.dialOf}`);
+  }
+  SOURCE_OF.set(field, entry.dialOf);
+}
 
 function ownDial(top, level) {
   const dial = `c.vis[${JSON.stringify(top)}]`;

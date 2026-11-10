@@ -18,6 +18,14 @@ for (const [entity, catalog] of Object.entries(CATALOGS)) {
     if (entry && entry.when !== undefined && !Object.hasOwn(PREDICATES, entry.when)) {
       throw new Error(`[vis] unknown predicate "${entry.when}" on ${entity}.${field}`);
     }
+    // A broken `dialOf` chain would throw on every response holding the key.
+    const seen = new Set([field]);
+    for (let next = entry && entry.dialOf; next !== undefined; next = catalog[next].dialOf) {
+      if (!Object.hasOwn(catalog, next) || seen.has(next)) {
+        throw new Error(`[vis] dialOf on ${entity}.${field} names no field or loops`);
+      }
+      seen.add(next);
+    }
   }
 }
 
@@ -44,11 +52,11 @@ function derivePublished(doc) {
   return doc.isPublished === true;
 }
 
-/** A key's level under its own dial and that of the top-level field it stands in for (`dialOf`). */
+/** A key's level under its own dial and those of the fields it stands in for (`dialOf`, followed down). */
 function fieldVis(catalog, dials, key, record) {
   const entry = catalog[key];
   const own = effectiveVis(entry, dials[key], record);
-  return entry.dialOf ? Math.min(own, effectiveVis(catalog[entry.dialOf], dials[entry.dialOf], record)) : own;
+  return entry.dialOf ? Math.min(own, fieldVis(catalog, dials, entry.dialOf, record)) : own;
 }
 
 /** A child's level under every dial that reaches it, the strictest winning, its parent's included. */
@@ -136,7 +144,7 @@ function refusedWriteKeys(entity, changes, access, existing) {
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
   const level = levelOf(access);
   return Object.keys(changes).filter(key => key === 'vis' || !Object.hasOwn(catalog, key) ||
-    !visible(level, effectiveVis(catalog[key], dials[key], existing)));
+    !visible(level, fieldVis(catalog, dials, key, existing)));
 }
 
 module.exports = { visible, effectiveVis, redactForAccess, redactAllForAccess, refusedWriteKeys };
