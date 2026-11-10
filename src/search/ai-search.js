@@ -1857,17 +1857,8 @@ function isMissingIndex(err, index) {
 const MAX_PROJECT_FANOUT = 25;
 
 /**
- * Remove one row from an index by key.
- *
- * REQUIRED, not tidiness: the `_ts` high-water mark cannot see deletes, so a deleted project or
- * document stays searchable forever otherwise. Measured on this index — deleting a probe project
- * and its document through the API left both rows returning from search.
- *
- * Typesense removed deleted documents from its index, so shipping without this would have been a
- * regression rather than a missing nicety.
- *
- * Best-effort by design: the row is already gone from Cosmos and the caller has already succeeded.
- * Loud on failure, because the consequence is a deleted record that is still findable.
+ * Remove one row from an index by key: indexers never see a delete, so nothing else will.
+ * Best-effort: it reports 0 on failure, and the caller decides whether to keep the row.
  */
 async function deleteFromIndex(index, id) {
   const { configured } = config();
@@ -1877,15 +1868,15 @@ async function deleteFromIndex(index, id) {
   }
 
   try {
-    await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
+    const { value = [] } = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
       value: [{ '@search.action': 'delete', id: String(id) }]
     });
+    // A 207 is `ok` with a per-row verdict; a 404 row is already out of the index.
+    const rejected = value.find(row => row && row.status === false && row.statusCode !== 404);
+    if (rejected) throw new Error(`HTTP ${rejected.statusCode} ${rejected.errorMessage || 'no message'}`);
     return 1;
   } catch (err) {
-    logger.error(
-      `[ai-search] could not remove ${index}/${id} (${err.message}). ` +
-      'It remains searchable until this is retried.'
-    );
+    logger.error(`[ai-search] could not remove ${index}/${id} (${err.message}). It remains searchable until this is retried.`);
     return 0;
   }
 }

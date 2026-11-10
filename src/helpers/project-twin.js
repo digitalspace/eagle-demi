@@ -6,12 +6,23 @@
  */
 
 const projects = require('../repositories/projects');
-const { levelOfRead } = require('./access-sql');
+const { levelOfRead, sameAccess } = require('./access-sql');
 const { writeGuarded } = require('./etag-write');
+const { eagleBaseAcl } = require('./eagle-acl');
 const { logger } = require('../utils/logger');
 const { auditEvent } = require('../utils/audit');
 const { eagleOnlyProjectId, deletedBy, markDeleted, clearDeleted } = require('../merge/project');
 const { refusedWriteKeys } = require('../vis/redact');
+
+/**
+ * The twin's roles the Track row also names, else admin-only: the cap's own list would widen it.
+ * Null when either is not a list or the twin's is empty.
+ */
+function sharedRead(own, cap) {
+  if (!Array.isArray(own) || !Array.isArray(cap) || own.length === 0) return null;
+  const shared = own.filter(role => cap.includes(role));
+  return shared.length > 0 ? shared : eagleBaseAcl([]);
+}
 
 /**
  * Narrow the twin to the Track row's read, keep its delete flag in step, then cascade it; never
@@ -31,13 +42,17 @@ async function narrowTwin(saved, eagleId, cascade) {
     reread: read,
     attempt: async (twin) => {
       if (!twin) return { status: 'none' };
-      const narrow = levelOfRead(twin.read) > levelOfRead(saved.read);
+      const twinLevel = levelOfRead(twin.read);
+      const savedLevel = levelOfRead(saved.read);
+      // At one level two reads can still admit different roles (`project-team` against `sysadmin`).
+      const capped = twinLevel === savedLevel ? sharedRead(twin.read, saved.read) : null;
+      const narrow = twinLevel > savedLevel || Boolean(capped && !sameAccess(capped, twin.read));
       // The twin follows the Track row's delete and an Eagle one's undo; a delete of its own stays.
       const by = deletedBy(saved);
       const twinBy = deletedBy(twin);
       const follow = by ? twinBy !== by && twinBy !== 'demi' : twinBy === 'eagle';
       if (!narrow && !follow) return twin.cascadePendingAt ? { status: 'owed', twin } : { status: 'none' };
-      const narrowed = narrow ? { ...twin, read: saved.read, isPublished: saved.isPublished } : { ...twin };
+      const narrowed = narrow ? { ...twin, read: capped || saved.read, isPublished: saved.isPublished } : { ...twin };
       if (follow) {
         if (by) markDeleted(narrowed, by);
         else clearDeleted(narrowed);

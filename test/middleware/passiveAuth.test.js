@@ -12,6 +12,8 @@ const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
+const apiKeys = require('../../src/repositories/api-keys');
+const { generateKey } = require('../../src/helpers/api-key');
 
 test('Passive Auth Middleware Tests', async (t) => {
 
@@ -211,6 +213,41 @@ test('Passive Auth Middleware Tests', async (t) => {
     const lines = warn.mock.calls.map(call => JSON.stringify(call.arguments));
     assert.ok(lines.some(line => line.includes('Rejected credential on GET /api/suggest (')), lines.join('\n'));
     assert.ok(!lines.some(line => /q=|secret/.test(line)), lines.join('\n'));
+  });
+
+  await t.test('a key lookup outage is not served the anonymous view', async () => {
+    const { plaintext } = generateKey(config.environmentName);
+    t.mock.method(apiKeys, 'getById', async () => { throw Object.assign(new Error('busy'), { code: 429 }); });
+    t.mock.method(logger, 'error', () => {});
+    t.mock.method(logger, 'warn', () => {});
+    const req = { header: (name) => (name === 'X-Api-Key' ? plaintext : null) };
+    const res = makeRes('req-outage');
+    let nextCalled = false;
+
+    passiveAuthMiddleware(req, res, () => { nextCalled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 503);
+  });
+
+  await t.test('a key id Cosmos could never store reads the anonymous view, not a 503', async () => {
+    t.mock.method(apiKeys, 'getById', async () => { throw new Error('Illegal characters in Resource ID'); });
+    t.mock.method(logger, 'warn', () => {});
+    for (const keyId of ['a#b', ' ', '\t', '.', '..', ' ']) {
+      const key = `demi_${config.environmentName}_${keyId}_x`;
+      const req = { header: (name) => (name === 'X-Api-Key' ? key : null) };
+      const res = makeRes('req-illegal-id');
+      let nextCalled = false;
+
+      passiveAuthMiddleware(req, res, () => { nextCalled = true; });
+      await new Promise(resolve => setImmediate(resolve));
+
+      assert.strictEqual(nextCalled, true, JSON.stringify(keyId));
+      assert.notStrictEqual(res.statusCode, 503, JSON.stringify(keyId));
+      assert.strictEqual(req.user, undefined, JSON.stringify(keyId));
+    }
+    assert.strictEqual(apiKeys.getById.mock.callCount(), 0);
   });
 
   await t.test('strict: no credential still continues as anonymous', () => {

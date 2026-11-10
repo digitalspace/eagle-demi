@@ -361,7 +361,7 @@ test('the documents catalog covers every field the seed and the controller write
       'eaglePushedAt',
       // The chunk ingest repeated-failure guard.
       'chunkIngestFailures', 'chunkIngestFailedAt',
-      // Stamped on a row a DELETE kept because some chunks could not be removed.
+      // Stamped on a row a DELETE kept because some chunks or index entries could not be removed.
       'chunkPurgeFailedAt']) {
       assert.ok(key in documentCatalog, `${key} is not catalogued`);
     }

@@ -961,9 +961,8 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
   });
 
   await t.test('a failed index removal does not fail the delete', async () => {
-    // Throwing here would leave the caller unable to tell what happened — and with no nightly full
-    // sync left to reconcile it, the response is now the ONLY signal that the row is still
-    // searchable.
+    // Pins the path with search unconfigured: nothing is indexed, so the row goes and the
+    // response reports 0. Configured: test/controllers/nosql/document-delete-kept.test.js.
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
     t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207' }));

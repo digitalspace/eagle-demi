@@ -16,6 +16,11 @@ const aiSearch = require('../../src/search/ai-search');
 const storage = require('../../src/storage');
 const { logger } = require('../../src/utils/logger');
 const { purgeDocument } = require('../../src/helpers/purge');
+const { DefaultAzureCredential } = require('@azure/identity');
+const { setEnv } = require('./registry-callers');
+
+// Taken before any case runs: restoreAll does not unwind a method mocked twice in one case.
+const realDeleteFromIndex = aiSearch.deleteFromIndex;
 
 const ROW = Object.freeze({
   id: 'd1', projectId: '207', s3Key: 'etl/site-c/1389817063122_20d7490a.pdf',
@@ -125,6 +130,90 @@ test('purgeDocument keeps the row when its chunks are not all removed', async (t
 
     assert.strictEqual(result.rowKept, true);
     assert.match(errors.mock.calls[1].arguments[0], /could not stamp kept document d1: 412/);
+  });
+
+  await t.test('with search configured, an incomplete chunk index delete keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async (id, opts) => {
+      if (!opts?.strict) return 0;
+      throw Object.assign(new Error('index still holds chunks'), { code: 'INDEX_DELETE_INCOMPLETE', deleted: 3 });
+    });
+    t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0,
+      'the row is the only handle a retried purge has on the index entries left behind');
+    assert.strictEqual(result.rowKept, true);
+    assert.strictEqual(result.removedChunksFromSearch, 3);
+    assert.match(result.indexRemovalError, /index still holds chunks/);
+    assert.strictEqual(documents.patchExtraction.mock.callCount(), 1);
+  });
+
+  await t.test('with search configured, a document index delete that fails keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
+    t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0);
+    assert.strictEqual(result.rowKept, true);
+    assert.strictEqual(result.removedFromSearch, 0);
+    assert.ok(result.indexRemovalError);
+  });
+
+  await t.test('with search configured, chunk and document index failures are both reported', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => {
+      throw Object.assign(new Error('index still holds chunks'), { code: 'INDEX_DELETE_INCOMPLETE', deleted: 1 });
+    });
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
+    t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(result.rowKept, true);
+    assert.match(result.indexRemovalError, /index still holds chunks/);
+    assert.match(result.indexRemovalError, /document d1 is still in the search index/);
+  });
+
+  await t.test('with search configured, a 207 from the document index delete keeps the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'deleteFromIndex', realDeleteFromIndex);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    setEnv(t, 'SEARCH_ENDPOINT', 'https://demi-search-test.search.windows.net');
+    setEnv(t, 'AZURE_CLIENT_ID', undefined);
+    setEnv(t, 'IDENTITY_ENDPOINT', undefined);
+    t.mock.method(DefaultAzureCredential.prototype, 'getToken',
+      async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 3600000 }));
+    t.mock.method(global, 'fetch', async () => ({
+      ok: true, status: 207,
+      json: async () => ({ value: [{ key: 'd1', status: false, statusCode: 503, errorMessage: 'throttled' }] })
+    }));
+    const errors = t.mock.method(logger, 'error', () => {});
+
+    const result = await purgeDocument(ROW);
+
+    assert.strictEqual(result.removedFromSearch, 0);
+    assert.strictEqual(documents.deleteById.mock.callCount(), 0);
+    assert.strictEqual(result.rowKept, true);
+    assert.match(errors.mock.calls[0].arguments[0], /could not remove .*d1 .*throttled/);
+  });
+
+  await t.test('with search configured, a complete index removal deletes the row', async (t) => {
+    stubAll(t);
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    const drain = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 5);
+
+    const result = await purgeDocument(ROW);
+
+    assert.deepStrictEqual(drain.mock.calls.map(c => c.arguments), [['d1', { strict: true }]]);
+    assert.strictEqual(documents.deleteById.mock.callCount(), 1);
+    assert.ok(!result.rowKept);
   });
 
   await t.test('every chunk removed deletes the row and reports it gone', async (t) => {

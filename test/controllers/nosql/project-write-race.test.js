@@ -655,6 +655,63 @@ test('the project push finds the row whatever its ACL', async (t) => {
     assert.deepStrictEqual(cascaded, []);
   });
 
+  await t.test('a twin at the same level holding a role the Track row lacks is narrowed and cascaded', async () => {
+    const store = mirrorStore(t,
+      [twin({ name: 'Twin', read: ['project-team'], isPublished: false }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ read: [] }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.deepStrictEqual(byId['351'].read, ['sysadmin']);
+    assert.ok(!byId[TWIN].read.includes('project-team'),
+      `the twin should drop project-team, got ${JSON.stringify(byId[TWIN].read)}`);
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351', TWIN]);
+  });
+
+  await t.test('a twin sharing no role with the Track row at its level narrows to admin-only', async () => {
+    const store = mirrorStore(t,
+      [twin({ name: 'Twin', read: ['project-proponent'], isPublished: false }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ read: ['project-team'] }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.strictEqual(levelOfRead(byId['351'].read), levelOfRead(['project-proponent']));
+    assert.deepStrictEqual(byId[TWIN].read, ['sysadmin']);
+    assert.ok(!byId[TWIN].read.includes('project-team'));
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351', TWIN]);
+  });
+
+  // Each case: the Track row's stored read, then the twin left as it was, unwritten and uncascaded.
+  const sameLevelTwinKept = (twinRead, pushedRead) => async () => {
+    const store = mirrorStore(t, [twin({ name: 'Twin', read: twinRead, isPublished: false }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ read: pushedRead }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.strictEqual(levelOfRead(byId['351'].read), levelOfRead(twinRead));
+    assert.deepStrictEqual(byId[TWIN].read, twinRead);
+    assert.deepStrictEqual(store.writes.map(w => [w.op, w.item && w.item.id]), [['upsert', '351']]);
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351']);
+  };
+
+  await t.test('a twin with no read is not given one by a Track row at its level',
+    sameLevelTwinKept(undefined, []));
+
+  await t.test('an idir-only twin does not gain staff from a Track row at its level',
+    sameLevelTwinKept(['idir'], ['staff', 'idir']));
+
+  await t.test('a twin holding every role of a Track row at its level keeps them all',
+    sameLevelTwinKept(['staff', 'project-proponent'], ['staff', 'project-proponent']));
+
+  await t.test('an admin-only twin is not opened to team by a Track row at its level',
+    sameLevelTwinKept(['sysadmin'], ['team']));
+
   await t.test('a twin owed a cascade gets it, and its marker is removed', async () => {
     const store = mirrorStore(t, [
       twin({ name: 'Twin', read: [...PRIVATE_ACL], isPublished: false, cascadePendingAt: '2026-09-20T00:00:00.000Z' }),

@@ -2950,10 +2950,9 @@ paths:
           description: Unauthorized.
         '503':
           description: >-
-            Some of the document's chunks could not be removed, so the document is kept. Its
-            search-index entries are already gone. Retry the delete after `Retry-After`
-            seconds; the body carries
-            `removedChunks`, `removedFromSearch` and `removedChunksFromSearch`.
+            Some chunks or search-index entries could not be removed, so the document is kept.
+            Retry the delete after `Retry-After` seconds; the body carries `removedChunks`,
+            `removedFromSearch` and `removedChunksFromSearch`.
 
   /api/documents/pdf-title/pending:
     get:
@@ -7943,8 +7942,9 @@ paths:
           description: The stored grant.
         '400':
           description: >-
-            A missing or past `end`, an unknown `party.type` or `scope.type`, an empty scope, more
-            than 200 scope ids, or `levels` naming 0 or 4. The body says which.
+            A missing or past `end`, a `start` not before `end`, an unknown `party.type` or
+            `scope.type`, an empty scope, more than 200 scope ids, or `levels` naming 0 or 4. The
+            body says which.
         '401':
           description: Unauthorized.
         '403':
@@ -8661,6 +8661,8 @@ components:
         (the only id a caller may choose, and only in that shape) records the roles that
         subscription holds. Such a row carries no secret, never expires on its own — API
         Management owns the subscription's lifecycle — and 409s if the id already exists.
+
+        A key lookup outage answers 503.
     BearerAuth:
       type: http
       scheme: bearer

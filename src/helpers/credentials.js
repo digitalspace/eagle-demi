@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Selected Credentials — the grant's rules (docs/rbac-architecture.md §1).
- *
- * A credential lets a named party SEE specified records at levels 1-3. It never changes a record,
- * never changes anyone else's access, and never touches the field plane: what attributes the
- * holder sees is still decided by the holder's own level.
- *
- * This module owns two things only — what a valid grant looks like, and whether a stored grant is
- * live right now. The predicate that reads it lives in `access-sql.js` and `access-odata.js`, and
- * the storage in `repositories/credentials.js`.
+ * Selected Credentials (docs/rbac-architecture.md §1): a grant lets a named party see records, never
+ * changes one, anyone else's access, or the field plane; read predicate: access-sql.js, access-odata.js.
  */
 
 /** A person logging in (BCeID Business), a realm group, or a registry API key. */
@@ -24,11 +17,7 @@ const SCOPE_TYPES = Object.freeze(['document', 'project']);
  */
 const GRANTABLE_LEVELS = Object.freeze([1, 2, 3]);
 
-/**
- * ponytail: id-list ceiling. A grant over more records than this wants `scope.type: 'project'`,
- * which covers a whole assessment in one row; raise it only with a paged read on the scope list,
- * since every id in it is a bound SQL parameter and a literal in the OData filter.
- */
+// ponytail: each id is a bound SQL parameter and OData literal; raise only with a paged scope read.
 const MAX_SCOPE_IDS = 200;
 
 /** Default window offered by the UI. `end` is required regardless — this is not a cap. */
@@ -39,14 +28,8 @@ function isIsoDate(value) {
 }
 
 /**
- * Why this grant body is refused, or null when it is a grant.
- *
- * Validation is on the GRANT, never on the login: an expired credential is simply not loaded, so a
- * missing or past `end` here would mean an open-ended one.
- *
- * @param {object} body   the request body
- * @param {number} [now]  epoch ms
- * @returns {string|null}
+ * Why this grant body is refused, or null. Expired credentials are never loaded, so a missing or
+ * past `end` would mean an open-ended grant.
  */
 function grantError(body, now = Date.now()) {
   const grant = body || {};
@@ -78,18 +61,25 @@ function grantError(body, now = Date.now()) {
       `${GRANTABLE_LEVELS.join(', ')} only (0 is sealed, 4 is public and needs no credential)`;
   }
 
+  return windowError(grant, now);
+}
+
+/** Why the grant's `start`/`end` window is refused, or null. */
+function windowError(grant, now) {
   if (!grant.end) return 'end is required — a credential without one never expires';
   if (!isIsoDate(grant.end)) return 'end must be a date';
   if (Date.parse(grant.end) <= now) return 'end must be in the future';
-  if (grant.start !== undefined && !isIsoDate(grant.start)) return 'start must be a date';
-
+  if (grant.start === undefined) return null;
+  if (!isIsoDate(grant.start)) return 'start must be a date';
+  if (Date.parse(grant.start) >= Date.parse(grant.end)) return 'start must be before end';
   return null;
 }
 
 /** Is this stored grant in force right now? Revoked, not yet started and expired all read false. */
 function isLive(credential, now = Date.now()) {
   if (!credential || credential.revokedAt) return false;
-  if (credential.start && Date.parse(credential.start) > now) return false;
+  // NaN fails every comparison, so `> now` would let a start that does not parse grant.
+  if (credential.start && !(Date.parse(credential.start) <= now)) return false;
   return isIsoDate(credential.end) && Date.parse(credential.end) > now;
 }
 

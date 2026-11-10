@@ -1681,7 +1681,7 @@ exports.deleteDocument = async (req, res) => {
       removedChunks, removedFromSearch, removedChunksFromSearch, storedFileRetained, rowKept
     } = await purgeDocument(existing);
     if (rowKept) {
-      // Audited even though the row stays: its search-index entries are already gone.
+      // Audited even though the row stays: some index entries may already be gone.
       auditEvent(req, {
         action: 'document.delete',
         outcome: 'failure',
@@ -1693,7 +1693,7 @@ exports.deleteDocument = async (req, res) => {
       // The row stays as the handle a retried DELETE needs to find the chunks left behind.
       res.setHeader('Retry-After', '30');
       return res.status(503).json({
-        error: 'Document not deleted: some of its chunks could not be removed. Retry the delete.',
+        error: 'Document not deleted: its search entries or chunks could not all be removed. Retry the delete.',
         removedChunks,
         removedFromSearch,
         removedChunksFromSearch

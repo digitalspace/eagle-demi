@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * Selected Credentials — the grant, the window, and the one extra OR arm.
- *
- * The dangerous direction here is a grant that reaches further than it says: further in ids,
- * further in levels, or further in time. Every case below is written against that, and the SQL and
- * OData assertions exist because `canRead` alone cannot see the two predicates a list read and a
- * search actually run.
- */
+// Each case guards a grant reaching further than it says, in ids, levels or time. SQL and OData
+// are asserted too because `canRead` cannot see the predicates list reads and searches run.
 
 process.env.NODE_ENV = 'test';
 
@@ -75,6 +69,12 @@ test('a grant without an end is refused', () => {
   assert.strictEqual(grantError(grant()), null);
 });
 
+test('a grant whose start is not before its end is refused', () => {
+  const afterEnd = new Date(Date.parse(IN_A_YEAR) + 86400000).toISOString();
+  assert.match(grantError(grant({ start: afterEnd })), /start must be before end/);
+  assert.match(grantError(grant({ start: IN_A_YEAR, end: IN_A_YEAR })), /start must be before end/);
+});
+
 test('an expired credential grants nothing', () => {
   const expired = grant({ end: YESTERDAY });
 
@@ -88,6 +88,19 @@ test('an expired credential grants nothing', () => {
   // A grant whose window has not opened yet is equally inert.
   const future = grant({ start: IN_A_YEAR });
   assert.strictEqual(canRead(LEVEL_2, accessWith([future]), 'id'), false);
+});
+
+test('a stored credential whose start does not parse grants nothing', () => {
+  const malformed = grant({ start: 'not a date' });
+
+  assert.strictEqual(isLive(malformed), false);
+  assert.strictEqual(canRead(LEVEL_2, accessWith([malformed]), 'id'), false);
+});
+
+test('a stored credential without a start is live until its end', () => {
+  const { start: _dropped, ...noStart } = grant();
+
+  assert.strictEqual(isLive(noStart), true);
 });
 
 test('a revoked credential grants nothing', () => {

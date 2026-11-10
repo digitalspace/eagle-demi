@@ -27,6 +27,11 @@ const KEY_ID_BYTES = 8;
 /** Ninety days, matching the landing zone's maximum secret lifetime. */
 const DEFAULT_TTL_DAYS = 90;
 
+/** Allow-list: the SDK throws on some ids (no status code) and rewrites `.` and `..` as paths. */
+function isStorableId(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9:-]{1,255}$/.test(id);
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
@@ -63,7 +68,7 @@ function parseKey(presented) {
 
   const [prefix, env, keyId] = parts;
   const secret = parts.slice(3).join('_');
-  if (prefix !== PREFIX || !env || !keyId || !secret) return null;
+  if (prefix !== PREFIX || !env || !isStorableId(keyId) || !secret) return null;
 
   return { env, keyId, secret };
 }
@@ -115,5 +120,6 @@ module.exports = {
   verify,
   isLive,
   defaultExpiry,
+  isStorableId,
   sha256
 };
