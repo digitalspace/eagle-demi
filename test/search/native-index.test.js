@@ -1,8 +1,7 @@
 'use strict';
 
-// Keyword lists over the index (search/native-index.js), driven through the real native list
-// handler. The index is faked at `searchProjects` and Cosmos at `query`, so the OData filter the
-// index is asked with and the SQL the rows are read back with are both observed.
+// The index is faked at `searchProjects` and Cosmos at `query`, so both the OData filter sent to
+// the index and the SQL that reads rows back are observed.
 
 process.env.NODE_ENV = 'test';
 
