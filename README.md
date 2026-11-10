@@ -1617,12 +1617,9 @@ without revisiting that grant. A missing grant fails the first step of
    `demi-api-fc-test`, and it also sets the Flex app's own platform CORS — **both layers, and the
    platform one answers the preflight first**, so neither alone is enough.
 
-   The parameter is an ARRAY because a cutover has two frontends at once. Getting the order wrong
-   is not theoretical: on 2026-08-15 the AFD frontend was published while this still named only the
-   App Service, and the result was a site that loaded perfectly and then failed every single
-   request — `/api/config` and both `/api/search` calls blocked with *"No
-   'Access-Control-Allow-Origin' header is present"*. Nothing in either deployment reported a
-   problem, because nothing in either deployment was wrong. **List the new origin first, publish
+   The parameter is an ARRAY because a cutover has two frontends at once. A frontend published to an
+   unlisted origin loads, then every request fails with *"No 'Access-Control-Allow-Origin' header
+   is present"*, and neither deployment reports a problem. **List the new origin first, publish
    second, drop the old origin last.**
 
    An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset,
@@ -1630,14 +1627,10 @@ without revisiting that grant. A missing grant fails the first step of
    fails loudly rather than silently reflecting any origin.
 
 3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**
-   This is the one step with no code anywhere in these repos, and nothing fails loudly enough to
-   point at it. `registry-state.service.ts` derives both `redirectUri` and
-   `silentCheckSsoRedirectUri` from `window.location.origin`, so moving the frontend to a new
-   hostname changes both. The client's registered URIs are **exact-host patterns**, so an
-   unregistered host gets `400 Invalid parameter: redirect_uri` from the realm's authorize endpoint —
-   which means CORS and CSP can all be correct on cutover day and staff still cannot log in. Probe it
-   directly before believing otherwise; the test environment's AFD host was registered on 2026-08-14
-   and staff login confirmed working the same day.
+   Nothing fails loudly enough to point at this step. `registry-state.service.ts` derives both
+   `redirectUri` and `silentCheckSsoRedirectUri` from `window.location.origin`, so a new hostname
+   changes both. The client's registered URIs are **exact-host patterns**, so an unregistered host
+   gets `400 Invalid parameter: redirect_uri` from the authorize endpoint, even with CORS correct.
 
    **This does not need another team.** `scripts/keycloak-add-redirect.sh <origin>` reads the
    client with the `demi-keycloak-admin` credentials in `6cdc9e-<env>`, appends to `redirectUris`
