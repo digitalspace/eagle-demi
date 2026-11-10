@@ -634,6 +634,19 @@ test('the bulk download worker', async (t) => {
     assert.doesNotMatch(text, /\.\.\//);
   });
 
+  await t.test('a long project folder cut short does not end in a dot or space', async (tt) => {
+    const docs = [doc('d1')];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+    // The 100-character cut lands just after ". ", which Windows drops when it extracts.
+    tt.mock.method(projects, 'listByIds',
+      async () => [{ id: PROJECT.id, name: `${'A'.repeat(98)}. Phase 2` }]);
+
+    await worker.run('job-1');
+
+    assert.ok(zipText([...uploads.keys()][0]).includes(`${'A'.repeat(98)}/d1.pdf`),
+      'a folder ending in a dot or space extracts under a different name than the zip lists');
+  });
+
   await t.test('a right-to-left override cannot disguise the extension', async () => {
     // "invoice‮fdp.exe" renders as "invoiceexe.pdf" in every file manager that honours it.
     const docs = [doc('d1', { documentFileName: 'invoice‮fdp.exe', fileExt: 'exe' })];
@@ -885,6 +898,18 @@ test('the bulk download worker', async (t) => {
 
     assert.strictEqual(readyPatch(patches).label, '',
       'the status route names an unlabelled job generically rather than after an id');
+  });
+
+  await t.test('a long project label cut short does not end in a dot or space', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(projects, 'listByIds',
+      async () => [{ id: PROJECT.id, name: `${'A'.repeat(98)}. Phase 2` }]);
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).label, 'A'.repeat(98),
+      'the label names the downloaded zip, and a trailing dot or space is lost on save');
   });
 
   await t.test('a job cancelled before the worker dequeued it does no work', async (tt) => {
