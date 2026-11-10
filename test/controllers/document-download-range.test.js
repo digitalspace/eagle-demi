@@ -109,6 +109,17 @@ test('stream mode caps each answer, not the file', async (t) => {
     assert.equal(presign.mock.callCount(), 0);
   });
 
+  await t.test('a failed stat on a mid-file edge piece answers 503, not the 302', async (t) => {
+    config.edgeSecret = EDGE['x-edge-secret'];
+    const { presign } = stored(t);
+    t.mock.method(storage, 'statObject', async () => { throw new Error('store down'); });
+    t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get({ ...EDGE, range: 'bytes=1024-2047' });
+    assert.equal(r.status, 503);
+    assert.equal(r.headers.get('retry-after'), '5');
+    assert.equal(presign.mock.callCount(), 0);
+  });
+
   await t.test('a store open failure on the first piece is the inline 302', async (t) => {
     config.edgeSecret = EDGE['x-edge-secret'];
     stored(t);
