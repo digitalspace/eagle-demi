@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const projectsRepo = require('../../src/repositories/projects');
 const catalog = require('../../src/vis/catalog/projects');
+const { mirrorStore } = require('../helpers/mirror-store');
 
 test('buildCriteria keys are all catalogued', () => {
   const fields = Object.keys(projectsRepo.CRITERIA_FIELDS);
@@ -161,5 +162,23 @@ test('upsert writes every sort field, so a Cosmos ORDER BY keeps the row', async
       .filter(key => key.split('.').reduce((v, part) => (v == null ? undefined : v[part]), row) === undefined);
 
     assert.deepStrictEqual(missing, []);
+  });
+});
+
+test('patchVis derives activeWork from the works it is handed, else from the row', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const work = (trackWorkId) => ({ trackWorkId, workTypeId: 6, isActive: true, phases: [] });
+  const patched = async (opts) => {
+    const store = mirrorStore(t, [{ container: 'projects', id: '207', read: ['public'], works: [work(1)] }]);
+    await projectsRepo.patchVis('207', { name: 4 }, opts);
+    return store.rows('projects')[0].activeWork.trackWorkId;
+  };
+
+  await t.test('with inputsFor, from its works', async () => {
+    assert.strictEqual(await patched({ inputsFor: async () => ({ worksForDerive: [work(2)] }) }), 2);
+  });
+
+  await t.test('without it, from the row works', async () => {
+    assert.strictEqual(await patched(), 1);
   });
 });
