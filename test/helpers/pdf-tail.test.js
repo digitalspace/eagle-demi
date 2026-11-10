@@ -449,3 +449,11 @@ test('an xref stream may not take a number the original uses', async () => {
   // Same bytes, but the original is told its numbers reach past the xref stream's.
   assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }, FINAL), 'tail-object-number');
 });
+
+test('an xref stream offset wider than 6 bytes is refused', async () => {
+  const { original, titled } = load('xrefstream-noinfo');
+  const facts = await readFacts(original);
+  const tail = titled.subarray(original.length).toString('latin1');
+  assert.ok(tail.includes('/W [1 4 2]'));
+  assert.equal(checkTail(Buffer.from(tail.replace('/W [1 4 2]', '/W [1 7 2]'), 'latin1'), original.length, facts, FINAL), 'tail-xref');
+});

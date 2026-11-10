@@ -401,7 +401,7 @@ function checkTrailer(dict, facts, info, allowed, highest) {
 function xrefStreamEntries(dict, data) {
   const w = dict.get('W');
   const widths = w && w.array && w.array.map(x => x.number);
-  if (!widths || widths.length !== 3 || widths[0] !== 1 || widths[2] !== 2 || !(widths[1] >= 1 && widths[1] <= 8)) refuse('tail-xref');
+  if (!widths || widths.length !== 3 || widths[0] !== 1 || widths[2] !== 2 || !(widths[1] >= 1 && widths[1] <= 6)) refuse('tail-xref');
   const index = dict.get('Index');
   const pairs = index && index.array ? index.array.map(x => x.number) : refuse('tail-xref');
   const row = 1 + widths[1] + 2;
