@@ -218,6 +218,12 @@ param trackClientId string = ''
 @description('Mirror every public Track work type and its milestones in the nightly sync. Off until the public read ships.')
 param trackWorksSync bool = false
 
+@description('Write every Track work into the `works` container in the nightly sync. Off until test has proven it.')
+param worksWrite bool = false
+
+@description('Compose project works from the `works` container instead of the project row. Off until the parity check passes.')
+param worksRead bool = false
+
 @description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
 param assessmentPass bool = false
 
@@ -353,7 +359,7 @@ param engageApiBase string = ''
 @description('Comma-separated registry row ids permitted on PUT /engage/*. Empty refuses every writer.')
 param engagePrincipals string = 'apim:engage'
 
-@description('Comma-separated registry row ids permitted on PUT and DELETE /track/projects/:id. Empty refuses every writer.')
+@description('Comma-separated registry row ids permitted on PUT and DELETE under /track/*. Empty refuses every writer.')
 param trackPrincipals string = 'apim:track'
 
 @description('NCRONTAB schedule for the ENGAGE reconcile timer. Empty registers no timer.')
@@ -726,6 +732,14 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'TRACK_WORKS_SYNC'
           value: trackWorksSync ? 'true' : 'false'
+        }
+        {
+          name: 'WORKS_WRITE'
+          value: worksWrite ? 'true' : 'false'
+        }
+        {
+          name: 'WORKS_READ'
+          value: worksRead ? 'true' : 'false'
         }
         {
           name: 'ASSESSMENT_PASS'

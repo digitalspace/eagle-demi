@@ -328,6 +328,12 @@ param trackClientId string = ''
 @description('Mirror every public Track work type and its milestones (`works[]`) in the nightly sync. Off until the public read ships.')
 param trackWorksSync bool = false
 
+@description('Write every Track work into the `works` container in the nightly sync, beside the project row arrays. Off until test has proven it.')
+param worksWrite bool = false
+
+@description('Compose project works from the `works` container instead of the project row. Off until the parity check passes.')
+param worksRead bool = false
+
 @description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
 param assessmentPass bool = false
 
@@ -406,7 +412,7 @@ param engageApiBase string = ''
 param engagePrincipals string = 'apim:engage'
 
 // Same rules as engagePrincipals. Never share a principal with that list or eagleMirrorPrincipals.
-@description('Comma-separated registry row ids permitted on PUT and DELETE /track/projects/:id.')
+@description('Comma-separated registry row ids permitted on PUT and DELETE under /track/*.')
 param trackPrincipals string = 'apim:track'
 
 @description('Deploy the log alert that fires when the nightly Track teams sync still finds project drift. Off until Track pushes its writes, because until then the nightly is the only writer and fires every night.')
@@ -876,6 +882,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trackApiBase: trackApiBase
     trackClientId: trackClientId
     trackWorksSync: trackWorksSync
+    worksWrite: worksWrite
+    worksRead: worksRead
     assessmentPass: assessmentPass
     trackClientSecretUri: trackClientSecretUri
     roleSyncClientId: roleSyncClientId

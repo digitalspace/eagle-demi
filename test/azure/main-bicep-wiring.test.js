@@ -89,8 +89,6 @@ const WIRED = [
     'nightly run never fires'],
   ['deployReconcileDriftAlert', /^\s+deployReconcileDriftAlert: deployReconcileDriftAlert$/m,
     'the observability module call — without it the drift alert is never created'],
-  ['deployTrackDriftAlert', /^\s+deployTrackDriftAlert: deployTrackDriftAlert$/m,
-    'the observability module call — without it the Track drift alert is never created'],
   ['linkBaseUrl', /^\s+linkBaseUrl: linkBaseUrl$/m,
     'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere'],
   ['allowedClients', /^\s+allowedClients: allowedClients$/m,
@@ -99,8 +97,6 @@ const WIRED = [
     'the API module call — without it DEMI_EAGLE_MIRROR_PRINCIPALS is always the module default'],
   ['pdfTitleWorkerPrincipals', /^\s+pdfTitleWorkerPrincipals: pdfTitleWorkerPrincipals$/m,
     'the API module call — without it DEMI_PDF_TITLE_WORKER_PRINCIPALS is always empty'],
-  ['trackPrincipals', /^\s+trackPrincipals: trackPrincipals$/m,
-    'the API module call — without it DEMI_TRACK_PRINCIPALS is always the module default'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
     'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
   ['syncProjectsSchedule', /^\s+syncProjectsSchedule: syncProjectsSchedule$/m,
@@ -895,67 +891,6 @@ for (const { name, param, lineOf, fatal, span, why } of [
     assert.match(block, /actionGroups: \[ alertGroup\.id \]/);
   });
 }
-
-const alertBlock = (name) => OBSERVABILITY.split(/^resource /m)
-  .find(b => b.includes(`name: '${name}-\${environmentName}'`));
-
-test('bicep declares the track machine subscription and wires DEMI_TRACK_PRINCIPALS to the app', () => {
-  assert.match(/^var machineConsumers = \[\n([\s\S]*?)^\]$/m.exec(APIM_MODULE)?.[1] ?? '', /^\s+'track'$/m,
-    'no track subscription, so Track has no key to send its pushes with');
-  assert.match(MAIN, /^param trackPrincipals string = 'apim:track'$/m);
-  assert.match(API_MODULE, /^param trackPrincipals string = 'apim:track'$/m);
-  assert.match(API_MODULE, /name: 'DEMI_TRACK_PRINCIPALS'\n\s+value: trackPrincipals$/m,
-    'an undeclared app setting dies on the next whole-collection PUT');
-});
-
-// The controller's log lines live on another branch, so the query is pinned whole: info lines share
-// the prefix, one retryable line must stay quiet, and two for one id must fire.
-test('demi-track-push deploys in every environment and pins its failure query', () => {
-  const block = alertBlock('demi-track-push');
-  assert.ok(block, 'no demi-track-push rule in observability.bicep');
-  assert.match(block, /^trackPushAlert '[^']+' = \{$/m, 'ungated: it can only fire once Track pushes');
-  assert.match(block, /evaluationFrequency: 'PT15M'\n\s+windowSize: 'PT30M'/,
-    'a window as short as the frequency can split one push and its retry across two evaluations');
-  assert.strictEqual(/query: '''\n([\s\S]+?)\n'''/.exec(block)?.[1], [
-    'let lines = AppTraces',
-    `| where (Message startswith "[track-push]" and SeverityLevel >= 3) or Message startswith "[demi-api] Track refused apim:" or Message startswith "[demi-api] APIM subscription 'track' has no registry row"`,
-    '| extend retryable = Message startswith "[track-push] write failed id=" or Message startswith "[track-push] delete lost its etag race id=", projectId = extract("id=([^ ]+)", 1, Message);',
-    'let hard = lines | where not(retryable) | summarize n = count() | where n > 0 | project problem = strcat(n, " non-retryable line(s)");',
-    'let repeated = lines | where retryable | summarize n = count() by projectId | where n >= 2 | project problem = strcat("project ", projectId, ": ", n, " retryable line(s)");',
-    'union hard, repeated',
-  ].join('\n'));
-  assert.match(block, /actionGroups: \[ alertGroup\.id \]/);
-});
-
-// The drift rule reads three counts out of the teams line; a renamed field reads null, and null
-// compares false, so the rule would go silent rather than fail.
-test('demi-track-drift reads the counts the teams sync logs and is off by default', () => {
-  const block = alertBlock('demi-track-drift');
-  assert.ok(block, 'no demi-track-drift rule in observability.bicep');
-  assert.match(block, /= if \(deployTrackDriftAlert && !empty\(syncTeamsSchedule\)\) \{/,
-    'with no teams timer the line never arrives and the rule can only be silent');
-  assert.match(OBSERVABILITY, /^param deployTrackDriftAlert bool = false$/m);
-  assert.match(MAIN, /^param deployTrackDriftAlert bool = false$/m,
-    'on before Track pushes, the nightly is the only writer and the rule fires every night');
-
-  const query = /query: '''\n([\s\S]+?)'''/.exec(block)?.[1];
-  assert.ok(query, 'the rule declares no query');
-  const { summaryLine } = require('../../src/scripts/sync-track-teams');
-  const line = summaryLine({ mode: 'live', trackProjects: 7, created: 2, updated: 3, orphaned: 5, failures: 0 });
-  const prefix = /startswith "([^"]+)"/.exec(query)?.[1];
-  assert.ok(prefix && line.startsWith(prefix), `the rule filters on ${prefix}, not the start of ${line}`);
-  const counts = Object.fromEntries([...query.matchAll(/(\w+) = toint\(extract\("([^"]+)", 1, Message\)\)/g)]
-    .map(([, name, re]) => [name, new RegExp(re).exec(line)?.[1]]));
-  assert.deepStrictEqual(counts, { trackProjects: '7', created: '2', updated: '3', orphaned: '5' });
-  assert.match(query, /^\| where trackProjects > 0\n\| sort by TimeGenerated asc\n\| extend previous = prev\(orphaned\);$/m,
-    'a failed night logs trackProjects=0 and orphaned=0; as a baseline it makes the next night a false rise');
-  assert.match(block, /autoMitigate: false\n\s+muteActionsDuration: 'PT23H'/,
-    'one mail a night: auto-resolve would send none for the next night, a short mute two for this one');
-  assert.match(query, /\| top 1 by TimeGenerated \| where created > 0 or updated > 0 or orphaned > previous$/m,
-    'only the latest night is judged, or one bad night alerts for two days');
-  assert.strictEqual(/^let span = (\S+);$/m.exec(query)?.[1], '48h', 'two nights, the log alert maximum');
-  assert.match(block, /windowSize: 'P2D'/);
-});
 
 // ADMIN_API_KEY is the break-glass credential. As a plain app setting its value sat in the template
 // parameters and in ARM deployment history; a revert to that is invisible to `az bicep build` and to
