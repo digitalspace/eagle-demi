@@ -6,7 +6,7 @@
  */
 
 const projects = require('../repositories/projects');
-const { levelOfRead } = require('./access-sql');
+const { levelOfRead, capRead, sameAccess } = require('./access-sql');
 const { writeGuarded } = require('./etag-write');
 const { logger } = require('../utils/logger');
 const { auditEvent } = require('../utils/audit');
@@ -31,13 +31,17 @@ async function narrowTwin(saved, eagleId, cascade) {
     reread: read,
     attempt: async (twin) => {
       if (!twin) return { status: 'none' };
-      const narrow = levelOfRead(twin.read) > levelOfRead(saved.read);
+      const twinLevel = levelOfRead(twin.read);
+      const savedLevel = levelOfRead(saved.read);
+      // At one level two reads can still admit different roles (`project-team` against `sysadmin`).
+      const capped = twinLevel === savedLevel ? capRead(twin.read, saved.read) : null;
+      const narrow = twinLevel > savedLevel || Boolean(capped && !sameAccess(capped, twin.read));
       // The twin follows the Track row's delete and an Eagle one's undo; a delete of its own stays.
       const by = deletedBy(saved);
       const twinBy = deletedBy(twin);
       const follow = by ? twinBy !== by && twinBy !== 'demi' : twinBy === 'eagle';
       if (!narrow && !follow) return twin.cascadePendingAt ? { status: 'owed', twin } : { status: 'none' };
-      const narrowed = narrow ? { ...twin, read: saved.read, isPublished: saved.isPublished } : { ...twin };
+      const narrowed = narrow ? { ...twin, read: capped || saved.read, isPublished: saved.isPublished } : { ...twin };
       if (follow) {
         if (by) markDeleted(narrowed, by);
         else clearDeleted(narrowed);
