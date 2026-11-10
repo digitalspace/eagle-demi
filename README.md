@@ -1617,12 +1617,9 @@ without revisiting that grant. A missing grant fails the first step of
    `demi-api-fc-test`, and it also sets the Flex app's own platform CORS — **both layers, and the
    platform one answers the preflight first**, so neither alone is enough.
 
-   The parameter is an ARRAY because a cutover has two frontends at once. Getting the order wrong
-   is not theoretical: on 2026-08-15 the AFD frontend was published while this still named only the
-   App Service, and the result was a site that loaded perfectly and then failed every single
-   request — `/api/config` and both `/api/search` calls blocked with *"No
-   'Access-Control-Allow-Origin' header is present"*. Nothing in either deployment reported a
-   problem, because nothing in either deployment was wrong. **List the new origin first, publish
+   The parameter is an ARRAY because a cutover has two frontends at once. A frontend published to an
+   unlisted origin loads, then every request fails with *"No 'Access-Control-Allow-Origin' header
+   is present"*, and neither deployment reports a problem. **List the new origin first, publish
    second, drop the old origin last.**
 
    An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset,
@@ -1630,27 +1627,32 @@ without revisiting that grant. A missing grant fails the first step of
    fails loudly rather than silently reflecting any origin.
 
 3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**
-   This is the one step with no code anywhere in these repos, and nothing fails loudly enough to
-   point at it. `registry-state.service.ts` derives both `redirectUri` and
-   `silentCheckSsoRedirectUri` from `window.location.origin`, so moving the frontend to a new
-   hostname changes both. The client's registered URIs are **exact-host patterns**, so an
-   unregistered host gets `400 Invalid parameter: redirect_uri` from the realm's authorize endpoint —
-   which means CORS and CSP can all be correct on cutover day and staff still cannot log in. Probe it
-   directly before believing otherwise; the test environment's AFD host was registered on 2026-08-14
-   and staff login confirmed working the same day.
+   Nothing fails loudly enough to point at this step. `registry-state.service.ts` derives both
+   `redirectUri` and `silentCheckSsoRedirectUri` from `window.location.origin`, so a new hostname
+   changes both. The client's registered URIs are **exact-host patterns**, so an unregistered host
+   gets `400 Invalid parameter: redirect_uri` from the authorize endpoint, even with CORS correct.
 
-   **This does not need another team.** The `demi-keycloak-admin` secret in `6cdc9e-test` holds
-   credentials that can update the client directly, and doing so is a single admin-API call. Read
-   the client, append to `redirectUris` and `webOrigins`, PUT the whole object back — appending to
-   what you just read is the only safe shape, because the API replaces the arrays it is given and a
-   hand-written one silently drops the other dozen entries. Add, on client `eagle-admin-console` in
-   realm `eao-epic`, in the realm matching the environment's `KEYCLOAK_URL`:
+   **This does not need another team.** `scripts/keycloak-add-redirect.sh <origin>` reads the
+   client with the `demi-keycloak-admin` credentials in `6cdc9e-<env>`, appends to `redirectUris`
+   and `webOrigins`, and PUTs the whole object back. Appending to what it just read is the only
+   safe shape, because the admin API replaces each array it is given.
+
+   You need an `oc` context that can read that secret. The script uses the `github-cicd` service
+   account context by default; set `OC_CONTEXT` to use another, for example `OC_CONTEXT=epic-test`.
+   `KC_ADMIN_SECRET` names a different secret, and `KC_URL_OVERRIDE` replaces its token host.
+
+   The script targets client `eagle-admin-console` in realm `eao-epic` on test Keycloak. Set
+   `KC_CLIENT_ID` for another client and `ENV=prod` for prod Keycloak; the realm stays `eao-epic`.
+   Pass `--dry-run` anywhere on the command line to see the change without writing it.
+
+   The script adds:
 
    - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`
    - Web Origins: `https://<afd-endpoint>` — the token and userinfo XHRs are checked against this
 
-   **Remove any `demi-frontend-<env>.azurewebsites.net` entries.** That name is back in Azure's
-   global pool, so a redirect URI on it points at whoever claims it next.
+   **Remove any `demi-frontend-<env>.azurewebsites.net` entries by hand** in the Keycloak admin
+   console; the script only adds. That name is back in Azure's global pool, so a redirect URI on it
+   points at whoever claims it next.
 
    Failure signature if this is skipped: clicking Log In lands on Keycloak's
    `Invalid parameter: redirect_uri` error page. Worse, once a user has `isLoggedIn` set on the new
