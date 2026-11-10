@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-#
-# Add an origin to a Keycloak client in realm eao-epic: `<origin>/*` to redirectUris and
-# `<origin>` to webOrigins. Default client: eagle-admin-console.
-#
-# The client is configured outside every repo, and the admin API replaces whole arrays on PUT.
-# So this reads the client, appends to both arrays in place, and PUTs the entire object back.
-# A hand-written list would silently drop the other entries.
-#
-# Credentials come from the demi-keycloak-admin secret in OpenShift 6cdc9e-<env>. Run it
-# yourself with `!` from a session that can read that secret.
-#
-#   scripts/keycloak-add-redirect.sh https://demi-admin-test-xxxx.a02.azurefd.net
-#   ENV=test scripts/keycloak-add-redirect.sh <origin>       # default env: test
-#   scripts/keycloak-add-redirect.sh --dry-run <origin>       # show the change, no PUT
-#   CLIENT_ID=epic-notify scripts/keycloak-add-redirect.sh <origin>   # other client
+# The admin API replaces whole arrays on PUT, so the client is read and PUT back with entries
+# appended; a hand-written list would drop the others.
 set -euo pipefail
 
-usage() { sed -n '2,16p' "$0"; exit "${1:-0}"; }
+usage() {
+  cat <<'EOF'
+Add <origin>/* to redirectUris and <origin> to webOrigins on a client in realm eao-epic.
+
+  scripts/keycloak-add-redirect.sh [--dry-run] <origin>
+
+  CLIENT_ID   client to change (default eagle-admin-console)
+  ENV         test or prod Keycloak (default test)
+  OC_CONTEXT  oc context that can read secret demi-keycloak-admin in 6cdc9e-<env>
+EOF
+  exit "${1:-0}"
+}
 
 ENV="${ENV:-test}"
 CLIENT_ID="${CLIENT_ID:-eagle-admin-console}"
