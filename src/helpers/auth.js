@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const config = require('../config');
 const apiKeys = require('../repositories/api-keys');
-const { parseKey, verify, isLive } = require('./api-key');
+const { parseKey, verify, isLive, isStorableId } = require('./api-key');
 const { acceptedValues } = require('../utils/rotating-secret');
 
 /**
@@ -113,7 +113,10 @@ function fromGateway(req) {
  * reserved shape no minted key can collide with, so one container and one cache serve both paths.
  */
 async function resolveGatewaySubscription(name) {
-  const { record, fresh } = await loadKeyRecord(`apim:${name}`);
+  const id = `apim:${name}`;
+  if (!isStorableId(id)) return null;
+
+  const { record, fresh } = await loadKeyRecord(id);
   if (!isLive(record)) return null;
 
   if (fresh) apiKeys.touchLastUsed(record.id);
