@@ -30,6 +30,17 @@ const NAMED_LETTERS = Object.entries(LOWER_LETTERS).reduce((all, [name, letter])
   return all;
 }, {});
 
+/**
+ * Controls other than tab, LF and CR, surrogates and noncharacters are not text; fromCodePoint
+ * throws past U+10FFFF. A numeric entity for any of them stays as written.
+ */
+function isText(code) {
+  if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return false;
+  if (code < 0x20) return code === 0x09 || code === 0x0A || code === 0x0D;
+  if (code >= 0x7F && code <= 0x9F) return false;
+  return !(code >= 0xFDD0 && code <= 0xFDEF) && (code & 0xFFFE) !== 0xFFFE;
+}
+
 /** Numeric and named entities decoded; an entity this table does not know is left as written. */
 function decodeEntities(text) {
   return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body) => {
@@ -37,9 +48,7 @@ function decodeEntities(text) {
       const code = body[1] === 'x' || body[1] === 'X'
         ? parseInt(body.slice(2), 16)
         : parseInt(body.slice(1), 10);
-      // NUL and surrogates are not text, and fromCodePoint throws past U+10FFFF: one bad entity stays as written.
-      const text = code > 0 && code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF);
-      return text ? String.fromCodePoint(code) : whole;
+      return isText(code) ? String.fromCodePoint(code) : whole;
     }
     // Letters are matched as written; the punctuation entities are not case-sensitive.
     if (Object.hasOwn(NAMED_LETTERS, body)) return NAMED_LETTERS[body];
