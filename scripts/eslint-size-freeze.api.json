@@ -26,7 +26,7 @@
   "src/helpers/pdf-tail.js": {"complexity":[72,56],"max-lines":[556]},
   "src/http/router.js": {"complexity":[33],"max-lines":[487]},
   "src/http/routes.js": {"max-lines":[437]},
-  "src/jobs/bulk-download.js": {"complexity":[28],"max-lines":[654]},
+  "src/jobs/bulk-download.js": {"complexity":[28],"max-lines":[587]},
   "src/jobs/search-definitions.js": {"complexity":[34]},
   "src/merge/assessments.js": {"complexity":[23]},
   "src/merge/project.js": {"complexity":[28],"max-lines":[731]},
