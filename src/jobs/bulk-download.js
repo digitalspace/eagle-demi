@@ -1,18 +1,7 @@
 'use strict';
 
-/**
- * The bulk-download worker — turns a job row into zip parts in object storage.
- *
- * Queue-triggered (api/index.js), one job per invocation. Nothing here trusts the submitted
- * selection: the manifest read below composes the ACCESS SNAPSHOT stored on the job, so a document
- * unpublished between submit and run is dropped from the zip and listed in `errors.txt`. That read
- * IS the access check — never `systemAccess()`, and never a compartment.
- *
- * Failure policy has two levels. A document that cannot be read is recorded and skipped, because
- * one missing object must not cost the caller the other 2,499 files. A JOB that cannot be run
- * rethrows, so the queue retries it and finally poisons the message; the retry re-runs a `failed`
- * job on purpose, which is what makes a transient object-store outage self-healing.
- */
+// The manifest read composes the job's stored access snapshot and IS the access check: never
+// `systemAccess()`. A failed document is recorded and skipped; a failed job rethrows for a retry.
 
 const path = require('path');
 const { PassThrough } = require('stream');
@@ -62,11 +51,7 @@ const REASON = {
   truncated: 'truncated'
 };
 
-/**
- * A name no other entry in this folder already holds — ` (2)`, ` (3)` before the extension.
- * Case-insensitive, because Windows and macOS refuse to extract two entries that differ only in
- * case into the same folder.
- */
+/** A name no other entry in the folder holds, ` (2)` before the extension; case-insensitive for Windows and macOS. */
 function uniqueName(taken, folder, name) {
   const ext = path.extname(name);
   const base = name.slice(0, name.length - ext.length);
@@ -81,9 +66,8 @@ function uniqueName(taken, folder, name) {
 }
 
 /**
- * A source stream that cannot kill the archive: an object failing mid-transfer ends the entry
- * where it stopped instead of erroring the archive, which would abandon every file after it. The
- * entry that results is TRUNCATED, so the caller is told and it is not counted as included.
+ * An object failing mid-transfer ends its entry where it stopped, marked TRUNCATED, instead of
+ * erroring the archive and abandoning every file after it.
  */
 function shielded(source, onTruncate) {
   const out = new PassThrough();
@@ -93,32 +77,19 @@ function shielded(source, onTruncate) {
 }
 
 /**
- * Object reads kept running ahead of the archive, in document order: `concurrency` of them at once,
- * or — at `concurrency` 1 — `ahead` opens whose bytes still wait for the append.
- *
- * Only the APPEND has to be serial: that is the archive's single-writer constraint, and it is what
- * fixes the order of the entries. Neither the round trip nor the transfer does.
- * docs/bulk-download-performance.md holds the numbers and how to remeasure them.
+ * Object reads running ahead of the archive in document order; only the append is serial.
+ * Numbers and how to remeasure them: docs/bulk-download-performance.md.
  */
 function readAhead(docs, { ahead, concurrency, bufferBytes }) {
   const transfers = Math.max(1, concurrency);
-  // `concurrency` counts the object reads running at once, one of which is the entry being appended,
-  // so the window parks one fewer than that and each read gets an equal share of the budget. 1 read
-  // means no buffer at all — the archive is the only reader, which is the behaviour without this.
+  // One read is the entry being appended, so the window parks one fewer, each with an equal share.
   const perStream = transfers > 1 ? Math.max(1, Math.floor(bufferBytes / transfers)) : 0;
-  // `concurrency` supersedes `ahead` rather than adding to it: an open that is transferring is
-  // strictly better than one that is only waiting, and a window wider than the transfer budget
-  // would hand the next slot to a later document than the one the archive reaches first.
+  // Replaces `ahead`: a wider window would hand the next slot past the document the archive needs.
   const limit = perStream > 0 ? Math.max(1, transfers - 1) : Math.max(1, ahead);
   const pending = new Map();
 
-  /**
-   * One document's open. It resolves either way and carries its own error, because a document that
-   * failed is that document's error when its turn comes — never an unhandled rejection, and never
-   * an unhandled 'error' event on a stream sitting in the window, which is an uncaught exception
-   * that takes the worker down mid-job. The listener goes on the moment the stream exists and
-   * stays on: `shielded` adds its own later, and both firing is harmless.
-   */
+  // Resolves either way and carries its own error: an unhandled 'error' on a parked stream would
+  // take the worker down. `shielded` adds a second listener later; both firing is harmless.
   const open = (i, buffered) => {
     const entry = { stream: null, source: null, error: null, dropped: false };
     entry.opened = (async () => {
@@ -137,9 +108,8 @@ function readAhead(docs, { ahead, concurrency, bufferBytes }) {
         }
         source.on('error', err => {
           entry.error = entry.error || err;
-          // A buffer whose source died never ends on its own, and the archive may be reading it.
-          // Destroyed WITH the error, so an entry already being appended is reported truncated
-          // rather than quietly ending short.
+          // A buffer whose source died never ends on its own; destroyed WITH the error, an entry
+          // being appended is reported truncated rather than quietly ending short.
           if (stream !== source) stream.destroy(err);
         });
         if (entry.dropped) {
@@ -225,15 +195,8 @@ async function isCancelled(jobId) {
 }
 
 /**
- * Build one part: start the upload, then stream documents into it until it is full.
- *
- * The upload is started BEFORE the first entry and awaited after `finish()`, which is what keeps
- * the zip out of memory — the backend multiparts whatever the archive emits.
- *
- * Where the part ENDS is decided here, against the bytes the archive has actually written, because
- * a recorded `fileSize` is missing on plenty of documents and a plan made from those sizes packs
- * the wrong files. Returns the index it stopped at, so the caller opens the next part there, and
- * whether a cancel is what stopped it.
+ * One part, streamed: the upload starts before the first entry, so the zip never sits in memory.
+ * It ends on bytes actually written, since many rows lack `fileSize`; returns where it stopped.
  */
 async function buildPart({
   jobId, n, docs, from, projectNames, access, errors, includedProjects, maxBytes, partMaxBytes
@@ -242,9 +205,8 @@ async function buildPart({
   const archive = new ZipStream({ store: true });
   const uploaded = storage.putObjectStream(key, archive, 'application/zip');
 
-  // One handler for the part's whole life. An archive error or a rejected upload is fatal to the
-  // part — racing every await against this is what stops the loop hanging on a dead consumer,
-  // and it is deliberately OUTSIDE the per-document catch below.
+  // An archive error or rejected upload is fatal to the part: every await races this, so the loop
+  // cannot hang on a dead consumer. Deliberately outside the per-document catch.
   let fatal = null;
   const died = new Promise((_resolve, reject) => {
     const die = err => { fatal = fatal || err; reject(err); };
@@ -274,10 +236,8 @@ async function buildPart({
       }
 
       const doc = docs[i];
-      // Roll BEFORE appending, never after: a part already at the cap must not take one more file.
-      // Both clauses matter — the first closes a part filled by documents nobody recorded a size
-      // for, the second keeps a document whose size IS known from overshooting a part that still
-      // has room.
+      // Roll before appending. First clause: a part filled by unsized documents; second: a known
+      // size that would overshoot a part with room left.
       const written = archive.getBytesWritten();
       if (i > from && (written >= partMaxBytes || written + knownSize(doc) > partMaxBytes)) break;
 
@@ -294,9 +254,8 @@ async function buildPart({
         // Only once this one has settled: refilling before it would hold one more socket open
         // than the window allows.
         ahead.fill(i + 1);
-        // A parked stream can be reset while the documents ahead of it are packed — a socket the
-        // serial fetch never held open long enough to lose. One fresh open at its turn, which is
-        // what it would have got before the window existed, then it is the document's failure.
+        // A parked stream can be reset while earlier documents pack: one fresh open at its turn,
+        // then it is the document's failure.
         if (entry.error && entry.stream) entry = await orDie(ahead.take(i));
         if (entry.error) throw entry.error;
         ahead.release();
@@ -392,15 +351,8 @@ function labelFor(ids, projectNames) {
 }
 
 /**
- * The job's access snapshot, with its credentials re-checked against the registry.
- *
- * Roles are frozen at submit on purpose — that is the selection the caller asked for. A CREDENTIAL
- * is different: it is a row somebody can revoke, and a zip built an hour later must not carry
- * documents a revoked grant opened. Narrowing only, never widening.
- *
- * Every party the request carried is re-read, not just the requester: a grant can be held by a
- * realm group, and checking the subject alone would drop it and quietly omit files the caller may
- * see. `job.parties` is what `middleware/credentials.js` loaded from, stored at submit.
+ * The access snapshot with revoked credentials dropped; roles stay frozen at submit. Every stored
+ * party is re-read, since a realm group can hold a grant. Narrows only, never widens.
  */
 async function freshAccess(job, now) {
   const access = job.access || {};
@@ -413,16 +365,8 @@ async function freshAccess(job, now) {
   return { ...access, credentials: held.filter(row => live.has(String(row.id))) };
 }
 
-/**
- * Take the job, or find somebody else already has it.
- *
- * The queue delivers at least once, so two instances can hold the same message. The status check
- * and the write are made one operation by the row's etag: the loser gets a 412 and returns instead
- * of building the same zip over the top of the winner's.
- *
- * ponytail: reaches past the repository for the one primitive it does not expose. Move to
- * `bulkDownloads.claim()` when that file next changes.
- */
+/** Take the job: delivery is at-least-once, so the etag makes check and write one; the loser gets 412. */
+// ponytail: reaches past the repository for the one primitive it lacks; move to bulkDownloads.claim().
 async function claim(job, now) {
   // 'running' past the visibility timeout is an instance that died mid-build: the redelivery is
   // the retry, and refusing it would leave the row (and its quota slot) stuck forever.
@@ -453,10 +397,8 @@ async function releaseSlot(job) {
 }
 
 /**
- * Flip the job to a terminal status, without ever becoming the reason the job fails.
- *
- * @returns {Promise<boolean>} false: a cancel finished this job first, so the row and its slot
- *   are the canceller's.
+ * Flip the job to a terminal status, never becoming the reason it fails. False: a cancel
+ * finished it first, so the row and its slot are the canceller's.
  */
 async function markTerminal(id, fields, statuses, what) {
   try {
@@ -496,21 +438,13 @@ async function abandon(id, parts) {
 }
 
 /**
- * Run one job to completion. Safe to call again for the same id: a `ready` job returns untouched,
- * and a job another instance is already running is left alone.
- *
- * @param {string} jobId
- * @param {object} [delivery]
- * @param {number} [delivery.attempt]      this message's dequeue count
- * @param {number} [delivery.maxAttempts]  host.json `maxDequeueCount`
+ * Run one job; safe to repeat. `attempt` is the dequeue count, `maxAttempts` host.json
+ * `maxDequeueCount`.
  */
 async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   const id = String(jobId || '').trim();
-  // A zip job id is a UUID, and the container's other row kinds are all `<prefix>:<rest>` —
-  // `quota:` and `searchdef:`. So a colon says the message names something this worker does not
-  // own, and without this it would patch that row to `running` and then `ready`: for a
-  // search-definition job that is its handler seeing a terminal status and walking away from a
-  // chunks rebuild. Checked before the read, so a wrong id never becomes a write.
+  // Zip ids are UUIDs; `quota:` and `searchdef:` rows share the container, and patching one to
+  // `ready` would end a chunks rebuild. Checked before the read, so a wrong id never writes.
   if (id.includes(':')) {
     logger.warn(`[bulk] refusing ${id}: a prefixed id belongs to another kind of row`);
     return null;
@@ -628,9 +562,8 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
 
     return { id, parts: done, includedCount, bytes, errorCount: errors.length };
   } catch (err) {
-    // `[bulk] job failed` is the string the poison alert matches (observability.bicep), so it is
-    // logged only on the delivery that will actually poison — an earlier attempt still has a retry
-    // and firing the alert on it would page somebody for a transient outage.
+    // The poison alert matches `[bulk] job failed` (observability.bicep): logged only on the last
+    // delivery, so a transient outage with a retry left pages nobody.
     const final = attempt >= maxAttempts;
     logger.error(
       final
@@ -642,9 +575,8 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     const marked = await markTerminal(id, {
       status: 'failed', error: err.message, finishedAt: new Date().toISOString()
     }, ['running'], 'failed');
-    // Only the delivery that runs out of retries: an intermediate failure still has an attempt
-    // coming, and a slot given back now is one this requester's other jobs are still holding.
-    // `marked` false means a cancel finished the job first and released the slot with it.
+    // Last delivery only: an earlier one still has an attempt holding the slot. `marked` false
+    // means a cancel finished the job and released the slot itself.
     if (final && marked) await releaseSlot(job);
     // Rethrown so the queue retries and then poisons; the retry re-runs a failed job on purpose.
     throw err;

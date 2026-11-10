@@ -26,9 +26,8 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
 const trimEnds = value => value.replace(/^[\s.]+|[\s.]+$/g, '');
 
 /**
- * Strip what a file or zip entry path must not carry: separators, characters Windows refuses,
- * control and bidi characters, dots and spaces at either end.
- * A lone surrogate becomes U+FFFD, so the name can be URI-encoded into a Content-Disposition.
+ * Strip separators, characters Windows refuses, control and bidi characters, dots and spaces at
+ * either end. A lone surrogate becomes U+FFFD, so a Content-Disposition can URI-encode the name.
  */
 function clean(value) {
   return trimEnds(String(value == null ? '' : value)
@@ -47,10 +46,8 @@ function extensionOf(name, fileExt) {
 }
 
 /**
- * A file name for a document, from what THIS caller may see of it: the row goes through the field
- * redactor first, so a title withheld at the caller's level cannot arrive as a file name instead.
- * `fallback` names a row redacted down to nothing and lends its extension to a name that has none;
- * with no fallback the id names it, which is public by definition.
+ * A file name from what THIS caller may see: a withheld title cannot return as a file name. `fallback`
+ * names a row redacted to nothing and lends its extension; without it the public id names it.
  */
 function fileNameFor(doc, access, fallback = '') {
   const shown = redactForAccess('documents', doc, access);
