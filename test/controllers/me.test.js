@@ -7,7 +7,7 @@ const assert = require('node:assert');
 
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const meController = require('../../src/controllers/me');
 const { logger } = require('../../src/utils/logger');
 const { routeChains } = require('../helpers/router-source');
@@ -151,9 +151,7 @@ test('me controller', async (t) => {
   });
 
   await t.test('the mounted route answers a valid Bearer with that caller\'s identity', async (t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     const token = jwt.sign({ preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only');
 
     await withServer(async (call) => {
@@ -168,9 +166,7 @@ test('me controller', async (t) => {
   // eagle-admin refreshes its token on a 401. A rejected Bearer answered as the public identity
   // under a 200 reads as "this user lost staff access", so the console hides itself instead.
   await t.test('the mounted route answers a rejected Bearer with 401, not the public identity', async (t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = true;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: true });
     t.mock.method(logger, 'warn', () => {});
 
     await withServer(async (call) => {

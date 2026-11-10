@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../src/config');
+const { useConfig } = require('../helpers/use-config');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
 const inspectionController = require('../../src/controllers/nosql/inspection');
@@ -45,9 +45,7 @@ async function callReads(t, headers) {
 }
 
 function keycloak(t, enabled) {
-  const keycloakEnabled = config.keycloakEnabled;
-  config.keycloakEnabled = enabled;
-  t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+  useConfig(t, { keycloakEnabled: enabled });
 }
 
 const eachRead = value => READS.map(() => value);

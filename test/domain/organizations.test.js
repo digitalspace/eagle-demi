@@ -14,7 +14,7 @@ const users = require('../../src/repositories/users');
 const syncOut = require('../../src/sync-out');
 const { ORGANIZATION } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const organization = require('../../src/domain/organizations');
 const orgMirror = require('../../src/controllers/nosql/organization');
 
@@ -28,10 +28,6 @@ const STORED = Object.freeze({
   name: 'Acme Mining', city: 'Victoria', read: ['public', 'staff', 'sysadmin'], isPublished: true, _etag: 'e1'
 });
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Sync-out stubbed: each queued row's id and etag, with its kind. */

@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const projects = require('../../src/repositories/projects');
 const syncOut = require('../../src/sync-out');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const extension = require('../../src/domain/extensions');
 
 let rows = [];
@@ -31,10 +31,6 @@ const STORED = Object.freeze({
   reviewExtensions: [EXTENSION], reviewSuspensions: [SUSPENSION], _etag: 'e1'
 });
 
-function ctxFor(roles) {
-  const req = { user: { sub: 'kc-1', preferred_username: 'idir-staff', realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage holding one project; returns the rows written and queued for sync-out. */
