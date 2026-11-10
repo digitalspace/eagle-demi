@@ -231,7 +231,7 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       if (removed) deleted++;
       if (outcome?.skipped) skipped++;
       // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
-      // one is recorded too: its search-index entries are already gone.
+      // one is recorded too: some of its index entries may already be gone.
       if (audit && (removed || failed)) {
         audit.auditEvent(null, {
           action: `${singular}.delete`,
