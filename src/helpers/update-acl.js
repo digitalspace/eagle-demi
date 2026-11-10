@@ -95,7 +95,8 @@ async function publishOpenedImages(projectEagleId, items, derived, result) {
     try {
       await images.publishFor({ req: null }, { ...item, id, read: readOf.get(id) }, parent && parent.id);
     } catch (err) {
-      logger.error('[update-acl] images of an opened update not published', { projectEagleId, id, error: err.message, stack: err.stack });
+      // publishFor already logged the stack.
+      logger.error('[update-acl] images of an opened update not published', { projectEagleId, id, error: err.message });
     }
   }
 }
