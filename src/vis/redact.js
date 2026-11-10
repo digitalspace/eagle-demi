@@ -44,16 +44,17 @@ function derivePublished(doc) {
   return doc.isPublished === true;
 }
 
-/**
- * A child's level under every dial that reaches it, the strictest winning: its own, its parent's,
- * and that of the top-level field it stands in for (`dialOf`).
- */
+/** A key's level under its own dial and that of the top-level field it stands in for (`dialOf`). */
+function fieldVis(catalog, dials, key, record) {
+  const entry = catalog[key];
+  const own = effectiveVis(entry, dials[key], record);
+  return entry.dialOf ? Math.min(own, effectiveVis(catalog[entry.dialOf], dials[entry.dialOf], record)) : own;
+}
+
+/** A child's level under every dial that reaches it, the strictest winning, its parent's included. */
 function childVis(catalog, dials, key, catalogKey, record) {
-  const entry = catalog[catalogKey];
-  const levels = [effectiveVis(entry, dials[catalogKey], record)];
-  if (LEVELS.includes(dials[key])) levels.push(dials[key]);
-  if (entry.dialOf) levels.push(effectiveVis(catalog[entry.dialOf], dials[entry.dialOf], record));
-  return Math.min(...levels);
+  const own = fieldVis(catalog, dials, catalogKey, record);
+  return LEVELS.includes(dials[key]) ? Math.min(own, dials[key]) : own;
 }
 
 /** The listed children of a dotted catalog key, for a parent the caller cannot see whole. */
@@ -94,7 +95,7 @@ function redactForAccess(entity, doc, access) {
     const entry = Object.hasOwn(catalog, key) ? catalog[key] : undefined;
     if (!entry) continue;
 
-    if (visible(level, effectiveVis(entry, dials[key], doc))) {
+    if (visible(level, fieldVis(catalog, dials, key, doc))) {
       out[key] = value;
       continue;
     }

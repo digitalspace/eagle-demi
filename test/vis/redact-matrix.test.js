@@ -88,6 +88,14 @@ test('redactForAccess', async (t) => {
     assert.strictEqual(redactForAccess('projects', row, { level: 0 }).projectLead, 'Alex Lead');
   });
 
+  await t.test('a stored copy is hidden under the dial of the field it copies', () => {
+    const row = storedRow({ eacDecision: { _id: 'd1', name: 'Approved' }, eacDecisionSort: 'Approved', vis: { eacDecision: 1 } });
+    assert.strictEqual('eacDecisionSort' in redactForAccess('projects', row, { level: 4 }), false);
+    assert.strictEqual('eacDecisionSort' in redactForAccess('projects', row, { level: 2 }), false);
+    assert.strictEqual(redactForAccess('projects', row, { level: 1 }).eacDecisionSort, 'Approved');
+    assert.strictEqual(redactForAccess('projects', storedRow({ eacDecisionSort: 'Approved' }), { level: 4 }).eacDecisionSort, 'Approved');
+  });
+
   await t.test('a dial cannot exceed maxVis', () => {
     const row = storedRow({ vis: { read: 4 } });
     assert.strictEqual('read' in redactForAccess('projects', row, { level: 4 }), false);

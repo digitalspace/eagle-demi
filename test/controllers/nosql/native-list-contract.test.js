@@ -22,6 +22,7 @@ const { recordEvents } = require('../../helpers/record-events');
 const projects = require('../../../src/repositories/projects');
 const { makeRes } = require('../../../src/http/router');
 const { listHandler, getHandler } = require('../../../src/controllers/nosql/mirror-reads');
+const { projectsKind } = require('../../../src/controllers/nosql/project');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -168,6 +169,16 @@ test('native list contract', async (t) => {
     const clauses = nativeCriteria(SPEC, parsed, access).criteria.map(c => c.clause).join(' AND ');
     const rows = [{ id: 'hid', author: 'A', vis: { author: 1 } }, { id: 'shown', author: 'B' }];
     assert.deepStrictEqual(rows.filter(row => !clauses || evaluate(clauses, row, {})).map(row => row.id), ['shown']);
+  });
+
+  await t.test('a sort on a stored copy leaves out a row whose dial hides the field it copies', () => {
+    const access = { authenticated: false, roles: [], level: 4 };
+    const parsed = parseNativeQuery(projectsKind, { sort: 'eacDecisionSort', count: 'true' }, access);
+    // list and count read under the same criteria
+    const clauses = nativeCriteria(projectsKind, parsed, access).criteria.map(c => c.clause).join(' AND ');
+    const decided = { eacDecision: { _id: 'd1', name: 'Approved' }, eacDecisionSort: 'Approved' };
+    const rows = [{ id: 'hid', ...decided, vis: { eacDecision: 1 } }, { id: 'shown', ...decided }];
+    assert.deepStrictEqual(rows.filter(row => evaluate(clauses, row, {})).map(row => row.id), ['shown']);
   });
 
   await t.test(`ids above ${MAX_IDS} are refused`, async (t) => {
