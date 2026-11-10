@@ -14,7 +14,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { deriveAssessments } = require('../merge/assessments');
 const { legislationTransitions } = require('../merge/track-derived');
 const { raced, writeGuarded } = require('../helpers/etag-write');
-const { SORTABLE, sortFieldFills } = require('./project-fills');
+const { SORTABLE, sortFieldFills } = require('../helpers/project-fills');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable, readPage, EAGLE_SYNC_PENDING

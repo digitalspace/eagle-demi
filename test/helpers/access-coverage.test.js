@@ -36,8 +36,6 @@ const UNGATED = {
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.',
-  'project-fills.js':
-    'Not a repository and no read path: pure sort-key fills that projects.js adds to a row before it writes.',
   'config.js':
     'Two documents, served to anonymous callers by GET /api/config and GET /api/config/public, so ' +
     'there is no tier that may read only part of either and nothing to filter. What bounds each ' +
