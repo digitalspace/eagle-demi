@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * Raw Eagle records for the record mirrors (not projects or documents), and the one call that drives a mirror and
- * hands back the row it wrote.
- *
- * Shared by the push suite and the catalog-completeness suite: they assert different things about
- * the SAME emitted row, and two fixtures would let one of them keep passing on a field the other
- * had already outgrown.
- *
- * Hand-written, never derived from the controllers — a fixture built from the thing under test
- * grows a field at the same moment it does and can never fail.
- */
+// Hand-written Eagle records shared by the push and catalog-completeness suites. One copy, so the
+// suites cannot drift; never derived from the controllers, so it cannot grow along with them.
 
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
@@ -33,6 +24,7 @@ const groupController = require('../../src/controllers/nosql/group');
 const inspectionController = require('../../src/controllers/nosql/inspection');
 
 const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
+const { mockRes } = require('./mock-res');
 
 /** The two callers every mirror assertion is about: the visitor it must hide a row from, and the
  * staff caller it must keep it visible to. */
@@ -466,16 +458,6 @@ const MIRRORS = {
   }
 };
 
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
-
 const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { roles: ['sysadmin'] } };
 
 /**
@@ -492,12 +474,8 @@ function documentReadForWriteFromGet(t) {
     (id, projectId) => documents.getById(systemAccess(), id, projectId));
 }
 
-/**
- * Drive one mirror and return `{ res, row }` — the row is what the controller handed the
- * repository, so every assertion is about the real emitter rather than a copy of it.
- *
- * The caller's `t` owns the mocks; restore them with `t.mock.restoreAll()`.
- */
+// Returns `{ res, row }`; `row` is what the controller handed the repository, not a copy of it.
+// The mocks hang off the caller's `t`; `t.mock.restoreAll()` undoes them.
 async function captureMirror(t, entity, doc, {
   existing = null, project, period, parent, pushedAt, losses = 0
 } = {}) {

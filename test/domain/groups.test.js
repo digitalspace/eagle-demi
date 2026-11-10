@@ -11,7 +11,8 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const groups = require('../../src/repositories/groups');
 const projects = require('../../src/repositories/projects');
-const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/access-sql');
+const { levelOfRead, canRead } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const group = require('../../src/domain/groups');
 
 let rows = [];
@@ -33,10 +34,6 @@ const STORED = Object.freeze({
   sources: { eagle: { _id: GROUP_ID, read: ['project-system-admin', 'sysadmin'] } }
 });
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage: one stored group and its projects. Returns what was written and deleted. */

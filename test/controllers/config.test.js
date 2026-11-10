@@ -7,15 +7,7 @@ const assert = require('node:assert');
 
 const configRepository = require('../../src/repositories/config');
 const configController = require('../../src/controllers/config');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; }
-  };
-}
+const { mockRes } = require('../helpers/mock-res');
 
 const REQ = { query: {}, params: {}, body: {} };
 

@@ -7,12 +7,11 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const jwt = require('jsonwebtoken');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const projects = require('../../../src/repositories/projects');
 const notify = require('../../../src/services/notify');
-const { withServer } = require('../../helpers/with-server');
+const { send } = require('../../helpers/with-server');
 
 const EAGLE_ID = '5c1f7a3e9b1d2c0012340001';
 const PROJECT_ID = `eagle-${EAGLE_ID}`;
@@ -34,20 +33,6 @@ function fakeNotify(t, fn) {
   t.mock.method(notify, 'unsubscribeCacMember', fn);
 }
 
-async function send(method, path, roles, body) {
-  const token = jwt.sign({ sub: 'kc-1', preferred_username: 'idir-user', realm_access: { roles } }, 'suite-only');
-  let result;
-  await withServer(async (call) => {
-    const res = await call(`/api${path}`, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
-    result = { status: res.status, cache: res.headers.get('cache-control'), body: await res.json() };
-  });
-  return result;
-}
-
 const BASE = `/projects/${PROJECT_ID}/cac`;
 const ROUTES = {
   get: (roles) => send('GET', BASE, roles),
@@ -60,9 +45,7 @@ const ROUTES = {
 
 test('CAC routes', async (t) => {
   t.beforeEach((t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
   });
   t.afterEach(() => t.mock.restoreAll());
 

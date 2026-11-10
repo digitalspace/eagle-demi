@@ -7,11 +7,10 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const jwt = require('jsonwebtoken');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const notifications = require('../../../src/repositories/notifications');
-const { withServer } = require('../../helpers/with-server');
+const { send } = require('../../helpers/with-server');
 
 const NOTIFICATION_ID = '5c1f7a3e9b1d2c0012390001';
 const STORED = Object.freeze({
@@ -27,20 +26,6 @@ function fakeStore(t, stored = STORED) {
   return store;
 }
 
-async function send(method, path, roles, body) {
-  const token = jwt.sign({ sub: 'kc-1', preferred_username: 'idir-user', realm_access: { roles } }, 'suite-only');
-  let result;
-  await withServer(async (call) => {
-    const res = await call(`/api${path}`, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
-    result = { status: res.status, body: await res.json() };
-  });
-  return result;
-}
-
 const ROUTES = {
   create: (roles, body = { name: 'Quarry' }) => send('POST', '/notifications', roles, body),
   update: (roles, body = { name: 'Mine' }, id = NOTIFICATION_ID) => send('PUT', `/notifications/${id}`, roles, body),
@@ -50,9 +35,7 @@ const ROUTES = {
 
 test('notification write routes', async (t) => {
   t.beforeEach((t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
   });
   t.afterEach(() => t.mock.restoreAll());
 

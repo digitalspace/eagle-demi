@@ -10,16 +10,7 @@ const monitor = require('../../src/azure/monitor');
 const cache = require('../../src/repositories/cache');
 const cosmos = require('../../src/db/cosmos-nosql');
 const controller = require('../../src/controllers/admin-reads');
-
-function mockRes() {
-  const res = {
-    body: null,
-    statusCode: 200,
-    status(code) { res.statusCode = code; return res; },
-    json(body) { res.body = body; return res; }
-  };
-  return res;
-}
+const { mockRes } = require('../helpers/mock-res');
 
 /**
  * The settings that decide whether a route answers at all. Restored after each test so an

@@ -12,15 +12,7 @@ const assert = require('node:assert');
 
 const apiKeys = require('../../../src/repositories/api-keys');
 const controller = require('../../../src/controllers/nosql/api-key');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; }
-  };
-}
+const { mockRes } = require('../../helpers/mock-res');
 
 // A sysadmin, because minting a key that carries a service role is gated on the caller holding
 // the top role (src/controllers/nosql/api-key.js). What is under test here is the id, not the gate.

@@ -69,7 +69,7 @@
   "test/controllers/document-download.test.js": {"max-lines":[1061]},
   "test/controllers/nosql-controllers.test.js": {"max-lines":[2448]},
   "test/controllers/nosql/eagle-push.test.js": {"max-lines":[1436]},
-  "test/controllers/nosql/pdf-title.test.js": {"max-lines":[1205]},
+  "test/controllers/nosql/pdf-title.test.js": {"max-lines":[1204]},
   "test/controllers/nosql/public-read-push.test.js": {"max-lines":[1495]},
   "test/controllers/nosql/update-push.test.js": {"max-lines":[1380]},
   "test/controllers/search-meta.test.js": {"max-lines":[1243]},

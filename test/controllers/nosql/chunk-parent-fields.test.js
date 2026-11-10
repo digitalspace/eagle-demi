@@ -20,7 +20,7 @@ const chunks = require('../../../src/repositories/chunks');
 const aiSearch = require('../../../src/search/ai-search');
 const documentController = require('../../../src/controllers/nosql/document');
 const restampChunks = require('../../../src/jobs/restamp-chunks');
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const { logger } = require('../../../src/utils/logger');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, storedProject: storedProjectRow,
@@ -198,9 +198,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   // WHICH writes move the copy, not where the walk runs. With no queue name and no opt-in the
   // write skips the re-stamp altogether and there is nothing here to observe, so these cases ask
   // for the inline path; test/controllers/nosql/restamp-dispatch.test.js owns the choice itself.
-  const inlineBefore = config.chunkRestampInline;
-  config.chunkRestampInline = true;
-  t.after(() => { config.chunkRestampInline = inlineBefore; });
+  useConfig(t, { chunkRestampInline: true });
 
   /**
    * Records every parent-field patch the handler under test issues. The flag write goes with it:

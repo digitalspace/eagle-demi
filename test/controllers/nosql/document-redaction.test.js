@@ -14,17 +14,7 @@ const assert = require('node:assert');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
 const documentController = require('../../../src/controllers/nosql/document');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader(k, v) { this.headers[k] = v; }
-  };
-}
+const { mockRes } = require('../../helpers/mock-res');
 
 const SYSADMIN = { realm_access: { roles: ['sysadmin'] } };
 

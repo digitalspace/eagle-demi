@@ -8,20 +8,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
-const config = require('../../../src/config');
+const { useConfig } = require('../../helpers/use-config');
 const { withServer } = require('../../helpers/with-server');
+const { mockRes } = require('../../helpers/mock-res');
 
 const boundaries = require('../../../src/repositories/boundaries');
 const boundaryController = require('../../../src/controllers/nosql/boundary');
-
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; }
-  };
-}
 
 test('a written boundary carries the ladder tokens for its level', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -82,9 +74,7 @@ function assertServed(row, label) {
 
 test('boundary answers carry no ACL and no Cosmos system fields', async (t) => {
   t.beforeEach((t) => {
-    const keycloakEnabled = config.keycloakEnabled;
-    config.keycloakEnabled = false;
-    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    useConfig(t, { keycloakEnabled: false });
     t.mock.method(boundaries, 'listByType', async () => ({ items: [structuredClone(STORED)], pageSize: 1000 }));
     t.mock.method(boundaries, 'getById', async (access, id) => (id === STORED.id ? structuredClone(STORED) : null));
     t.mock.method(boundaries, 'upsert', async (row) => ({ ...STORED, ...row }));

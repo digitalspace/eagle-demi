@@ -14,7 +14,8 @@ const comments = require('../../src/repositories/comments');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { DELETED_CEILING } = require('../../src/repositories/documents');
-const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/access-sql');
+const { levelOfRead, canRead } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const syncOut = require('../../src/sync-out');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const period = require('../../src/domain/comment-periods');
@@ -38,10 +39,6 @@ const PROJECTS = {
   'p-sysadmin': { id: 'p-sysadmin', read: ['sysadmin'] }
 };
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage: one stored period, its parents, and the comment cascade. Returns what was written. */
