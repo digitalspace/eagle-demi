@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * Raw Eagle records for the record mirrors (not projects or documents), and the one call that drives a mirror and
- * hands back the row it wrote.
- *
- * Shared by the push suite and the catalog-completeness suite: they assert different things about
- * the SAME emitted row, and two fixtures would let one of them keep passing on a field the other
- * had already outgrown.
- *
- * Hand-written, never derived from the controllers — a fixture built from the thing under test
- * grows a field at the same moment it does and can never fail.
- */
+// One hand-written fixture for the push and catalog-completeness suites: a copy per suite, or one
+// derived from the controllers, can grow a field along with the code and never fail.
 
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
@@ -483,12 +474,8 @@ function documentReadForWriteFromGet(t) {
     (id, projectId) => documents.getById(systemAccess(), id, projectId));
 }
 
-/**
- * Drive one mirror and return `{ res, row }` — the row is what the controller handed the
- * repository, so every assertion is about the real emitter rather than a copy of it.
- *
- * The caller's `t` owns the mocks; restore them with `t.mock.restoreAll()`.
- */
+// Returns `{ res, row }`; `row` is what the controller handed the repository, not a copy of it.
+// The mocks hang off the caller's `t`; `t.mock.restoreAll()` undoes them.
 async function captureMirror(t, entity, doc, {
   existing = null, project, period, parent, pushedAt, losses = 0
 } = {}) {
