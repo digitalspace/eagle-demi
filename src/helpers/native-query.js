@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The native list contract, parsed once for every `GET /<kind>` list: offset `page` (1-based) and
- * `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the kind's declared filters.
- * Anything else, and any repeated control parameter, is a 400 rather than silently ignored.
- * Filter and `q` clauses also honour each record's own dial on the field, so `count=true` cannot
- * reveal a value that record hides.
+ * The query contract for every `GET /<kind>` list is documented on `parseNativeQuery` below.
+ * Each record's own dial on the field is parsed once and hides values the caller may not see, even from `count=true`.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -15,6 +12,7 @@ const {
 } = require('../repositories/_sql');
 const { levelOf } = require('../vis/level');
 const { spellingsOf } = require('./spellings');
+const { topField, dialAllows } = require('./dial');
 const { redactForAccess } = require('../vis/redact');
 
 /** Most ids one `ids=` read may name, and most values one repeated filter may take. */
@@ -102,9 +100,6 @@ function filterNames(spec) {
   ]);
 }
 
-// Catalog entries and per-record dials are keyed by the top-level field: `eacDecision._id` is `eacDecision`.
-const topField = field => field.split('.')[0];
-
 /** `assertFilterable` as a value: the refusal message, or null when the caller may see the field. */
 function refusal(entity, field, access) {
   try {
@@ -144,6 +139,8 @@ function booleansOf(spec, kind, q, access) {
 }
 
 /**
+ * Contract: `page` (1-based offset paging), `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the
+ * kind's declared filters. Anything else in the query string, or a repeated control parameter, is a 400.
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
  * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]}, anyOf: {field: [values]},
  * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool}, flags: {field: bool} }`.
@@ -281,12 +278,6 @@ function flagClause(field, on) {
   return { clause: on ? isTrue : `(NOT ${isTrue})`, params: [] };
 }
 
-/** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
-function dialAllows(field, level) {
-  const dial = `c.vis[${JSON.stringify(topField(field))}]`;
-  return `(NOT IS_DEFINED(${dial}) OR ${dial} >= ${level})`;
-}
-
 /**
  * Cosmos criteria and ORDER BY for a parsed query, for `selectWhere`/`countWhere`. The caller's
  * visibility predicate is added by those, not here.
@@ -344,16 +335,8 @@ function isEagleId(id) {
 }
 
 /**
- * The repository a native kind needs, over one Cosmos container: `list` and `count` share one
- * predicate, `getById` is the same predicate narrowed to one id (cross-partition, so it needs no
- * partition key from the caller, and drains pages through `queryFirst`: one page can come back
- * empty while the row exists).
- *
- * @param {object} opts
- * @param {string} opts.container
- * @param {string} opts.entity          catalog entity, for the `selectFor` projection
- * @param {string} opts.partitionField  'id' or 'projectId'
- * @param {string} opts.defaultOrder    e.g. 'c.id ASC', used when the caller names no sort
+ * `partitionField` is `'id'` or `'projectId'`; `defaultOrder` is a raw ORDER BY fragment with the `c.` prefix, e.g.
+ * `'c.id ASC'`. `getById` drains pages via `queryFirst` (cross-partition), as a page can be empty while the row exists.
  */
 function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   const spec = (access, criteria, orderBy) => selectWhere({
@@ -374,9 +357,8 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
 }
 
 /**
- * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` from
- * the parent as this caller may see it. Runs on rows already redacted; a parent the caller cannot
- * read adds nothing.
+ * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` to
+ * already-redacted rows, reading the parent as this caller may see it; an unreadable parent adds nothing.
  */
 async function projectParentJoin(access, rows) {
   const projects = require('../repositories/projects');
@@ -385,6 +367,10 @@ async function projectParentJoin(access, rows) {
 
   const parents = new Map((await projects.listRowsByIds(access, ids))
     .map(row => [String(row.id), redactForAccess('projects', row, access)]));
+  return withProjectNames(rows, parents);
+}
+
+function withProjectNames(rows, parents) {
   return rows.map((row) => {
     const parent = row && parents.get(String(row.projectId));
     if (!parent) return row;
@@ -406,9 +392,9 @@ module.exports = {
   nativeCriteria,
   presenceClause,
   flagClause,
-  dialAllows,
   rangeBound,
   isEagleId,
   cosmosKind,
-  projectParentJoin
+  projectParentJoin,
+  withProjectNames
 };

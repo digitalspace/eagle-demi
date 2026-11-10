@@ -10,7 +10,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { sortEntries } = require('../search/eagle-query');
+const { sortEntries } = require('../search/sort-entries');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE, MAX_PAGE_DEPTH } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const { catalogFor } = require('../vis/catalog');

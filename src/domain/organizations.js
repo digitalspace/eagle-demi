@@ -13,27 +13,10 @@ const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, readWith, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { ORGANIZATION } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
-
-const SHORT = { type: 'string', max: 1000 };
-
-/** The fields eagle-api's POST copies from the body (organization.js:92-113). None is required. */
-const SCHEMA = Object.freeze({
-  name: SHORT,
-  description: { type: 'string', max: 10000 },
-  country: SHORT,
-  postal: SHORT,
-  province: SHORT,
-  city: SHORT,
-  address1: SHORT,
-  address2: SHORT,
-  companyType: SHORT,
-  companyLegal: SHORT,
-  company: SHORT,
-  parentCompany: { type: 'id', nullable: true }
-});
+const { SCHEMA } = require('./organization-fields');
 
 /** Create adds `isPublished`, which eagle-api did not take: it published every new organization. */
 const CREATE_SCHEMA = Object.freeze({ ...SCHEMA, isPublished: { type: 'boolean' } });
@@ -43,7 +26,7 @@ const IGNORED_ON_UPDATE = ['read', 'isPublished'];
 
 const readOrg = (ctx, id) => lists.getById(ctx.access, id, lists.KINDS.ORGANIZATION);
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
+const auditOf = auditFor('organization', { project: false });
 
 /** True when `value` passes the parentCompany spec on its own. */
 const validParent = (value) =>
@@ -57,10 +40,6 @@ function coerceParent(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   if (!Object.hasOwn(input, 'parentCompany') || validParent(input.parentCompany)) return input;
   return { ...input, parentCompany: null };
-}
-
-function auditOf(action, fields) {
-  return (saved) => ({ action, targetType: 'organization', targetId: saved.id, detail: { fields } });
 }
 
 /**
@@ -144,9 +123,7 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const refused = refusedWriteKeys(lists.CONTAINER, checked.value, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const written = await demiWrite(ctx, id, existing, () => checked.value, auditOf('organization.update', fields));
 
@@ -215,7 +192,6 @@ function setPublished(published) {
 }
 
 module.exports = {
-  SCHEMA,
   create,
   update,
   publish: setPublished(true),

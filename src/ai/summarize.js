@@ -98,6 +98,23 @@ function foundryChatUrl() {
     `?api-version=${encodeURIComponent(config.foundryApiVersion)}`;
 }
 
+/** One chat completion POST; each caller fetches its own token and URL and reads the response. */
+function foundryChat(url, token, { system, user, maxTokens, signal, jsonObject }) {
+  return fetch(url, {
+    method: 'POST',
+    ...(signal ? { signal } : {}),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      // Deterministic: same input, same output, for search and project summaries. A rerun that
+      // reads differently looks like a bug to a user and makes the probes non-repeatable.
+      temperature: 0,
+      max_tokens: maxTokens,
+      ...(jsonObject ? { response_format: { type: 'json_object' } } : {})
+    })
+  });
+}
+
 /**
  * Trim a chunk to the configured ceiling.
  *
@@ -183,23 +200,8 @@ async function summarize(keywords, chunks) {
 
   try {
     const token = await getToken();
-    const res = await fetch(url, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ],
-        // Deterministic: this is compression, not composition. Two identical searches returning
-        // two different summaries reads as a bug to a user and makes the probes non-repeatable.
-        temperature: 0,
-        max_tokens: config.summaryMaxTokens
-      })
+    const res = await foundryChat(url, token, {
+      system: SYSTEM_PROMPT, user: prompt, maxTokens: config.summaryMaxTokens, signal: controller.signal
     });
 
     if (!res.ok) {
@@ -243,6 +245,7 @@ module.exports = {
   // Shared with ai/project-summary.js, which calls the same deployment with its own prompts.
   getToken,
   foundryChatUrl,
+  foundryChat,
   // Exported for tests: prompt shape bounds the bill, and citation parsing bounds what the UI links.
   buildPrompt,
   parseCitations,

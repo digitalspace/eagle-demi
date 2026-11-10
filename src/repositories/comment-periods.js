@@ -9,8 +9,10 @@ const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
   assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria, EAGLE_SYNC_PENDING
 } = require('./_sql');
+const { firstByIdAcross } = require('./_first-by-id');
 const { cascadeAcl } = require('../helpers/acl-cascade');
-const { cosmosKind, dialAllows } = require('../helpers/native-query');
+const { cosmosKind } = require('../helpers/native-query');
+const { dialAllows } = require('../helpers/dial');
 const { levelOf } = require('../vis/level');
 const projects = require('./projects');
 
@@ -35,14 +37,7 @@ async function getById(access, id, projectId, { includeDeleted = false } = {}) {
     return canRead(item, access, PARTITION_FIELD) ? item : null;
   }
 
-  const spec = selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: [...(includeDeleted ? [] : [NOT_DELETED]), eq('id', String(id), '@id')]
-  });
-  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
-  // the row exists, and the caller reads that as "no such comment period".
-  return await cosmos.queryFirst(CONTAINER, spec, {});
+  return firstByIdAcross(CONTAINER, access, PARTITION_FIELD, id, includeDeleted ? [] : [NOT_DELETED]);
 }
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
@@ -117,7 +112,7 @@ function byProjectSpec(projectId, access, orderBy, criteria = []) {
   });
 }
 
-/** Every period of one parent, deleted ones too, past `listByProject`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+/** Every period of one parent, deleted ones too, past `listByProject`'s MAX_PAGE_SIZE cap: reconcile reads and the ENGAGE URL join. */
 async function listEveryByProject(projectId, access) {
   return fetchAll(CONTAINER, byProjectSpec(projectId, access), { partitionKey: String(projectId) });
 }

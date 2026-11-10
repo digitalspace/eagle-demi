@@ -5,7 +5,7 @@
 
 const settings = require('../config').syncOut;
 const lists = require('../repositories/lists');
-const { SCHEMA } = require('../domain/organizations');
+const { SCHEMA } = require('../domain/organization-fields');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 const {

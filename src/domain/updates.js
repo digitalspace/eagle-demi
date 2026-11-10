@@ -13,7 +13,7 @@ const { resolveAccess } = require('../helpers/access-sql');
 const updateParent = require('../helpers/update-parent');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { UPDATE } = require('../sync-out/kinds');
 const images = require('./update-images');
 const { logger } = require('../utils/logger');
@@ -281,13 +281,7 @@ async function parentOf(projectId) {
   return (await updateParent.readParent(String(projectId))) || undefined;
 }
 
-const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
-
-function auditOf(action, fields) {
-  return (saved) => ({
-    action, targetType: 'update', targetId: saved.id, projectId: saved.projectId, ...(fields && { detail: { fields } })
-  });
-}
+const auditOf = auditFor('update');
 
 /** Thrown from a build when the row moved past the version the client loaded. */
 const STALE = Symbol('stale edit');
@@ -402,9 +396,7 @@ async function update(ctx, id, changes) {
   const existing = await updates.getById(ctx.access, id);
   if (!existing) return { status: 'not-found' };
   const refused = refusedWriteKeys(updates.CONTAINER, given, ctx.access, existing);
-  if (refused.length) {
-    return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
-  }
+  if (refused.length) return notWritable(refused);
 
   const movesParent = Object.hasOwn(given, 'projectId');
   // A stored parent DEMI does not hold caps nothing, as on the mirror; only moving to one is refused.

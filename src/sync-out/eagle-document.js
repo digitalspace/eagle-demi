@@ -14,7 +14,7 @@ const { isNativeProject, isMintedNative } = require('../merge/project');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { DOCUMENT } = require('./kinds');
 const {
-  requireSettings, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
+  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -102,13 +102,7 @@ async function eaglePublished(s, row, eagleId, logFields) {
 const pathOf = eagleId => `/document/${encodeURIComponent(eagleId)}`;
 
 /** PUT the row's fields; false when Eagle has no document under the id. */
-async function put(s, eagleId, row, logFields) {
-  const target = pathOf(eagleId);
-  const res = await call(s, 'PUT', target, bodyFor(row), logFields);
-  if (res.status === 404) return false;
-  if (!res.ok) throw failure('PUT', target, res);
-  return true;
-}
+const put = async (s, eagleId, row, logFields) => putRecord(s, pathOf(eagleId), bodyFor(row), logFields);
 
 const internalExtOf = row => String(row.fileExt || path.posix.extname(row.s3Key || '')).replace(/^\./, '').toLowerCase();
 

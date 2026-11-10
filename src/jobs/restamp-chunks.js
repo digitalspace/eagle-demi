@@ -18,6 +18,7 @@ const documents = require('../repositories/documents');
 const chunks = require('../repositories/chunks');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
+const { queueBody } = require('../utils/queue-message');
 
 /**
  * Whether the queue exists to send to: the NAME alone, the same setting `api/index.js` guards the
@@ -63,16 +64,7 @@ async function enqueue({ documentId, projectId, attempt = 1 }, options = undefin
  * queue instead of vanishing.
  */
 function parseMessage(message) {
-  let body = message;
-  if (Buffer.isBuffer(message) || typeof message === 'string') {
-    const text = Buffer.isBuffer(message) ? message.toString('utf8') : message;
-    try {
-      body = JSON.parse(text);
-    } catch (err) {
-      throw new Error(`chunk restamp message is not JSON: ${err.message}`, { cause: err });
-    }
-  }
-
+  const body = queueBody(message, 'chunk restamp');
   if (!body || typeof body !== 'object' || !body.documentId) {
     throw new Error('chunk restamp message carries no documentId');
   }

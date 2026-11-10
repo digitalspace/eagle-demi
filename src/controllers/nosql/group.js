@@ -14,12 +14,8 @@
 
 const groups = require('../../repositories/groups');
 const { eagleReadUnder } = require('../../seed/transform');
-const { mirrorError } = require('../../helpers/duplicate-id');
-const { auditEvent } = require('../../utils/audit');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const {
-  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict, underDeleteCeiling, refId
-} = require('./eagle-mirror');
+const { upsertKeepingDemiRows, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 const { projectParentJoin } = require('../../helpers/native-query');
 
@@ -67,39 +63,13 @@ async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
 
 exports.mirrorFromEagle = mirrorFromEagle;
 
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (!written) {
-      return res.status(404).json({ error: 'Parent project not found', code: refusalCode(doc.project) });
-    }
-    if (written.status === 'conflict') return pushConflict(res, { label: LABEL, eagleId });
-    const { saved, existing, ignored } = written;
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: LABEL, action: 'group.push', targetType: 'group',
-        current: existing, projectId: existing.projectId, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'group.push',
-      targetType: 'group',
-      targetId: saved.id,
-      projectId: saved.projectId,
-      detail: { eagleId, isDeleted: saved.isDeleted }
-    });
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'group controller failed');
-  }
-};
+exports.upsertFromEagle = pushHandler({
+  label: LABEL, action: 'group.push', targetType: 'group', mirror: mirrorFromEagle, projectScoped: true,
+  refuse: (written, doc, res) => !written
+    && res.status(404).json({ error: 'Parent project not found', code: refusalCode(doc.project) }),
+  detail: (saved, _existing, eagleId) => ({ eagleId, isDeleted: saved.isDeleted }),
+  failure: 'group controller failed'
+});
 
 const GROUPS = {
   entity: 'groups',

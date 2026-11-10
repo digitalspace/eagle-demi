@@ -24,8 +24,8 @@ const TIMERS = [
   {
     name: 'reconcileEngage',
     setting: 'RECONCILE_ENGAGE_SCHEDULE',
-    module: '../src/sync-out/kinds',
-    exportsFor: run => ({ KINDS: { commentPeriod: { reconcile: run } } }),
+    module: '../src/sync-out/reconcile',
+    exportsFor: run => ({ HOOKS: { commentPeriod: run } }),
     args: [{ store: true }],
     failure: { message: '[reconcile-engage] nightly run failed', meta: { kind: 'commentPeriod' } }
   },
@@ -125,8 +125,8 @@ test('reconcileEngage runs every kind\'s reconcile, and one failing kind does no
     calls.push([name, opts]);
     if (error) throw error;
   };
-  stubModule(t, '../src/sync-out/kinds', {
-    KINDS: { first: { reconcile: hook('first', new Error('first down')) }, second: { reconcile: hook('second') } }
+  stubModule(t, '../src/sync-out/reconcile', {
+    HOOKS: { first: hook('first', new Error('first down')), second: hook('second') }
   });
   const errors = [];
   t.mock.method(logger, 'error', (message, meta) => { errors.push(meta); });

@@ -41,7 +41,7 @@ esac
 BASE_URL="${1%/}"
 PROJECT_ID="${2:-5e31dc4462cdea0021d974b4}"
 
-RUNBOOK='eagle-demi.wiki/Runbook-Search-Outage.md'
+RUNBOOK='docs/runbook-search-outage.md'
 
 RESPONSE=$(mktemp)
 trap 'rm -f "$RESPONSE"' EXIT

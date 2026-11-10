@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Check ENGAGE-owned comment periods against the copy Eagle holds and against ENGAGE's public list.
- *
- *   node src/scripts/reconcile-engage.js [--repair] [--store] [--limit N]
- *
- * Reports only by default. `--repair` re-queues every never-synced, missing and drifted row through
- * sync-out, so DEMI's copy wins; this script never writes to Eagle itself. The ENGAGE half is report
- * only. `--store` keeps the report under `REPORT_ID` in the cache container. `--limit` caps the rows
- * checked against Eagle. Runs on the devbox via `demi-run`, like reconcile-eagle.js.
+ * ENGAGE periods against Eagle and ENGAGE: `node src/scripts/reconcile-engage.js [--repair] [--store] [--limit N]`
+ * on the devbox. Report only unless `--repair`, which re-queues through sync-out and never writes Eagle itself.
  */
 
 const commentPeriods = require('../repositories/comment-periods');
@@ -18,6 +12,7 @@ const eagle = require('../sync-out/eagle');
 const config = require('../config');
 const { writeGuarded } = require('../helpers/etag-write');
 const { admitParent } = require('../helpers/parent-admit');
+const { metUrlKey } = require('../helpers/met-url');
 const { logger } = require('../utils/logger');
 
 const REPORT_ID = cache.RECONCILE_ENGAGE_REPORT_ID;
@@ -132,10 +127,14 @@ async function checkDuplicates(rows, reader, report) {
     const byUrl = new Map();
     for (const period of Array.isArray(res.body) ? res.body : []) {
       if (!period || !period.metURL) continue;
-      byUrl.set(period.metURL, [...(byUrl.get(period.metURL) || []), String(period._id)]);
+      const key = metUrlKey(period.metURL) || period.metURL;
+      const group = byUrl.get(key) || { metURLs: [], eagleIds: [] };
+      group.metURLs.push(period.metURL);
+      group.eagleIds.push(String(period._id));
+      byUrl.set(key, group);
     }
-    for (const [metURL, eagleIds] of byUrl) {
-      if (eagleIds.length > 1) report.duplicates.push({ eagleProjectId, metURL, eagleIds });
+    for (const { metURLs, eagleIds } of byUrl.values()) {
+      if (eagleIds.length > 1) report.duplicates.push({ eagleProjectId, metURLs, eagleIds });
     }
   }
 }
@@ -192,10 +191,8 @@ async function engagementList(base, get) {
 }
 
 /**
- * ENGAGE vs DEMI, report only: published engagements under a project that DEMI holds no row for. One
- * under a notification is skipped, since those still go to Eagle from ENGAGE directly. The reverse check
- * is not made: ENGAGE's anonymous list leaves out internal engagements, so a DEMI row missing from it
- * says nothing.
+ * Published engagements under a project DEMI holds no row for; those under a notification go to Eagle directly.
+ * One-way only: ENGAGE's anonymous list omits internal engagements, so a DEMI row missing from it says nothing.
  */
 async function checkEngage(base, rows, get, report, admit) {
   const engagements = await engagementList(base, get);
@@ -274,7 +271,7 @@ function findingLines(r) {
     ...r.missingInEagle.map(f => `${TAG} missing-in-eagle ${ref(f)}`),
     ...r.drift.map(f => `${TAG} drift ${ref(f)} ` +
       f.fields.map(d => `${d.field} demi=${d.demi} eagle=${d.eagle}`).join(' ')),
-    ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURL=${f.metURL} ` +
+    ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURLs=${f.metURLs.join(',')} ` +
       `eagleIds=${f.eagleIds.join(',')}`),
     ...r.conflicts.map(f => `${TAG} conflict ${ref(f)} candidateEagleId=${f.candidateEagleId}`),
     ...r.skipped.map(f => `${TAG} skipped ${ref(f)}`),

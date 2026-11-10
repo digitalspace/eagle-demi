@@ -1,7 +1,7 @@
 'use strict';
 
-// A kind is `{ repo, consumers, reconcile }`: the repository the worker re-reads and etag-writes a row through,
-// consumer names in `./index.js`, and a hook whose `{ repair: true }` re-queues drifted rows.
+// A kind is `{ repo, consumers }`: the repository the worker re-reads and etag-writes a row through, and consumer
+// names in `./index.js`. Each kind's reconcile hook lives in `./reconcile.js`.
 
 const commentPeriods = require('../repositories/comment-periods');
 const comments = require('../repositories/comments');
@@ -10,8 +10,6 @@ const lists = require('../repositories/lists');
 const notifications = require('../repositories/notifications');
 const projects = require('../repositories/projects');
 const updates = require('../repositories/updates');
-const pending = require('./pending');
-const { logger } = require('../utils/logger');
 
 const COMMENT = 'comment';
 const COMMENT_PERIOD = 'commentPeriod';
@@ -20,24 +18,6 @@ const NOTIFICATION = 'notification';
 const ORGANIZATION = 'organization';
 const PROJECT = 'project';
 const UPDATE = 'update';
-
-/**
- * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed send claims. Resolves to the
- * pending report with the ENGAGE report, or `{ error }` when that pass threw, under `engage`.
- */
-async function reconcileCommentPeriods(options = {}) {
-  let engage;
-  try {
-    // Required on call: the script requires sync-out itself.
-    engage = await require('../scripts/reconcile-engage').run(options);
-  } catch (err) {
-    engage = { error: err.message };
-    logger.error('[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway',
-      { error: err.message, stack: err.stack });
-  }
-  // A row both passes queue gets a second message, which the worker skips as current.
-  return { ...(await pending.reconcile(options, pending.depsFor(COMMENT_PERIOD))), engage };
-}
 
 // No pins kind: no client still reads pins from eagle-api (docs/eagle-api-port.md, Pins, Sync-out).
 const KINDS = Object.freeze({
@@ -50,15 +30,13 @@ const KINDS = Object.freeze({
       listSyncPending: () => comments.listSyncPending(),
       upsert: (item, existing) => comments.upsert(item, existing)
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(COMMENT))
+    consumers: Object.freeze(['eagle'])
   }),
   // eagle-api's comment POST takes the period's `commentIdCount`, and comment reads gate on the period
   // (helpers/parentRead.js).
   [COMMENT_PERIOD]: Object.freeze({
     repo: commentPeriods,
-    consumers: Object.freeze(['eagle']),
-    reconcile: reconcileCommentPeriods
+    consumers: Object.freeze(['eagle'])
   }),
   // eagle-admin writes documents through eagle-api until F10 (PUT, publish, feature); those handlers read
   // Eagle's copy of the document.
@@ -69,8 +47,7 @@ const KINDS = Object.freeze({
       listSyncPending: () => documents.listSyncPending(),
       upsert: (item, existing) => documents.upsertForSync(item, existing)
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
+    consumers: Object.freeze(['eagle'])
   }),
   // ENGAGE met-api reads eagle-api `/projectNotification/:id` until the EN slice, and eagle-api's
   // recentActivity aggregate looks up projectNotification.
@@ -80,8 +57,7 @@ const KINDS = Object.freeze({
       listSyncPending: () => notifications.listSyncPending(),
       upsert: (item, existing) => notifications.upsert(item, existing)
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(NOTIFICATION))
+    consumers: Object.freeze(['eagle'])
   }),
   // A project's proponent and an organization's parentCompany are sent by Eagle id, and eagle-api's project reads
   // join `proponent` to the organization (helpers/aggregators.js).
@@ -92,8 +68,7 @@ const KINDS = Object.freeze({
       listSyncPending: () => lists.listSyncPending(lists.KINDS.ORGANIZATION),
       upsert: (item, existing) => lists.upsert(item, existing)
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(ORGANIZATION))
+    consumers: Object.freeze(['eagle'])
   }),
   // eagle-api's document handlers, which eagle-admin writes through until F10, read the parent project
   // (document.js featureDocument counts featured documents per project).
@@ -104,8 +79,7 @@ const KINDS = Object.freeze({
       // Guarded on the stored row's etag, so two deliveries cannot both take the create claim.
       upsert: (item, existing) => projects.upsert(item, { etag: existing._etag })
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(PROJECT))
+    consumers: Object.freeze(['eagle'])
   }),
   // eagle-api's `/public/recentActivity` serves Updates from Eagle's own copy until F5.
   [UPDATE]: Object.freeze({
@@ -114,8 +88,7 @@ const KINDS = Object.freeze({
       listSyncPending: () => updates.listSyncPending(),
       upsert: (item, existing) => updates.upsert(item, existing)
     }),
-    consumers: Object.freeze(['eagle']),
-    reconcile: (options) => pending.reconcile(options, pending.depsFor(UPDATE))
+    consumers: Object.freeze(['eagle'])
   })
 });
 

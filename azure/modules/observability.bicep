@@ -424,7 +424,7 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI search is failing'
-    description: 'Three or more search errors in five minutes, from either of two branches: `[search] … failed` and `[search/summary] … failed`, where the caller got a 502 or an empty summary, and `[ai-search] … retried without it`, where the live index could not answer a field, so the page was SERVED as a 200 with `meta.degraded` and is missing a column. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: Runbook-Search-Outage in the DEMI wiki.'
+    description: 'Three or more search errors in five minutes, from either of two branches: `[search] … failed` and `[search/summary] … failed`, where the caller got a 502 or an empty summary, and `[ai-search] … retried without it`, where the live index could not answer a field, so the page was SERVED as a 200 with `meta.degraded` and is missing a column. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: docs/runbook-search-outage.md in the eagle-demi repo.'
     // Error, not warning: the public site cannot search at all while this is true.
     severity: 1
     enabled: true
@@ -484,7 +484,7 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI search 5xx rate over 20%'
-    description: 'More than a fifth of the search requests in the last five minutes answered 5xx, over at least five requests. Same runbook as demi-search-failures: Runbook-Search-Outage in the DEMI wiki.'
+    description: 'More than a fifth of the search requests in the last five minutes answered 5xx, over at least five requests. Same runbook as demi-search-failures: docs/runbook-search-outage.md in the eagle-demi repo.'
     severity: 1
     enabled: true
     scopes: [ workspace.id ]

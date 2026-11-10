@@ -31,7 +31,7 @@ const { nextSyncVersion } = require('../../sync-out/kinds');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+  eaglePush, mismatchedPush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 /** Staff fields an Eagle echo leaves alone, by the `sourceSystem` that writes them. */
@@ -41,7 +41,7 @@ const KEPT_FROM_ECHO = Object.freeze({
 });
 const ownedElsewhere = (row) => Boolean(row) && Object.hasOwn(KEPT_FROM_ECHO, row.sourceSystem);
 
-/** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+/** Eagle's staff-side period fields. */
 function staffFields(doc) {
   const list = (v) => (Array.isArray(v) ? v : []);
   return {
@@ -270,9 +270,7 @@ exports.staffFields = staffFields;
 exports.upsertFromEagle = async (req, res) => {
   try {
     const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
+    if (!push) return mismatchedPush(res);
     const { eagleId, doc, pushedAt } = push;
 
     const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });

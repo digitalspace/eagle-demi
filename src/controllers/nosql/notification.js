@@ -8,11 +8,7 @@
 const notifications = require('../../repositories/notifications');
 const updates = require('../../repositories/updates');
 const { eagleBaseAcl } = require('../../seed/transform');
-const { mirrorError } = require('../../helpers/duplicate-id');
-const { auditEvent } = require('../../utils/audit');
-const {
-  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
 
 const { createdAtOf } = notifications;
 
@@ -79,39 +75,7 @@ async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
 
 exports.mirrorFromEagle = mirrorFromEagle;
 
-exports.upsertFromEagle = async (req, res) => {
-  try {
-    const push = eaglePush(req);
-    if (!push) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
-    const { eagleId, doc, pushedAt } = push;
-
-    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (written.status === 'conflict') {
-      return pushConflict(res, { label: 'Notification Controller', eagleId });
-    }
-    const { saved, existing, ignored } = written;
-    if (ignored) {
-      return ignoreStalePush(req, res, {
-        label: 'Notification Controller', action: 'notification.push',
-        targetType: 'notification', current: existing, pushedAt
-      });
-    }
-
-    auditEvent(req, {
-      action: 'notification.push',
-      targetType: 'notification',
-      targetId: saved.id,
-      detail: {
-        eagleId,
-        isPublishedFrom: existing ? existing.isPublished : null,
-        isPublishedTo: saved.isPublished
-      }
-    });
-
-    return res.json({ id: saved.id, action: 'upsert' });
-  } catch (err) {
-    return mirrorError(res, err, 'notification controller failed');
-  }
-};
+exports.upsertFromEagle = pushHandler({
+  label: 'Notification Controller', action: 'notification.push', targetType: 'notification',
+  mirror: mirrorFromEagle, failure: 'notification controller failed'
+});

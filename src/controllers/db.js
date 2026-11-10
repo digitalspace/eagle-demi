@@ -55,11 +55,8 @@ async function getIndexProgressHandler(req, res) {
     // neither the app's env nor its managed identity. One string removes the guess, and this is
     // exactly the fact that went wrong when chunk writes were pointed at `chunks_fts`.
     const chunks = require('../repositories/chunks');
-    // `semantic` belongs on this endpoint for the same reason the container name does: it is a
-    // fact about the deployed process that nothing else can observe. Reranking degrades to BM25
-    // with a 200 and an identical response shape, so `partial` climbing against `requested` is the
-    // only reading that separates "ranking is live" from "the scorecard measures an order no user
-    // gets". It reads a plain object — no container query, so this stays the cheap endpoint.
+    // Reranking degrades to BM25 with a 200 and the same shape, so `semantic` stats are the only
+    // sign it is live. A plain object read, no container query: this stays the cheap endpoint.
     res.json({
       success: true,
       active: true,
