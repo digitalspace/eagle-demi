@@ -70,7 +70,8 @@ test('a grant without an end is refused', () => {
 });
 
 test('a grant whose start is not before its end is refused', () => {
-  assert.match(grantError(grant({ start: IN_A_YEAR })), /start must be before end/);
+  const afterEnd = new Date(Date.parse(IN_A_YEAR) + 86400000).toISOString();
+  assert.match(grantError(grant({ start: afterEnd })), /start must be before end/);
   assert.match(grantError(grant({ start: IN_A_YEAR, end: IN_A_YEAR })), /start must be before end/);
 });
 
