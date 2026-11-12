@@ -173,7 +173,8 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
       .replace(/^<\?xpacket[^>]*>/, OLD_HEADER)
       .replace('<?xpacket end="w"?>', '<?xpacket end=\'r\'?>'),
     'a header with an encoding': packet().replace('kc9d"?>', 'kc9d" encoding="UTF-8"?>'),
-    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>')
+    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>'),
+    'whitespace between dc:title and rdf:Alt': packet().replace('<dc:title><rdf:Alt>', '<dc:title>\n  <rdf:Alt>')
   };
   for (const [label, body] of Object.entries(accepted)) {
     await t.test(`accepted: ${label}`, () => assert.equal(check(body), null));
@@ -213,6 +214,8 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'an empty dc:title': packet().replace(`>${TITLE}<`, '><'),
     'no dc:title at all': packet().replace(/<dc:title>.*<\/dc:title>/, ''),
     'a dc:title attribute with another title': packet(TITLE, '<x:a dc:title="Other"/>'),
+    'text directly under dc:title': packet(TITLE, '<dc:title>Other</dc:title>'),
+    'text directly under rdf:Alt in dc:title': packet().replace('<rdf:Alt>', '<rdf:Alt>Other'),
     'a DOCTYPE with an entity': `<!DOCTYPE x [<!ENTITY e "BT">]>${packet()}`,
     'an undeclared entity': packet(TITLE, '<x:a>&e;</x:a>'),
     'CDATA': packet(TITLE, '<x:a><![CDATA[BT]]></x:a>'),
@@ -276,6 +279,15 @@ test('Info /Title decodes to the wanted title', () => {
     check('a\u2013b', '(a-b)').then(r => assert.equal(r, 'tail-info-title')),
     check('x', '(x\\237)').then(r => assert.equal(r, 'tail-info-title', 'an undefined PDFDocEncoding byte'))
   ]);
+});
+
+test('a long PDFDocEncoding /Title is compared, not thrown on', async () => {
+  const { original } = load('classic-info');
+  const facts = await readFacts(original);
+  const trailer = `/Size ${facts.size} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+  const kept = '/Producer (Acrobat Distiller 6.0.1) /ModDate (D:20040102030405)';
+  const long = 'a'.repeat(250000);
+  assert.equal(checkTail(classicTail(original, [[1, `<< ${kept} /Title (${long}) >>`]], trailer), original.length, facts, long), null);
 });
 
 test('a revised Info changes only /Title; a new Info holds only /Title', async (t) => {
@@ -436,4 +448,12 @@ test('an xref stream may not take a number the original uses', async () => {
   assert.ok(xrefNum >= facts.size, 'the titler takes a fresh number');
   // Same bytes, but the original is told its numbers reach past the xref stream's.
   assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }, FINAL), 'tail-object-number');
+});
+
+test('an xref stream offset wider than 6 bytes is refused', async () => {
+  const { original, titled } = load('xrefstream-noinfo');
+  const facts = await readFacts(original);
+  const tail = titled.subarray(original.length).toString('latin1');
+  assert.ok(tail.includes('/W [1 4 2]'));
+  assert.equal(checkTail(Buffer.from(tail.replace('/W [1 4 2]', '/W [1 7 2]'), 'latin1'), original.length, facts, FINAL), 'tail-xref');
 });
