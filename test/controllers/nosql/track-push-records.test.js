@@ -53,7 +53,7 @@ async function seeded(t, { rows = [TRACK_ROW] } = {}) {
 test('Track work, phase and event routes', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('a phase PUT writes one work document and no project row', async (t) => {
+  await t.test('a phase PUT that moves no derived value writes one work document and no project row', async (t) => {
     const store = await seeded(t);
 
     const res = await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
