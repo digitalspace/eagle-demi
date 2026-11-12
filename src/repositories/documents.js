@@ -504,11 +504,6 @@ async function parentFieldRowsWithNoProject(access) {
   return projectedRowsWithNoProject(access, [...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS]);
 }
 
-/** `{id, projectId, displayName, displayNameSort}` for that bucket — the sort-key backfill's walk. */
-async function displayNameRowsWithNoProject(access) {
-  return projectedRowsWithNoProject(access, ['projectId', 'displayName', 'displayNameSort']);
-}
-
 /**
  * Every document flagged `parentFieldsPending`, `{id, projectId}` only. Cross-partition on
  * purpose: which partitions they sit in is what is not known in advance, and the set is small.
@@ -833,7 +828,6 @@ module.exports = {
   parentFieldRowsForProject,
   projectedRowsForProject,
   parentFieldRowsWithNoProject,
-  displayNameRowsWithNoProject,
   listSeededIds,
   countSeededIds,
   listDistinctProjectIds,
