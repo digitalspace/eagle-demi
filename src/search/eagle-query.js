@@ -170,15 +170,13 @@ const VALUE_ALIASES = {
 };
 
 /**
- * `and[sector]=X` also matches a row with no sector whose Track sub-type SHOWS as X: the response
- * falls back to it (wireSector in controllers/search.js). Null when no stored sub-type shows as X,
- * or this caller may not query the fields the fallback reads.
+ * `and[sector]=X` also matches a no-sector row whose sub-type shows as X (controllers/search.js wireSector).
+ * Null when none does or the caller may not query its fields; adds those fields to `read` if used.
  */
-function sectorFallbackTerm(value, access) {
+function sectorFallbackTerm(value, access, read) {
   const fields = fieldsFor('Project');
-  const readable = ['projectSubType', 'legislationYear']
-    .every(f => fields.get(f)?.filterable && fieldVisible('Project', f, access));
-  if (!readable) return null;
+  const reads = ['projectSubType', 'legislationYear'];
+  if (!reads.every(f => fields.get(f)?.filterable && fieldVisible('Project', f, access))) return null;
   const sources = subTypeSources(value).map(({ name, under2002, under2018 }) => {
     const eq = `projectSubType eq ${quote(name)}`;
     if (under2002 && under2018) return eq;
@@ -187,7 +185,8 @@ function sectorFallbackTerm(value, access) {
       : `(${eq} and (legislationYear eq null or legislationYear gt 2002))`;
   });
   if (sources.length === 0) return null;
-  const any = sources.length === 1 ? sources[0] : `(${sources.join(' or ')})`;
+  reads.forEach(f => read.add(f));
+  const any =sources.length === 1 ? sources[0] : `(${sources.join(' or ')})`;
   return `((sector eq null or sector eq '') and ${any})`;
 }
 
@@ -506,25 +505,8 @@ function withProjectIds(query, demiIds) {
 }
 
 /**
- * Build the `$filter` from `and[key]=value` parameters plus the caller's ACL clause.
- *
- * Repeats of one key are a multi-select and become an OR group; different keys are ANDed, which is
- * what eagle-public means — it splits on `,` client-side and appends one `and[key]=` per value.
- *
- * `acl` IS REQUIRED AND IS THE WHOLE SAFETY ARGUMENT. It is `filterFor()`'s return value, not a
- * string, so this can refuse the two ways a filter fails OPEN: a missing ACL clause, and an
- * `empty: true` caller, whom OData cannot express because it has no `false` literal.
- *
- * @param {object} query    req.query
- * @param {string} dataset  Project | Document | DocumentChunk
- * @param {{filter: string|null, empty: boolean}} acl  from helpers/access-odata.filterFor()
- * @param {object} access  from helpers/access-sql.resolveAccess(); absent reads as anonymous
- * @param {object} [opts]   `{unexpressible: [key]}` — keys this REQUEST has learned the live index
- *                          cannot answer, whatever the committed definition says. Dropped here
- *                          rather than deleted from `query` by the caller, so they land in
- *                          `dropped` and the caller can still try to answer them another way.
- * @returns {{filter: string|undefined, dropped: string[]}} filter undefined = unrestricted, which
- *          is reachable ONLY for a privileged caller whose ACL clause is legitimately null.
+ * `$filter` from `and[...]` (a key's repeats OR, keys AND), ANDed with the whole filterFor() `acl`.
+ * Returns `{filter, dropped, fields}`; `fields` = index columns the terms read, `opts.unexpressible` keys drop.
  */
 function buildFilter(query, dataset, acl, access, opts = {}) {
   if (!acl || typeof acl.empty !== 'boolean') {
@@ -540,7 +522,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
   const unexpressible = new Set(opts.unexpressible || []);
   const groups = [];
   const dropped = [];
-  // Fields a caller's own term landed on, so a default below can step aside for them.
+  // Index fields the caller's own terms read: returned as `fields`, and a default below steps aside.
   const filtered = new Set();
 
   for (const [key, rawValue] of andParams(query)) {
@@ -570,6 +552,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
         continue;
       }
       groups.push(nameContainsClause(containsFields, lucene));
+      containsFields.forEach(f => filtered.add(f));
       continue;
     }
 
@@ -606,7 +589,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
 
     if (!edge && (PRESENCE_KEYS[dataset] || EMPTY_SET).has(base)) {
       const clause = presenceTerm(field, values);
-      if (clause) groups.push(clause); else dropped.push(key);
+      if (clause) { groups.push(clause); filtered.add(field); } else dropped.push(key);
       continue;
     }
 
@@ -620,7 +603,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
         .map(spelling => (edge ? rangeTerm(field, meta, spelling, edge) : term(field, meta, spelling)))
         .filter(Boolean);
       if (built.length === 0) return [];
-      const extra = fallback && fallback(v, access);
+      const extra = fallback && fallback(v, access, filtered);
       if (extra) built.push(extra);
       return [built.length === 1 ? built[0] : `(${built.join(' or ')})`];
     });
@@ -663,7 +646,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
   }
 
   if (acl.filter) groups.push(acl.filter);
-  return { filter: groups.length ? groups.join(' and ') : undefined, dropped };
+  return { filter: groups.length ? groups.join(' and ') : undefined, dropped, fields: [...filtered] };
 }
 
 /**
@@ -693,16 +676,8 @@ function hasCriteria(query) {
 }
 
 /**
- * Build `$orderby` from `sortBy`, normalising the three shapes on the wire: eagle-public appends
- * `sortBy` TWICE (the second often empty), eagle-admin sends one comma-joined value, and `+`/`-`
- * carries the direction.
- *
- * RELEVANCE IS ORDERED EXPLICITLY as `search.score() desc, id asc` — leaving `$orderby` off leaves
- * ties in whatever order the service computed, which `$skip` paging then loses and repeats. The gate
- * for a sort key is the field's TYPE, not `sortable`. `$orderby` also overrides semantic reranking,
- * which costs nothing while `chunks` is both the only semantic index and the one that can carry no
- * order at all. See wiki Search-Query-Construction#default-order-and-relevance and
- * #type-gates-not-filterable-and-sortable-flags.
+ * `$orderby` from any `sortBy` shape (repeated, comma-joined, `+`/`-`); relevance is explicit so `$skip` paging
+ * holds (wiki Search-Query-Construction). Returns `{orderby, dropped, fields}`; `fields` omits the id tiebreak.
  */
 function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
   const fields = fieldsFor(dataset);
@@ -743,9 +718,9 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
     if (askedForRelevance || hasKeywords) {
       // Relevance, made explicit so it can be paged. Without a sortable key there is no tiebreak
       // to add, and an `$orderby` of `search.score() desc` alone is what the service already does.
-      return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped };
+      return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped, fields: [] };
     }
-    if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped };
+    if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped, fields: [] };
     // The default sort goes through the SAME mapping and the SAME visibility gate as the caller's
     // own keys: a field this caller cannot read cannot order their page either, and the default
     // document order is the one `displayNameSort` exists to fix.
@@ -753,13 +728,14 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
     const defaultField = sortFieldFor(defaultName, dataset, fields);
     if (fieldVisible(dataset, defaultField, access)) {
       parts.push(`${defaultField} ${direction}`);
+      seen.add(defaultField);
     }
   }
 
   // The tiebreak goes through the SAME dedupe as the caller's clauses, or `sortBy=id` emits
   // `id asc, id asc`. `_id` reaches here as `id` too, through the alias table.
   if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
-  return { orderby: parts.join(', ') || undefined, dropped };
+  return { orderby: parts.join(', ') || undefined, dropped, fields: [...seen] };
 }
 
 /**
