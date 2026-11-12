@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Search definition apply — submit a run, poll it.
- *
- * The run PUTs indexes and indexers and then rebuilds them, which takes minutes for `projects` and
- * hours for `chunks`, so this side only validates, records the job and enqueues it
- * (src/jobs/search-definitions.js). Unlike a bulk download the job id is NOT a capability: every
- * route here is sysadmin-gated, because the request decides what the search service serves.
+ * Search definition apply: validate, record and enqueue (src/jobs/search-definitions.js), then poll.
+ * Sysadmin-gated, unlike bulk download, because the request decides what the search service serves.
  */
 
 const jobs = require('../repositories/bulk-downloads');
@@ -21,10 +17,7 @@ const audit = require('../utils/audit');
 // the data sources and report success, which is the failure mode this whole path exists to end.
 const ALLOWED_BODY_KEYS = ['only', 'datasources', 'live', 'check'];
 
-// Comfortably above every name this package carries and far below anything worth scanning. The
-// list is checked against it BEFORE the names are read, because the 400 below quotes back the
-// entries it did not recognise — an unbounded list would be reflected into the response and, for
-// `only`, would be one `apply.run()` per entry.
+// Checked before names are read: the 400 echoes unknown entries, and each `only` entry is a run.
 const MAX_NAMES = 20;
 // Twice the longest name the package carries; bounds what the unknown-name 400 can echo back.
 const MAX_NAME_LENGTH = 64;
@@ -81,17 +74,13 @@ exports.applySearchDefinitions = async (req, res) => {
     const check = flag(body.check, 'check');
     if (check.error) return badRequest(check.error);
 
-    // The same pair the CLI refuses together: `check` reads the live schema and writes nothing,
-    // `live` PUTs. Accepting both would make the flag that decided what happened whichever branch
-    // the job looked at first.
+    // Refused together, as in the CLI: `check` writes nothing and `live` PUTs.
     if (live.value && check.value) return badRequest('live and check are mutually exclusive.');
     if (check.value && datasources.value.length > 0) {
       return badRequest('check writes nothing, so it cannot take datasources.');
     }
 
-    // An empty `only` means "every definition", which on a live run resets every indexer — chunks
-    // included, and that is hours of rebuild during which search serves a partial index. Nobody
-    // asks for that by leaving a field out, so it has to be named.
+    // An empty `only` on a live run resets every indexer, chunks included: hours of partial search.
     if (live.value && only.value.length === 0) {
       return badRequest(
         'live needs a non-empty only list: applying everything resets every indexer, chunks included.');
@@ -101,12 +90,8 @@ exports.applySearchDefinitions = async (req, res) => {
       return refuse(req, res, 503, { error: 'search definition apply disabled' });
     }
 
-    // ONE APPLY AT A TIME. Two runs PUT the same definitions and reset the same indexers, and the
-    // second reset throws away the high-water mark the first is rebuilding from. Checked before
-    // the row is written, so the request that loses never gets a row or a message.
-    // A row is only in the way while something is still working on it: a worker the host killed
-    // leaves `running` behind for the rest of the row's 30-day TTL, and refusing every apply for a
-    // month is not "one at a time", it is an outage nobody can clear from the API.
+    // One apply at a time: a second reset discards the first run's high-water mark. Stale rows
+    // are skipped, else a killed worker's `running` row would block applies for its whole TTL.
     const active = (await jobs.listActiveSearchDefinitionJobs())
       .filter(job => !searchDefinitions.isStale(job));
     if (active.length > 0) {
@@ -126,9 +111,7 @@ exports.applySearchDefinitions = async (req, res) => {
       requesterId: String(user.keyId || user.sub || user.preferred_username || '')
     });
 
-    // Row FIRST, then the message, for the reason the zip controller does it in that order: a
-    // worker that dequeues an id with no row can only give up, whereas a message that never
-    // arrives leaves a queued row somebody can requeue.
+    // Row first, then message: a dequeued id with no row cannot run, but a lost message can be requeued.
     const saved = await jobs.create(job);
     const id = job.id.slice(searchDefinitions.JOB_PREFIX.length);
     try {
@@ -146,10 +129,8 @@ exports.applySearchDefinitions = async (req, res) => {
     logger.info(`[search-definitions] job queued job=${job.id} only=${only.value.join(',') || 'all'} ` +
       `live=${live.value} check=${check.value}`);
 
-    // Written once the work is actually queued, and with the stored row id, so the seven-year
-    // record names a row somebody can still go and read. This is the privileged action the route
-    // exists for — it decides what the search service serves — so it belongs beside apikey.create
-    // in EagleAudit_CL rather than only in the app log, which is kept for weeks.
+    // Audited only once queued, with the stored row id; this privileged action belongs in
+    // EagleAudit_CL beside apikey.create, not only the short-lived app log.
     audit.auditEvent(req, {
       ...APPLY_EVENT,
       targetId: job.id,

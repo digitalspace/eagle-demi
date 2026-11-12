@@ -939,8 +939,8 @@ test('GET /search keyword searches over the indexed Cosmos datasets', async (t) 
     assert.match(body.error, /RecentActivity search is unavailable/);
   });
 
-  // The indexers have no delete detection (`_ts` high-water only), so a row the index still holds
-  // may be one Cosmos no longer admits. Dropping it is the fail-closed direction.
+  // Indexers never see deletes (`_ts` high-water only), so an indexed row may be one Cosmos will
+  // not admit. Dropping it fails closed.
   await t.test('a ranked id the caller may not read drops out of the page', async () => {
     stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
     stubIndex('searchActivities', ['5f0e4a0c3f4b1a0021a1b2c1', 'gone-from-cosmos'], 2);

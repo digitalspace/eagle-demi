@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The value-level health check: a row count over a committed maximum has to reach the status a CI
- * step gates on, and an index that is not there must not pass as a zero.
- * Background: `docs/runbook-search-outage.md`, "Fields null on every row".
- */
+// A count over the committed maximum must reach the status CI gates on, and a missing index must
+// not pass as zero. See docs/runbook-search-outage.md, "Fields null on every row".
 
 process.env.NODE_ENV = 'test';
 // Set before the controller reads it. Unconfigured is its own answer (asserted last), so without an
@@ -33,11 +30,7 @@ function capture() {
 }
 
 /**
- * Record every count and answer them all zero, unless `counts` claims one by field name.
- *
- * The field is read off the filter's first token rather than looked up in the committed file: the
- * expectations below are written out, so nothing here may derive them from the same source the
- * controller reads.
+ * Field comes from the filter's first token, not the committed file the controller also reads.
  *
  * @param {Object<string, number|null>} [counts] field -> the count to answer
  * @returns {Array<{indexName: string, filter: string}>} the calls, in order

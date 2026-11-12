@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * `GET /search?dataset=RecentActivity` — the two reads the home page rebuild needs from this
- * container: one update by id, and the type filter on the keywordless path.
- *
- * Both were previously invisible failures rather than errors. `and[_id]` fell through to the list
- * branch and answered an arbitrary page, and `and[type]` was accepted and then reported under
- * `meta.dropped.filter` — a filter panel that quietly does nothing returns the whole corpus and
- * looks like a filter that matched everything.
- *
- * Harness, stub points and row fixtures: `test/helpers/search-reads.js`.
- */
+// One update by id and the keywordless type filter. Both fail silently, not loudly: a filter that
+// does nothing returns the whole corpus and looks like one that matched everything.
 
 process.env.NODE_ENV = 'test';
 
@@ -227,9 +218,8 @@ test('GET /search?dataset=RecentActivity&and[_id]', async (t) => {
       '`updates` is partitioned on /id, so one row costs a readItem and no query at all');
   });
 
-  // A MISS IS 0, NOT A PAGE. Falling through to the list branch would answer the newest updates to
-  // a caller who asked for one that does not exist — a `/updates/:id` route rendering the wrong
-  // record with a 200.
+  // A miss is 0, not a page: falling through to the list branch would let `/updates/:id` render
+  // the wrong record with a 200.
   await t.test('an id nothing matches answers zero rows and a measured zero', async () => {
     stubCosmos(t, rowsFor([NEWS, PCP]));
 
@@ -278,7 +268,7 @@ test('GET /search?dataset=RecentActivity&and[type]', async (t) => {
       '/api/search?dataset=RecentActivity&and%5Btype%5D=News');
 
     assert.strictEqual(status, 200);
-    // THE WHOLE POINT: `type` used to come back under `meta.dropped.filter`.
+    // `type` must not come back under `meta.dropped.filter`.
     assert.strictEqual(body[0].meta[0].dropped, undefined);
 
     const specs = specsFor(seen, 'updates');
@@ -320,9 +310,8 @@ test('GET /search?dataset=RecentActivity&and[type]', async (t) => {
     }
   });
 
-  // `and[type]=` with nothing after the `=` splits to zero values, the same as the key never being
-  // sent — the index path (`eagleQuery.buildFilter`) already reads it that way, and `typeCriteria`
-  // has to agree or the same URL means two different things depending on whether keywords are on.
+  // An empty `and[type]=` means no filter, as `eagleQuery.buildFilter` reads it; `typeCriteria`
+  // must agree or one URL means two things depending on keywords.
   await t.test('an empty and[type]= adds no clause and is not reported applied', async () => {
     const seen = stubCosmos(t, rowsFor([NEWS, PCP]));
 
