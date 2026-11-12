@@ -249,6 +249,21 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.strictEqual(store.level(image), 2);
   });
 
+  await t.test('a project closed after its read leaves an opened update\'s upload private', async () => {
+    const image = '5c1f7a3e9b1d2c0012370001';
+    stub(t, [{
+      id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['public', 'staff', 'sysadmin'],
+      demiStatus: 'published', featuredImage: { document: image, alt: 'A creek' }
+    }]);
+    t.mock.method(updateParent, 'readParent', async () => ({ id: 'p-1', kind: 'project', read: PUBLIC_PARENT }));
+    const store = fakeImages(t, [{ id: image, level: 2, documentSource: 'UPDATE', projectId: 'p-1' }],
+      { parentRead: PRIVATE_ACL });
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.strictEqual(store.level(image), 2);
+  });
+
   await t.test('a draft DEMI created stays staff-only under a public project', async () => {
     const seen = stub(t, [{
       id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['staff', 'sysadmin'], demiStatus: 'draft'
