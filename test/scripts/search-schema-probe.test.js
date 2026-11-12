@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The pre-deploy gate, exercised end to end against a stub API.
- *
- * What it has to get right is not "does it POST": it is which field names leave this repo, and
- * which HTTP answers stop a release. A `select` carrying a non-retrievable field would 400 on a
- * healthy index and read as drift; a 503 that passed would ship the outage this gate exists to
- * prevent; a 404 that passed on its own would make every run of this gate decorative.
+ * Pins which field names leave this repo and which HTTP answers stop a release: a non-retrievable
+ * field in `select` 400s on a healthy index and reads as drift.
  */
 
 const test = require('node:test');
@@ -56,8 +52,7 @@ test('search-schema-probe.sh', async (t) => {
     assert.deepStrictEqual(indexes.activities.select, ['id', 'eagleId', 'projectId']);
     assert.deepStrictEqual(indexes['project-notifications'].select, ['id', 'eagleId']);
 
-    // `fileSize` is the field the 2026-09-08 outage shipped without. If it stops being probed the
-    // gate is decorative.
+    // `fileSize` must stay probed: a live index without it breaks document search.
     assert.ok(indexes.documents.select.includes('fileSize'));
     // Not retrievable (azure/search/indexes/documents.json), so it cannot be selected — AI Search
     // answers 400, which this script would report as drift that is not there.
@@ -66,25 +61,22 @@ test('search-schema-probe.sh', async (t) => {
     // Sortable but not retrievable: still out of the select.
     assert.ok(!indexes.documents.select.includes('displayNameSort'));
     assert.ok(indexes.projects.select.includes('centroid'));
-    // The searchable flags of the release's own definition, so a field it newly searches is
-    // checked against the live index before the app that searches it ships.
-    // Searchable but not retrievable: in the field list though they are out of the select.
+    // The release's own searchable flags, so a newly searched field is checked before the app ships.
+    // Searchable but not retrievable: in the field list though out of the select.
     assert.ok(indexes.projects.searchFields.includes('searchLabels'));
     assert.ok(indexes.projects.searchFields.includes('nameTokens'));
     assert.ok(!indexes.projects.select.includes('searchLabels'));
     assert.ok(!indexes.projects.searchFields.includes('sector'));
-    // No orderby: the endpoint derives the orders from buildOrderBy, which knows the app orders
-    // `documents` by displayNameSort and never by displayName. Sending a list built from the
-    // `sortable` flags would block a release over fields no query sorts on.
+    // No orderby: the endpoint derives orders from buildOrderBy; a list built from the `sortable`
+    // flags would block a release over fields no query sorts on.
     assert.ok(!('orderby' in indexes.documents));
     assert.ok(!('orderby' in indexes.projects));
     assert.ok(!('orderby' in indexes.chunks));
   });
 
   await t.test('probes the index definitions it is pointed at, not the ones beside the script', async () => {
-    // The prod gate runs the WORKFLOW REF's copy of this script against the DEPLOYED TAG's index
-    // definitions, checked out under release/. An ignored argument would gate the release on
-    // main's definitions, which is not the version being shipped.
+    // The prod gate runs the workflow ref's script against the deployed tag's definitions under
+    // release/; an ignored argument would gate the release on main's definitions.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-indexes-'));
     fs.writeFileSync(path.join(dir, 'documents.json'), JSON.stringify({
       name: 'documents',
@@ -108,9 +100,8 @@ test('search-schema-probe.sh', async (t) => {
   });
 
   await t.test('probes only the indexes the deployed app knows, naming the ones it skips', async () => {
-    // The release that ADDS an index runs against the app that does not have it yet, and that app
-    // answers 400 to a body naming more indexes than it compiled in. Posting the whole body would
-    // block the release that ships the index, on the one thing about it that is expected.
+    // The release that adds an index runs against an app that 400s on indexes it does not know, so
+    // posting the whole body would block the very release that ships the index.
     const stub = await startStub((req) => (req.method === 'GET'
       ? { status: 200, json: { ok: true, indexes: { chunks: { ok: true }, projects: { ok: true }, documents: { ok: true } } } }
       : { status: 200, json: { ok: true } }));

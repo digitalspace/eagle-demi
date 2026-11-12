@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The PR gate's "did this branch change what search asks for" question, against real git history.
- *
- * The shape that matters is the one the 2026-09-08 outage had: every `*_SELECT` is a multi-line
- * concatenation, so the field that took production down arrived on a continuation line carrying no
- * `_SELECT` token. A gate reading diff lines answers "no" to exactly the change it exists to catch.
+ * Every `*_SELECT` is a multi-line concatenation, so a changed field can sit on a continuation line
+ * with no `_SELECT` token; a gate reading diff lines would miss it. Runs against real git history.
  */
 
 const test = require('node:test');

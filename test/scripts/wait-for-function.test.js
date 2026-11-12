@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * `scripts/wait-for-function.sh` runs against two subscriptions — prod's resource group lives in
- * one, test's in another — so an `az` call that leans on the CLI default fails with
- * ResourceGroupNotFound, which reads as "not registered yet" rather than "wrong subscription".
- *
- * A fake `az` on PATH logs its whole argv, so the flag is measured off the log rather than
- * asserted from the script's own output. It always reports the function as registered, keeping
- * every case off the 20-second poll path.
+ * Test and prod live in different subscriptions, so an `az` call on the CLI default fails as
+ * ResourceGroupNotFound, which reads as "not registered yet". The flag is read off the fake az log.
  */
 
 const test = require('node:test');

@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * The `apply` mode of `scripts/with-search-admin.sh` — the same grant and revoke as the devbox
- * flow, but the work happens in the Function app instead of on the VM.
- *
- * What these tests are for is the window, not the HTTP. The identity the INTERNET-FACING API runs
- * as holds Search Service Contributor for as long as the apply takes, so the two things that must
- * hold are that the grant is in place before the POST (or the app 403s), and that it comes back off
- * on every way out — a finished job, a failed job, a job that never answers. A revoke that only
- * runs on the happy path leaves the public API able to delete an index.
- *
- * `AZ` and `CURL` are both seams. They log into the same file, so "granted before the POST" and
- * "revoked after the last poll" are read off one ordered transcript rather than asserted from the
- * script's own output.
+ * The internet-facing API holds Search Service Contributor while the apply runs: grant before the
+ * POST, revoke on every way out. Fake az and curl share one log, so order is read off one transcript.
  */
 
 const test = require('node:test');
@@ -47,10 +37,8 @@ exit 0
 `;
 
 /**
- * Stands in for `curl`. Answers the enqueue POST with a job id, then walks $CURL_STATUSES one entry
- * per poll — so a test names the job's whole life as a list. The body and the status code are
- * printed the way the script asks for them, body first and `%{http_code}` on its own last line.
- * $CURL_JOB_RESULTS is the `results` array the job records, one entry per indexer.
+ * Answers the POST with a job id, then walks $CURL_STATUSES one entry per poll. Prints the body,
+ * then `%{http_code}` on its own last line, as the script asks.
  */
 const FAKE_CURL = `#!/usr/bin/env bash
 echo "curl $*" >> "\${CALL_LOG}"
@@ -112,9 +100,8 @@ const isPoll = (c) => c.startsWith('curl ') && c.includes('/admin/search-definit
 
 test('with-search-admin.sh apply', async (t) => {
   await t.test('grants BEFORE the POST', async () => {
-    // The app writes definitions as demi-identity-<env>. A POST that lands before the assignment
-    // does gets a 403 from the search service, and the job fails for a reason that reads like a
-    // code bug rather than a timing one.
+    // A POST that lands before the assignment gets a 403 from the search service, which reads like
+    // a code bug rather than a timing one.
     const r = run(['apply', '--env', 'test', '--only', 'projects']);
     assert.strictEqual(r.status, 0, r.stderr);
     const created = indexOf(r.calls, isCreate);
@@ -144,9 +131,8 @@ test('with-search-admin.sh apply', async (t) => {
   });
 
   await t.test('treats `warned` as a success, with the per-indexer results', async () => {
-    // What a chunks run normally ends as: the definitions are written, the reset is issued, and the
-    // indexer is still going when the job's 25-minute wait runs out. Exiting non-zero here would
-    // have the operator chase a run that did its job, and the results say which indexer to watch.
+    // A chunks run normally ends here: written and reset, the indexer still going when the job's
+    // wait runs out. Non-zero would send the operator after a run that did its job.
     const r = run(['apply', '--env', 'test', '--only', 'chunks', '--live'], {
       env: {
         CURL_STATUSES: 'running warned',
@@ -162,9 +148,8 @@ test('with-search-admin.sh apply', async (t) => {
   });
 
   await t.test('ends on a status the job never emits instead of polling through it', async () => {
-    // The job writes queued, running, succeeded, warned or failed (src/jobs/search-definitions.js).
-    // Anything else is the two sides having drifted apart, and reading it as "still going" holds the
-    // role open to the deadline while reading it as done would report an unknown state as success.
+    // Any status src/jobs/search-definitions.js never writes means the two sides drifted; "still
+    // going" would hold the role open to the deadline, "done" would report success.
     const r = run(['apply', '--env', 'test', '--only', 'projects'],
       { env: { CURL_STATUSES: 'ready' } });
     assert.notStrictEqual(r.status, 0, 'an unknown status is not a success');
@@ -232,9 +217,8 @@ test('with-search-admin.sh apply', async (t) => {
   });
 
   await t.test('goes through the APIM machine path for the environment', async () => {
-    // Direct azurewebsites.net access is platform-403'd since the APIM cutover. `/machine` is the
-    // API for callers with no browser session, which is what this script is; `X-Api-Key` is
-    // accepted on `/api` too, so the path is a choice rather than the only one that works.
+    // Direct azurewebsites.net access is 403. `/machine` is the path for callers with no browser
+    // session; `X-Api-Key` also works on `/api`, so this is a choice.
     const r = run(['apply', '--env', 'prod', '--only', 'projects'],
       { env: { SUBSCRIPTION: 'sub-x', RG: 'rg-x' } });
     assert.strictEqual(r.status, 0, r.stderr);
@@ -246,9 +230,8 @@ test('with-search-admin.sh apply', async (t) => {
   });
 
   await t.test('a revoke that fails takes the run down with it, apply or no apply', async () => {
-    // The apply succeeded, so without this the script exits 0 and the operator moves on — while
-    // the INTERNET-FACING API keeps Search Service Contributor indefinitely. A distinct code (3)
-    // so a caller can tell "the grant is still standing" from "the apply was refused" (1).
+    // Exit 3 means the grant is still standing, distinct from 1 (apply refused); otherwise the
+    // run exits 0 and the internet-facing API keeps the role.
     const r = run(['apply', '--env', 'test', '--only', 'projects'],
       { env: { AZ_DELETE_FAILS: '1' } });
 

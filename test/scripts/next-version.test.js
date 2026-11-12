@@ -5,14 +5,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const SCRIPT = require('node:path').join(__dirname, '..', '..', 'scripts', 'next-version.js');
 
-// The bump rules in `scripts/next-version.js` are the only non-trivial logic in the release
-// automation, and they are logic nobody watches: the workflow runs unattended on every push to
-// `main` and its output becomes the tag a future prod deploy consumes. A wrong bump is not noticed
-// when it happens, only later, when two releases claim versions in the wrong order.
-//
-// Every expectation below is a hardcoded string. Computing the expected version from the same
-// parsing the implementation uses would produce a test that agrees with any behaviour, including
-// broken behaviour, and therefore can never go red.
+// Expectations are hardcoded strings: deriving them with the implementation's own parsing would
+// agree with any behaviour, broken included.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -59,9 +53,8 @@ test('the hyphenated BREAKING-CHANGE footer counts too', () => {
 });
 
 test('prose about a breaking change is not a breaking change', () => {
-  // The body says the opposite of what an unanchored phrase search would trigger. Requiring the
-  // footer form — line start, then the spec's separator — is what keeps a promise of compatibility
-  // from minting a major.
+  // Only the footer form (line start, then the spec's separator) counts, so a promise of
+  // compatibility cannot mint a major.
   const message = 'fix: tighten the retry budget\n\nThis is a NON-BREAKING CHANGE to the /api/chunk contract.';
   assert.strictEqual(nextVersion('v1.4.2', [message]), 'v1.4.3');
 });
@@ -102,9 +95,8 @@ test('a missing or unparseable last tag tells the operator to create the seed re
   }
 });
 
-// `highestReleaseTag` is the version BASE. Since every push to `main` mints a tag, picking the wrong
-// one re-mints a version that already exists — the tag push then fails, or worse, succeeds against a
-// number a previous build already shipped under.
+// `highestReleaseTag` is the version base: the wrong one re-mints a version that already exists,
+// and every push to `main` mints a tag.
 
 test('the base is the highest tag, not the last one GitHub happened to return', () => {
   assert.strictEqual(highestReleaseTag(['v0.1.0', 'v0.3.1', 'v0.2.7']), 'v0.3.1');
@@ -131,15 +123,8 @@ test('no release tag at all yields an empty base, which nextVersion turns into t
   assert.throws(() => nextVersion(highestReleaseTag(['nightly']), ['fix: x']), /seed release/);
 });
 
-// THE ARGV THE SCRIPT ACTUALLY HANDS TO gh, which no other test in this file reaches.
-//
-// Everything above imports { nextVersion, highestReleaseTag } and exercises pure functions. The
-// `require.main === module` block is what runs in CI, and it shipped `--per-page 100` — a flag
-// `gh api` does not have — through a fully green suite. The script exited 1 on every push to main
-// and no test noticed, because no test ran the script.
-//
-// gh is stubbed on PATH rather than mocked in-process: the script spawns a real child, so only a
-// real executable observes what it was invoked with.
+// The tests above call pure functions; only this one runs the `require.main` block CI runs. gh is a
+// stub on PATH because the script spawns a real child.
 test('the tags lookup uses argv gh actually accepts', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-argv-'));
   const argvLog = path.join(dir, 'argv.txt');
@@ -167,10 +152,8 @@ esac
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// THE gh-FAILURE PATH. The catch block deliberately does NOT substitute a fallback base: a bad
-// flag, a rate limit or a 5xx all land there alongside a genuine 404, and continuing from a base
-// that is not the highest tag computes a version that already exists — surfacing much later as a
-// `git push origin <tag>` collision in draft-release.yaml rather than here, where it is legible.
+// No fallback base in the catch: a bad flag, rate limit or 5xx land there too, and a wrong base
+// mints an existing version that fails later as a tag push collision in draft-release.yaml.
 test('a gh failure listing tags is fatal, not silently absorbed into a fallback base', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-ghfail-'));
   fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
