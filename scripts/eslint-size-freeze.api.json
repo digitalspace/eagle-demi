@@ -1,5 +1,5 @@
 {
-  "src/ai/federal-source.js": {"complexity":[33],"max-lines":[575],"max-lines-per-function":[168]},
+  "src/ai/federal-source.js": {"complexity":[33],"max-lines":[492],"max-lines-per-function":[163]},
   "src/ai/project-summary.js": {"complexity":[61,22],"max-lines":[2128],"max-lines-per-function":[403,158]},
   "src/chunker.js": {"max-lines-per-function":[157]},
   "src/config.js": {"max-lines":[616]},

@@ -49,6 +49,26 @@ test('the bulk download worker', async (t) => {
     assert.match(zipText([...uploads.keys()][0]), /Errors\.TXT \(project\)\/d1\.pdf/);
   });
 
+  await t.test('fullwidth dots and backslashes cannot climb out of the folder', async (tt) => {
+    const docs = [doc('d1', { documentFileName: '\uff0e\uff0e\uff3c\uff0e\uff0e\uff3cx.bat', fileExt: 'bat' })];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    const text = zipText([...uploads.keys()][0]);
+    assert.match(text, /Site C Clean Energy\/x\.bat/);
+    assert.doesNotMatch(text, /\uff0e|\uff3c/);
+  });
+
+  await t.test('a name written decomposed and one precomposed are one name to a Mac', async (tt) => {
+    const docs = [doc('d1', { documentFileName: 'r\u00e9port.pdf' }), doc('d2', { documentFileName: 're\u0301port.pdf' })];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    assert.match(zipText([...uploads.keys()][0]), /port \(2\)\.pdf/);
+  });
+
   await t.test('a long project label cut short does not end in a dot or space', async (tt) => {
     const docs = [doc('d1')];
     const { patches } = harness(tt, { row: job(docs), docs });

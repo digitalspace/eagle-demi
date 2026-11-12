@@ -16,11 +16,8 @@ const {
 } = require('../../src/ai/federal-source');
 
 /**
- * Trimmed copies of the registry's own pages, captured 2026-09-10.
- *
- * Trimmed, not written: the markup, the entity escaping and the unquoted `href` are the registry's,
- * because those are exactly what the parsers have to survive. What was removed is boilerplate — the
- * GC template chrome, the stylesheets, and the free-text snippet each result carries.
+ * Trimmed copies of the registry's pages: markup, entity escaping and unquoted `href` kept as found,
+ * since that is what the parsers must survive; template chrome, styles and snippets removed.
  */
 const FIXTURES = path.join(__dirname, '..', 'fixtures', 'iaac');
 const fixture = name => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -46,12 +43,8 @@ const BLANK_PDF = Buffer.from([
 const TWO_PAGE_PDF = fs.readFileSync(path.join(FIXTURES, 'two-page.pdf'));
 
 /**
- * The extractor as a stub, for every test about the WALK rather than about extraction.
- *
- * A runner without poppler answered `no_pdf_extractor` to all of them, which asserted what the
- * host has installed instead of what the walk does with the pages it gets back. The text below is
- * what `pdftotext -layout` reads out of these two fixtures; the gated tests over the real binary
- * are what keep that claim honest.
+ * The extractor as a stub, for tests about the walk. Its text is what `pdftotext -layout` reads from
+ * these fixtures; the gated tests over the real binary keep that true.
  */
 const stubPdfToPages = async (buffer) => {
   if (buffer.equals(BLANK_PDF)) return [{ page: 1, text: '\n' }];
@@ -96,9 +89,8 @@ test('parseSearch', async (t) => {
   });
 
   await t.test('skips a higher-ranked result whose title is a different project', () => {
-    // The registry ranks on full text, so a project that merely MENTIONS this one outranks it
-    // regularly. The decoy below is the real result block with its id and title swapped, so the
-    // markup is the registry's and only the values differ.
+    // The registry ranks on full text, so a project that mentions this one can outrank it. The decoy
+    // is the real result block with its id and title swapped.
     const real = fixture('search-tilbury.html');
     const decoy = real
       .slice(real.indexOf('<a class="resultJobItem"'))
@@ -326,13 +318,22 @@ test('parseInlineContent', async (t) => {
   await t.test('keeps the template out of the decision', () => {
     const text = parseInlineContent(fixture('doc-121216.html')).text;
 
-    // The registry menu carries its own `<h2>` ahead of the document's, the search form carries a
-    // placeholder, the stylesheet carries CSS, and the page footer carries a date. None of it is
-    // Canada's decision, and all of it would be quoted back as if it were.
+    // Menu `<h2>`, search placeholder, CSS and footer date are page furniture that would otherwise
+    // be quoted back as Canada's decision.
     for (const furniture of [/Registry/, /Search by keyword/, /overflow-wrap/,
       /Report a problem/, /Date modified/]) {
       assert.doesNotMatch(text, furniture);
     }
+  });
+
+  await t.test('drops bidi and control characters from title and text, raw or as entities', () => {
+    const hidden = 'Site\u202e C\u2066 Re\u0001port &#x202E;draft&#x2066;';
+    const rtl = '\u05e9\u05dc\u05d5\u05dd\u200f (EAO)';
+    const content = parseInlineContent(
+      `<h2>${hidden}</h2><p>${hidden}</p><p>${rtl}\tnext\nline</p>`);
+
+    assert.strictEqual(content.title, 'Site C Report draft');
+    assert.strictEqual(content.text, `Site C Report draft\n\nSite C Report draft\n\n${rtl} next line`);
   });
 
   await t.test('answers null for a page with no document heading', () => {
@@ -394,6 +395,20 @@ test('pdfToPages', async (t) => {
     }
   });
 
+  await t.test('drops bidi and control characters from page text, keeping pages and line breaks', async () => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-poppler-'));
+    fs.writeFileSync(path.join(bin, 'pdftotext'),
+      "#!/bin/sh\nprintf 'One\\342\\200\\256 a\\001b\\r\\nline\\tend\\fTwo\\342\\201\\246\\f'\n", { mode: 0o755 });
+    const realPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${realPath}`;
+    try {
+      assert.deepStrictEqual(await pdfToPages(Buffer.from('%PDF')),
+        [{ page: 1, text: 'One ab\nline\tend' }, { page: 2, text: 'Two' }]);
+    } finally {
+      process.env.PATH = realPath;
+    }
+  });
+
   await t.test('answers `pdf_extract_failed` for something that is not a PDF',
     { skip: needsPoppler }, async () => {
       assert.deepStrictEqual(await pdfToPages(Buffer.from('not a pdf')),
@@ -416,12 +431,8 @@ test('fetchFederalSource', async (t) => {
   });
 
   /**
-   * The registry, as files. Records every request so a test can assert the path walked, the headers
-   * sent and the number of requests spent.
-   *
-   * `document/158078` is served the page captured under `document/157936`: the registry files this
-   * one decision statement under both ids, and 157936 is the id whose page was captured. What the
-   * stub proves is the walk and the budget, not which id the registry chose.
+   * The registry as files, recording every request. `document/158078` is served the page captured
+   * as `157936`: the registry files this one decision statement under both ids.
    */
   const registry = (routes) => {
     const calls = [];
@@ -552,9 +563,8 @@ test('fetchFederalSource', async (t) => {
     assert.strictEqual(await fetchFederalSource({ name: '' }, stub), null);
   });
 
-  // A decision statement the registry LISTS and this code could not read. Each cause below returns
-  // the row with empty pages and names itself, because the caller stores "we could not read it"
-  // and "Canada issued no decision" as different things and can only tell them apart here.
+  // A decision statement the registry LISTS that could not be read: each cause returns the row with
+  // empty pages and names itself, so the caller can tell it from "no decision".
   const unread = async (routes, over = {}, opts = {}) => {
     const source = await fetchFederalSource(
       { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' },
@@ -626,9 +636,8 @@ test('fetchFederalSource', async (t) => {
   });
 
   await t.test('names the missing extractor on a host without poppler', async () => {
-    // The bare Function host. No poppler means no text, which is not the same as no decision.
-    // What the extractor answers is the unit test above; that the walk carries the answer through
-    // to the row instead of losing the read is this one.
+    // The bare Function host: no poppler means no text, not no decision. This checks the walk
+    // carries the extractor's answer through to the row.
     await unread(FULL(), {
       title: 'Decision Statement Issued under Section 54 of the ' +
         'Canadian Environmental Assessment Act, 2012',
