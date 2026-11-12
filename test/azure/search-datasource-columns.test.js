@@ -14,9 +14,7 @@ const PAIRS = [
   [index, datasource],
   [require('../../azure/search/indexes/projects.json'),
     require('../../azure/search/datasources/demi-projects-ds.json')],
-  // The two keyword indexes. `activities` is fed by the `updates` container and
-  // `project-notifications` by `notifications`, so the data-source name follows the CONTAINER and
-  // the index name follows the dataset — the same split the README describes.
+  // Data-source names follow the container, index names the dataset.
   [require('../../azure/search/indexes/activities.json'),
     require('../../azure/search/datasources/demi-updates-ds.json')],
   [require('../../azure/search/indexes/project-notifications.json'),
@@ -34,9 +32,7 @@ for (const [idx, ds] of PAIRS) {
       `declared by ${idx.name} but not selected by ${ds.name}: ${missing.join(', ')}`);
   });
 
-  // The other direction. A column selected under a name the index does not declare is dropped on
-  // the floor by the indexer, again under a 200 and a green run — which is how a rename ships half
-  // done.
+  // The indexer silently drops a column the index does not declare, so a rename ships half done.
   test(`every column ${ds.name} selects is declared by ${idx.name}`, () => {
     const declared = new Set(idx.fields.map(f => f.name));
     const extra = [...projectedColumns(ds.container.query).keys()]
@@ -46,10 +42,8 @@ for (const [idx, ds] of PAIRS) {
   });
 }
 
-// The chunks pair is not in PAIRS above: `chunkId` is filled by a field MAPPING on the indexer
-// (`id` -> `chunkId`), not by the query, so the generic both-directions check cannot hold for it.
-// The parent fields it repeats off the document are pinned by name instead — three files that never
-// see each other, and the code is the one that decides what a chunk carries.
+// Chunks are not in PAIRS: `chunkId` comes from an indexer field mapping, not the query, so the
+// parent fields are pinned by name instead.
 test('the chunk parent fields are declared, projected and named in one place', () => {
   const { CHUNK_PARENT_FIELDS, CHUNK_PARENT_LIST_REFS } = require('../../src/repositories/chunks');
   const chunkIndex = require('../../azure/search/indexes/chunks.json');
@@ -72,9 +66,8 @@ test('the chunk parent fields are declared, projected and named in one place', (
     assert.strictEqual(field.type, 'Edm.String');
     assert.strictEqual(field.filterable, true);
     assert.strictEqual(field.searchable, false);
-    // FACETABLE only on the List refs, which are what the filter panel counts. `projectId` is the
-    // access-scope column and was never faceted — and a field's facetability cannot be changed by a
-    // PUT, so asserting it here would demand a rebuild of the whole index.
+    // Facetable only on List refs: facetability cannot change by PUT, so asserting it on projectId
+    // would demand a full rebuild.
     if (CHUNK_PARENT_LIST_REFS.includes(name)) assert.strictEqual(field.facetable, true);
 
     // Same name and same type as the column on the parent, or the two filters disagree about what
@@ -85,13 +78,8 @@ test('the chunk parent fields are declared, projected and named in one place', (
   }
 });
 
-// The stamp that says a chunk WAS stamped, pinned across the same three files. The loop above
-// cannot cover it: it has no counterpart on the documents index and it is a number, not a List id.
-//
-// Missing from the query is the whole point of the failure it guards. `chunks-indexer` would pull
-// every re-stamped row, find no such column, and index the field as null on all 1.1M — under a 200
-// from the data-source PUT and a green indexer run — so the completeness probe would count the
-// entire corpus as never stamped and the degraded banner would stay up permanently.
+// Unprojected, the indexer writes null on every chunk and the completeness probe keeps the
+// degraded banner up for good.
 test('the chunk parent-fields version is declared, projected and filterable', () => {
   const { CHUNK_PARENT_FIELDS_VERSION } = require('../../src/repositories/chunks');
   const chunkIndex = require('../../azure/search/indexes/chunks.json');
@@ -118,9 +106,7 @@ test('the chunk parent-fields version is declared, projected and filterable', ()
   assert.strictEqual(field.searchable, false);
 });
 
-// The page-provenance flag, pinned across the same three files and for the same failure. Declared
-// and not projected means the indexer writes null on all 1.1M rows under a 200 and a green run, so
-// every re-extracted document goes back to reading "Passage N" with nothing saying why.
+// Unprojected, every re-extracted document silently falls back to "Passage N".
 test('the chunk page flag is declared, projected and filterable', () => {
   const chunkIndex = require('../../azure/search/indexes/chunks.json');
   const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
@@ -143,10 +129,8 @@ test('the chunk page flag is declared, projected and filterable', () => {
   assert.strictEqual(field.facetable, false);
 });
 
-// The other direction for the one chunk field that must NOT reach the index. `parentStampedAt`
-// orders concurrent re-stamp walks and answers no query; adding it to the data source would pull
-// every one of the 1.1M rows through the indexer for a column nothing filters on, and declaring it
-// on the index is a PUT plus a full pass. It has to be selected back out of both.
+// Only orders concurrent re-stamp walks; projecting or declaring it costs a full indexer pass for
+// a column no query reads.
 test('the chunk re-stamp token is neither projected nor indexed', () => {
   const { STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
   const chunkIndex = require('../../azure/search/indexes/chunks.json');
@@ -158,9 +142,8 @@ test('the chunk re-stamp token is neither projected nor indexed', () => {
     `${STAMPED_AT_FIELD} is declared by the chunks index, which nothing writes to it`);
 });
 
-// `vis` is the only column the projects query computes rather than reads: the container stores an
-// object, the index has no map type, and an indexer given the bare object writes null — every dial
-// then falls back to defaultVis with the whole suite green.
+// The index has no map type; given the bare object the indexer writes null and every dial falls
+// back to defaultVis.
 test('the projects vis column is serialized to text', () => {
   const [idx, ds] = PAIRS[1];
   const projected = projectedColumns(ds.container.query);
@@ -179,9 +162,7 @@ test('the projects legislationYear column only hands the indexer a number', () =
   assert.strictEqual(idx.fields.find(f => f.name === 'legislationYear').type, 'Edm.Int32');
 });
 
-// `tags` is a Collection(Edm.String), and the same `maxFailedItems: 0` rule holds: one row whose tags
-// are a bare string, an object, or a list holding anything but strings fails the document and stops
-// the whole indexer run.
+// Same `maxFailedItems: 0` rule: tags that are not a list of strings stop the whole run.
 test('the projects tags columns only hand the indexer a list of strings', () => {
   const [, ds] = PAIRS[1];
   const columns = projectedColumns(ds.container.query);
@@ -254,10 +235,8 @@ test('the projects tagsTokens field is a searchable, non-retrievable string list
   assert.strictEqual(field.retrievable, false);
 });
 
-// A rename in the data source and the dial translation in `src/vis/catalog/index-projects-renames.js`
-// are two files that never see each other. search-drift.test.js walks the entries that EXIST; it
-// cannot see an alias added here with no entry, and that alias is exactly the case where a stored
-// dial key stops matching any field on a hit — `dialsForIndex` drops it and the field ships.
+// search-drift.test.js only walks existing entries; an alias with no PROJECT_TO_INDEX entry makes
+// `dialsForIndex` drop the dial and the field ships.
 test('every column the projects data source renames is translated by PROJECT_TO_INDEX', () => {
   const { PROJECT_TO_INDEX } = require('../../src/vis/catalog/index-projects-renames');
   const [, ds] = PAIRS[1];
@@ -289,9 +268,7 @@ test('searchLabels joins the six label columns, each guarded so a missing one ca
   }
 });
 
-// Same rule as `wireSector` in src/controllers/search.js: a blank or whitespace-only sector is no
-// sector, so the Track sub-type stands in. Without the TRIM guard, `''` or `' '` wins and the row
-// carries neither word.
+// Same rule as `wireSector` in src/controllers/search.js: a blank sector yields to the sub-type.
 test('searchLabels falls back to the sub-type when the sector is blank', () => {
   const [, ds] = PAIRS[1];
   const expr = projectedColumns(ds.container.query).get('searchLabels');
@@ -300,10 +277,7 @@ test('searchLabels falls back to the sub-type when the sector is blank', () => {
     String.raw`\(IS_STRING\(c\.projectSubType\) \? c\.projectSubType : ''\)\)`));
 });
 
-// The three fields TODO 3.3 adds, pinned by name and by what they are: the generic check above
-// passes on a `documentSource` typed Edm.Boolean or a `fileNameTokens` aliased off the wrong
-// column, and both are silent — a type flip is a rebuild, and the wrong alias analyzes the wrong
-// text under an index that still answers.
+// The generic check passes a wrong type or a wrong alias source; both fail silently.
 test('the 3.3 fields are declared and sourced as intended', () => {
   const field = name => index.fields.find(f => f.name === name);
   const projected = projectedColumns(datasource.container.query);
@@ -338,9 +312,8 @@ test('documentAuthorSort is a sortable string fed by the lower-cased author', ()
   assert.strictEqual(projected.get('documentAuthorSort'), 'LOWER(c.documentAuthor)');
 });
 
-// `nameTokens` exists because `en.microsoft` strips stopwords like "mine" from every other
-// searchable projects field, so a name search for one matched nothing. Same trade as
-// `fileNameTokens`: the text a second time under a stopword-free analyzer, plain column untouched.
+// `en.microsoft` strips stopwords like "mine", so the name is indexed again under a stopword-free
+// analyzer.
 test('the projects nameTokens field is declared and sourced as intended', () => {
   const [idx, ds] = PAIRS[1];
   const field = idx.fields.find(f => f.name === 'nameTokens');
@@ -356,9 +329,8 @@ test('the projects nameTokens field is declared and sourced as intended', () => 
   assert.ok(idx.tokenizers.some(t => t.name === 'filename_tokenizer'));
 });
 
-// `eagle-query` reads these flags off the committed JSON at require time and decides from them
-// alone whether a sort or a filter is expressible. A field present but flagged wrong is a key
-// silently dropped into `meta.dropped` — a 200 with an unfiltered page, not an error.
+// `eagle-query` reads these flags from the committed JSON; a wrong flag silently drops the key
+// into `meta.dropped` and serves an unfiltered page.
 test('the fields the search page sorts and filters on carry the flags that make them usable', () => {
   const projects = require('../../azure/search/indexes/projects.json');
   const activities = require('../../azure/search/indexes/activities.json');

@@ -1,14 +1,5 @@
-// Key Vault for the DEMI application secrets, plus its private endpoint and the read grants.
-//
-// THIS TEMPLATE NEVER CARRIES A SECRET VALUE. It creates the vault and says which names the app
-// expects; the first value is set by hand from the devbox with `az keyvault secret set`. The rotator
-// (secret-rotator.bicep) mints new versions of the four rotated names and renews the rest. Nothing
-// about a value passes through git, a workflow input, or an ARM parameter, so there is no @secure()
-// parameter that can blank a live credential and nothing for `what-if` to mask.
-//
-// The app reads each name as `@Microsoft.KeyVault(SecretUri=<vaultUri>secrets/<name>)`. That URI is
-// composed from the vault URI below, not read off a secret resource, because the secret is created
-// out of band and this deployment cannot see it.
+// Never carries a secret value: names only, values are set by hand or by secret-rotator.bicep.
+// Secret URIs are composed from the vault URI because the secrets are created out of band.
 
 @description('Location for the vault')
 param location string = resourceGroup().location
@@ -22,21 +13,16 @@ param tags object
 @description('Principal ID of the identity the API runs as. Granted Key Vault Secrets User below.')
 param identityPrincipalId string
 
-// REQUIRED, no default. The landing-zone policy `Deny-PublicPaaSEndpoints` forces
-// `publicNetworkAccess: Disabled` on every vault, so a vault with no private endpoint answers
-// `ForbiddenByConnection` to every caller including its owner — an unreachable vault that still
-// reserves its name for good under purge protection. An empty value used to be accepted here and
-// produced exactly that.
+// No default: a vault without a private endpoint answers ForbiddenByConnection to everyone and,
+// under purge protection, still holds its name.
 @description('Subnet ID for the inbound private endpoint. REQUIRED — public network access is denied by policy, so a vault without one is unreachable.')
 param peSubnetId string
 
 @description('Action group the secret near-expiry alert mails.')
 param actionGroupId string
 
-// Optional secrets are named per environment rather than assumed: a Key Vault reference to a
-// secret nobody has set leaves the app setting unresolved. Naming one here is the statement that
-// it has been set on that environment's vault. Whatever a later phase moves in goes in the same
-// list and is then verified by deploy-infra.sh.
+// Name a secret here only once it is set on that vault: a reference to a missing secret leaves
+// the app setting unresolved. deploy-infra.sh checks the list.
 @description('Optional secret names this environment\'s vault holds, e.g. notify-api-key, edge-secret. Empty leaves those app settings blank.')
 param optionalSecretNames array = []
 
@@ -49,19 +35,13 @@ var requiredSecretNames = [
   'docling-api-key'
   'minio-access-key'
   'minio-secret-key'
-  // Read by APIM, not by the API app: the two headers the analytics gateway stamps. Required
-  // rather than optional because both environments that deploy this vault publish the analytics
-  // API, and a gateway stamping an unresolved named value is a backend that 401s what it forwards.
+  // Read by APIM for the analytics gateway headers; unresolved, the backend 401s every request.
   'analytics-shared-header'
   'analytics-audit-header'
 ]
 
-// The OpenShift secret sync's own credentials — `openshift-token-<env>`, plus `dev-openshift-token`
-// on the nonprod vault, which serves 6cdc9e-dev as well — are named in each environment's
-// `optionalSecretNames` rather than here. They are per-environment names, and deploy-infra.sh reads
-// this list as literal strings, so a `${environmentName}` here would be skipped by its check
-// silently. Optional in the template, required for the sync: an environment that names no token
-// deploys no sync app either (`syncNamespaces` in the param file).
+// OpenShift sync tokens go in optionalSecretNames: deploy-infra.sh reads the list above as
+// literal strings and would skip an interpolated name.
 
 // 3-24 characters, alphanumeric and hyphens, must start with a letter. `demi-kv-prod` is 12.
 var vaultName = 'demi-kv-${environmentName}'
@@ -79,10 +59,8 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     // RBAC, not access policies. Every other data plane here is Entra RBAC, and access policies
     // cannot be granted to a principal that does not exist yet.
     enableRbacAuthorization: true
-    // Both demanded explicitly by the `Enforce recommended guardrails for Azure Key Vault`
-    // assignment — omitting either is RequestDisallowedByPolicy, not a default. Purge protection is
-    // IRREVERSIBLE: once on, a deleted vault and its name are held for the retention window and
-    // cannot be purged early, so `demi-kv-test` is a name this subscription keeps.
+    // Key Vault guardrails policy demands both explicitly. Purge protection cannot be undone: a
+    // deleted vault keeps its name for the retention window.
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
@@ -106,9 +84,8 @@ resource secretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// No DNS zone group here, same as the Cosmos and AI Search endpoints: this landing zone attaches
-// one by policy (`deployedByPolicy`) pointing at privatelink.vaultcore.azure.net in a central DNS
-// subscription this one cannot read. Declaring our own would create a competing record set.
+// No DNS zone group: landing-zone policy attaches one in a central DNS subscription, and our own
+// would compete with it.
 resource vaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
   name: 'pe-${vaultName}'
   location: location
@@ -171,9 +148,7 @@ output vaultUri string = vault.properties.vaultUri
 // One place composes a secret identifier, so a stray missing slash cannot differ between names.
 var secretUriBase = '${vault.properties.vaultUri}secrets/'
 
-// Every name this environment's vault is expected to hold. deploy-infra.sh checks the live vault
-// against it from the devbox before deploying, because a missing name is an app setting that
-// silently never resolves.
+// deploy-infra.sh checks the live vault against this list, since a missing name never resolves.
 output secretNames array = union(requiredSecretNames, optionalSecretNames)
 
 // VERSIONLESS on purpose (no `/<version>` suffix), so a new version needs no infrastructure deploy.
@@ -194,9 +169,6 @@ output notifyApiKeySecretUri string = contains(optionalSecretNames, 'notify-api-
 // Same rule: empty means X-Edge-Secret is ignored, which is what an environment with no Front Door
 // in front of it wants.
 output edgeSecretUri string = contains(optionalSecretNames, 'edge-secret') ? '${secretUriBase}edge-secret' : ''
-// Same rule again. Prod runs ungated, so empty is the expected state there rather than an
-// oversight, and an unresolved reference would make the curtain answer 401 instead of 404. Named
-// `…SecretUri` and not `…PasswordSecretUri` because the linter's `outputs-should-not-contain-secrets`
-// heuristic reads 'password' in an output name as the value itself; this is a vault URI, and the
-// repo carries no linter suppressions.
+// Empty on prod, which runs ungated. Not named ...PasswordSecretUri: the linter reads "password"
+// in an output name as a secret value.
 output accessGateSecretUri string = contains(optionalSecretNames, 'access-gate-password') ? '${secretUriBase}access-gate-password' : ''

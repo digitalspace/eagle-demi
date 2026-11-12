@@ -1,8 +1,7 @@
 'use strict';
 
-// The intake account is the only one Defender for Storage scans, and every value below is a choice
-// `az bicep build` cannot judge: a wrong cap, a dropped filter or a lost tag-write deny all compile. Same
-// text-structural limits as main-bicep-wiring.test.js.
+// A wrong scan cap, a dropped filter or a lost tag-write deny all still compile, so the intake
+// account's Defender settings are checked here.
 
 const test = require('node:test');
 const assert = require('node:assert');
