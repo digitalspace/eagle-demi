@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * `src/scripts/probe-acl.js` is an operator script that only talks to a remote API over HTTP, so it
- * must run from a shell that has ENVIRONMENT exported — which is the natural state while probing
- * test. Reading ADMIN_API_KEY through src/config.js applied the server's DEMI_ALLOWED_CLIENTS boot
- * guard to it and killed the probe with an unrelated error before it ran.
- *
- * A child process, and no key: the script exits on its own guard before any request, so this case
- * proves the decoupling without reaching the network.
- */
+// probe-acl.js must not load src/config.js, whose server boot guards would kill it in an operator
+// shell. Run with no key, it exits on its own guard before any request.
 
 const test = require('node:test');
 const assert = require('node:assert');

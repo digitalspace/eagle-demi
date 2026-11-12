@@ -1,9 +1,5 @@
-// PUT the committed datasources on SEARCH_ENDPOINT, pointed at the Cosmos account in COSMOS_ENDPOINT
-// through the search service's user-assigned identity. Env: DS_SUB, DS_RG (of the Cosmos account),
-// DS_DIR (datasource JSON dir, default the committed one), DS_IDENTITY_ID (resource id of the
-// identity the service runs indexers as). Needs Search Service Contributor for the duration — run
-// under scripts/with-search-admin.sh, or through POST /admin/search-definitions/apply, which calls
-// putDataSources() in process (src/jobs/search-definitions.js).
+// PUT the committed datasources with identity auth to Cosmos. Env: DS_SUB, DS_RG, DS_DIR, DS_IDENTITY_ID.
+// Needs Search Service Contributor: run under scripts/with-search-admin.sh or POST /admin/search-definitions/apply.
 'use strict';
 
 const fs = require('fs'), path = require('path');
@@ -20,12 +16,7 @@ function missingEnv() {
   return REQUIRED.filter(k => !process.env[k]);
 }
 
-/**
- * PUT the committed data sources, or the `names` subset of them.
- *
- * Exported so the queue job can run it in process; `log` is the report's only exit, defaulting to
- * console.log for the CLI below.
- */
+/** PUT the committed data sources, or the `names` subset; the queue job runs it in process. */
 async function putDataSources({ names = [], log = console.log } = {}) {
   const missing = missingEnv();
   if (missing.length > 0) {
@@ -43,7 +34,7 @@ async function putDataSources({ names = [], log = console.log } = {}) {
   for (const f of files) {
     const d = JSON.parse(fs.readFileSync(path.join(DS_DIR(), f), 'utf8'));
     onDisk.push(d.name);
-    // An empty list is every committed data source — the CLI's behaviour since it was written.
+    // An empty list is every committed data source.
     if (names.length > 0 && !names.includes(d.name)) continue;
     delete d['@odata.etag'];
     d.credentials = { connectionString: `ResourceId=${rid};Database=${process.env.COSMOS_NOSQL_DATABASE};IdentityAuthType=AccessToken` };
@@ -56,8 +47,7 @@ async function putDataSources({ names = [], log = console.log } = {}) {
     written++;
     log(`datasource ${d.name} ${r.status} -> ${account}/${d.container.name}`);
   }
-  // A name that matches nothing is a typo, and the run that "succeeded" without writing it is the
-  // failure this refuses to report as success.
+  // A name that matches nothing is a typo; never report that run as success.
   const unknown = names.filter(n => !onDisk.includes(n));
   if (unknown.length > 0) throw new Error(`no committed data source named ${unknown.join(', ')}`);
   return written;

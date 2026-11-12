@@ -1,15 +1,7 @@
 'use strict';
 
-/**
- * The reset-run-wait loop that runs on the devbox.
- *
- * It exists because the search data plane is private and every definition call from a workstation
- * is a 20-45 s ARM round trip, so the whole wait has to happen in one process on the VM. That also
- * means nothing here can be tried out by hand: the decisions worth pinning are the ones that cost
- * a re-pull of 1.1M rows when they are wrong — refusing to reset an indexer that is mid-run,
- * waiting for a straddling execution to drain before asking for a new one, and never reporting a
- * pre-reset execution as the run that was asked for.
- */
+// The devbox reset-run-wait loop cannot be tried by hand, and a wrong call costs a re-pull of 1.1M
+// rows: refuse a mid-run reset, drain a straddling execution, never report a pre-reset one.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -21,9 +13,8 @@ const NAME = 'documents-indexer';
 const NOW = Date.parse('2026-09-08T20:30:00Z');
 const STALE = { status: 'success', startTime: '2026-09-08T20:00:00Z', itemsProcessed: 0, itemsFailed: 0 };
 const RUNNING = { status: 'inProgress', startTime: '2026-09-08T20:00:00Z', itemsProcessed: 0 };
-// The shapes demi-search-test returns (api-version 2024-07-01, read 2026-09-17): a JSON string,
-// pretty-printed with \r\n, never null. A run that started from a cleared mark reports
-// highWaterMark -1; an ordinary PT5M tick reports the container's own `_ts`.
+// The shape the live service returns: a pretty-printed JSON string, never null. A cleared mark
+// reports highWaterMark -1; an ordinary tick reports the container's own `_ts`.
 const CLEARED = '{\r\n  "highWaterMark": -1,\r\n  "upperLimit": 1789669673\r\n}';
 const KEPT = '{\r\n  "highWaterMark": 1789669219,\r\n  "upperLimit": 1789669273\r\n}';
 const FRESH = {
@@ -96,9 +87,8 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('waits for an execution that straddles the reset before asking for a run', async () => {
-    // Same failure as above, one step later: a tick that started just before the reset landed is
-    // still holding the old high-water mark. Asking for a run while it drains is what produced the
-    // runs that finished with items=0.
+    // A tick that started just before the reset still holds the old high-water mark; a run asked
+    // for while it drains finishes with items=0.
     const r = await drive(service({ history: [STALE, RUNNING, STALE, FRESH] }), { settleMs: 60000 });
     assert.strictEqual(r.code, 0, r.out);
     assert.deepStrictEqual(r.calls.slice(0, 5), [
@@ -134,9 +124,8 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('a scheduled tick that lands on top of the reset run does not hide it', async () => {
-    // The PT5M schedule can start a tick between two polls. That tick is newer than the reset run
-    // and carries a tracking state, so reading executionHistory[0] reports a reset that worked as
-    // DEMI_RESET_NOT_APPLIED and sends the operator back to reset an indexer that is already clean.
+    // A scheduled tick between two polls is newer than the reset run and carries a tracking state,
+    // so reading executionHistory[0] would wrongly report DEMI_RESET_NOT_APPLIED.
     const started = { status: 'inProgress', startTime: FRESH.startTime, itemsProcessed: 120 };
     const tick = {
       status: 'success',
@@ -165,8 +154,7 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('accepts an execution whose tracking state the API did not return', async () => {
-    // 2024-07-01 returns initialTrackingState on every execution, but an older or newer api-version
-    // need not, and then the startTime comparison is the whole proof.
+    // Other api-versions need not return initialTrackingState; then startTime is the whole proof.
     const { initialTrackingState: _drop, ...noField } = FRESH;
     const r = await drive(service({ history: [STALE, STALE, noField] }));
     assert.strictEqual(r.code, 0, r.out);
@@ -200,9 +188,8 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('the reset entry is not the run, whichever side of resetAt it is stamped', async () => {
-    // POST /reset appends an entry of its own, stamped from the service's clock: half a second
-    // before the client's resetAt on test, and after it whenever the client clock lags. It reports
-    // status reset with items 0, so taking it as the verdict passes an indexer that never ran.
+    // POST /reset appends its own entry, stamped by the service clock on either side of resetAt.
+    // Taking it (items 0) as the verdict passes an indexer that never ran.
     const at = (ms) => new Date(NOW + ms).toISOString();
     const entry = (ms) => ({
       status: 'reset', startTime: at(ms), itemsProcessed: 0, initialTrackingState: null
@@ -218,10 +205,8 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('with no reset entry in the history, a pre-reset execution is not the run', async () => {
-    // The skew allowance measures a run against the reset entry's own stamp. With no such entry
-    // there is nothing to measure against, so a tick that started before resetAt is just a
-    // pre-reset execution: reporting it passes the rebuild with the counts of a run that did
-    // nothing. Nothing here carries initialTrackingState, so only the pick decides the verdict.
+    // With no reset entry the skew allowance has nothing to measure against. No row carries
+    // initialTrackingState, so only the pick decides the verdict.
     const at = (ms) => new Date(NOW + ms).toISOString();
     const { initialTrackingState: _drop, ...bare } = FRESH;
     const straddler = { status: 'success', startTime: at(-1000), itemsProcessed: 0, itemsFailed: 0 };
@@ -297,9 +282,8 @@ test('reset-and-run-indexers', async (t) => {
   });
 
   await t.test('the timeout covers the whole call, not each indexer in turn', async () => {
-    // demi-devbox.sh gives every indexer in the list the long deadline, and run-command itself cuts
-    // the call off at 90 minutes. A deadline taken per indexer lets one call outlive the call that
-    // carries it, and the "still running is only a warning" result never comes back.
+    // run-command cuts the call off at 90 minutes; a per-indexer deadline lets the call outlive it
+    // and the "still running" warning never comes back.
     const TICK_MS = 30000;
     const timeoutMs = 300000;
     const script = [STALE, STALE, RUNNING];
@@ -369,8 +353,8 @@ test('reset-and-run-indexers', async (t) => {
     assert.deepStrictEqual(results, ['name=projects-indexer', 'name=documents-indexer']);
   });
   await t.test('resets again when the run kept its tracking state', async () => {
-    // AI Search applies a reset asynchronously, so a run posted seconds later can still consume the
-    // old high-water mark (test, 2026-09-17). One more reset, given longer, clears it.
+    // A reset applies asynchronously, so a run posted seconds later can still use the old mark.
+    // One more reset, given longer, clears it.
     const kept = { ...FRESH, initialTrackingState: KEPT };
     const svc = service({ history: [STALE, STALE, kept, STALE, FRESH] });
     const r = await drive(svc);
