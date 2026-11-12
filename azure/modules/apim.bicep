@@ -1,12 +1,5 @@
-// API Management (Consumption) in front of the Flex API: key issuance, per-consumer rate limits and
-// metering. NOT a security boundary — Consumption has no VNet, so `demi-api-fc-<env>` stays publicly
-// reachable and the app still authenticates every caller itself.
-//
-// TWO APIs, not one. The SPA is anonymous, so `demi-api` sets subscriptionRequired: false; but the
-// subscriptions doc contradicts itself on whether a key presented to such an API still resolves
-// `context.Subscription` ("Considerations" says the key is ignored, the lookup algorithm says it is
-// honoured). Machine callers therefore get their own path, `/machine`, where a subscription is
-// required and resolution is unambiguous. Same backend, same code.
+// Not a security boundary: Consumption has no VNet, so the Function App stays public and checks
+// every caller. Two APIs because a key sent to a keyless API resolves ambiguously.
 
 @description('Azure region.')
 param location string = resourceGroup().location
@@ -30,9 +23,7 @@ param keyVaultName string
 @description('Name of the shared gateway secret in that vault.')
 param gatewaySecretName string = 'apim-gateway-secret'
 
-// eagle-analytics rides this gateway rather than paying a second Consumption instance's fixed cost.
-// Its Function App lives in another repository, so its host name is a parameter here and is READ
-// FROM that deployment's `apiHostName` output — never composed, the way frontendHostNames is not.
+// Read from the eagle-analytics deployment's apiHostName output, never composed.
 @description('Absolute base URL of analytics-api-fc-<env>, e.g. https://analytics-api-fc-test.azurewebsites.net. Empty deploys no analytics API, which is every environment where eagle-analytics does not exist yet.')
 param analyticsBackendUrl string = ''
 
@@ -48,9 +39,7 @@ param analyticsBrowserOrigins array = []
 var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
-// All three, not just the URL: the Function refuses every request that arrives without the shared
-// header and every /audit write without the audit one, so publishing the API on a header the vault
-// cannot supply would deploy a gateway that 502s what it forwards.
+// All three: the backend refuses requests missing either header, so a partial set deploys a dead API.
 var analyticsDeployed = !empty(analyticsBackendUrl) && !empty(analyticsSharedHeaderSecretUri) && !empty(analyticsAuditHeaderSecretUri)
 var analyticsApiName = 'analytics'
 var analyticsMachineApiName = 'analytics-machine'
@@ -91,8 +80,7 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
-    // Live state on both instances, and off is where we want it: the legacy portal is the
-    // deprecated one and nothing here uses it. Unmodelled, every apply proposes turning it back on.
+    // Unmodelled, every apply proposes turning the deprecated portal back on.
     legacyPortalStatus: 'Disabled'
   }
 }
@@ -114,15 +102,8 @@ resource secretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// The secret VALUE is created out of band — this repo is public and the vault is the source of
-// truth. Through the ARM CONTROL plane, which the vault firewall and the guardrail policies
-// demanding contentType/expiry do not apply to; the data plane (`az keyvault secret set`) is
-// Forbidden against this private-endpoint-only vault:
-//   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
-//
-// APIM's trusted-service entry covers custom-domain certificates only, so whether a Consumption
-// instance resolves this named value against a publicNetworkAccess:Disabled vault is UNVERIFIED
-// until the first deploy; the fallback is a `secret: true` named value carrying the literal.
+// The value is set out of band with an ARM control-plane PUT (`az rest`); the data plane is
+// Forbidden on this private vault.
 resource gatewaySecret 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
   parent: apim
   name: 'gateway-secret'
@@ -209,9 +190,7 @@ resource machineProductApi 'Microsoft.ApiManagement/service/products/apis@2024-0
   ]
 }
 
-// Per-subscription rate limit, no quota: the nightly reconcile bursts, and a monthly wall would
-// fail it closed halfway through a run. Shared by both machine products, so the two ceilings cannot
-// drift apart.
+// Rate limit, no quota: a monthly wall would cut the bursty nightly reconcile off mid-run.
 var machineRateLimitPolicy = '''<policies>
   <inbound>
     <base />
@@ -242,26 +221,9 @@ resource machineSubscriptions 'Microsoft.ApiManagement/service/subscriptions@202
   }
 }]
 
-// ── eagle-analytics ─────────────────────────────────────────────────────────────────────────────
-//
-// TWO APIs again, for the reason at the top of this file: a key presented to an API that does not
-// require one resolves ambiguously, so anonymous and keyed callers get separate APIs. Which splits
-// the paths — `/analytics/...` for everything a browser reaches (ingest, health, and the read routes
-// the DEMI admin screens call with a Keycloak bearer), `/analytics-machine/audit` for the one route
-// only servers call. The analytics app strips one leading `/analytics` and matches both the prefixed
-// and the root-mounted form, so the backend sees the same route either way.
-//
-// Operations are named one at a time rather than wildcarded like demi-api above: this surface is a
-// short fixed list owned by one repository, and naming each one keeps a route nobody declared off
-// the gateway.
+// eagle-analytics operations are named, not wildcarded, so an undeclared route stays off the gateway.
 
-// Key Vault-backed, same as gateway-secret above. eagle-analytics deploys the other side of both
-// headers, but the vault is the one copy either side reads, so APIM is no longer a second store and
-// a rotation is a new secret version rather than a redeploy of two repositories.
-//
-// No `identityClientId`: the service above is SystemAssigned, and that is the identity APIM uses
-// when the property is absent. `dependsOn` the role assignment because APIM resolves the secret
-// while it creates the named value — without the read grant already in place that create fails.
+// APIM reads the secret while creating the named value, so the read grant must exist first.
 resource analyticsSharedHeader 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = if (analyticsDeployed) {
   parent: apim
   name: 'analytics-shared-header'
@@ -292,21 +254,8 @@ resource analyticsAuditHeader 'Microsoft.ApiManagement/service/namedValues@2024-
   ]
 }
 
-// API scope, because eagle-analytics puts its apimGuard on every route but /health, reads included:
-// its Function host answers on a public hostname of its own, and a route reachable without this
-// header is a route reachable without the gateway. /audit demands a second credential on top, and
-// /query* and /dashboards* add the staff JWT — this header is the floor, not the whole check. Each
-// name is deleted before it is set for the same reason the global policy deletes its three:
-// anything a client sends under these names is attacker input dressed as the gateway.
-//
-// X-Analytics-Audit is deleted HERE AND STAMPED NOWHERE. This API is anonymous, so a client copy
-// reaching the backend is the whole attack: /audit is only served behind the machine API below.
-//
-// Both names must equal APIM_SHARED_HEADER_NAME and AUDIT_SHARED_HEADER_NAME in eagle-analytics,
-// whose defaults are these literals.
-//
-// Composed from fragments rather than written out twice: the machine policy differs by ONE stamp,
-// and everything either API strips must not drift apart.
+// Client copies of these headers are deleted first. Names must match APIM_SHARED_HEADER_NAME and
+// AUDIT_SHARED_HEADER_NAME in eagle-analytics; only the machine API stamps the audit header.
 var analyticsInboundHead = '''<policies>
   <inbound>
     <base />
@@ -320,8 +269,6 @@ var analyticsInboundHead = '''<policies>
     </set-header>
 '''
 
-// The second credential, and only on the keyed API: /audit carries both guards, so the gateway has
-// to prove itself twice.
 var analyticsAuditStamp = '''    <set-header name="X-Analytics-Audit" exists-action="override">
       <value>{{analytics-audit-header}}</value>
     </set-header>
@@ -371,13 +318,8 @@ resource analyticsHealthOperation 'Microsoft.ApiManagement/service/apis/operatio
   }
 }
 
-// The read routes the DEMI admin screens call from a browser. Anonymous AT THE GATEWAY and not
-// unauthenticated: each request carries a Keycloak bearer that the app verifies against its own role
-// gate. A subscription key cannot guard these — a page cannot hold one secretly — so the key stays
-// on /audit, which only servers call.
-//
-// `/dashboards` and `/dashboards/*` are separate operations because an APIM wildcard matches a
-// segment that is there, not a missing one — one entry alone would 404 either the list or the items.
+// Keyless at the gateway; the app checks the Keycloak bearer. An APIM wildcard needs a segment, so
+// `/dashboards` and `/dashboards/*` are separate operations.
 var analyticsBearerOperations = [
   {
     name: 'query'
@@ -421,19 +363,10 @@ resource analyticsBearerOperationResources 'Microsoft.ApiManagement/service/apis
   }
 }]
 
-// Named origins, not `*`: `*` would be the wrong answer for a request that carries a bearer, and
-// these are the same hostnames CORS_ORIGIN admits (main.bicep builds the list from
-// frontendHostNames, so a deploy-time AFD hash is never written twice).
-//
-// One indented <origin> element per entry. Bicep multi-line strings take no interpolation, hence
-// this and the header placeholder below.
+// Bicep multi-line strings take no interpolation, hence the placeholder replaced below.
 var analyticsOriginElements = join(map(analyticsBrowserOrigins, origin => '        <origin>${origin}</origin>'), '\n')
 
-// CORS only. The shared header is stamped at API scope above, which every operation inherits
-// through <base />, so repeating it here would only set the same value twice.
-//
-// Authorization is forwarded exactly as it arrives: nothing in this file rewrites or removes it, and
-// the app is what verifies the token.
+// CORS only: the shared header comes from API scope through <base />.
 var analyticsBearerCorsPolicy = replace('''<policies>
   <inbound>
     <base />
@@ -480,15 +413,8 @@ resource analyticsApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-
   ]
 }
 
-// Ingest only. CORS sits on this one operation because it is the only one a web page posts to, and
-// APIM answers the preflight from this scope itself — declaring an OPTIONS operation would REPLACE
-// that built-in handling, which is why there is none.
-//
-// ponytail: no gateway throttle, as Consumption has no `rate-limit-by-key`; the per-session cap and
-// 80/100 percent budget emails guard it. Per-IP limits need Basic v2 or a Table Storage counter.
-//
-// 100 KiB, not the 256 KB a 50-event batch could reach: that is the gateway's own runtime ceiling
-// for validate-content, and a larger number would read as enforced without being it.
+// No OPTIONS operation: one would replace APIM's own preflight. 100 KiB is validate-content's ceiling.
+// ponytail: no throttle (Consumption lacks rate-limit-by-key); per-IP limits need Basic v2.
 resource analyticsEventsPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2024-05-01' = if (analyticsDeployed) {
   parent: analyticsEventsOperation
   name: 'policy'
@@ -517,10 +443,7 @@ resource analyticsEventsPolicy 'Microsoft.ApiManagement/service/apis/operations/
   }
 }
 
-// Keyed path, and one route only: staff audit rows in, from other EPIC services. Reached as
-// /analytics-machine/audit with Ocp-Apim-Subscription-Key. The read routes live on the anonymous API
-// above because a browser cannot hold a key; a server writing audit rows can, and a revocable key
-// per consumer is what makes that write attributable.
+// A revocable key per consumer makes each audit write attributable.
 resource analyticsMachineApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = if (analyticsDeployed) {
   parent: apim
   name: analyticsMachineApiName
@@ -587,9 +510,7 @@ resource analyticsMachineProductPolicy 'Microsoft.ApiManagement/service/products
   }
 }
 
-// One subscription per consumer, rotatable alone, keys read with `az apim subscription list-keys`.
-// Servers only: the dashboard UI needs no entry here, since its read routes sit on the anonymous API
-// and are authorised by the bearer it already holds.
+// Servers only: the dashboard UI reads through the keyless API with its bearer.
 var analyticsMachineConsumers = [
   'eagle-api'
 ]
@@ -604,12 +525,8 @@ resource analyticsMachineSubscriptions 'Microsoft.ApiManagement/service/subscrip
   }
 }]
 
-// Global policy. The three backend headers are deleted first because the Function App host stays
-// publicly reachable: anything a client sends under these names is attacker input.
-// X-Client-Ip is the address APIM saw the request arrive from. Behind the gateway the last
-// X-Forwarded-For hop is APIM, so it is the only way the app can tell two callers apart —
-// src/utils/caller-ip.js reads it, and only on a request the gateway secret proves.
-// No <base/> here: the global scope has no parent, so APIM rejects it; backend forwards explicitly.
+// Client copies of these headers are deleted first. src/utils/caller-ip.js trusts X-Client-Ip only
+// with the gateway secret. No <base/>: the global scope has no parent and APIM rejects it.
 resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
   parent: apim
   name: 'policy'

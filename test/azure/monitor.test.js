@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The three read calls behind /admin/audit, /admin/analytics and /admin/cost, checked at the wire:
- * which URL, which verb, which body. A wrong api-version or a swapped scope fails in Azure with a
- * 400 nobody sees until the panel is open, so it is asserted here instead.
- */
+// A wrong api-version or scope gets a 400 from Azure that nobody sees until the admin panel is
+// opened, so URL, verb and body are asserted here.
 
 process.env.NODE_ENV = 'test';
 
