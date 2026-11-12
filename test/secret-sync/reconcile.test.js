@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The reconcile, against a fake Kubernetes API and a fake vault.
- *
- * The OpenShift client is the REAL one (src/secret-sync/openshift.js) with `fetch` injected, so
- * the request method, path and body shape are asserted as they would go on the wire — a patch that
- * annotates the wrong level restarts nothing, and that is invisible in a mocked client.
+ * The real OpenShift client with `fetch` injected, so wire shape is asserted: a patch at the wrong
+ * level restarts nothing, which a mocked client would hide.
  */
 
 process.env.NODE_ENV = 'test';

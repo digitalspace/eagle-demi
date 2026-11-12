@@ -60,7 +60,7 @@ function violations(file, source) {
   return found;
 }
 
-/** Exempt entries whose file no longer breaks the rule they excuse. */
+/** Exempt entries whose file does not break the rule they excuse. */
 function staleExemptions(exempt, sourceOf) {
   return Object.entries(exempt)
     .filter(([file, { violation }]) => !violations(file, sourceOf(file)).includes(violation))

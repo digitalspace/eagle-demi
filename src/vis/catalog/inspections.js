@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policies for the `inspections` container: Eagle `Inspection`,
- * `InspectionElement` and `InspectionItem`, one entity each because the kinds carry different
- * fields. See catalog/projects.js for the rules. The inspector's `email` and the stored-file
- * internals are 2/2; who added or edited a row is 2/2, as on organizations.
+ * Field visibility for the `inspections` container, one entity per kind because the kinds carry
+ * different fields. Inspector email, stored-file internals and row authorship are 2/2.
  */
 const ROW_PLANE = require('./row-plane');
 

@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a mirrored project notification. See catalog/projects.js for the
- * rules.
- *
- * A notification is a public record of a project the EAO was told about; everything the model
- * carries beyond the ACL is already on the public notifications page, so it is 4/4.
+ * Field visibility for a mirrored project notification (rules in catalog/projects.js). Every
+ * field beyond the ACL is already on the public notifications page, so it is 4/4.
  */
 module.exports = {
   // Structural / identity.

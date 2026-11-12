@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a native passage row (`GET /documents/passages`): one chunks-index
- * hit, shaped in `src/controllers/native/passages.js`. Same contract as catalog/chunks.js, whose
- * entries these restate; the gate is still the parent document.
- *
- * `snippet` is 4/4 where chunk `content` is 0/0: it is the index's highlight of the matched terms,
- * escaped, never the whole chunk. `content` is not listed, so the redactor drops it if a row ever
- * carried it.
+ * Field visibility for a native passage row (`GET /documents/passages`). `snippet` is 4/4 because
+ * it is the escaped highlight, never the whole chunk; `content` is unlisted so it is dropped.
  */
 module.exports = {
   id: { defaultVis: 4, maxVis: 4 },

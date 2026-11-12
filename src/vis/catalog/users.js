@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a mirrored Eagle `User`. See catalog/projects.js for the rules.
- *
- * EVERY CONTACT FIELD IS 2/2: email, the phone and fax numbers and the postal address reach staff
- * and never the public, even on a user row Eagle published. The name card is 4/4 and still hidden
- * behind the row ACL, which Eagle's default `['sysadmin']` lands at level 2. Eagle's `password` and
- * `salt` are never stored, so neither is catalogued.
+ * Field visibility for a mirrored Eagle `User` (rules in catalog/projects.js). Every contact field
+ * is 2/2, even on a published user row; `password` and `salt` are never stored.
  */
 const ROW_PLANE = require('./row-plane');
 

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * User writes: `POST /users` and `PUT /users/:id`, ported from eagle-api `api/controllers/user.js`
- * (rules in docs/eagle-api-port.md, Users). Rows live in the `users` container beside the ones
- * the Eagle mirror writes (controllers/nosql/user.js).
+ * User writes (rules in docs/eagle-api-port.md, Users). Rows share the `users` container with
+ * the ones the Eagle mirror writes.
  */
 
 const crypto = require('node:crypto');
@@ -122,10 +121,8 @@ function takeoverBase(row) {
 }
 
 /**
- * Replaces every field, as eagle-api's PUT does (user.js:69-90); a field the body leaves out goes
- * back to its default. `isPublished` left out keeps the current visibility, except that a user
- * whose orgName moves off the public organization loses public, as eagle-api's PUT does (:92).
- *
+ * Replaces every field, as eagle-api's PUT does: an omitted field resets to its default. Moving
+ * orgName off the public organization drops public even when `isPublished` is omitted.
  * @param {{access: object, req: object}} ctx
  * @param {string} id
  * @param {object} changes the request body; `read` is ignored

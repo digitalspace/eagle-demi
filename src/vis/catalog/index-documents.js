@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for an AI Search DOCUMENT hit, keyed on INDEX field names — same reason as
- * catalog/index-projects.js. Most names match `catalog/documents.js`, but not all: the data source
- * projects `c.documentFileName AS fileNameTokens`, and this table also classifies `highlighted`,
- * which no stored document carries. The index is what a hit carries and it is PUT independently of
- * the container, so the two tables stay separate.
- *
- * Every field of `azure/search/indexes/documents.json` has an entry; test/vis/search-drift.test.js
- * holds that against the committed index definition.
+ * Field visibility for an AI Search document hit, keyed on index field names, which differ from
+ * the container's. test/vis/search-drift.test.js holds it to azure/search/indexes/documents.json.
  */
 module.exports = {
   id: { defaultVis: 4, maxVis: 4 },

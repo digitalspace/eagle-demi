@@ -7,13 +7,11 @@
 module.exports = {
   cacPublished: (record) => record.projectCACPublished === true,
 
-  // `=== false`, NOT `!== true`: `isAnonymous` defaults to TRUE in the Eagle model, so a row that
-  // never set it is anonymous — and `!== true` is true for `undefined`, which would publish the
-  // name on exactly those comments.
+  // `=== false`, not `!== true`: Eagle defaults `isAnonymous` to true, so an unset row is
+  // anonymous and must not publish the name.
   commentAttributed: (record) => record.isAnonymous === false,
 
-  // eagle-api governs pinned-proponent visibility with the project's own `pinsRead[]` and IGNORES
-  // the organization-level `read` (controllers/pins.js), so neither the project ACL nor the
-  // organization's says whether `pins` is public. This is the only thing that does.
+  // eagle-api decides pin visibility by the project's `pinsRead[]` and ignores the organization
+  // `read`, so this is the only check that says whether `pins` is public.
   pinsPublished: (record) => Array.isArray(record.pinsRead) && record.pinsRead.includes('public')
 };

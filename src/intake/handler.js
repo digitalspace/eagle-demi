@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * One Defender for Storage scan result, read by the sweep from an upload in `incoming/<documentId>`.
- * Clean files go to the object store and the row takes its requested `read` list, capped at the project's
- * current one; every other result moves the file to quarantine and rejects the row.
+ * A clean upload goes to the object store with its requested `read`, capped at the project's;
+ * any other scan result quarantines the file and rejects the row.
  */
 
 const path = require('path');
@@ -84,9 +83,8 @@ async function reject(row, scan, reason, { store, blobs }) {
 }
 
 /**
- * Apply one scan result to a pending row: `{ result, scannedAt, eTag, malwareNames }`, where `eTag`
- * is the blob the result was read from. Throws on a storage or Cosmos failure; the row stays pending.
- * `deps`: `{ store, blobs, nrs, projects }`.
+ * `scan.eTag` is the blob the result was read from. Throws on a storage or Cosmos failure; the row
+ * stays pending.
  */
 async function applyScanResult(row, scan, deps) {
   const started = Date.now();

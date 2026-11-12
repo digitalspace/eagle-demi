@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a mirrored public comment. See catalog/projects.js for the rules.
- *
- * The one field here that is PII is `author`, and it is the whole reason this catalog exists: a
- * comment submitted anonymously carries a name in Mongo that the public site must never render.
- * The Eagle Comment model has no email field, so none is mirrored and none is catalogued.
- *
- * The staff-side review fields are level 2 with a ceiling of 2: staff read them in eagle-api, and
- * nothing here may publish them.
+ * Field visibility for a mirrored public comment (rules in catalog/projects.js). `author` is the PII:
+ * an anonymous comment still holds a name in Mongo the public must never see.
  */
 module.exports = {
   // Structural / identity.
