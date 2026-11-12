@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The user, group and inspection mirrors. What is asserted is what stays silent when it breaks,
- * because the push answers 200 either way: the stored ACL a row is gated by, the parent that caps
- * it, the fields a visitor gets back, and the secrets that must never be stored.
- */
+// The push answers 200 either way, so these assert what breaks silently: stored ACL, parent cap,
+// fields a visitor gets back, and secrets that must never be stored.
 
 process.env.NODE_ENV = 'test';
 

@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Who may call the PDF title worker routes. They read rows unfiltered and sign reads and writes of
- * stored originals, so only a named registry principal with demi-service-write and no project
- * scope gets through; the list is empty unless DEMI_PDF_TITLE_WORKER_PRINCIPALS names one.
- */
+// The worker routes read rows unfiltered and sign object access, so only a principal named in
+// DEMI_PDF_TITLE_WORKER_PRINCIPALS, with demi-service-write and no project scope, passes.
 
 process.env.NODE_ENV = 'test';
 

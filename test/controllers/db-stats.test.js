@@ -31,8 +31,8 @@ function mockCounts(t, { projects, eagleOnly, centroid, documents, extracted, er
 
 test('GET /db/stats', async (t) => {
   await t.test('reports the unlinked project count', async () => {
-    // An Eagle project with no Track counterpart is RETAINED and FLAGGED by decision (TODO F17),
-    // so the only place its number surfaces is here. Measured 2026-08-23: 393 total, 382 Track.
+    // An Eagle project with no Track counterpart is retained and flagged, so this is the only
+    // place its count surfaces. The numbers are a measured test snapshot.
     mockCounts(t, {
       projects: 393, eagleOnly: 11, centroid: 300,
       documents: 60578, extracted: 40000, errors: 12, boundaries: 281

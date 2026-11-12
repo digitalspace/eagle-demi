@@ -1,18 +1,7 @@
 'use strict';
 
-/**
- * POST /api/gate — the public site's access curtain, ported from eagle-api.
- *
- * Driven through the DISPATCHER rather than the handler, because half of what matters here is the
- * route table: the route carries no guards on purpose, and a chain added to it would 401 the only
- * caller it has. The other half is the three-way answer, where every wrong turn is a security
- * failure in the quiet direction — a 404 tells eagle-public this environment runs ungated, so a
- * failed Cosmos read must never answer one.
- *
- * The 404 assertions check the BODY, not just the status: an unregistered route is a 404 from the
- * dispatcher too (`{ error: 'Endpoint not found.' }`), so a status-only assertion would pass with
- * the whole feature deleted.
- */
+// A 404 tells eagle-public the environment runs ungated, so a failed Cosmos read must never answer
+// one. 404 checks assert the body: an unregistered route is a dispatcher 404 too.
 
 process.env.NODE_ENV = 'test';
 
@@ -83,9 +72,8 @@ test('the access curtain', async (t) => {
   });
 
   await t.test('401, not 500, on a password of a different length', async (t) => {
-    // `crypto.timingSafeEqual` THROWS on unequal-length buffers, so a comparison that reaches it
-    // without a length check answers 500 — which both tells the caller their guess was the wrong
-    // length and turns every short guess into a server error in the logs.
+    // `crypto.timingSafeEqual` throws on unequal lengths; a 500 would leak the length and flood
+    // the logs with server errors.
     gateOn(t);
     await withServer(async (call) => {
       for (const wrong of ['x', `${PASSWORD}x`, '']) {
@@ -147,8 +135,8 @@ test('the access curtain', async (t) => {
   });
 
   await t.test('404 when ACCESS_GATE is false, even with the right password', async (t) => {
-    // The flag is what eagle-api owns. A password left behind in app settings after the curtain was
-    // lifted must not keep a gate answering that the site no longer shows.
+    // eagle-api owns the flag. A password left in app settings after the curtain is lifted must
+    // not keep a gate answering that the site does not show.
     t.mock.method(configRepository, 'getPublic', async () => ({
       id: 'public', ENVIRONMENT: 'test', ACCESS_GATE: false
     }));
@@ -195,9 +183,8 @@ test('the access curtain', async (t) => {
 test('the gate route is deliberately unguarded', () => {
   const route = routeChains().find(r => r.method === 'post' && r.path === '/gate');
   assert.ok(route, 'POST /gate is not in the route table');
-  // The caller is a visitor holding nothing, so ANY guard here — authMiddleware most of all — locks
-  // out the only traffic this route has. Asserted against the source with comments stripped, so a
-  // guard named only in prose does not satisfy it and a real one added does fail it.
+  // The caller is a visitor holding nothing, so any guard here locks out the only traffic this
+  // route has. The source is read with comments stripped.
   assert.equal(route.chain.trim(), '',
     'the curtain must carry no guards: the password in the body is the whole credential');
 });

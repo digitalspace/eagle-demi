@@ -19,12 +19,8 @@ const ANON_ACCESS = { level: 4 };
 
 const ANON = { query: {}, params: {}, body: {} };
 
-/**
- * The read ACL gates ROWS, not fields — so a caller entitled to the row was getting the raw Cosmos
- * record with it: `read[]` (the internal role vocabulary), `s3Key` (the object-store key) and
- * `_etag`. `/api/search` already withholds all of that from every row shape it emits; these two
- * CRUD routes simply did not follow the same rule.
- */
+// The read ACL gates rows, not fields: these CRUD routes must withhold `read[]`, `s3Key` and
+// `_etag` the same way `/api/search` does.
 const STORED = {
   id: 'd1',
   projectId: '207',
@@ -58,12 +54,8 @@ test('document routes withhold the raw Cosmos record', async (t) => {
     assert.strictEqual(body.isPublished, true, 'the mirror survives');
   });
 
-  /**
-   * Dropping `read[]` has to be lossless. The seeded Eagle documents carry an ACL and no usable
-   * `isPublished` (seed/transform.js), so reporting the stored flag verbatim would call a
-   * restricted document published, or a published one hidden, depending which way the two rows
-   * disagree. `isPublished` is derived from the ACL, the same expression the search rows use.
-   */
+  // Seeded Eagle documents carry an ACL but no usable `isPublished` (seed/transform.js), so the
+  // flag must be derived from `read[]`, as the search rows do.
   await t.test('isPublished is derived from read[], not read off the stored flag', async () => {
     const disagreeing = { ...structuredClone(STORED), read: ['sysadmin', 'staff'], isPublished: true };
     t.mock.method(documents, 'getById', async () => disagreeing);
@@ -125,12 +117,8 @@ test('the projects redactor withholds the ACL as well as the upstream payloads',
     assert.strictEqual(view.isPublished, false, 'derived from the ACL: not public');
     assert.strictEqual(view.name, 'P');
 
-    // NO ACL AT ALL falls back to the stored flag, and the fallback must not default to TRUE — a
-    // row that reached here without a `read[]` is the one case where the authoritative source is
-    // missing, and guessing "published" there publishes it. The branch is unreachable for stored
-    // rows today (`resolveProjectAcl` and the project controller both guarantee a non-empty
-    // `read[]`), which is exactly why it needs an assertion rather than trust: nothing else would
-    // notice it changing.
+    // With no `read[]` the stored flag is the fallback, never default-true. Stored rows always
+    // carry `read[]`, so only this assertion would notice the fallback changing.
     assert.strictEqual(
       redactForAccess('projects', { id: '209', name: 'Q', isPublished: false }, ANON_ACCESS)
         .isPublished, false,
@@ -139,10 +127,8 @@ test('the projects redactor withholds the ACL as well as the upstream payloads',
       redactForAccess('projects', { id: '210', name: 'R', isPublished: true }, ANON_ACCESS)
         .isPublished, true,
       'and the fallback is the stored flag, not a constant');
-    // NEITHER field: the row says nothing about its own visibility, so the answer is NOT PUBLIC.
-    // `isPublished === true` and `isPublished !== false` agree on every row that carries the flag
-    // and disagree only here — where the second one publishes a row that never claimed to be
-    // public. That is the whole reason the comparison is written the strict way round.
+    // Neither field: `=== true` and `!== false` differ only here, and only the strict form keeps
+    // the row unpublished.
     assert.strictEqual(
       redactForAccess('projects', { id: '211', name: 'S' }, ANON_ACCESS).isPublished, false,
       'a row that asserts neither an ACL nor a flag is not published by default');
