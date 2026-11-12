@@ -9,6 +9,9 @@ const {
 
 const STATUS = Object.freeze({ APPLIED: 'applied', STALE: 'stale', PARENT_NOT_FOUND: 'parent-not-found' });
 
+/** Who wrote a Track work's document and who may write it; the works repository refuses any other owner's. */
+const TRACK_OWNED = Object.freeze({ source: 'track', owner: 'track' });
+
 /** Keys a document holds beside the work's own fields; `settledDoc` rebuilds all but `deleted`. */
 const DOC_TAIL = new Set(['outcome', 'phases', 'pushStamps', 'updatedAt', 'deleted']);
 
@@ -34,7 +37,7 @@ const unchanged = (status, doc) => ({ status, doc });
 /** A work PUT: the work's own fields replaced, its stored phases and milestones kept. */
 function applyWork(doc, { pushedAt, work }, { projectId = null } = {}) {
   if (isStale(doc, 'work', pushedAt)) return unchanged(STATUS.STALE, doc);
-  const fields = docWorkFieldsOf(work, doc ? doc.projectId : projectId);
+  const fields = { ...docWorkFieldsOf(work, doc ? doc.projectId : projectId), ...TRACK_OWNED };
   const stamps = { ...stampsOf(doc), work: Number(pushedAt) };
   return { status: STATUS.APPLIED,
     doc: settledDoc(fields, isLive(doc) ? doc.phases : [], stamps, doc ? doc.updatedAt ?? null : null) };
@@ -95,6 +98,7 @@ function removeWork(doc, { pushedAt, workId, workTypeId }, { projectId = null } 
     projectId: doc ? doc.projectId : projectId,
     trackWorkId: Number(workId),
     workTypeId: Number(workTypeId ?? (doc ? doc.workTypeId : NaN)),
+    ...TRACK_OWNED,
     deleted: true,
     pushStamps: { ...stampsOf(doc), work: Number(pushedAt) },
     updatedAt: doc ? doc.updatedAt ?? null : null
@@ -137,5 +141,5 @@ function applyNewWork(doc, { pushedAt, work }, { projectId = null } = {}) {
 }
 
 module.exports = {
-  STATUS, applyWork, applyNewWork, applyPhase, applyEvent, removePhase, removeEvent, removeWork
+  STATUS, TRACK_OWNED, applyWork, applyNewWork, applyPhase, applyEvent, removePhase, removeEvent, removeWork
 };

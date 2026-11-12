@@ -18,6 +18,8 @@ const { mockRes } = require('../../helpers/mock-res');
 const { useConfig } = require('../../helpers/use-config');
 const { STAFF } = require('../../helpers/eagle-mirror-fixtures');
 const { recordEvents } = require('../../helpers/record-events');
+const { syncWorkDocs } = require('../../../src/scripts/sync-works');
+const cosmos = require('../../../src/db/cosmos-nosql');
 const config = require('../../../src/config');
 
 const PID = '1001';
@@ -147,6 +149,47 @@ test('Track work, phase and event routes', async (t) => {
 
     assert.deepStrictEqual(res.body, { id: '2001', action: 'skipped', reason: 'apiRow' });
     assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('adopted document survives a Track PUT (answered 200 skipped adopted) and the nightly (counted adopted)',
+    async (t) => {
+      const store = await seeded(t);
+      const work = () => store.rows('works').find(r => r.id === 'track-2001');
+      await cosmos.upsert('works', { ...work(), owner: 'demi', simpleTitle: 'Staff title' });
+      const adopted = work();
+      store.writes.length = 0;
+      const warn = t.mock.method(logger, 'warn', () => {});
+      const put = fixture('work');
+
+      const res = await call('putTrackWork', { params: { id: '2001' },
+        body: { ...put, pushedAt: LATER, work: { ...put.work, simple_title: 'Track title' } } });
+      const counts = await syncWorkDocs(PID, [fixture('new_work').work], { pushedAt: LATER + 1, live: true });
+
+      assert.deepStrictEqual(res.body, { id: '2001', action: 'skipped', reason: 'adopted' });
+      assert.strictEqual(counts.adopted, 1);
+      assert.deepStrictEqual([work(), writesTo(store, 'works')], [adopted, []]);
+      assert.deepStrictEqual(warn.mock.calls.filter(c => /etag race/.test(c.arguments[0])), []);
+    });
+
+  await t.test('a stale, equal or child record on an adopted work also answers 200 skipped adopted', async (t) => {
+    const store = await seeded(t);
+    const work = () => store.rows('works').find(r => r.id === 'track-2001');
+    await cosmos.upsert('works', { ...work(), owner: 'demi' });
+    const adopted = work();
+    store.writes.length = 0;
+    t.mock.method(logger, 'warn', () => {});
+    const derived = t.mock.method(projects, 'patchDerived', async () => ({ status: 'unchanged' }));
+    const put = fixture('work');
+
+    const answers = [
+      await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() }),
+      await call('putTrackWork', { params: { id: '2001' }, body: { ...put, pushedAt: put.pushedAt - 1 } }),
+      await call('postTrackWork', { body: fixture('new_work') })
+    ];
+
+    assert.deepStrictEqual(answers.map(res => [res.statusCode, res.body.reason]),
+      [[200, 'adopted'], [200, 'adopted'], [200, 'adopted']]);
+    assert.deepStrictEqual([work(), store.writes, derived.mock.callCount()], [adopted, [], 0]);
   });
 
   await t.test('only a write a reader can see is audited', async (t) => {

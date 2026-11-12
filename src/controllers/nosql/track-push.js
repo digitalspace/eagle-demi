@@ -177,6 +177,8 @@ const RECORD_REFUSALS = {
   [RESULT.CONFLICT]: [503, 'WRITE_CONFLICT', RETRY],
   [RESULT.DERIVED_CONFLICT]: [503, 'DERIVED_CONFLICT', RETRY]
 };
+/** Writer results Track must not retry, answered 200 `skipped` with this `reason`. */
+const RECORD_SKIPS = { [RESULT.API_ROW]: 'apiRow', [RESULT.ADOPTED]: 'adopted' };
 // Track retries PARENT_NOT_FOUND once after 5 s, which covers a project row still in flight from another thread.
 const PROJECT_PENDING = [404, 'PARENT_NOT_FOUND', 'DEMI holds no project row for this record yet.'];
 
@@ -193,9 +195,9 @@ function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }
   }
   if (status === RESULT.APPLIED) return res.json({ id: recordId, action: 'applied' });
   if (status === RESULT.UNCHANGED) return res.json({ id: recordId, action: 'unchanged' });
-  if (status === RESULT.API_ROW) {
-    logger.warn(`[track-push] skipped id=${label} reason=apiRow`);
-    return res.json({ id: recordId, action: 'skipped', reason: 'apiRow' });
+  if (RECORD_SKIPS[status]) {
+    logger.warn(`[track-push] skipped id=${label} reason=${RECORD_SKIPS[status]}`);
+    return res.json({ id: recordId, action: 'skipped', reason: RECORD_SKIPS[status] });
   }
   const [httpStatus, code, error] = status === RESULT.PROJECT_NOT_FOUND && method !== 'DELETE'
     ? PROJECT_PENDING : RECORD_REFUSALS[status];

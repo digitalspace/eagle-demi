@@ -8971,8 +8971,9 @@ components:
       description: >-
         `action` is `applied`, `unchanged` (a reader sees no difference; only moved stamps were
         stored, and the project row's derived fields were still checked), or `skipped` with
-        `reason` `unmirrored` (the nightly leaves this work type out of DEMI) or `apiRow` (the
-        project row has no Track source). Only `applied` is audited.
+        `reason` `unmirrored` (the nightly leaves this work type out of DEMI), `apiRow` (the
+        project row has no Track source) or `adopted` (DEMI took the work over from Track, so
+        Track no longer writes it). Only `applied` is audited.
       content:
         application/json:
           schema:
@@ -10389,7 +10390,7 @@ components:
           enum: [applied, unchanged, skipped]
         reason:
           type: string
-          enum: [unmirrored, apiRow]
+          enum: [unmirrored, apiRow, adopted]
           description: Only when `action` is `skipped`.
 
     TrackWorkRecord:

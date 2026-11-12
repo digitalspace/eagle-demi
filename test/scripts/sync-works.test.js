@@ -7,6 +7,7 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 const { syncWorkDocs } = require('../../src/scripts/sync-works');
+const { TRACK_OWNED } = require('../../src/merge/track-record');
 const { workDocOf } = require('../../src/seed/track-mappers');
 const { fakeWorks, useWorks } = require('../helpers/track-sync-fakes');
 
@@ -14,7 +15,7 @@ const PULL_START = 1762675200000;
 const NOW = '2026-11-10T00:00:00.000Z';
 const nestedWork = () => structuredClone(require('../fixtures/track-records/new_work_two_phases.json').work);
 const storedDoc = (pushStamps, over = {}) =>
-  ({ ...workDocOf(nestedWork(), { projectId: '207', pushStamps, updatedAt: NOW }), ...over });
+  ({ ...workDocOf(nestedWork(), { projectId: '207', pushStamps, updatedAt: NOW }), ...TRACK_OWNED, ...over });
 
 const writeOn = (t) => {
   const held = config.worksWrite;
@@ -31,14 +32,26 @@ test('with WORKS_WRITE off the container is never called', async (t) => {
   assert.deepStrictEqual(fake.calls, []);
 });
 
-test('a work Track returns is saved as its document', async (t) => {
+test('a nightly create carries source and owner track', async (t) => {
   writeOn(t);
   const fake = useWorks(t, fakeWorks());
 
   const counts = await sync([nestedWork()]);
 
   assert.strictEqual(counts.written, 1);
-  assert.deepStrictEqual(fake.saved.map(doc => [doc.id, doc.projectId]), [['track-2001', '207']]);
+  assert.deepStrictEqual(fake.saved.map(doc => [doc.id, doc.projectId, doc.source, doc.owner]),
+    [['track-2001', '207', 'track', 'track']]);
+});
+
+test('nightly leaves a sheet-owned work alone', async (t) => {
+  writeOn(t);
+  const sheet = { id: 'sheet-a', projectId: '207', source: 'sheet', owner: 'sheet', phases: [] };
+  const fake = useWorks(t, fakeWorks([sheet]));
+
+  const counts = await sync([]);
+
+  assert.deepStrictEqual(fake.saved, []);
+  assert.deepStrictEqual(counts, { written: 0, unchanged: 0, stale: 0, adopted: 0, failed: 0 });
 });
 
 test('a document a push stamped after the pull started is left alone and counted stale', async (t) => {
@@ -78,7 +91,8 @@ test('a stored work Track no longer returns is tombstoned with its stamps', asyn
 
   await sync([]);
 
-  assert.deepStrictEqual(fake.saved, [{ id: 'track-2001', projectId: '207', deleted: true, pushStamps: { work: PULL_START - 1 } }]);
+  assert.deepStrictEqual(fake.saved.map(doc => [doc.id, doc.deleted, doc.pushStamps]),
+    [['track-2001', true, { work: PULL_START - 1 }]]);
 });
 
 test('a missing work a push stamped after the pull started is kept and counted stale', async (t) => {

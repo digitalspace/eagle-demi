@@ -11,7 +11,7 @@ const works = require('../repositories/works');
 const { writeGuarded } = require('../helpers/etag-write');
 const { deriveInputs } = require('../domain/works-derive');
 const {
-  STATUS, applyWork, applyNewWork, applyPhase, applyEvent, removePhase, removeEvent, removeWork
+  STATUS, TRACK_OWNED, applyWork, applyNewWork, applyPhase, applyEvent, removePhase, removeEvent, removeWork
 } = require('../merge/track-record');
 
 const RESULT = Object.freeze({
@@ -22,17 +22,18 @@ const RESULT = Object.freeze({
   NOT_BACKFILLED: 'not-backfilled',
   PROJECT_NOT_FOUND: 'project-not-found',
   CONFLICT: 'conflict',
-  DERIVED_CONFLICT: 'derived-conflict'
+  DERIVED_CONFLICT: 'derived-conflict',
+  ADOPTED: 'adopted'
 });
 
 /** The document as stored, without Cosmos' own fields and the write time. */
 const storedFields = (doc) => Object.fromEntries(Object.entries(doc || {})
   .filter(([key]) => !key.startsWith('_') && key !== 'updatedAt'));
 
-/** What a reader sees of a document: a tombstone and an absent work show nothing, and stamps are not shown. */
+/** What a reader sees: nothing of a tombstone or absent work, and no push stamps or owner stamp. */
 function visible(doc) {
   if (!doc || doc.deleted === true) return null;
-  const { pushStamps: _stamps, ...fields } = storedFields(doc);
+  const { pushStamps: _stamps, source: _source, owner: _owner, ...fields } = storedFields(doc);
   return fields;
 }
 
@@ -64,7 +65,7 @@ const STEPS = {
 
 async function workIdOf(projectId, step) {
   if (step.workId !== undefined) return step.workId;
-  const holder = (await works.listByProject(projectId)).find(step.holds);
+  const holder = (await works.listByProject(projectId, { owner: TRACK_OWNED.owner })).find(step.holds);
   return holder ? holder.trackWorkId : null;
 }
 
@@ -78,12 +79,16 @@ async function saveWork(projectId, workId, step) {
     existing: await read(),
     reread: read,
     attempt: async (doc) => {
+      // Before the step, so an adopted work answers the same whatever the record or its stamp.
+      if (doc && works.ownerOf(doc) !== TRACK_OWNED.owner) return { status: RESULT.ADOPTED };
       const { status, doc: next } = step.apply(doc);
       if (status !== RESULT.APPLIED) return { status };
       const changed = !isDeepStrictEqual(visible(doc), visible(next));
       if (!changed && isDeepStrictEqual(storedFields(doc), storedFields(next))) return { status: RESULT.UNCHANGED };
       const updatedAt = changed ? new Date().toISOString() : next.updatedAt;
-      await works.save({ ...next, updatedAt }, { etag: doc ? doc._etag : undefined });
+      const saved = await works.save({ ...next, updatedAt },
+        { owner: TRACK_OWNED.owner, etag: doc ? doc._etag : undefined, existing: doc });
+      if (saved.status === 'foreign') return { status: RESULT.ADOPTED };
       return { status: changed ? RESULT.APPLIED : RESULT.UNCHANGED };
     }
   });
