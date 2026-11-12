@@ -10,7 +10,7 @@
   "src/controllers/nosql/link.js": {"complexity":[25]},
   "src/controllers/nosql/notification.js": {"complexity":[26]},
   "src/controllers/nosql/pdf-title.js": {"complexity":[36,31,21,21],"max-lines":[887]},
-  "src/controllers/nosql/project.js": {"complexity":[35,29,27,22,21],"max-lines":[1416],"max-lines-per-function":[153]},
+  "src/controllers/nosql/project.js": {"complexity":[35,29,27,22,21,21],"max-lines":[1425],"max-lines-per-function":[158]},
   "src/controllers/nosql/update.js": {"complexity":[27]},
   "src/controllers/nosql/user.js": {"complexity":[21]},
   "src/controllers/search-definitions.js": {"complexity":[26]},

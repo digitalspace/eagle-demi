@@ -40,7 +40,7 @@ test('redactForAccess', async (t) => {
   await t.test('a level 4 caller sees the public fields and not the ACL', () => {
     const out = redactForAccess('projects', storedRow(), { level: 4 });
     assert.strictEqual(out.name, 'Coal Mountain');
-    assert.strictEqual(out.projectLead, 'Alex Lead');
+    assert.strictEqual('projectLead' in out, false);
     assert.strictEqual('read' in out, false);
     assert.strictEqual('_rid' in out, false);
     assert.strictEqual('_self' in out, false);

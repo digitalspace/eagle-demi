@@ -100,17 +100,16 @@ const catalog = {
   substantially: { defaultVis: 4, maxVis: 4 },
   substantiallyDate: { defaultVis: 4, maxVis: 4 },
 
-  // Contacts. eagle-public shows these to anonymous visitors today, so they stay at 4.
-  projectLead: { defaultVis: 4, maxVis: 4 },
-  responsibleEPD: { defaultVis: 4, maxVis: 4 },
-  eaoMember: { defaultVis: 4, maxVis: 4 },
-
-  // Public by EAO policy (docs/rbac-architecture.md §3 question 2). The phones are office lines on
-  // the same contact card as the emails.
-  projectLeadEmail: { defaultVis: 4, maxVis: 4 },
-  responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
-  projectLeadPhone: { defaultVis: 4, maxVis: 4 },
-  responsibleEPDPhone: { defaultVis: 4, maxVis: 4 },
+  // The business keeps staff names and contact lines to IDIR logins. Capped at 3, so no dial can
+  // publish them; the staff contact history `staffAssignments` sits at the same level.
+  projectLead: { defaultVis: 3, maxVis: 3 },
+  responsibleEPD: { defaultVis: 3, maxVis: 3 },
+  eaoMember: { defaultVis: 3, maxVis: 3 },
+  projectLeadEmail: { defaultVis: 3, maxVis: 3 },
+  responsibleEPDEmail: { defaultVis: 3, maxVis: 3 },
+  projectLeadPhone: { defaultVis: 3, maxVis: 3 },
+  responsibleEPDPhone: { defaultVis: 3, maxVis: 3 },
+  staffAssignments: { defaultVis: 3, maxVis: 3 },
 
   // Public only while the CAC is, which is what the predicate reads.
   cacEmail: { defaultVis: 2, maxVis: 4, when: 'cacPublished' },
@@ -142,6 +141,12 @@ const catalog = {
   // Dispute resolution, from the legislation block like `substantially`.
   dispute: { defaultVis: 2, maxVis: 2 },
   disputeDate: { defaultVis: 2, maxVis: 2 },
+
+  // DEMI's staff history (domain/project-staff-fields.js): the register number is private, and
+  // investment and notes are internal. Staff and service keys only, never raised.
+  externalIds: { defaultVis: 2, maxVis: 2 },
+  capitalInvestments: { defaultVis: 2, maxVis: 2 },
+  staffNotes: { defaultVis: 2, maxVis: 2 },
 
   // eagle-api publishes the pinned-proponent list by `pinsRead[]` alone (controllers/pins.js), so
   // `pins` is public only through its predicate, never through the project ACL.

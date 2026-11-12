@@ -61,6 +61,12 @@ describe('mapping a project row', () => {
     expect(mapProject({ _id: 'abc', isPublished: false }).gatingState).toBe('staged');
   });
 
+  it('labels the assessment team when the read carries no responsible EPD', () => {
+    expect(mapProject({ _id: 'abc' }).rawMetadata?.eagleAttributes?.responsibleEPD).toBe('Project assessment team');
+    expect(mapProject({ _id: 'abc', responsibleEPD: 'Casey Sample' }).rawMetadata?.eagleAttributes?.responsibleEPD)
+      .toBe('Casey Sample');
+  });
+
   it('names an unnamed row rather than rendering blank', () => {
     expect(mapProject({ _id: 'abc' }).name).toBe('Unnamed Project');
   });

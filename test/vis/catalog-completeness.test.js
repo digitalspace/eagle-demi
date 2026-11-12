@@ -270,13 +270,6 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.execProjectDirector.maxVis, 4);
   });
 
-  await t.test('the contact emails and phones are public by policy', () => {
-    assert.strictEqual(catalog.projectLeadEmail.defaultVis, 4);
-    assert.strictEqual(catalog.responsibleEPDEmail.defaultVis, 4);
-    assert.strictEqual(catalog.projectLeadPhone.defaultVis, 4);
-    assert.strictEqual(catalog.responsibleEPDPhone.defaultVis, 4);
-  });
-
   // Merged through EAGLE_TOP_LEVEL_FIELDS; their only other home is `sources.eagle` at maxVis 0,
   // so without these entries they reach nobody.
   await t.test('pins and featuredDocuments are catalogued in their own right', () => {

@@ -80,7 +80,8 @@ export function mapProject(p: RawProject): Project {
     eagleAttributes: {
       _id: p._id,
       name: p.name,
-      responsibleEPD: p.responsibleEPD || 'Project Assessment Director',
+      // Level 3: an anonymous read never carries it, so it gets eagle-public's team label.
+      responsibleEPD: p.responsibleEPD || 'Project assessment team',
       locationDescription: p.region || 'British Columbia',
       centroid: p.centroid,
     },

@@ -4,6 +4,7 @@
 // (test/ownership/ownership.test.js); the merge rules that apply these lists are in src/merge/project.js.
 
 const { SYNC_STATE_FIELDS } = require('./sync-out');
+const { STAFF_ROLE_FIELDS } = require('../domain/project-staff-fields');
 
 /**
  * `[targetField, trackField, eagleField]`; eagleField null means Eagle has no equivalent.
@@ -119,7 +120,7 @@ const DEMI_OWNED_AT = 'demiOwnedAt';
  */
 const DEMI_ONLY_FIELDS = [
   'tags', 'levelHeldAt', DEMI_OWNED_AT, STAFF_EDITED_AT, 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
-  ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
+  ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS, ...STAFF_ROLE_FIELDS
 ];
 
 /** What a Track row takes from its `eagle-<id>` twin: not the sync-out state, as the Track row was never sent. */
