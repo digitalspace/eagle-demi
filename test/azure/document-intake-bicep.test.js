@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const { resourceBlock } = require('../helpers/bicep-resource');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
@@ -18,14 +19,6 @@ const PROD_PARAMS = read('azure', 'main.prod.bicepparam');
 const DEPLOY = read('scripts', 'deploy-infra.sh');
 const COSMOS_MODULE = read('azure', 'modules', 'cosmos-nosql.bicep');
 const BLOBS = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs';
-
-/** The body of a top-level resource declaration, up to its closing brace at column 0. */
-function resourceBlock(source, symbol) {
-  const start = source.indexOf(`resource ${symbol} `);
-  assert.ok(start >= 0, `resource ${symbol} is declared`);
-  const end = source.indexOf('\n}', start);
-  return source.slice(start, end);
-}
 
 const DEFENDER = resourceBlock(MODULE, 'defenderForStorage');
 

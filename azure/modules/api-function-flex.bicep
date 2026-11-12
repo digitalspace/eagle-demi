@@ -1,7 +1,5 @@
-// DEMI REST API on Flex Consumption (FC1) — `demi-api-fc-<env>`, the only API app.
-//
-// Nothing here holds a storage key: the deployment container and the host's own bookkeeping both
-// authenticate as the user-assigned identity.
+// DEMI REST API on Flex Consumption (FC1), `demi-api-fc-<env>`. No storage key: deployment and
+// host bookkeeping authenticate as the user-assigned identity.
 
 @description('Location for Azure Function App resources')
 param location string = resourceGroup().location
@@ -35,10 +33,8 @@ param searchIndexProjects string = 'projects'
 @description('Azure AI Search index holding document metadata.')
 param searchIndexDocuments string = 'documents'
 
-// EMPTY IS A VALID VALUE for these two, and it is the kill switch: RecentActivity and
-// ProjectNotification keyword searches fall back to the Cosmos read, which answers them with
-// CONTAINS. The other three have nothing to fall back to.
-// Set to the index name only after the index PUT and the first indexer run.
+// Empty is the kill switch for these two (keyword searches fall back to a Cosmos CONTAINS read);
+// the other three have no fallback. Set the name only after the index PUT and first indexer run.
 @description('Azure AI Search index holding recent activity (updates). Empty falls back to Cosmos.')
 param searchIndexActivities string = ''
 
@@ -134,7 +130,7 @@ param ssoAudience string = ''
 
 // Empty keys every visitor arriving through one of our proxies on that proxy's address, which is
 // one shared anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
-@description('Comma-separated egress IPs of proxies we run (the OpenShift rproxy). For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
+@description('Comma-separated egress IPs of proxies we run in front of APIM. For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
 param trustedProxyIps string = ''
 
 // Empty keys every visitor arriving through Front Door on its egress address, which is one shared
@@ -266,9 +262,8 @@ param syncTeamsSchedule string = ''
 @description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty registers no timer.')
 param syncProjectsSchedule string = ''
 
-// ── Bulk download ────────────────────────────────────────────────────────────
-// Flex trap: an app setting deployed as '' is DROPPED, so `process.env.X` is undefined rather
-// than empty — off is the code's default, never a value it can read here.
+// Bulk download. Flex drops an app setting deployed as '', so the code reads undefined, not
+// empty: off is the code's default.
 @description('Storage queue the bulk-download worker triggers on. Empty registers no worker, which leaves the feature off.')
 param bulkDownloadsQueue string = ''
 
@@ -287,7 +282,7 @@ param bulkMaxTotalBytes int = 21474836480
 @description('Object opens the worker keeps ahead of the archive append, so the next documents overlap the current one. Sockets and buffers in flight per instance.')
 param bulkFetchAhead int = 3
 
-@description('Objects READ at once, the entry being appended included. 1 keeps the transfers serial, which is what bulkFetchAhead alone does; above 1 it supersedes bulkFetchAhead. One connection to NRS carries about 6.4 MB/s.')
+@description('Objects READ at once, the entry being appended included. 1 keeps the transfers serial, which is what bulkFetchAhead alone does; above 1 it supersedes bulkFetchAhead. One connection to NRS carries about 6 MB/s.')
 param bulkFetchConcurrency int = 1
 
 @description('Bytes those concurrent reads hold in total, split evenly between them. The memory this trades for the throughput, on top of the one 64 MiB multipart upload buffer.')
@@ -409,9 +404,8 @@ var apiAppName = 'demi-api-fc-${environmentName}'
 var appServicePlanName = 'demi-plan-fc-${environmentName}'
 var storageAccountName = take('demifc${environmentName}${uniqueString(resourceGroup().id)}', 24)
 
-// Built-in data-plane roles the Flex host needs on its own storage account: blobs carry the
-// deployment package and the host's leases, queues and tables its bookkeeping. All three, because
-// AzureWebJobsStorage below is identity-based rather than a connection string.
+// Data-plane roles the Flex host needs on its own account (package and leases, queues, tables),
+// because AzureWebJobsStorage below is identity-based, not a connection string.
 var blobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
 var queueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var tableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
@@ -459,6 +453,57 @@ resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobService
   name: 'devbox-run-output'
 }
 
+// Encrypted works extracts for the devbox import; ciphertext only, so shared-key access is OK.
+// The app identity can read, write and delete here via blobDataOwner; operator roles are by hand.
+resource worksImportContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'works-import'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Replaces any lifecycle rule set by hand on the account. The trailing slash keeps the delete rule
+// off every other container, including any whose name starts with works-import.
+resource storageLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: apiStorage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'works-import-expiry'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob', 'appendBlob']
+              prefixMatch: ['${worksImportContainer.name}/']
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+              snapshot: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
 // only one of the features still needs the service.
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue) || !empty(syncOutQueue)) {
@@ -466,9 +511,8 @@ resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-0
   name: 'default'
 }
 
-// Bulk-download job ids waiting to be zipped. One id per message. NAMED FROM THE PARAM: a queue
-// declared under a different name than the worker triggers on is a feature that silently does
-// nothing, and an environment with no queue name deploys neither queue.
+// Bulk-download job ids, one per message. Named from the param: a queue the worker does not
+// trigger on silently does nothing, and no queue name deploys neither queue.
 resource bulkDownloadsQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
   parent: queueService
   name: bulkDownloadsQueue
@@ -481,9 +525,8 @@ resource bulkDownloadsPoison 'Microsoft.Storage/storageAccounts/queueServices/qu
   name: '${bulkDownloadsQueue}-poison'
 }
 
-// Documents whose chunks need their parent fields re-stamped. One document per message, ids only.
-// Named from the param for the reason the bulk queue is: a queue under a name the worker does not
-// trigger on is a feature that silently does nothing.
+// Documents whose chunks need parent fields re-stamped, one id per message. Named from the param
+// for the same reason as the bulk queue.
 resource chunkRestampQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(chunkRestampQueue)) {
   parent: queueService
   name: chunkRestampQueue
@@ -599,9 +642,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           }
         }
       }
-      // 20 instances caps the bill; nothing measured needs more. `alwaysReady: []` is scale to
-      // zero — cold start is measured before the prod flip, and one always-ready instance is the
-      // knob if it is too slow.
+      // 20 instances caps the bill. `alwaysReady: []` scales to zero; one always-ready instance is
+      // the knob if cold start is too slow.
       scaleAndConcurrency: {
         maximumInstanceCount: 20
         instanceMemoryMB: 2048
@@ -614,11 +656,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
     }
     siteConfig: {
       minTlsVersion: '1.2'
-      // WHOLE-COLLECTION PUT: a setting that exists on the live app but is absent from this list is
-      // DELETED by the next deploy. Everything the app reads is declared here, empty values
-      // included. No FUNCTIONS_WORKER_RUNTIME, FUNCTIONS_EXTENSION_VERSION,
-      // WEBSITE_NODE_DEFAULT_VERSION or WEBSITE_RUN_FROM_PACKAGE: Flex takes the runtime from
-      // `functionAppConfig.runtime` and rejects those four.
+      // WHOLE-COLLECTION PUT: list every setting, empty values included, or the deploy DELETES it.
+      // Runtime is `functionAppConfig.runtime`; Flex rejects FUNCTIONS_WORKER_RUNTIME, FUNCTIONS_EXTENSION_VERSION, WEBSITE_RUN_FROM_PACKAGE.
       appSettings: [
         // src/controllers/config.js falls back to DEV values for both of these — pin them per app.
         {
@@ -794,16 +833,14 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'SYNC_PROJECTS_SCHEDULE'
           value: syncProjectsSchedule
         }
-        // Bulk download. api/index.js registers the queue worker only when the queue name is set,
-        // and the host resolves it as `%BULK_DOWNLOADS_QUEUE%`. Empty is off — and Flex drops an
-        // empty value entirely, so the code reads `undefined` here, not ''.
+        // api/index.js registers the bulk worker only when set; the host resolves
+        // `%BULK_DOWNLOADS_QUEUE%`. Empty is off (Flex drops it, so the code reads undefined).
         {
           name: 'BULK_DOWNLOADS_QUEUE'
           value: bulkDownloadsQueue
         }
-        // Chunk parent-field re-stamping. Empty means the re-stamp is SKIPPED and the document is
-        // flagged `parentFieldsPending` instead; only CHUNK_RESTAMP_INLINE runs the walk on the
-        // request, and that is a local-development opt-in.
+        // Empty SKIPS the chunk re-stamp and flags `parentFieldsPending`; CHUNK_RESTAMP_INLINE
+        // (local development only) runs it on the request instead.
         {
           name: 'CHUNK_RESTAMP_QUEUE'
           value: chunkRestampQueue
@@ -876,10 +913,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'ENGAGE_API_BASE'
           value: engageApiBase
         }
-        // What src/scripts/put-search-datasources.js needs to build a data source's connection
-        // string: the Cosmos account it names lives in this deployment's subscription and group,
-        // and the identity is the one the SEARCH service runs indexers as, which in prod is not
-        // this app's (main.bicep passes it).
+        // For put-search-datasources.js connection strings. The identity is the one Search runs
+        // indexers as, which in prod is not this app's (main.bicep passes it).
         {
           name: 'DS_SUB'
           value: subscription().subscriptionId
@@ -1004,12 +1039,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'FOUNDRY_DEPLOYMENT'
           value: foundryDeployment
         }
-        // Audit and usage analytics. Absent endpoint drops events after a single warning rather
-        // than throwing, which is what makes local development and the test suite work.
-        //
-        // Audit rows go to the eagle-analytics DCR wherever it is deployed, DEMI's own otherwise.
-        // The stream travels with the endpoint because each DCR declares one of the two and rejects
-        // the other, so the pair must never be set from different sides.
+        // No endpoint drops events after one warning (local and tests). The stream travels with the
+        // endpoint: each DCR accepts only its own, so never set the pair from different sides.
         {
           name: 'AUDIT_DCR_ENDPOINT'
           value: analyticsAuditConfigured ? analyticsDcrEndpoint : auditDcrEndpoint
@@ -1148,16 +1179,14 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'CORS_ORIGIN'
           value: join(map(frontendHostNames, h => 'https://${h}'), ',')
         }
-        // Flex routes all outbound traffic through the integrated subnet on its own, so this is
-        // inert here — kept because it costs nothing and a wrong guess about that is a total
-        // outage: every private endpoint would resolve public and be refused.
+        // Inert on Flex, which routes all outbound through the subnet anyway. Kept: if that is
+        // wrong, every private endpoint resolves public and is refused.
         {
           name: 'WEBSITE_VNET_ROUTE_ALL'
           value: '1'
         }
-        // THE LANDING ZONE'S resolver, not Azure's platform default 168.63.129.16. The privatelink
-        // zones live in a central subscription reachable only through the hub resolver; with the
-        // default, Cosmos and Search resolve to PUBLIC addresses and every call is rejected.
+        // The landing zone's hub resolver, not 168.63.129.16: privatelink zones are reachable only
+        // through it, else Cosmos and Search resolve PUBLIC and every call is rejected.
         {
           name: 'WEBSITE_DNS_SERVER'
           value: '10.53.244.4'
@@ -1170,9 +1199,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'TRUSTED_PROXY_IPS'
           value: trustedProxyIps
         }
-        // What proves a request came through OUR Front Door, and so that X-Azure-SocketIP is the
-        // address AFD accepted the connection from. Empty is the off switch, like the gateway
-        // secret above; a plain value would put the secret in the template and in ARM history.
+        // Proves a request came through our Front Door, so X-Azure-SocketIP can be trusted. Empty
+        // is off; a reference, not the value, because a plain value would land in ARM history.
         {
           name: 'EDGE_SECRET'
           value: empty(edgeSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${edgeSecretUri})'
@@ -1202,17 +1230,15 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'EDGE_BAN_RULE_ID'
           value: edgeBanRuleId
         }
-        // The public site's access curtain (src/controllers/gate.js). A reference, not the value,
-        // for the same reason as every secret above. Empty answers 404 on the route rather than
-        // 401, so an ungated environment does not advertise a curtain it does not have.
+        // Public site access curtain (src/controllers/gate.js). Empty answers 404, not 401, so an
+        // ungated environment does not advertise a curtain.
         {
           name: 'ACCESS_GATE_PASSWORD'
           value: empty(accessGateSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${accessGateSecretUri})'
         }
       ]
-      // Platform-level CORS, in front of the app's own, and it answers the preflight itself — so
-      // adding a host to CORS_ORIGIN alone is not enough. portal.azure.com keeps the built-in test
-      // console working.
+      // Platform CORS answers the preflight before the app, so CORS_ORIGIN alone is not enough.
+      // portal.azure.com keeps the portal test console working.
       cors: {
         allowedOrigins: concat(
           [ 'https://portal.azure.com' ],
@@ -1223,9 +1249,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-// `<app>.scm.azurewebsites.net` is internet-reachable and answers 401 rather than refusing, so
-// leaving basic auth on is an unthrottled credential-guessing surface. Nothing authenticates that
-// way: CI logs in with OIDC and publishes with `az functionapp deployment source config-zip`.
+// SCM is internet-reachable and answers 401, so basic auth on is an unthrottled guessing surface.
+// Nothing uses it: CI publishes with OIDC and `config-zip`.
 resource apiScmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
   parent: apiFunctionApp
   name: 'scm'
@@ -1242,9 +1267,8 @@ resource apiFtpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies
   }
 }
 
-// Who authenticated to SCM and deployed — the one authenticated change that never passes through
-// the app's own audit trail. Into the AUDIT workspace: demi-logs stops collecting at its
-// dailyQuotaGb, and a record a busy day can drop is not an audit record.
+// SCM deploys bypass the app's audit trail. Sent to the AUDIT workspace because demi-logs stops
+// collecting at its dailyQuotaGb.
 resource apiAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(auditWorkspaceId)) {
   scope: apiFunctionApp
   // Distinctly named: the landing zone sets its own `setByPolicy-*` settings here, and a colliding
