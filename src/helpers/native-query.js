@@ -332,12 +332,18 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
   const spec = (access, criteria, orderBy) => selectWhere({
     access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
   });
+  // A row's place in the default order shows its value there, so the row's dial on it applies as on `sort=`.
+  const orderFields = [...(defaultOrder || '').matchAll(/c\.([\w.]+)/g)].map(([, field]) => field);
+  const defaultCriteria = (access, criteria) =>
+    [...criteria, ...orderFields.map(field => ({ clause: dialAllows(field, levelOf(access)), params: [] }))];
   return {
     async list(access, { criteria, orderBy, pageNum, pageSize, fetch }) {
-      return readPage(container, spec(access, criteria, orderBy || defaultOrder), { pageNum, pageSize, fetch });
+      const where = orderBy ? criteria : defaultCriteria(access, criteria);
+      return readPage(container, spec(access, where, orderBy || defaultOrder), { pageNum, pageSize, fetch });
     },
-    async count(access, { criteria }) {
-      const { items } = await cosmos.query(container, countWhere({ access, partitionField, criteria }), {});
+    async count(access, { criteria, parsed }) {
+      const where = parsed && parsed.sort ? criteria : defaultCriteria(access, criteria);
+      const { items } = await cosmos.query(container, countWhere({ access, partitionField, criteria: where }), {});
       return items[0] || 0;
     },
     async getById(access, id) {
