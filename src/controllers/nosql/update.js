@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Update controller — the Eagle mirror for `RecentActivity`. Staff writes go through domain/updates.js.
- *
- * DEMI owns Updates, so the publish transition is DEMI's to announce: eagle-notify is told once
- * per update, and told again when an update DEMI announced is withdrawn. `notifiedAt` is the claim
- * that makes "once" true across concurrent pushes and timer runs — see repositories/updates.js.
+ * The Eagle mirror for `RecentActivity`; staff writes go through domain/updates.js. eagle-notify hears
+ * of a publication once and of its withdrawal; `notifiedAt` is the claim (repositories/updates.js).
  */
 
 const updates = require('../../repositories/updates');
@@ -24,10 +21,8 @@ const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
 const EMAIL_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif']);
 
 /**
- * The featured image, only when anyone may fetch it: the email links DEMI's download route, which
- * serves public documents alone. The document id is the Eagle `_id`, as in `featuredImage.document`.
- * Only types every mail client renders go out: classic Outlook shows WebP as a broken image.
- * The extension stands in only when the row has no MIME type.
+ * The featured image, only when public (the email links the public download route) and a type every
+ * mail client renders: classic Outlook breaks on WebP. The extension stands in for a missing MIME type.
  */
 async function publicImage(item) {
   const image = item.featuredImage;
@@ -44,9 +39,8 @@ async function publicImage(item) {
 }
 
 /**
- * Did DEMI claim this update's email? A claim whose send got no answer may still have gone out, so
- * any DEMI claim is cancelled. A claim with no marker predates the bookkeeping and counts as a
- * backfill: nothing to cancel.
+ * Did DEMI claim this update's email? Any DEMI claim is cancelled, since an unanswered send may have
+ * gone out; a claim with no marker predates the bookkeeping and has nothing to cancel.
  */
 function announcedByDemi(row) {
   return Boolean(row) && row.notifiedBy === updates.NOTIFIED_BY.DEMI;
@@ -68,11 +62,8 @@ async function sendClaimed(claimed, now, parent) {
 }
 
 /**
- * Tell eagle-notify what changed, if anything did. Never throws and never fails the push: a
- * mirrored record is worth keeping even when the notification does not land.
- *
- * Moving `publishDate` into the future after the email went out sends nothing: no cancellation,
- * and no second email once the new date passes.
+ * Tell eagle-notify what changed, if anything did. Never throws: the mirrored record outranks the
+ * notification. A `publishDate` moved later after the email sends nothing, now or then.
  */
 async function announce(item, existing, now = new Date().toISOString()) {
   // Not configured: claim NOTHING. A claim taken while dark would suppress the first real
@@ -90,9 +81,8 @@ async function announce(item, existing, now = new Date().toISOString()) {
         });
         return;
       }
-      // Read fresh, before the claim: a row stored before the parent cap, or a parent unpublished
-      // since the push, must not be emailed. Left unclaimed and marked, so the timer stops listing
-      // it; a push or a project cascade clears the mark once the parent may have moved.
+      // Read fresh before the claim: a parent unpublished since the push must not be emailed. Marked,
+      // not claimed, so the timer stops listing it until a push or cascade clears the mark.
       const parent = item.projectId ? await readParent(item.projectId) : null;
       if (item.projectId && !isPublicParent(parent)) {
         const reason = parent ? 'parent-not-public' : 'parent-missing';
@@ -163,17 +153,15 @@ function mirrorItem(eagleId, doc, read, existing) {
     complianceAndEnforcement: doc.complianceAndEnforcement === true,
     dateAdded: doc.dateAdded,
     dateUpdated: doc.dateUpdated,
-    // The rest of what eagle-public's News model reads. `pcp` and `projectNotification` arrive as
-    // bare Mongo references — eagle-api populates them only in its own aggregate — so they are
-    // stored as ids and resolved, if ever, by the reader.
+    // The rest of eagle-public's News model. `pcp` and `projectNotification` arrive as bare Mongo
+    // references, so they are stored as ids for the reader to resolve.
     notificationName: doc.notificationName || null,
     contentUrl: doc.contentUrl || null,
     documentUrl: doc.documentUrl || null,
     pcp: refId(doc.pcp),
     projectNotification: refId(doc.projectNotification),
-    // The Updates fields (PUBLIC-159). Stored as sent, except image text, stored as plain text; the
-    // `shortHeadline`/`summary` fallbacks are the reader's, so an edit to `headline` or `content`
-    // never leaves a stale copy here.
+    // The Updates fields, stored as sent bar image text. The `shortHeadline`/`summary` fallbacks are
+    // the reader's, so an edit to `headline` or `content` never leaves a stale copy here.
     category: doc.category || null,
     subject: doc.subject || null,
     shortHeadline: doc.shortHeadline || null,
@@ -192,15 +180,12 @@ function mirrorItem(eagleId, doc, read, existing) {
     // Stored beside `isPublished` rather than folded into it: `read[]` is what governs visibility
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
-    // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
-    // compliance under the parent's ceiling, or the parent's for a row `inheritsParentRead` admits
-    // (`helpers/update-parent:updateRead`); `sources.eagle.read` keeps Eagle's own, uncapped and
-    // still minus compliance (null when Eagle sent none), for the project cascade to re-derive from.
+    // `read` is `helpers/update-parent:updateRead`; `sources.eagle.read` keeps Eagle's own minus
+    // compliance, uncapped (null when Eagle sent none), for the project cascade to re-derive from.
     isPublished: read.includes('public'),
     read,
-    // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
-    // a published update notifies again. Eagle's own `notifiedAt` (set by its backfill on old rows)
-    // seeds an empty claim, so an update Eagle already announced is never announced again.
+    // A Cosmos write REPLACES the item, so the claim is carried across. Eagle's own `notifiedAt`
+    // seeds an empty claim, so an update Eagle already announced is not announced again.
     notifiedAt: (existing && existing.notifiedAt) || toIsoOrNull(doc.notifiedAt),
     // Who holds the claim, carried with it. DEMI cancels only what it sent itself.
     notifiedBy: existing && existing.notifiedAt
@@ -212,14 +197,8 @@ function mirrorItem(eagleId, doc, read, existing) {
 }
 
 /**
- * Mirror one raw Eagle `RecentActivity`, whoever asked — the push handler below or the backfill
- * (src/scripts/seed-public-reads.js). It does NOT announce: `announce` is the push handler's,
- * because a backfill is history rather than news.
- *
- * The rebuild `upsertWithRetry` does after a lost race is what keeps `notifiedAt` honest: carried
- * from a stale read it would hand back a claim another push is holding.
- *
- * Throws `DUPLICATE_ID` when two DEMI rows name the Eagle id.
+ * Mirror one raw Eagle `RecentActivity` for the push or the backfill, never announcing; throws
+ * `DUPLICATE_ID` when two DEMI rows name the Eagle id. The rebuild after a lost race keeps the claim.
  *
  * @returns {Promise<{saved, existing}|{ignored, existing}|{status: 'conflict'}>}
  */
