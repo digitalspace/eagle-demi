@@ -184,12 +184,9 @@ param allowedClients = 'eagle-admin-console,eagle-agent-test'
 // 2026-10-16: aud is ["demi-api","epictrack-web","account"]). Prod has the same mapper.
 param ssoAudience = 'demi-api'
 
-// The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
-// for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
-// 2026-09-02; .122 seen 2026-09-05 through test.projects.eao.gov.bc.ca). With these trusted, the
-// anonymous bulk-download quota keys on the browser hop.
-// An address missing here only puts that proxy's visitors back on one shared key.
-param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
+// Egress addresses of proxies we run in front of APIM. None runs on test, so the list is empty
+// and the APIM-asserted address is the caller.
+param trustedProxyIps = ''
 
 // eagle-edge stamps the vault's `edge-secret` (optionalSecretNames); the rotator below rotates both.
 
