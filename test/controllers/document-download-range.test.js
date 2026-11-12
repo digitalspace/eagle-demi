@@ -4,6 +4,9 @@
 // An anonymous edge-stamped caller is never sent to the store's URL: it gets the bytes, a 404 or a 503.
 
 process.env.NODE_ENV = 'test';
+// Before src/config is first required: the audit writer is inert without these.
+process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -13,6 +16,7 @@ const storage = require('../../src/storage');
 const { logger } = require('../../src/utils/logger');
 const config = require('../../src/config');
 const controller = require('../../src/controllers/nosql/document');
+const audit = require('../../src/utils/audit');
 const {
   URL_WITH_DISPOSITION, DOC, BYTES, STAT, LAST_MODIFIED, req, res, stored, get, holdOpen
 } = require('../helpers/download-stream');
@@ -21,6 +25,10 @@ const {
 const EDGE = { 'x-edge-secret': 'edge-secret-for-download-range-suite' };
 // Verified auth with no privileged role, as a public-tier API key resolves.
 const KEY_USER = { realm_access: { roles: [] } };
+
+// Both streams (analytics and audit) land here instead of the ingestion API.
+const sent = [];
+audit._setTransport(async (stream, batch) => { sent.push(...batch.map(row => ({ stream, ...row }))); });
 
 /** Takes a slot with a read that never ends, freed when the test ends. */
 async function holdSlot(t, open, request) {
@@ -203,12 +211,17 @@ test('stream mode caps each answer, not the file', async (t) => {
       config.edgeSecret = EDGE['x-edge-secret'];
       t.mock.method(logger, 'info', () => {});
       const { presign } = stored(t, { doc: { ...DOC, mimeType: 'application/zip' } });
+      await audit.flush();
+      sent.length = 0;
       const { res: r, body } = await get(EDGE);
       assert.equal(r.status, 200);
       assert.deepEqual(body, BYTES);
       assert.equal(r.headers.get('content-type'), 'application/octet-stream');
       assert.match(r.headers.get('content-disposition'), /^attachment;/);
       assert.equal(presign.mock.callCount(), 0);
+      await audit.flush();
+      // A save, not a view: the analytics event carries no `inline` mark.
+      assert.deepStrictEqual(sent.find(row => row.stream === audit.EVENTS_STREAM).Detail, {});
     });
 
   await t.test('an edge-stamped request for a missing object answers 404', async (t) => {
