@@ -19,12 +19,8 @@ const LIST = new Map([
 ]);
 
 /**
- * Documents repository double, partitioned by `projectId` the way Cosmos is.
- *
- * `countVisible` answers over ALL partitions while `listVisible` answers one — which is what makes
- * the coverage check falsifiable: a partition the caller never asks for shows up as a shortfall.
- * `opts.count` lets a test hand back a total larger than what it will serve, standing in for the
- * real failure this replaced (a cross-partition read that silently stops after one page).
+ * Documents double: `countVisible` spans all partitions, `listVisible` one, so a skipped partition
+ * shows as a shortfall. `opts.count` returns a total larger than what is served.
  */
 function fakeDocuments(docs, opts = {}) {
   // `cleared` records every clear attempted, in order: the argument list is the contract, since a
@@ -78,12 +74,8 @@ function fakeSources(eagleDocs) {
 }
 
 /**
- * Chunks repository double. `parentFieldsChanged` and `reStampAfterWrite` are the REAL ones — the
- * decision to re-stamp and the two failure counters are only meaningful against what the repository
- * actually does, so only the Cosmos write is faked, through the helper's documented `stamp` seam.
- *
- * `opts.rejectChunksOf` names documents whose patch comes back with chunk operations REJECTED —
- * a document that landed in part, which is a different unit from a document that threw.
+ * Chunks double: real `parentFieldsChanged` and `reStampAfterWrite`, fake `stamp`.
+ * `opts.rejectChunksOf` names documents whose chunk operations are rejected.
  */
 function fakeChunks(opts = {}) {
   // `stampedAt` is the instant each partition's re-stamp was guarded on — the only thing that
@@ -111,10 +103,7 @@ function fakeChunks(opts = {}) {
 }
 
 /**
- * `cosmos.bulkVerified` double. `failedIds` is part of its real return shape and is what lets the
- * caller re-stamp only the rows that landed, so the double has to carry it or the test cannot see
- * the difference.
- *
+ * `cosmos.bulkVerified` double, returning `failedIds` like the real one.
  * `opts.failIds` rejects named ids; `opts.failAll` rejects everything.
  */
 function fakeWriter(opts = {}) {
@@ -196,9 +185,7 @@ test('listFieldsFor — the five fields, from the raw eagle payload', () => {
 
 test('planPatch', async (t) => {
   await t.test('a row with no such property and nothing to write is NOT patched', () => {
-    // The trap this exists for: the seeded row has no `typeId` key at all and the upstream value
-    // is null. Treating undefined and null as different would rewrite all ~60,578 rows with a
-    // page of nulls and pay full RU to change nothing.
+    // No `typeId` key and a null upstream value must count as equal.
     const fields = { typeId: null, milestoneId: null, projectPhaseId: null, documentAuthorType: null, documentAuthorTypeId: null };
     assert.strictEqual(planPatch({ id: 'doc9', projectId: '207' }, fields, NOW), null);
   });
@@ -285,10 +272,6 @@ test('backfill', async (t) => {
       'flushed at the batch size, with the remainder at the end');
   });
 
-  // REPLACED the continuation-token test 2026-08-22. Measured against demi-cosmos-test: the
-  // cross-partition `ORDER BY c.id ASC` read returns its FIRST page with no continuation token, so
-  // the loop that test pinned stopped after 200 of 60,578 rows and reported success. The script
-  // now walks one partition at a time and checks its own coverage instead.
   await t.test('every partition is walked, including the unlinked one', async () => {
     const documents = fakeDocuments([...SEEDED, { id: 'orphan', projectId: '' }]);
     const writer = fakeWriter();
@@ -318,9 +301,7 @@ test('backfill', async (t) => {
       });
       assert.strictEqual(summary.scanned, 3);
       assert.strictEqual(summary.expected, 60578);
-      // The summary is what the exit code is computed from, and a partial run must not exit 0 —
-      // a wrapper reads that as "every filter works now". Asserted on the same fields the entry
-      // point reads, since the entry point itself calls process.exit.
+      // The exit code is computed from these fields; the entry point itself calls process.exit.
       assert.ok(summary.scanned !== summary.expected, 'this is the state that must exit non-zero');
     } finally {
       console.log = log;
@@ -340,11 +321,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('re-stamps the chunks of every document whose ids moved', async () => {
-    // THE OTHER HALF OF THE SAME FIX. Every chunk carries a COPY of these four ids so a chunk
-    // search can filter on them without a join, and nothing else refreshes it. Writing the ids onto
-    // the document and stopping there fixes the Document tab and leaves Deep Search filtering on
-    // what the chunk was stamped with at ingest — four nulls for exactly these rows, so the filter
-    // matches none of them under a 200.
+    // Chunks copy these four ids and nothing else refreshes them.
     const chunks = fakeChunks();
     const summary = await backfill(['--live'], {
       documents: fakeDocuments(SEEDED), projects: fakeProjects(['207', '311']),
@@ -379,9 +356,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('only the documents whose row write LANDED have their chunks re-stamped', async () => {
-    // A re-stamp on the strength of a rejected write puts an id in the chunks that no document in
-    // Cosmos holds — the chunk then answers a filter its own document does not match, which is
-    // strictly worse than the stale copy the run was fixing.
+    // Re-stamping after a rejected write would put ids in chunks that no document holds.
     const eagle = [];
     const seeded = [];
     const failIds = [];
@@ -427,9 +402,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('a part-stamped document is one document and two chunk operations', async () => {
-    // The units the summary used to add together. `doc1`'s row landed and two of its chunk
-    // operations were rejected — one document to repair, not two, and reading it either way
-    // decides whether the operator runs a 1.1M-row backfill.
+    // `doc1`'s row landed and two of its chunk operations were rejected: one document to repair.
     const summary = await backfill(['--live'], {
       documents: fakeDocuments(SEEDED), projects: fakeProjects(['207', '311']),
       sources: fakeSources(EAGLE), bulkVerified: fakeWriter().write,
@@ -443,9 +416,7 @@ test('backfill', async (t) => {
 
   await t.test('a row whose parent fields moved is patched flagged, in the same operations',
     async () => {
-      // The flag rides the SAME patch as the ids. Re-stamping best-effort and flagging nothing
-      // made every loss here invisible: a run killed between the patch and the re-stamp, or a
-      // re-stamp that threw, left rows whose chunks nothing knows to repair.
+      // Same patch as the ids, so a run killed before the re-stamp still leaves the flag.
       const writer = fakeWriter();
       const seeded = [{ ...SEEDED[0], parentFieldsPendingAt: '2999-01-01T00:00:00.000Z' }];
       await backfill(['--live'], {
@@ -463,9 +434,7 @@ test('backfill', async (t) => {
     });
 
   await t.test('a patch that moves no parent field raises no flag', async () => {
-    // `documentAuthorType` is the LABEL, and no chunk carries it — only the four ids beside it are
-    // stamped onto chunks. A patch that moves the label alone owes the chunks nothing, and a flag
-    // raised here sends `--pending` over rows whose chunks already agree.
+    // `documentAuthorType` is the label, which no chunk carries.
     const writer = fakeWriter();
     const labelOnly = [{
       id: 'doc1', projectId: '207', type: 'Letter',
@@ -501,9 +470,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('the chunk patches are guarded on the token the flag was raised with', async () => {
-    // Unguarded, this run is last-writer-wins: a partition that took minutes to flush would put
-    // the values it read at the start back over a re-stamp that landed in between, with the flag
-    // already cleared, so nothing would report the drift.
+    // Unguarded, a slow flush would overwrite a re-stamp that landed in between.
     const writer = fakeWriter();
     const chunks = fakeChunks();
     await backfill(['--live'], {
@@ -578,9 +545,7 @@ test('backfill', async (t) => {
   });
 });
 
-// The entry point calls process.exit, so the decision is tested where it can be: as a function of
-// the same summary the run returns. Review caught that deleting the incomplete half left the suite
-// green — a claim in the commit message with nothing holding it up.
+// The entry point calls process.exit, so the exit decision is tested on the summary.
 test('exitCodeFor — a partial run is non-zero, both ways of being partial', () => {
   assert.strictEqual(exitCodeFor({ scanned: 60578, expected: 60578, failed: 0 }), 0);
   assert.strictEqual(exitCodeFor({ scanned: 3, expected: 60578, failed: 0 }), 1, 'short walk');

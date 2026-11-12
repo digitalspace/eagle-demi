@@ -30,10 +30,8 @@ let stateSeq = 0;
 const stateFile = () => path.join(STATE_DIR, `state-${stateSeq++}.json`);
 
 /**
- * Documents repository double, partitioned by `projectId` the way Cosmos is.
- *
- * `listDistinctProjectIds` answers off the DOCUMENTS, which is the point of the change it backs: a
- * partition whose key is a ProjectNotification id has no `projects` row to enumerate it from.
+ * Documents repository double, partitioned by `projectId` the way Cosmos is. Partitions come from
+ * the documents, since a ProjectNotification parent has no `projects` row.
  */
 function fakeDocuments(docs, opts = {}) {
   const state = { partitions: [], selected: [], pendingWrites: [] };
@@ -46,10 +44,8 @@ function fakeDocuments(docs, opts = {}) {
   const tokenOf = (doc) => doc.parentFieldsPending === true
     ? (doc.parentFieldsPendingAt || PENDING_AT)
     : (doc.parentFieldsPendingAt ?? null);
-  // PROJECTED, as the repository's SELECT is: the id, the etag, the parent fields, the pending
-  // pair and nothing else, so a script reading any other column fails here rather than in
-  // production. A property the item does not carry is absent from a Cosmos projection, so a
-  // never-flagged row gets neither half.
+  // Projected like the repository's SELECT, so reading any other column fails here. Properties the
+  // item lacks stay absent, as in a Cosmos projection.
   const project = (doc) => {
     const row = { id: doc.id, _etag: doc._etag || `etag-${doc.id}` };
     for (const field of chunks.CHUNK_PARENT_FIELDS) {
@@ -90,10 +86,8 @@ function fakeDocuments(docs, opts = {}) {
         .map(doc => ({ id: doc.id, projectId: doc.projectId }));
     },
     /**
-     * The repository's token guard played straight, and the three answers it gives: the clear
-     * lands only when the token it carries is still the one on the row. `movedOn` is a write that
-     * landed under the run and took the token with it; `missingOn` is a row the patch cannot find.
-     * No throw — a mismatch is a status, which is what lets the script count it.
+     * Clears only when the token still matches. `movedOn` = a newer write took the token;
+     * `missingOn` = no row found. A mismatch is a status, not a throw.
      */
     async setParentFieldsPending(id, projectId, pending, guard) {
       const token = guard && typeof guard === 'object' ? guard.pendingAt : undefined;
@@ -110,23 +104,17 @@ function fakeDocuments(docs, opts = {}) {
 }
 
 /**
- * Chunks repository double. `parentFieldsOf` and `reStampAfterWrite` are the REAL ones — the skip
- * rule and the two failure counters are only meaningful against what the repository actually does,
- * so only the Cosmos write is faked, through the helper's documented `stamp` seam.
+ * Chunks repository double. `parentFieldsOf` and `reStampAfterWrite` are the real ones; only the
+ * Cosmos write is faked, through the `stamp` seam.
  */
 function fakeChunks(opts = {}) {
-  // `stamps` is `documentId -> the instant the patch was guarded on`. Recorded because that guard
-  // is the only thing standing between a corpus walk and the newer re-stamp it would overwrite.
-  // `budgets` is the retry budget each patch was given, recorded because a dropped one changes
-  // nothing a test can see otherwise: the walk still runs, and still gives up on the sustained
-  // throttle the budget was raised for.
+  // `stamps`: documentId -> the instant the patch was guarded on. `budgets`: the retry budget each
+  // patch got, which no other assertion would notice being dropped.
   const state = {
     patched: [], patchedIds: [], live: 0, read: [], pointReads: [], stamps: {}, budgets: [],
     backoffCeilings: []
   };
-  // What each document's chunks currently hold. Absent means "one chunk, all four null AND no
-  // version" — the shape of every chunk written before the parent fields existed, which is the
-  // corpus this backfill exists for.
+  // What each document's chunks hold. Absent means one chunk, all four null and no version.
   const rows = opts.rows || {};
   const chunksOf = (documentId) => rows[String(documentId)] || [{ id: `${documentId}::p1::c0` }];
   return {
@@ -177,9 +165,8 @@ function fakeChunks(opts = {}) {
 }
 
 /**
- * AI Search double. `rows` are the index rows the unstamped query answers with, keyed by project id
- * — `null` for the bucket whose projectId is null — and `deleted` records the keys the purge asked
- * the service to remove.
+ * AI Search double. `rows`: unstamped index rows by project id (`null` for the null bucket).
+ * `deleted`: keys the purge asked to remove.
  */
 function fakeSearch(opts = {}) {
   const state = { queried: [], deleted: [] };
@@ -307,9 +294,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('--force re-patches a chunk whose Cosmos copy already matches', async () => {
-    // The repair for a run made before the data-source PUT landed: the chunk row is right in
-    // Cosmos and null in the index, the ordinary skip rule can never touch it again, and no `_ts`
-    // will ever move it. Nothing but a forced re-patch gets those rows back to the indexer.
+    // Repair for a run before the data-source PUT: right in Cosmos, null in the index, and only a
+    // forced patch moves `_ts` so the indexer re-pulls it.
     const rows = {
       d1: [{ id: 'd1::p1::c0', projectId: '207', typeId: TYPE_ID, parentFieldsVersion: V }],
       d2: [{
@@ -332,9 +318,8 @@ test('backfill', async (t) => {
 
   await t.test('a document with no projectId is walked as its own bucket, not folded into \'\'',
     async () => {
-      // Two separate traps. `String(null)` becomes `''`, which pins the read to the no-project
-      // partition and walks nothing; leaving the rows out altogether keeps their chunks unstamped
-      // forever, so the unscoped stale-chunk count never reaches zero and the facets stay withheld.
+      // Two traps: folding null into `''` walks the wrong partition, and skipping the rows leaves
+      // their chunks unstamped for good.
       const d = deps({
         documents: fakeDocuments([...DOCS, { id: 'd6', projectId: null, typeId: TYPE_ID }])
       });
@@ -350,9 +335,6 @@ test('backfill', async (t) => {
     });
 
   await t.test('--pending walks only the flagged documents and clears their flag', async () => {
-    // The reconcile path for a re-stamp that never happened: the write flags the row, this walks
-    // exactly those rows, and clearing the flag is what stops the same documents being re-stamped
-    // every night.
     const d = deps({
       documents: fakeDocuments([
         { id: 'd1', projectId: '207', typeId: TYPE_ID },
@@ -434,9 +416,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('an unstamped document with nothing to copy is still stamped', async () => {
-    // d3 has no List refs, so its chunks already hold the four nulls it wants — but they were
-    // never visited, and only the version says so. Skipping it on the values is what left the
-    // completeness probe counting it as outstanding forever.
+    // d3's chunks already hold the nulls it wants; only the missing version shows they were never
+    // visited.
     const d = deps();
     const summary = await backfill(['--live', '--state', stateFile()], d);
 
@@ -511,10 +492,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('a partition whose documents all had nothing to copy is NOT checkpointed', async () => {
-    // '208' holds only d3, whose four List refs are null — which is exactly what every document
-    // looks like BEFORE `backfill-document-list-ids.js` has run. Writing that partition down as
-    // done is how a run started too early marks the corpus finished: nothing is attempted, every
-    // partition is checkpointed, and the rerun after the List-id backfill lands does nothing.
+    // '208' holds only d3, with null List refs, which is how every row looks before the List-id
+    // backfill. Checkpointing it would let a too-early run mark the corpus done.
     const file = stateFile();
     await backfill(['--live', '--state', file], deps());
 
@@ -565,10 +544,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('walks a partition that has no project row at all', async () => {
-    // An Eagle document whose parent is a ProjectNotification is partitioned under the
-    // NOTIFICATION's id (`helpers/parent-admit.js`), and no `projects` row carries that id. The
-    // walk used to enumerate partitions from `projects.listVisible`, so every one of those
-    // documents was skipped in silence while the run reported success.
+    // A ProjectNotification parent partitions the document under the notification id
+    // (`helpers/parent-admit.js`), which has no `projects` row.
     const notification = '5f0e4a0c3f4b1a0021a1b2c3';
     const d = deps({
       documents: fakeDocuments([...DOCS, { id: 'd5', projectId: notification, typeId: TYPE_ID }])
@@ -601,10 +578,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('clears a chunk whose value the document no longer has', async () => {
-    // THE CASE THE OLD SKIP RULE COULD NEVER REACH. d3 carries no List refs, and its chunks were
-    // stamped with a type before it was re-typed to nothing upstream — so the chunk answers a
-    // filter its own document does not match. Skipping on "the document has nothing to copy" left
-    // that stale value in place forever.
+    // d3 has no List refs but its chunks still carry a type removed upstream.
     const d = deps({
       chunks: fakeChunks({ rows: { d3: [{ id: 'd3::p1::c0', projectId: '208', typeId: TYPE_ID }] } })
     });
@@ -623,9 +597,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('a document whose chunks already agree is skipped', async () => {
-    // The other half: re-walking a finished corpus must not pay a full-partition patch per
-    // document to write back what is already there. Every row carries the current version, which
-    // is what a corpus this backfill has already finished looks like.
+    // Every row carries the current version, as in a finished corpus; nothing should be patched.
     const d = deps({
       chunks: fakeChunks({
         rows: {
@@ -665,9 +637,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('a RESUMED run that misses a partition is INCOMPLETE and exits 1', async () => {
-    // THE HOLE THIS CLOSES. The check used to be skipped whenever anything was resumed, so a
-    // resumed run that never enumerated a partition reported its figures and exited 0 — and a
-    // backfill that exits 0 is never run again.
+    // A resume is not exempt from the coverage check: a run that exits 0 is never run again.
     const file = stateFile();
     await backfill(['--live', '--state', file], deps());
 
@@ -696,9 +666,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('a checkpoint survives a kill in the middle of the write', async (t2) => {
-    // THE FAILURE THIS FILE EXISTS FOR. Written in place, `writeFileSync` truncates first, so a
-    // process killed between the truncate and the last byte leaves a fragment — `loadState` reads
-    // that as "nothing checkpointed" and the resume re-walks partitions the dead run had finished.
+    // An in-place write truncates first, so a kill leaves a fragment read as "nothing checkpointed".
     const file = stateFile();
     await backfill(['--live', '--state', file], deps());
     const before = fs.readFileSync(file, 'utf8');
@@ -736,10 +704,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('documents ingested since the backfill started do not fail a resume', async () => {
-    // THE FALSE INCOMPLETE. A backfill over 1.1M chunks runs for days while ingest keeps writing,
-    // and every chunk written after it started is stamped AT INGEST — those documents are not this
-    // script's work. Re-counting the corpus on the resume made a run that covered everything it
-    // was started over report INCOMPLETE and exit 1, which reads as "run it again" forever.
+    // Chunks ingested after the start are stamped at ingest, so coverage is measured against the
+    // starting snapshot, not a fresh count.
     const file = stateFile();
     await backfill(['--live', '--state', file], deps());
 
@@ -789,10 +755,8 @@ test('backfill', async (t) => {
   });
 
   await t.test('a state file with no snapshot keeps the fail-closed comparison', async () => {
-    // Backward compatibility. Nothing recorded what the corpus held when THAT run started, so the
-    // only number available is a fresh count — and being short against it stays a failure. The
-    // snapshot is not back-filled either: stamping today's count as the baseline would vouch for a
-    // run that never measured it.
+    // With no snapshot, a fresh count is the only baseline. It is not saved as the snapshot, since
+    // that run never measured it.
     const file = stateFile();
     fs.writeFileSync(file, JSON.stringify({ done: ['208'], walked: { 208: 1 } }));
 
@@ -809,9 +773,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('--pending repairs a document whose projectId is null', async () => {
-    // `String(null)` is `'null'`, a partition no document lives in: the walk read an empty
-    // partition, patched nothing and exited 0 with the flag still raised, so the repair every
-    // night was a no-op on exactly the rows nothing else looks at.
+    // `String(null)` is `'null'`, a partition no document lives in.
     const d = deps({
       documents: fakeDocuments([
         { id: 'd1', projectId: '207', typeId: TYPE_ID },
@@ -828,9 +790,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('--pending leaves the flag raised when the row moved under the run', async () => {
-    // The clear is guarded on the TOKEN the flag was raised with. A write that landed since raised
-    // the flag again for chunks this run never saw, and clearing it anyway hides that drift from
-    // the nightly reconcile for good.
+    // A newer write raised the flag for chunks this run never saw; clearing it would hide drift.
     const d = deps({
       documents: fakeDocuments([
         { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true },
@@ -845,10 +805,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('--project clears the flag on every document it verified', async () => {
-    // The repair the poison alert names. It compares the same chunks against the same row as
-    // `--pending` does, so it holds the same proof — and leaving the flag up kept the nightly
-    // drift line pointing at documents this run had already fixed, which is a repair nobody can
-    // tell from a failure.
+    // The repair the poison alert names; it holds the same proof as `--pending`.
     const d = deps({
       documents: fakeDocuments([
         // Stale chunks, so it is patched here.
@@ -873,9 +830,7 @@ test('backfill', async (t) => {
 
   await t.test('a document whose chunks were lost keeps its flag while its neighbours lose theirs',
     async () => {
-      // Per document, not per partition: the old rule refused to clear anything once one document
-      // in the partition failed, so one lost chunk left every other repaired document flagged and
-      // the drift line never came down.
+      // Per document: one lost chunk must not keep every other document flagged.
       const d = deps({
         documents: fakeDocuments([
           { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true },
@@ -892,9 +847,7 @@ test('backfill', async (t) => {
     });
 
   await t.test('a flag whose row the clear cannot find is counted and exits non-zero', async () => {
-    // The row went away, or it does not live under the key this walk read it from. Counting it as
-    // cleared reports a flag taken down that is still up, and the reconcile keeps naming it every
-    // night with nothing to explain why.
+    // The row is gone, or lives under another key; the flag is still up.
     const d = deps({
       documents: fakeDocuments([
         { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true }
@@ -908,9 +861,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('--pending counts and names the flagged rows the walk never reached', async (t2) => {
-    // The row's partition key changed between `listParentFieldsPending` and the walk, so the walk
-    // read a partition it is no longer in: no clear was attempted, nothing was counted, and the
-    // run exited 0 while the reconcile kept naming the same document every night.
+    // The row's partition key changed after `listParentFieldsPending`, so the walk never sees it.
     const documents = fakeDocuments([
       { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true }
     ]);
@@ -954,9 +905,7 @@ test('backfill', async (t) => {
   });
 
   await t.test('deletes the index rows whose Cosmos chunk is gone', async () => {
-    // `deleteSurplus` removes chunks from Cosmos and the indexer has no deletion detection, so the
-    // row stays in the index unstamped for good — no patch can reach it, and the unstamped count
-    // it inflates is what withholds the facets for every search over this project.
+    // The indexer never sees deletes, so such rows stay unstamped and hold back facets.
     const search = fakeSearch({
       rows: {
         207: [
@@ -1059,10 +1008,7 @@ test('every stamp is guarded on an instant, so a walk cannot overwrite a newer o
   const START = '2026-09-09T11:00:00.000Z';
 
   await t.test('a flagged row uses its flag token, every other row the walk start', async () => {
-    // The flag token is what the re-stamp this run is answering was queued with, so using it keeps
-    // the repair and the flag in the same order. A row nobody flagged has no token of its own, and
-    // the walk's START — not the moment its partition came up — is what makes a corpus pass that
-    // runs for hours lose to every re-stamp queued after it began.
+    // The walk start, not the partition's turn, lets a long corpus pass lose to later re-stamps.
     const d = deps({
       documents: fakeDocuments([
         { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true },
@@ -1098,9 +1044,7 @@ test('every stamp is guarded on an instant, so a walk cannot overwrite a newer o
 
   await t.test('chunks a newer walk already stamped are reported, not counted as patched',
     async () => {
-      // 412 is neither a success nor a failure: the values on those chunks are at least as current
-      // as this walk's, so the document still clears its flag and the run still exits 0 — but a
-      // summary that said nothing would read as a repair that patched fewer chunks than it found.
+      // 412 means a newer stamp is there: not a failure, but counted so the summary adds up.
       const d = deps({
         documents: fakeDocuments([
           { id: 'd1', projectId: '207', typeId: TYPE_ID, parentFieldsPending: true }
