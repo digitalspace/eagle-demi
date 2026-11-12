@@ -1,20 +1,8 @@
 'use strict';
 
 /**
- * Azure AI Search — the Deep Search backend over extracted document text.
- *
- * Retrieval is lexical BM25. No vectors and no embedding pipeline: AI is a summariser over the
- * final top-N, not a retriever. Chunk search additionally asks Azure's semantic ranker to REORDER
- * what BM25 already found — see semanticConfigurationFor. That is a reranker over the top 50, not a
- * second retrieval path; it cannot surface anything the keyword query missed.
- *
- * Deliberately plain `fetch` against the REST API rather than `@azure/search-documents`. Two
- * calls are needed — search and delete — and the SDK would be a new dependency for what a request
- * body already expresses. `@azure/identity` is NOT new: it is already how Cosmos authenticates.
- *
- * The service has `disableLocalAuth`, so there is no admin key to configure or leak, and its
- * `publicNetworkAccess` is Disabled (landing-zone policy), so this only works from inside the
- * VNet — which the App Service is. See the wiki's BC-Gov-Azure-Landing-Zone page.
+ * Azure AI Search client: lexical BM25 retrieval, semantic ranker only reorders chunk hits.
+ * Plain `fetch` over REST on purpose: search and delete do not justify the SDK dependency.
  */
 
 const { randomUUID } = require('crypto');
@@ -26,18 +14,8 @@ const { mapLimit } = require('../utils/worker-pool');
 
 const API_VERSION = '2024-07-01';
 
-/**
- * Highlight markers.
- *
- * AI Search wraps matched terms in whatever tags it is given, INSIDE text extracted from arbitrary
- * uploaded PDFs, and the frontend renders the result with `[innerHTML]`. Asking for `<mark>`
- * directly would mean either shipping unescaped document text to the DOM or trying to escape
- * around tags we ourselves asked for.
- *
- * So ask for control characters no document can contain, escape the ENTIRE fragment, and only then
- * swap the sentinels for real tags. U+0001/U+0002 cannot survive `chunkMarkdown`, cannot be typed,
- * and have no meaning in HTML.
- */
+// Highlights land inside untrusted PDF text the frontend renders as HTML. Control chars no
+// document can hold mark them; the whole fragment is escaped, then they become <mark>.
 const HL_PRE = '\u0001';
 const HL_POST = '\u0002';
 
@@ -54,38 +32,16 @@ const MAX_TERMS = 16;
 const MAX_SKIP = 100000;
 
 /**
- * Fields the document search asks for.
- *
- * EVERY NAME MUST EXIST IN THE INDEX — a stray one is a 400 on every query, not a missing field in
- * the response, and a 400 is not retried. Exported so a test can hold that invariant against the
- * committed `azure/search/indexes/documents.json` rather than leaving it as a comment; a typo here
- * broke no test until one did.
- *
- * The last five arrived with the widened index: `datePosted` is eagle-public's Date column and its
- * default sort, and the four ids are what `idToList()` resolves for Type and Milestone.
+ * Every name must exist in the index: a stray one is a 400 on every query, never retried.
+ * Exported so a test holds it against `azure/search/indexes/documents.json`.
  */
-// `isFeatured` backs eagle-public's ★ column; `documentSource` its PROJECT-NOTIFICATION split.
 const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projectId,read,' +
   'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted,isFeatured,' +
   'documentSource,fileSize';
 
 /**
- * The fields a PROJECT hit carries back. Same invariant, same reason, and the same exported-so-a-
- * test-can-hold-it treatment as DOCUMENT_SELECT above.
- *
- * IT WAS AN INLINE LITERAL, AND THAT IS HOW THE LAST SIX WENT MISSING. Widening the index, the data
- * source and the mapper is not enough on its own: a field absent from `select` comes back
- * undefined, so the mapper emits `type: ''` and `currentPhaseName: null` on every hit and the
- * columns read '-' exactly as before — a quieter version of the bug being fixed, under a 200. The
- * document side already had the constant and the guard test; projects had neither.
- *
- * The last six arrived with the widened index: `type` is eagle-public's Type column, and the two
- * label/id pairs are what the response rebuilds into the `{_id, name}` shape Phase and Decision
- * bind. `decisionDate` backs the decision-date range filter.
- *
- * `dateUpdated` is eagle-public's "Last updated" column and the field `sortBy=-dateUpdated` orders
- * by. The sort reads index metadata and so worked without it; the column read '-' on every row,
- * which is the quiet half of this same bug.
+ * Same rule as DOCUMENT_SELECT. A field added to the index and mapper but not here comes back
+ * undefined, so its column reads '-' on every row under a 200.
  */
 const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,projectSubType,' +
   'legislationYear,status,region,centroid,legacyEagleId,read,isPublished,type,currentPhaseName,' +
@@ -93,32 +49,14 @@ const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,project
   'activeWorkAct,activeWorkType,activeWorkPhase';
 
 /**
- * The fields a CHUNK hit carries back. Same invariant as the two above: every name must exist in
- * the index or every chunk query is a 400.
- *
- * `content` IS DELIBERATELY ABSENT, and that is the whole reason this list is narrow. `content` was
- * `retrievable: false`, so the index enforced it; semantic ranking requires its configured fields
- * to be retrievable, so that flipped and the guarantee now lives here. Adding `content` is not a
- * display tweak — it starts returning full chunk text to every caller.
- *
- * Named and exported like the other two so `/health/search-schema` probes the live index with what
- * the app actually sends, and so a test can hold it against the committed `chunks.json`. It was an
- * inline literal with no test at all while both of its neighbours had one.
+ * `content` is left out on purpose: semantic ranking forces it retrievable in the index, so this
+ * list is all that stops full chunk text reaching every caller.
  */
 const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read';
 
 /**
- * The fields a project keyword query matches on. Shared by the search and the count so the badge
- * and the result total answer the same question; `nameTokens` is `name` under the `filename`
- * analyzer — `keywords=mine` matches "Mine Project", which `en.microsoft` strips as a stopword
- * from every other field here.
- *
- * `searchLabels` is the sector, status, region, type, phase and decision labels joined into one
- * field by the data source, so `keywords=mines` finds projects by sector. One field rather than six,
- * because flipping `searchable` on the label columns would mean rebuilding the index.
- *
- * `tags` holds former and alternate names set in DEMI, so an old name still finds the project;
- * `tagsTokens` is `tags` under `filename`, for the same reason as `nameTokens`.
+ * Shared by search and count so badge and total agree. The `*Tokens` fields use the `filename`
+ * analyzer, which keeps words like "mine" that `en.microsoft` drops as stopwords.
  */
 const PROJECT_SEARCH_FIELDS =
   'name,displayName,description,proponent,nameTokens,searchLabels,tags,tagsTokens';
@@ -126,25 +64,12 @@ const PROJECT_SEARCH_FIELDS =
 /** What leg two of a document keyword search matches a project on: the names it goes by, never its description. */
 const LEG_TWO_SEARCH_FIELDS = 'name,displayName,proponent,nameTokens,tags,tagsTokens';
 
-/**
- * The fields a document keyword query matches on, compat and native alike. One copy, because
- * compat's leg-two exclusion clause has to complement exactly these. `fileNameTokens` is
- * documentFileName under the `filename` analyzer — `keywords=mine` matches `2019-mine-plan.pdf`,
- * which `en.microsoft` on documentFileName does not.
- */
+/** One copy for compat and native: compat's leg-two exclusion clause must complement exactly these. */
 const DOCUMENT_SEARCH_FIELDS = 'displayName,documentFileName,description,fileNameTokens';
 
 /**
- * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
- *
- * `select` is the row key plus what the caller's own id space needs; the row itself is read back
- * from Cosmos, so the index carries no copy of the text it ranks on and the wire shape stays the
- * one the Cosmos list read already emits. That is why `searchable` fields here are not
- * `retrievable` — see azure/search/indexes/activities.json.
- *
- * `content` is indexed under `html_text` (html_strip in front of the standard tokenizer) because
- * an update body can hold markup; the other searchable fields are `en.microsoft` like everywhere
- * else, and `nameTokens` is `name` under `filename` for the same reason `projects` carries one.
+ * These indexes only say which rows match; the rows are read back from Cosmos, so their
+ * searchable fields are not retrievable (see azure/search/indexes/activities.json).
  */
 const KEYWORD_INDEXES = Object.freeze({
   activities: {
@@ -164,41 +89,23 @@ const KEYWORD_INDEXES = Object.freeze({
 const SERVICE_MAX_TOP = 250;
 
 /**
- * The largest page this layer will assemble, whatever `pageSize` says.
- *
- * 500 is eagle-public's own ceiling — `MAX_SHOW_ALL_ITEMS` in `table-template.component.ts:122-126`
- * is the biggest page any live caller asks for — so every real request fits in two service calls.
- * The controller REFUSES a larger page rather than letting this clamp it: a short page under a
- * large total is a page the caller never learns they did not receive, which is the whole defect
- * this constant exists to close.
+ * eagle-public's largest page (`MAX_SHOW_ALL_ITEMS`). The controller refuses larger pages, since a
+ * clamp would return a short page the caller cannot tell from a full one.
  */
-
-
 const MAX_PAGE_ROWS = 500;
 
 /**
- * How many document ids a chunk query may be scoped to before the filter is treated as
- * inexpressible.
- *
- * Only the document-only keys a chunk carries no copy of are resolved this way — dates,
- * `isFeatured`, `legislation`, `documentSource`. DERIVED, not chosen: `SERVICE_MAX_TOP - 1` keeps
- * the whole resolution inside one service request, and a hand-picked number silently stops agreeing
- * with what one request can return. Over the cap the key stays dropped rather than being applied to
- * an arbitrary prefix. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
+ * Most document ids a chunk query scopes to for keys chunks do not copy (dates, isFeatured, ...).
+ * Derived so the lookup fits one request; over it the key is dropped, never applied to a prefix.
  */
 const DOCUMENT_SCOPE_CAP = SERVICE_MAX_TOP - 1;
 
-/**
- * How long an answer about the LIVE index is trusted before it is asked again. Bounded rather than
- * read at startup: the index is widened by an operator PUT no app release is involved in, so a
- * process that cached "the field is not there" would drop the filter until somebody restarted it.
- */
+/** Operators widen the live index without a release, so a cached "field missing" must expire. */
 const LIVE_SCHEMA_TTL_MS = 10 * 60 * 1000;
 
 /**
- * How long "the question could not be answered" is held instead — a 403 or a timeout is not a fact
- * about the index and clears in seconds. Cached at all so a failing service gets one probe per
- * burst of keystrokes rather than one per keystroke.
+ * A 403 or timeout says nothing about the index, so it is held briefly: one probe per burst of
+ * keystrokes rather than one per keystroke.
  */
 const UNKNOWN_STATUS_TTL_MS = 30 * 1000;
 
@@ -207,13 +114,8 @@ let credential = null;
 let unconfiguredWarned = false;
 
 /**
- * One service, three indexes, one app setting each.
- *
- * `SEARCH_INDEX` keeps its unqualified name for backward compatibility — it named the chunk index
- * before there were three. The defaults are the LIVE names,
- * matching the committed definitions under `azure/search/` and the live indexes, all three of which
- * agree since the cutover on 2026-08-22. The retired `demi-*` indexes still exist and their indexers
- * still run, so rolling back is a settings change with no refill. All three are settable precisely so no code release is involved either way.
+ * `SEARCH_INDEX` is the chunk index. Every name is an app setting so pointing back at the retired
+ * `demi-*` indexes, which are still filled, needs no release.
  */
 function config() {
   const endpoint = (process.env.SEARCH_ENDPOINT || '').replace(/\/$/, '');
@@ -223,14 +125,8 @@ function config() {
     index,
     projectsIndex: process.env.SEARCH_INDEX_PROJECTS || 'projects',
     documentsIndex: process.env.SEARCH_INDEX_DOCUMENTS || 'documents',
-    // NO DEFAULT NAME on these two, and that is the whole switch: ABSENT and EMPTY both mean the
-    // RecentActivity and ProjectNotification keyword searches are answered from Cosmos. Only an
-    // explicitly non-empty setting turns the index on.
-    //
-    // A default name here made the switch work only where the setting already existed. Test had no
-    // such app setting — the index was never PUT there — so the app read 'activities', queried an
-    // index the service does not hold, and every keyword search 404'd into a 502. The other three
-    // keep their defaults: nothing else can answer them, so there is nothing to fall back to.
+    // No default name: absent or empty means these keyword searches are answered from Cosmos.
+    // A default would query an index the service may not hold, and every search would 502.
     activitiesIndex: process.env[KEYWORD_INDEXES.activities.setting] || '',
     notificationsIndex: process.env[KEYWORD_INDEXES.notifications.setting] || '',
     configured: Boolean(endpoint)
@@ -238,11 +134,8 @@ function config() {
 }
 
 /**
- * Not configured is a DEGRADED state, not an error.
- *
- * A missing app setting must not 500 the search endpoint — the Project and Document datasets are
- * served by a different backend and stay up. Warn once per process: per-request this would be
- * pure noise, because the frontend searches on every keystroke.
+ * Not configured is degraded, not an error: the search endpoint must not 500 over it. Warns once
+ * per process, because the frontend searches on every keystroke.
  */
 function warnUnconfigured() {
   if (unconfiguredWarned) return;
@@ -254,10 +147,8 @@ function warnUnconfigured() {
 }
 
 /**
- * A bearer token for the search data plane, cached until shortly before it expires.
- *
- * `@azure/identity` is required lazily so that importing this module does not pull it into test
- * runs that never authenticate — the same reason `db/cosmos-nosql.js` does it.
+ * Data-plane token, cached until near expiry. The identity module loads lazily so test runs that
+ * never authenticate do not pull it in.
  */
 async function getToken() {
   if (tokenCache && tokenCache.expiresOn - Date.now() > 5 * 60 * 1000) {
@@ -276,33 +167,19 @@ async function getToken() {
 }
 
 /**
- * Statuses worth a second attempt.
- *
- * 429 is throttling — the service is Basic at one replica, so a burst of keystroke-driven searches
- * can genuinely exceed it. 503 is a transient service-side failure. Nothing else belongs here: a
- * 400 from a field name that is not in the index returns the same 400 every time, and a 403 from a
- * missing data-plane role is a deployment fact, not a blip. Retrying either triples the latency of
- * a guaranteed failure.
+ * Throttling (Basic tier, one replica) and transient 503 only. A 400 or 403 repeats every time,
+ * so retrying it only triples the latency of a sure failure.
  */
 const RETRY_STATUSES = new Set([429, 503]);
 const MAX_ATTEMPTS = 3;
 
 /**
- * Fail long before the platform does.
- *
- * App Service aborts the request at 240s. A search that hangs until then holds a worker slot on a
- * 224 MB instance for four minutes, and the caller — the frontend, searching on a 300ms debounce —
- * gave up long before. 30s is well past any healthy query against this corpus.
+ * Fail long before the platform aborts, so a hung search does not hold a worker for minutes after
+ * the caller gave up. Well past any healthy query on this corpus.
  */
 const REQUEST_TIMEOUT_MS = 30000;
 
-/**
- * How long to wait before retrying.
- *
- * `Retry-After` is in seconds and is what the service actually wants; honour it when present.
- * Otherwise linear backoff, matching `bulkVerified` in `db/cosmos-nosql.js` rather than inventing a
- * second backoff style in the same codebase.
- */
+/** Honours `Retry-After` (seconds); else linear backoff, as `bulkVerified` in db/cosmos-nosql.js. */
 function retryDelayMs(res, attempt) {
   const header = res.headers && typeof res.headers.get === 'function'
     ? res.headers.get('retry-after')
@@ -334,9 +211,8 @@ async function request(path, body, opts = {}) {
         signal: AbortSignal.timeout(timeoutMs)
       });
     } catch (err) {
-      // A timeout surfaces as a TimeoutError from the signal, never as a status. NOT retried: the
-      // call has already spent the full budget waiting, and if the service is that slow another
-      // two attempts make the queue worse rather than better.
+      // A timeout is not retried: the full budget is spent, and more attempts against a service
+      // that slow only lengthen its queue.
       throw new Error(
         `${path.split('?')[0]} failed after ${timeoutMs}ms (${err.name}) [${clientRequestId}]`,
         { cause: err }
@@ -359,9 +235,8 @@ async function request(path, body, opts = {}) {
       continue;
     }
 
-    // `status` is carried on the error, not just formatted into its message. `runSearch` has to
-    // distinguish 402 (semantic ranker's free allowance is spent) from every other failure, and
-    // string-matching an error message to make a control-flow decision is how that breaks silently.
+    // `runSearch` branches on 402 (semantic allowance spent), so the status rides on the error
+    // rather than being parsed out of the message.
     const err = new Error(`HTTP ${res.status} ${detail.slice(0, 300)} [${clientRequestId}]`);
     err.status = res.status;
     // The service body can quote the `$filter`, ACL clause included: handlers map it via `searchServiceReply`.
@@ -374,12 +249,8 @@ async function request(path, body, opts = {}) {
 }
 
 /**
- * Split user input into query terms.
- *
- * Splits on anything that is not a letter or digit, so no Lucene syntax character can reach the
- * query — `queryType: 'full'` means `+`, `-`, `*`, `"`, `~`, `(`, `)` and `:` are all operators,
- * and an unbalanced one is a 400 rather than a search for that character. Accented and non-Latin
- * letters survive (\p{L}); dropping them would make French place names unsearchable.
+ * Splits on anything not a letter or digit, so no Lucene operator reaches a `full` query (an
+ * unbalanced one is a 400). \p{L} keeps accented letters, so French place names stay searchable.
  */
 function tokenize(keywords) {
   return String(keywords || '')
@@ -389,126 +260,50 @@ function tokenize(keywords) {
 }
 
 /**
- * Below this length an edit-distance-1 expansion has more neighbours than signal.
- *
- * Measured on the live corpus: `fuzzy=true` on the stopword-only query "the and of" returned a
- * full page of OCR noise — `the~1` matched a scanned fragment reading "th" — while the same query
- * with fuzzy off returned 0. Stopwords are removed by the analyzer, but a FUZZY term bypasses the
- * analyzer entirely, so the removal never happens and the expansion matches debris instead.
- * The frontend sends fuzzy=true on every Deep Search, so this is the default path, not an edge.
- *
- * Four is the usual Lucene threshold, and a typo in a three-letter word is not recoverable by
- * edit distance anyway — every other three-letter word is one edit away.
+ * Shorter terms get no `~1`: a fuzzy term skips the analyzer, so short words match OCR debris, and
+ * every three-letter word is one edit from many others.
  */
 const MIN_FUZZY_LENGTH = 4;
 
 /**
- * Shortest term that may carry a trailing `*`. Lower than MIN_FUZZY_LENGTH on purpose: a prefix is
- * not a guess the way an edit-distance match is — `ke*` is what someone typing "kemess" has entered
- * so far, and waiting for the fourth keystroke is the type-ahead failing on the first three.
- *
- * Two rather than one because a one-character prefix overruns the service's term-expansion cap,
- * which truncates rather than errors: `k*` then answers from an arbitrary subset of the vocabulary.
+ * Lower than MIN_FUZZY_LENGTH on purpose: a prefix is typed text, not a guess. Not 1, because `k*`
+ * overruns the service's expansion cap, which silently answers from a subset of the vocabulary.
  */
 const MIN_PREFIX_LENGTH = 2;
 
 /**
- * Score multiplier on the fuzzy variant. MEASURED, not chosen.
- *
- * `(term OR term~1)` lets the fuzzy arm compete with the exact arm on BM25 score, so a document
- * matching only by edit distance can outrank one holding the term verbatim. That was the residual
- * gap after the stopword fix: blanket `--no-fuzzy` still scored 2 labels higher (44 vs 42), and the
- * vocabulary sweep came back clean, so it was a RANKING effect rather than a zeroing one.
- *
- * Paired run, both arms in one session, 71 labels plus the textless control (2026-08-04):
- *
- *   pooled recall@10  0.592 -> 0.620   (42 -> 44 of 71)
- *   pooled recall@1   0.282 -> 0.310
- *   pooled MRR        0.382 -> 0.403
- *   2 miss->hit, 0 hit->miss, no stratum regressed, control 0 in both arms
- *
- * All three metrics move together, which is what makes this shippable — `anyTerms` improved
- * recall@10 while making recall@1 and MRR worse, and was rejected for exactly that. It lands on the
- * same 44 labels blanket `--no-fuzzy` reaches, so it recovers the residue WITHOUT giving up typo
- * tolerance, which was the point.
- *
- * Honest limit: 2 discordant pairs is not statistically significant (one SE ~ 0.059 on this label
- * set; the move is half of that). The case rests on the direction being consistent across all three
- * metrics with zero regressions, not on the aggregate. Full account on the wiki's Search-Measurements page.
+ * Measured, not chosen: keeps an edit-distance match from outranking the verbatim term.
+ * Numbers and limits are on the wiki's Search-Measurements page.
  */
 const FUZZY_BOOST = 0.5;
 
 /**
- * Lucene's boolean operators, which are CASE-SENSITIVE under `queryType: 'full'`.
- *
- * `tokenize` strips operator punctuation but cannot strip a word, so these reach `buildQuery` as
- * ordinary terms and join into `... AND AND AND ...` — a parse error, HTTP 400, not a search.
- * Measured against the live index on a real corpus phrase, "EAST TOBA AND MONTROSE HYDROELECTRIC
- * PROJECT": `Failed to parse query string at line 1, column 42`, which is exactly where the bare
- * `AND` lands. Any public query containing a standalone AND/OR/NOT was failing this way.
- *
- * Lowercasing demotes them back to terms and loses nothing: the index side is lowercased by
- * `en.microsoft`, so the word still matches whatever it would have matched.
+ * Case-sensitive operators under `full`: a typed bare AND would make `x AND AND y`, a 400.
+ * Lowercased to plain terms, which the lowercasing analyzer still matches.
  */
 const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
 
 /**
- * Terms `en.microsoft` REMOVES at query time, and which must therefore never carry an UNANALYZED
- * variant — neither `~1` nor `*`.
- *
- * The plain term is analyzed, so a stopword is dropped from the query and costs nothing. An
- * unanalyzed variant is NOT, so `mine~1` resurrects the stopword as a literal — and the index side
- * dropped it too, so the clause matches nothing. `(mine OR mine~1)` therefore collapses to an
- * unsatisfiable clause, and under the ` AND ` join ONE of those zeroes the entire query.
- *
- * Measured on the live index 2026-08-04, not guessed: the label
- * "Sediments from the proposed Lodgepole mine will move downstream and accumulate" returned 0 hits
- * with fuzzy on and 1 with fuzzy off, against a chunk that holds the sentence verbatim. `from`,
- * `mine`, `that` and `with` are the ones an EA corpus hits constantly.
- *
- * SHORT STOPWORDS ARE LISTED TOO. The set used to stop at MIN_FUZZY_LENGTH, on the reasoning that a
- * shorter word never gets a variant — true while `~1` was the only unanalyzed variant, false from
- * the moment `*` arrived at MIN_PREFIX_LENGTH 2. Without the short half,
- * `buildContainsQuery('Notice of Commencement')` emits `of*` and an ordinary title finds nothing.
- *
- * The short half is the standard English stop set, inferred rather than measured: every field this
- * module queries over is `analyzer: en.microsoft` (azure/search/indexes/*.json), whose stop list
- * covers the standard set. Not confirmed against the live service — the Analyze API needs a
- * data-plane role the app identity does not hold (403). The set errs wide on purpose: a word
- * wrongly listed costs one prefix expansion, a word wrongly missing costs every hit on the phrase.
- *
- * To regenerate the measured half: for each candidate, `searchChunks({keywords: word,
- * fuzzy: false})`. A count of 0 means the analyzer removed it.
+ * Words the analyzer drops: a `~1` or `*` variant of one asks for a literal the index lacks, and
+ * one such clause zeroes the AND. Errs wide: a wrong entry only costs one prefix expansion.
  */
 const ANALYZER_STOPWORDS = new Set([
-  // Measured against the live index.
+  // Measured on the live index: `searchChunks({ keywords: word, fuzzy: false })` counts 0.
   'from', 'hers', 'herself', 'himself', 'itself', 'mine', 'myself', 'ours', 'ourselves', 'that',
   'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself',
-  // Standard English stop set, from the field analyzer being en.microsoft.
+  // Standard English stop set, inferred from en.microsoft; the Analyze API is 403 to the app.
   'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in', 'into', 'is', 'it',
   'no', 'not', 'of', 'on', 'or', 'such', 'the', 'then', 'there', 'to', 'was', 'will'
 ]);
 
-/**
- * One decision, used by every place that appends `~1` or `*`: the analyzer drops this term, so an
- * unanalyzed variant of it would demand a literal the index does not hold.
- */
+/** The one check every `~1` or `*` append goes through. */
 function isAnalyzerStopword(term) {
   return ANALYZER_STOPWORDS.has(term.toLowerCase());
 }
 
 /**
- * `(term OR term~1)` per term, ANDed together.
- *
- * The OR is not redundant. A fuzzy term bypasses the query analyzer, so it matches only against
- * what is already in the index; the plain term goes through `en.microsoft` and picks up stemming.
- * Measured on the live index, the bare fuzzy form happened to match too — because the INDEX side
- * is lemmatised — but that is a property of the current analyzer, and the OR does not depend on it.
- *
- * The outer ` AND ` was tested as the recall suspect and CLEARED: an ` OR ` arm moved pooled
- * recall@10 0.549 → 0.577 at n=71, half a standard error, with recall@1 and MRR worse and the
- * discriminating `text` stratum flat. See the wiki's Search-Measurements page — the knob is not carried in the code
- * because the question it answered is closed.
+ * `(term OR term~1)` per term, ANDed. The plain arm keeps stemming, which the fuzzy arm skips.
+ * An outer OR was measured and rejected (wiki Search-Measurements).
  */
 function buildQuery(terms, fuzzy, prefix = false) {
   const last = terms.length - 1;
@@ -516,21 +311,10 @@ function buildQuery(terms, fuzzy, prefix = false) {
     .map((raw, i) => {
       const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
       const parts = [t];
-      // A stopword gets NO unanalyzed variant. Both `~1` and `*` bypass the query analyzer, so on a
-      // term the analyzer removes they demand a literal the index does not hold, and the clause
-      // becomes unsatisfiable — fatal under a conjunction. The plain term stays: it analyzes away
-      // and is dropped harmlessly, which is the behaviour that was already correct.
       const analyzed = !isAnalyzerStopword(t);
-      // `^0.5` on the fuzzy variant only — see FUZZY_BOOST. Never on the plain term (the arm this
-      // protects) and never on the `*` prefix variant, which is a different mechanism.
       if (fuzzy && analyzed && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1^${FUZZY_BOOST}`);
-      // Prefix on the LAST term only — the one still being typed. Applying it to every term would
-      // match `pipe` inside `pipeline` in the middle of a phrase and blur the query; applying it
-      // to none loses search-as-you-type, which Typesense provided via `prefix=true` and the
-      // frontend relies on because it searches on debounced keystrokes.
-      //
-      // MIN_PREFIX_LENGTH, not MIN_FUZZY_LENGTH — the two thresholds answer different questions.
-      // `analyzed` still gates it: `*` bypasses the query analyzer exactly as `~1` does.
+      // Prefix on the last term only, the one still being typed; on every term `pipe` would
+      // match `pipeline` mid-phrase.
       if (prefix && analyzed && i === last && t.length >= MIN_PREFIX_LENGTH) parts.push(`${t}*`);
       return parts.length > 1 ? `(${parts.join(' OR ')})` : t;
     })
@@ -538,34 +322,16 @@ function buildQuery(terms, fuzzy, prefix = false) {
 }
 
 /**
- * Every character Lucene reads as syntax under `queryType: 'full'`, backslashed so it is matched
- * as text instead. `tokenize` answers the same danger by DELETING them, and the contains filter
- * splits on them, so on today's rules no syntax character survives to reach this. It stays as the
- * guard on that invariant: loosen CONTAINS_SEPARATORS and an unbalanced bracket is a 400 from the
- * service, not a search.
- *
- * The backslash is in the class, and one pass over the input is enough: a replacement is never
- * rescanned, so the `\` this emits cannot be escaped a second time.
+ * Guard only: CONTAINS_SEPARATORS already strips syntax, but loosen it and an unbalanced bracket
+ * is a 400. One pass suffices; a replacement is never rescanned.
  */
 function escapeLucene(term) {
   return term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, '\\$&');
 }
 
 /**
- * Word separators for the contains filter: whitespace and every punctuation mark the field
- * analyzer strips, which is `tokenize`'s rule with the apostrophe held back.
- *
- * A word carrying punctuation cannot be a prefix. `*` makes the term UNANALYZED, while the index
- * side is `en.microsoft` and holds no punctuation in its tokens, so `LNG,*` asks for a token that
- * cannot exist — and one unsatisfiable term under the ` AND ` join answers 0 rows for a project
- * whose name is on screen. Splitting first is what keeps `Kitimat LNG, Phase 2` findable.
- *
- * THE HYPHEN SEPARATES TOO, for the same reason: `en.microsoft` breaks `Site-C` into `site` and
- * `c`, so `Site\-C*` is a prefix of a token the index never holds. Rendering it as two words is
- * what the index can answer.
- *
- * The apostrophe stays INSIDE the word: the analyzer keeps `dam's` as one token, and splitting it
- * would require a bare `s` on its own.
+ * Split where the analyzer splits (hyphen included): `LNG,*` is a token the index never holds.
+ * The apostrophe stays inside, as the analyzer keeps `dam's` whole.
  */
 const CONTAINS_SEPARATORS = /[^\p{L}\p{N}'\u2019]+/u;
 
@@ -573,21 +339,8 @@ const CONTAINS_SEPARATORS = /[^\p{L}\p{N}'\u2019]+/u;
 const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
 
 /**
- * Lucene query for a "the name contains this" filter: every word required, each word matched as a
- * prefix so the word still being typed hits.
- *
- * Whitespace and punctuation both separate words (CONTAINS_SEPARATORS), so a word reaching the
- * query holds letters, digits and apostrophes only. `escapeLucene` is the guard on that, not a
- * routine step — see its comment.
- *
- * The operator lowercasing and the stopword guard are `buildQuery`'s, for the reasons given there:
- * a bare `AND` typed into the cell is an operator rather than a word, and a `*` on a word the
- * analyzer removes demands a literal the index does not hold, which empties the conjunction.
- *
- * A stopword is KEPT, just without its `*`: 'Notice of Commencement' renders
- * `Notice* AND of AND Commencement*`. Dropping the word outright is the other defensible answer,
- * but the plain term analyzes away at query time and costs nothing, and keeping it means the clause
- * still reads as what the caller typed.
+ * "Name contains" filter: every word required, each as a prefix. A stopword stays without its `*`:
+ * 'Notice of Commencement' gives `Notice* AND of AND Commencement*`.
  */
 function buildContainsQuery(text) {
   return String(text || '')
@@ -604,53 +357,16 @@ function buildContainsQuery(text) {
 }
 
 /**
- * Semantic reranking (L2), applied ON TOP of the Lucene query rather than instead of it.
- *
- * `semanticQuery` is the load-bearing choice. The other route — `queryType: 'semantic'` — accepts
- * ONLY plain text: both simple and full Lucene syntax are rejected. Taking it would silently throw
- * away every measured thing `buildQuery` does: the `(term OR term~1^0.5)` fuzzy arm, FUZZY_BOOST,
- * the ANALYZER_STOPWORDS guard that stops a conjunction collapsing to zero hits, the operator
- * lowercasing that prevents a hard 400, and the trailing `*` that makes search-as-you-type work.
- *
- * With `semanticQuery`, `search` keeps the Lucene expression and drives retrieval (L1) exactly as
- * before; the plain-text copy is used only to rescore what L1 already found. Available in the
- * API_VERSION this module already pins.
- *
- * Azure rescores at most the top 50 of L1, so this can only reorder — it can never surface a
- * document the Lucene query failed to match.
- *
- * DERIVED FROM THE INDEX NAME, not a constant. A semantic configuration is scoped to the index that
- * declares it, so a hard-coded name is the one thing a staged index rename cannot survive: point
- * `SEARCH_INDEX` at a `chunks` index while this still says `demi-chunks-semantic` and every chunk
- * search 400s — naming a configuration the index does not declare is a hard error, not a degrade to
- * BM25. The convention `<index>-semantic` is what `azure/search/indexes/chunks.json` carries, and
- * keeping the two in step is why the definition file is the source of the name.
+ * Derived from the index name, as `azure/search/indexes/chunks.json` declares it: naming a
+ * configuration the index lacks is a 400 on every chunk search, not a fallback to BM25.
  */
 function semanticConfigurationFor(index) {
   return `${index}-semantic`;
 }
 
 /**
- * The MONTH a 402 said the allowance was spent, `YYYY-MM` in UTC. Gates the request, not just the
- * log.
- *
- * Without the gate, every later search still asks for reranking, still gets 402, and still pays a
- * second round trip to retry stripped — on every debounced keystroke.
- *
- * A MONTH, NOT A BOOLEAN, and the earlier reasoning for the boolean has expired. It read: "the
- * allowance resets monthly and App Service restarts long before that, so a process-lifetime latch
- * is the whole lifetime that matters". `demi-api-test` now runs with `alwaysOn: true` (measured
- * 2026-08-24), so the worker outlives the allowance it is waiting on — a 402 on the 30th kept
- * Deep Search in BM25 order through every month after it, silently, because
- * `semanticErrorHandling: 'partial'` answers 200 with the same shape either way.
- *
- * No timer and no restart hook: the comparison runs on the request that would have been degraded,
- * so the first search of a new month re-enables ranking by itself.
- *
- * UTC, because Azure meters and resets on the UTC month. If the reset were keyed to a later
- * timezone, this would re-ask up to 7 hours early (Vancouver is UTC-7), take one 402 and re-latch
- * — one wasted round trip, self-correcting. Do not "fix" it to local time: that direction stays
- * latched into a month whose allowance has already reset, which is the failure this replaced.
+ * UTC month (`YYYY-MM`) a 402 said the semantic allowance was spent. A month, not a flag, as the
+ * worker outlives the reset. Keep UTC: Azure resets on it, and local time would stay latched.
  */
 let semanticExhaustedMonth = null;
 
@@ -658,16 +374,8 @@ const utcMonth = () => new Date().toISOString().slice(0, 7);
 const semanticIsExhausted = () => semanticExhaustedMonth === utcMonth();
 
 /**
- * How often reranking was asked for, and how often it did not happen.
- *
- * Degradation here is invisible from the outside: `semanticErrorHandling: 'partial'` answers 200
- * with the same response shape in BM25 order, so a service reranking nothing looks exactly like one
- * reranking everything.
- *
- * These counters are the reading that works without a telemetry pipeline. They are per-process and start
- * again at zero on every recycle, which answers "since this process started, was ranking running?"
- * and nothing longer. That is the right resolution for a single-worker B1, and it is not a time
- * series — the durable version is an alert on the log line.
+ * A `partial` rerank answers 200 in BM25 order, so these per-process counters are the only sign
+ * ranking is off. They reset on recycle; the durable signal is an alert on the log line.
  */
 const semanticCounters = {
   requested: 0,
@@ -677,14 +385,7 @@ const semanticCounters = {
   exhaustedAt: null
 };
 
-/**
- * What the counters say right now, plus the one number a reader actually wants.
- *
- * `ranked` is derived rather than counted: a search is ranked exactly when it asked and did not
- * degrade, and two counters that can drift apart would eventually disagree about the same search.
- * `exhausted` repeats the latch so a caller reading this does not have to infer it from a
- * timestamp being non-null.
- */
+/** `ranked` is derived, not counted, so it cannot drift from `requested` and `partial`. */
 function semanticStats() {
   return {
     ...semanticCounters,
@@ -693,13 +394,7 @@ function semanticStats() {
   };
 }
 
-/**
- * One search that asked for reranking and got the BM25 order anyway.
- *
- * Whether L2 ran is invisible in the results — the same shape comes back either way, in a different
- * order. Both the log line and the counter live here so the two can never disagree about what
- * counted as degraded.
- */
+/** Log line and counter in one place, so they agree on what counted as degraded. */
 function notePartialRerank(reason) {
   semanticCounters.partial++;
   semanticCounters.lastPartialReason = String(reason);
@@ -710,12 +405,8 @@ function notePartialRerank(reason) {
 }
 
 /**
- * 402 means the semantic ranker's monthly free allowance is spent, for the rest of the month.
- *
- * Not a blip and not retryable — it is not in RETRY_STATUSES for that reason. Left unhandled it
- * would turn every Deep Search into a 500 until the calendar rolls over, which is a far worse
- * outcome than serving the BM25 order the product ran on until now. So it degrades instead, stops
- * asking, and says so once per process rather than on every keystroke.
+ * 402: the free semantic allowance is spent until the month ends. Degrade to BM25 and stop asking,
+ * rather than 500 every Deep Search; logged once per month, not per keystroke.
  */
 function noteSemanticExhausted() {
   if (semanticIsExhausted()) return;
@@ -729,15 +420,8 @@ function noteSemanticExhausted() {
 }
 
 /**
- * One search request. Every dataset goes through here so the ACL filter, the query shape and the
- * "null filter means unrestricted, empty filter is a bug" rule are written once.
- *
- * `opts.top` is the PAGE the caller asked for, which is not the same thing as one request: the
- * service returns at most SERVICE_MAX_TOP rows however many are asked for. A page larger than that
- * is filled by consecutive requests rather than truncated — see MAX_PAGE_ROWS. Truncating is what
- * this used to do, and it is invisible from outside: eagle-public's "Show All" asks for 500
- * (`table-template.component.ts:122-126`, MAX_SHOW_ALL_ITEMS), got 250 rows and a total in the
- * thousands, and nothing anywhere said the other 250 had been dropped.
+ * Every dataset searches through here, so the ACL filter and query shape are written once.
+ * `opts.top` is the page size; pages over SERVICE_MAX_TOP are filled by further requests.
  */
 async function runSearch(index, opts = {}) {
   const terms = tokenize(opts.keywords);
@@ -752,21 +436,12 @@ async function runSearch(index, opts = {}) {
   };
   if (opts.select) body.select = opts.select;
   if (opts.searchFields) body.searchFields = opts.searchFields;
-  // `top` is a page SIZE, `skip` is the offset before it — until this was here, `top` was the only
-  // knob and result 251 was unreachable by any caller. Azure caps `$skip` at 100,000 and rejects
-  // more, and a deep skip is re-scored work the service throws away, so this is a real ceiling
-  // rather than a formality: page ~1,000 of a 10-row page is the end of the road, whatever the
-  // count says. Floored at 0 because eagle-public can send `pageNum=-1` outright
-  // (project.service.ts:33 defaults the page to 0 and api.ts:173 sends `pageNum - 1`).
+  // Floored at 0: eagle-public can send `pageNum=-1`. Capped so `skip + top` stays inside MAX_SKIP.
   const skip = Math.max(0, Math.floor(Number(opts.skip) || 0));
   if (skip > 0) body.skip = Math.min(skip, MAX_SKIP - body.top);
-  // Omitted when absent, never sent empty: an empty `$orderby` is a 400, and eagle-query returns
-  // undefined precisely where the index can express no order.
+  // Never sent empty: an empty `$orderby` is a 400.
   if (opts.orderby) body.orderby = opts.orderby;
-  // Never under `matchAll`: `search: '*'` matches without matching any TERM, so there is nothing
-  // for the analyzer to mark. Asking anyway spends a response body on empty highlight objects for
-  // every row of a filtered list page, and it is one more thing the service can refuse on a query
-  // shape it was never asked to highlight.
+  // `search: '*'` matches no term, so there is nothing to highlight.
   if (opts.highlight && !opts.matchAll) {
     body.highlight = opts.highlight;
     body.highlightPreTag = HL_PRE;
@@ -775,42 +450,24 @@ async function runSearch(index, opts = {}) {
   // Omitted entirely when null. An empty-string filter is UNRESTRICTED, not "no matches".
   if (opts.filter) body.filter = opts.filter;
 
-  // `matchAll` is excluded deliberately: `search: '*'` has no relevance signal to rescore, so
-  // semantic ranking does nothing on it — and Azure bills per non-empty semantic query.
-  // The 402 latch is the same idea: asking again cannot succeed THIS MONTH, and asking anyway
-  // costs every search a wasted round trip before the stripped retry. Next month it can, so this
-  // is a month comparison rather than a flag.
+  // `search: '*'` has nothing to rescore, yet Azure bills each semantic query.
   const semantic = opts.semantic === true && !opts.matchAll && !semanticIsExhausted();
   if (semantic) {
-    // The TOKENIZED terms rejoined, not opts.keywords verbatim. `tokenize` is what strips Lucene
-    // operator characters, and operator syntax inside the semantic string is explicitly unsupported.
+    // Plain text only: `search` keeps the Lucene query for retrieval, this copy only rescores it.
     body.semanticQuery = terms.join(' ');
     body.semanticConfiguration = semanticConfigurationFor(index);
-    // Degrade rather than fail. A 1-SU Basic service allows 2 concurrent semantic requests, and the
-    // frontend searches on a debounced keystroke — being over that is the expected path, not an
-    // edge. `partial` returns the BM25 order instead of erroring.
+    // Basic allows 2 concurrent semantic requests, so going over is expected: serve BM25 order.
     body.semanticErrorHandling = 'partial';
   }
 
   const path = `/indexes/${index}/docs/search?api-version=${API_VERSION}`;
 
-  // What the live index could not answer, for this request as a whole. The fill loop below issues
-  // more than one call, so the one-retry budget and the mark it leaves both span all of them.
+  // Spans every call of the fill loop: one drop-and-retry per request, not per call.
   let degraded = null;
 
   /**
-   * One service call, with the schema-drift degrade around it.
-   *
-   * A 400 naming a field the live index does not carry is the failure that took prod's Document
-   * tab down for 65 minutes on 2026-09-08: the deploy pipeline applies no index definition, so a
-   * release that widens a select against an index nobody widened 400s EVERY query. Dropping the
-   * field costs that one column; rethrowing costs the whole tab.
-   *
-   * ONE retry, and only for a field this layer may drop:
-   * - a second 400 rethrows, because narrowing until the query passes is how a deploy against a
-   *   wholly stale index would answer 200 with none of what the caller asked for;
-   * - a visibility field rethrows, and the controller answers 502 SEARCH_SCHEMA_DRIFT;
-   * - a field named nowhere this can edit rethrows unretried, since the retry would be identical.
+   * A 400 naming a field the live index lacks drops that field and retries once. A second 400 or a
+   * visibility field rethrows: narrowing until it passes would answer 200 with nothing asked for.
    */
   const send = async () => {
     try {
@@ -825,9 +482,7 @@ async function runSearch(index, opts = {}) {
       if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field, lists)) throw err;
       const twin = lists === DROPPABLE_LISTS && DROPPED_TOGETHER.get(field);
       degraded = { missing: twin && dropField(body, twin) ? [field, twin] : [field] };
-      // ERROR, not warn: nothing else says the index is behind the code, and the page being served
-      // is missing a column the app asked for. `{index, fields}` are log fields so the alert and
-      // the operator can filter on a field rather than parse the sentence.
+      // Error, not warn: nothing else says the index is behind the code.
       logger.error(
         `[ai-search] the ${index} index cannot answer '${degraded.missing.join("', '")}' — retried ` +
         'without it, so this page is narrower than the app asked for. Widen the index and reindex.',
@@ -847,9 +502,7 @@ async function runSearch(index, opts = {}) {
     } catch (err) {
       if (!semantic || err.status !== 402) throw err;
       noteSemanticExhausted();
-      // Counted as a degraded search, not just a latch event: this request was asked to rerank and
-      // the order it served is BM25. Leave it out and `ranked` claims a ranked result for the one
-      // search that provoked the 402.
+      // This search was served in BM25 order too, so it counts against `ranked`.
       notePartialRerank('the monthly allowance is exhausted (HTTP 402)');
       delete body.semanticQuery;
       delete body.semanticConfiguration;
@@ -857,8 +510,6 @@ async function runSearch(index, opts = {}) {
       data = await send();
     }
 
-    // Whether L2 ran is invisible in the results: the same shape comes back in BM25 order.
-    // Unlogged, a service silently serving BM25 all day looks exactly like one that reranks.
     if (semantic && data['@search.semanticPartialResponseReason']) {
       notePartialRerank(data['@search.semanticPartialResponseReason']);
     }
@@ -869,24 +520,15 @@ async function runSearch(index, opts = {}) {
   const value = [...(first.value || [])];
   const count = first['@odata.count'] ?? value.length;
 
-  // Fill the rest of the page, one service-sized request at a time. The loop ends on a SHORT
-  // answer, never on the count: `@odata.count` is the index-wide total and a page can run out long
-  // before it. Bounded at MAX_PAGE_ROWS / SERVICE_MAX_TOP requests — two today — so `pageSize`
-  // cannot be turned into a request multiplier against a 1-SU service.
+  // Ends on a short answer, never on `@odata.count` (the index-wide total). MAX_PAGE_ROWS bounds
+  // the calls, so `pageSize` cannot multiply requests against a 1-SU service.
   let requested = body.top;
   let received = value.length;
   while (received === requested && value.length < wanted) {
     body.top = Math.min(wanted - value.length, SERVICE_MAX_TOP);
     const nextSkip = Math.min(skip + value.length, MAX_SKIP - body.top);
-    // AT THE CEILING THE OFFSET STOPS MOVING, AND A REPEATED OFFSET IS A DUPLICATED PAGE. Both
-    // iterations clamp to the same `MAX_SKIP - top`, so without this the second request re-fetches
-    // the first one's rows and appends them: measured at `{top:500, skip:100000}` — reachable from
-    // the controller as pageSize=500&pageNum=200 — the page came back 500 rows long with 250
-    // distinct, row 251 identical to row 1, for the price of a second service call.
-    //
-    // Stopping short is the honest answer. `$skip` caps at 100000 and Azure has nothing past it to
-    // give; a short page under a large total is what running out of index looks like, and it is
-    // what the caller already handles on the last page of any result set.
+    // At the MAX_SKIP ceiling the offset stops moving and would fetch the same rows twice;
+    // a short page is the honest answer there.
     if (nextSkip <= body.skip) break;
     body.skip = nextSkip;
     requested = body.top;
@@ -899,15 +541,8 @@ async function runSearch(index, opts = {}) {
 }
 
 /**
- * The index field named in an AI Search 400, or null when the failure is something else.
- *
- * ONE COPY OF THE PATTERN, because two readers depend on it: the schema probe below turns a match
- * into `{ok: false}`, and `controllers/search.js` turns it into the `SEARCH_SCHEMA_DRIFT` code on
- * its 502. A second spelling of the regex is a second thing to be quietly wrong.
- *
- * The message is the service's own: `Invalid expression: Could not find a property named
- * 'fileSize' on type 'search.document'.` — the exact 400 that took prod's Document tab down on
- * 2026-09-08, when the deployed app selected a field the live index did not carry.
+ * The field named in an AI Search 400, or null. One copy: the schema probe and
+ * `controllers/search.js` (SEARCH_SCHEMA_DRIFT) both read it.
  */
 function missingPropertyFrom(err) {
   const match = /Could not find a property named '([^']+)'/.exec((err && err.message) || '');
@@ -915,37 +550,22 @@ function missingPropertyFrom(err) {
 }
 
 /**
- * The fields the degrade above must never drop.
- *
- * Dropping one of these does not narrow the answer, it WIDENS it. `read` is the caller's ACL,
- * `isPublished` is the mirror the redactor derives from it, and `vis` is the per-record dial map —
- * a hit that comes back without `vis` has every field at its `defaultVis`, which is the fail-open
- * direction the redactor tests hold. An index that cannot answer them is a 502
- * (`SEARCH_SCHEMA_DRIFT`) so an operator widens the index, rather than a page served wider than
- * the caller may see.
+ * Never dropped: losing one widens the answer (a hit without `vis` falls back to `defaultVis`).
+ * An index lacking one is a 502 SEARCH_SCHEMA_DRIFT instead.
  */
 const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
 
 /**
- * One source column under two analyzers, added in one release, so a stale index lacks both and the
- * one-retry budget must drop them together. Other `<field>Tokens` pairs predate this and drop alone.
+ * One column under two analyzers that a stale index lacks together, so the single retry drops
+ * both. Other `<field>Tokens` pairs drop alone.
  */
 const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']]);
 
 const DROPPABLE_LISTS = ['select', 'searchFields', 'highlight', 'orderby'];
 
 /**
- * Take one field name out of every list in a search body that can name it.
- *
- * `filter` is deliberately not one of them: it carries the ACL clause, and a filter that lost a
- * term admits MORE rows. A field named only there changes nothing here, so `false` comes back and
- * the caller rethrows rather than paying for a retry that fails identically.
- *
- * An emptied `select` or `searchFields` refuses the whole drop instead of being deleted: a request
- * with no `select` returns every RETRIEVABLE field, which on the chunks index is the entire passage
- * text — the one thing CHUNK_SELECT exists to withhold. `orderby` and `highlight` may go: the
- * service's own relevance order and no highlights are both narrower answers, not wider ones.
- *
+ * Never touches `filter`: it holds the ACL, and a lost term admits more rows. An emptied `select`
+ * refuses the drop, since no `select` returns every retrievable field, chunk text included.
  * @param {string[]} [lists] the body keys to drop it from; all four unless narrowed
  * @returns {boolean} whether the body changed, so the caller knows a retry can differ
  */
@@ -962,8 +582,6 @@ function dropField(body, field, lists = DROPPABLE_LISTS) {
     changes.push([key, kept]);
   }
   for (const [key, kept] of changes) {
-    // Rejoined the way each list is written elsewhere in this module, so a body that degraded reads
-    // like one that never had the field.
     if (kept.length === 0) delete body[key];
     else body[key] = kept.map(part => part.trim()).join(key === 'orderby' ? ', ' : ',');
   }
@@ -982,32 +600,19 @@ function mergeDegraded(results) {
 }
 
 /**
- * Ask the LIVE index whether it can answer a `select` and an `$orderby` — the committed-vs-live
- * gate the deploy pipeline had no way to run.
- *
- * `top: 0, count: false` so the service validates the projection and the order and returns no rows
- * and no count: the answer is a status, not data, and it costs one empty page. Needs no role beyond
- * the Search Index Data Reader the app already holds, which is the point — applying index
- * definitions needs Search Service Contributor and the Function identity does not have it.
- *
- * ONLY the missing-property 400 resolves; every other failure throws. A probe that answered
- * `{ok: false}` for a timeout or a 403 would report schema drift for a network blip and send an
- * operator to widen an index that is already correct.
- *
+ * Only a missing-field 400 resolves `{ok: false}`; anything else throws, so a blip is not drift.
  * @param {object} opts
  * @param {string} opts.indexName   the LIVE index name, not the schema name
  * @param {string|string[]} [opts.select]
  * @param {string|string[]} [opts.orderby]
- * @param {string|string[]} [opts.searchFields]  a field the live index holds but cannot search is
- *   reported in `missing` too: to a keyword query it is the same 400
+ * @param {string|string[]} [opts.searchFields]  an unsearchable field is reported in `missing` too
  * @returns {Promise<{ok: boolean, index: string, missing?: string[]}>}
  */
 async function probeIndexSchema({ indexName, select, orderby, searchFields } = {}) {
   const list = value => (Array.isArray(value) ? value.join(',') : value);
-  // A term, not `*`: the service skips checking `searchFields` on a match-all (200 on test, 2026-09-29).
+  // A term, not `*`: the service skips checking `searchFields` on a match-all.
   const body = { search: searchFields ? 'probe' : '*', top: 0, count: false };
   if (select) body.select = list(select);
-  // Joined with ', ' — `$orderby` clauses are comma-separated and each carries its own direction.
   if (orderby) body.orderby = Array.isArray(orderby) ? orderby.join(', ') : orderby;
   if (searchFields) body.searchFields = list(searchFields);
 
@@ -1024,11 +629,8 @@ async function probeIndexSchema({ indexName, select, orderby, searchFields } = {
 }
 
 /**
- * Whether the LIVE index can evaluate this `$filter` over `property`, asked by sending it.
- *
- * Only a 400 naming `property` is the answer "no" — every other failure throws, so the caller
- * answers "unknown" rather than dropping a working filter over a blip. Asked with a `top: 0` search
- * because reading the index definition needs Search Service Contributor, which this identity lacks.
+ * Sends the filter, since reading the index definition needs a role the app lacks. Only a 400
+ * naming `property` means no; anything else throws, so the caller answers "unknown".
  */
 async function filterAnswerable(indexName, property, filter) {
   try {
@@ -1041,11 +643,7 @@ async function filterAnswerable(indexName, property, filter) {
   }
 }
 
-/**
- * The field a 400 names from a `searchFields` list. Both spellings as demi-search-test returned them
- * on 2026-09-29: `The field 'sector' in the search field list is not searchable.` and
- * `Unknown field 'nosuchfield' in search field list.`, each followed by `Parameter name: searchFields`.
- */
+/** The field a 400 names from a `searchFields` list: "The field 'x' ..." or "Unknown field 'x' ...". */
 function unsearchableFieldFrom(err) {
   const refusal = searchFieldRefusalFrom(err);
   return refusal ? refusal.field : null;
@@ -1058,11 +656,7 @@ function searchFieldRefusalFrom(err) {
   return match ? { field: match[2], absent: match[1] === 'Unknown field' } : null;
 }
 
-/**
- * The property a 400 blames, in the two spellings the service uses for one fact: `Could not find a
- * property named 'typeId'` for a field the index lacks, `The field 'typeId' in the filter clause is
- * not filterable` for one it carries unfilterable. Both mean "this filter cannot be sent".
- */
+/** The property a 400 blames, whether the index lacks it or holds it unfilterable. */
 function blamedPropertyFrom(err) {
   const named = missingPropertyFrom(err);
   if (named) return named;
@@ -1083,43 +677,29 @@ async function countMatching(indexName, filter) {
 let chunkParentFieldCache = null;
 
 /**
- * What the LIVE `chunks` index can do with the parent-field filters, cached for
- * `LIVE_SCHEMA_TTL_MS`. Asked of the service, never of the packaged `chunks.json`: the index is
- * applied by a separate operator step, so between an app release and the index PUT the two
- * disagree and the clause is a 400. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
- *
- * `fields` and `version` are passed in so this module keeps knowing nothing about the repositories;
- * `opts` is the `{now, ttlMs}` test seam.
- *
- * @returns {Promise<{known: boolean, available: string[], missing: string[], unknown: string[],
- *   unstamped: ?number}>} per field, not all-or-nothing: filter only on `available`. `known: false`
- *   marks a partial answer. `unstamped` is `null` for "cannot say", never 0.
+ * Live parent-field filter support, per field: filter only on `available`. Asked of the service,
+ * since `chunks.json` can be ahead of the index. `opts` is the `{now, ttlMs}` test seam.
+ * @returns {Promise<{known, available: string[], missing: string[], unknown: string[], unstamped}>}
  */
 function chunkParentFieldStatus(fields, version, opts = {}) {
   const now = opts.now || Date.now();
   const ttlMs = opts.ttlMs === undefined ? LIVE_SCHEMA_TTL_MS : opts.ttlMs;
-  // The PROMISE is cached, not its value: Deep Search fires on a debounced keystroke, so a cold
-  // cache is hit by a burst and a cached value would send one probe per request in flight.
+  // The promise is cached, not the value, so a burst on a cold cache sends one probe.
   if (chunkParentFieldCache && now - chunkParentFieldCache.at < chunkParentFieldCache.ttl) {
     return chunkParentFieldCache.promise;
   }
   const entry = { at: now, ttl: ttlMs, promise: null };
-  // An "unknown" is a hiccup, not a schema fact, and clears in seconds — held for the schema TTL
-  // it would make ten minutes of requests guess from one blip.
+  // An "unknown" is a blip, not a schema fact, so it gets the short TTL.
   entry.promise = readChunkParentFieldStatus(fields, version)
     .then((status) => {
       if (!status.known) entry.ttl = Math.min(ttlMs, UNKNOWN_STATUS_TTL_MS);
       return status;
     })
-    // A REJECTION IS THE SAME UNKNOWN, and without this it is the worst one there is: a cached
-    // rejected promise rethrows to every caller that touches it for the full schema TTL, so one
-    // failed probe 502s the Deep Search tab for ten minutes. Resolved instead, on the short TTL,
-    // which is what makes it a withheld filter rather than a dead tab.
+    // A cached rejection would 502 every Deep Search for the full TTL; resolve it as unknown.
     .catch((err) => {
       logger.warn(`[ai-search] the live chunk parent-field probe could not run: ${err.message}`);
       entry.ttl = Math.min(ttlMs, UNKNOWN_STATUS_TTL_MS);
-      // `fields` deliberately not spread: it is a plausible source of the throw being handled, and
-      // a recovery that rethrows is no recovery.
+      // `fields` may be what threw, so it is not spread blindly here.
       return {
         known: false,
         available: [],
@@ -1139,10 +719,7 @@ async function readChunkParentFieldStatus(fields, version) {
     return { known: false, available: [], missing: [], unknown: [...fields], unstamped: null };
   }
 
-  // One probe per field, not one over all four: the service names ONE offending field per 400, so
-  // a combined probe reports the first and drops three filters the index answers perfectly well.
-  // Issued together — they are independent reads, and in series they sat in front of every
-  // filtered Deep Search.
+  // One probe per field: a 400 names only one field, so a combined probe would misreport the rest.
   const probes = await Promise.allSettled(
     fields.map(field => filterAnswerable(index, field, `${field} eq 'probe'`)));
 
@@ -1154,8 +731,6 @@ async function readChunkParentFieldStatus(fields, version) {
       (probe.value ? available : missing).push(fields[i]);
       return;
     }
-    // Undecided, not absent: the reader filters on `available` only, so one field's hiccup costs
-    // one filter rather than all four.
     logger.warn(`[ai-search] could not read the live ${fields[i]} filter schema: ` +
       `${probe.reason.message}`);
     unknown.push(fields[i]);
@@ -1170,18 +745,15 @@ async function readChunkParentFieldStatus(fields, version) {
     );
   }
 
-  // A partial schema answer is not worth a count request: the mark it feeds is advisory, the
-  // dropped filters are not.
+  // A partial answer is not worth a count request: the mark it feeds is advisory.
   if (unknown.length) return { known: false, available, missing, unknown, unstamped: null };
 
   try {
-    // Not asked when the index carries none of the fields: no facet filter can be emitted then, so
-    // the count could not change any answer.
+    // With no field available no facet filter is sent, so the count could change nothing.
     const unstamped = available.length ? await staleChunkCount({ version }) : null;
     return { known: true, available, missing, unknown: [], unstamped };
   } catch (err) {
-    // Only the backfill mark went unanswered — expressibility is settled, so all four fields stay
-    // usable and `known: false` says the answer is partial.
+    // Only the backfill mark is unknown; the available fields stay usable.
     logger.warn(`[ai-search] could not count unstamped chunks: ${err.message}`);
     return { known: false, available, missing, unknown: [], unstamped: null };
   }
@@ -1201,14 +773,8 @@ function allOf(clauses) {
 }
 
 /**
- * How many chunks still carry an older parent-field stamp than the code writes — over the whole
- * index, or under one caller's own predicate (`aclFilter`, `projectIds`) when it is passed.
- *
- * Read off the STAMP, never off the four values: a document with no List refs legitimately stamps
- * four nulls, so a count of those never reaches zero and the mark it gates never clears. `null` is
- * "cannot say", never 0 — an index carrying no stamp column cannot tell, and neither can a version
- * that is not a number. See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
- *
+ * Chunks with an older parent-field stamp, read off the stamp: a document with no List refs stamps
+ * four nulls legitimately. `null` means "cannot say", never 0.
  * @returns {Promise<?number>}
  */
 async function staleChunkCount({ version, aclFilter = null, projectIds = [] } = {}) {
@@ -1241,22 +807,9 @@ async function staleChunkCount({ version, aclFilter = null, projectIds = [] } = 
 }
 
 /**
- * The index rows a stamp has never reached, `{id, chunkId, documentId}` each.
- *
- * `id` is the index KEY, read back rather than re-derived — the indexer mints it with a .NET
- * base64 variant (`deleteDocuments`) — and `chunkId` is the Cosmos row's own id. Both are needed
- * because the caller has to tell a chunk that is merely unstamped from one whose Cosmos row is
- * GONE: the indexer has no deletion detection, so a deleted chunk keeps its index row forever, no
- * stamp can ever reach it, and the unstamped count it is part of never reaches zero.
- *
- * `projectId` matches on PRESENCE: `null` asks for the rows whose projectId is null, absent asks
- * across every project.
- *
- * BOUNDED. `maxRows` caps the paging and `complete` says whether the answer is the whole set, so a
- * caller acts on a truncated page knowing it is one.
- *
- * @returns {Promise<?{rows: Array, total: number, complete: boolean}>} `null` for "cannot say" —
- *          search unconfigured, no version to compare, or an index with no stamp column.
+ * Unstamped rows, or null for "cannot say". `id` is the indexer's key, `chunkId` the Cosmos id:
+ * the caller needs both to spot index rows whose chunk is gone.
+ * @returns {Promise<?{rows: Array, total: number, complete: boolean}>}
  */
 async function listStaleChunkIds({ version, projectId, maxRows = 2000 } = {}) {
   const { configured, index } = config();
@@ -1291,8 +844,7 @@ async function listStaleChunkIds({ version, projectId, maxRows = 2000 } = {}) {
       const page = value || [];
       total = Number.isFinite(count) ? count : rows.length + page.length;
       rows.push(...page);
-      // A SHORT page ends it, never the count: `@odata.count` is the index-wide total, and the
-      // rows run out first whenever `$skip` reaches its own ceiling.
+      // A short page ends it, never the count: rows run out first at the `$skip` ceiling.
       if (page.length < want) break;
     }
   } catch (err) {
@@ -1308,27 +860,8 @@ async function listStaleChunkIds({ version, projectId, maxRows = 2000 } = {}) {
 }
 
 /**
- * The ids of the documents matching a filter, for scoping a CHUNK query to them.
- *
- * ONLY the document-only keys reach this now — `datePostedStart`/`datePostedEnd`, `isFeatured`,
- * `legislation`, `documentSource`. The four facets that used to dominate it (`type`, `milestone`,
- * `projectPhase`, `documentAuthorType`) are copied onto every chunk and filter directly, which is
- * what removed the cap from the cases that mattered. Everything below is the residue: a chunk row
- * carries no date and no legislation, so a filter on one can only be answered by resolving the
- * documents first and scoping the chunks to them.
- *
- * BOUNDED, AND THE BOUND IS REPORTED. `search.in` takes a large list but not an unlimited one. So
- * this returns the total as well as the ids, and a caller whose match set exceeds `cap` must treat
- * the filter as INEXPRESSIBLE — answer with the key still named in `meta.dropped` — rather than
- * scope to an arbitrary prefix of it. A truncated scope would silently answer "these are the chunks
- * matching your filter" about a subset nobody chose, which is worse than saying it did not apply.
- *
- * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
- * document whose text mentions the term is found by the chunk search; this query exists only to
- * answer "which documents carry this metadata".
- *
- * ONE SERVICE CALL, because `cap + 1` is exactly `SERVICE_MAX_TOP`. So a filtered chunk page costs
- * two round trips, not three.
+ * Document ids for scoping a chunk query by keys chunks do not copy. Over `cap` the ids come back
+ * empty, so the caller reports the key in `meta.dropped` rather than scoping to a prefix.
  */
 async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   const { configured, documentsIndex } = config();
@@ -1337,9 +870,7 @@ async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
-  // `cap + 1` is not an off-by-one: it is how the caller learns it was over the cap without a
-  // second round trip. `@odata.count` is authoritative, but asking for one more than we can use
-  // means a service that ever stopped returning a count still cannot look like a full match set.
+  // `cap + 1` on purpose: without a count, a full extra row still shows the set is over the cap.
   const { value, count } = await runSearch(documentsIndex, {
     matchAll: true,
     filter,
@@ -1348,45 +879,24 @@ async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   });
 
   const rows = value || [];
-  // One comparison, not two: an `ids.length <= cap` clause beside this looks like it covers the
-  // no-count path, and does not — the fallback here already makes `total` the page length there,
-  // so the extra clause can never change the answer. A guard nothing can trip reads as protection
-  // that is not there.
   const total = Number.isFinite(count) ? count : rows.length;
   const withinCap = total <= cap;
-  // NO PREFIX. A partial scope answers "the chunks matching your filter" about a subset nobody
-  // chose, and the caller cannot tell it from a complete answer; the empty list forces the caller
-  // to report the filter as inexpressible instead. Read off the rows only once the cap is settled:
-  // over the cap the list is discarded, and every filter measured on prod is over the cap.
+  // No prefix: a partial scope would pass for a complete answer.
   const ids = withinCap ? rows.map(row => String(row.id)).filter(Boolean) : [];
   return { ids, total, withinCap };
 }
 
-/**
- * Turn one hit's highlight into safe display markup.
- *
- * Escape first, mark second — never the other way round. Falls back to an empty string rather
- * than to chunk text: `content` is not retrievable, so there is no text here to fall back to.
- */
+/** Escape first, mark second. '' without highlights: chunk `content` is never selected. */
 function snippetFrom(hit) {
   const highlights = (hit['@search.highlights'] && hit['@search.highlights'].content) || [];
   if (highlights.length === 0) return '';
-  // Balanced PER FRAGMENT, then joined. A fragment is a window cut out of the chunk, and the cut
-  // can land INSIDE a highlight — measured on the live index, one came back carrying a closing
-  // sentinel whose opener had been trimmed away, which rendered as a stray `</mark>`.
+  // Balanced per fragment: a fragment cut can land inside a highlight and orphan a sentinel.
   return highlights.map(balanceFragment).join(' … ');
 }
 
 /**
- * Display markup for one RETRIEVABLE field of a hit — the analyzer's own idea of what matched.
- *
- * Differs from `snippetFrom` in its fallback: chunk `content` is not retrievable, so there is
- * nothing to fall back to, whereas these fields are selected and always present. A field the query
- * did not match therefore comes back as escaped plain text rather than '', so the caller can bind
- * one string unconditionally and escaping happens exactly once, here.
- *
- * Azure returns the whole value for a short field like `name` and windowed fragments for a long one
- * like `description`, which is why the join matches `snippetFrom`'s.
+ * Display markup for one selected field. Unlike `snippetFrom`, an unmatched field falls back to its
+ * escaped value, so the caller binds one string and escaping happens once, here.
  */
 function markedField(hit, field) {
   const fragments = (hit['@search.highlights'] || {})[field] || [];
@@ -1397,12 +907,8 @@ function markedField(hit, field) {
 }
 
 /**
- * Escape one highlight fragment and convert its sentinels into balanced `<mark>` tags.
- *
- * Emits a tag only where a sentinel has a partner: an orphaned closer is dropped rather than
- * turned into markup, and an unclosed opener is closed at the end of the fragment. Browsers
- * tolerate a stray `</mark>`, but emitting unbalanced tags into an [innerHTML] binding is how a
- * snippet quietly starts eating the layout around it.
+ * Escapes, then turns sentinels into balanced `<mark>` tags: an orphan closer is dropped and an
+ * open mark is closed at the end, so an innerHTML snippet cannot break the layout around it.
  */
 function balanceFragment(fragment) {
   let depth = 0;
@@ -1443,19 +949,14 @@ async function searchChunks(opts = {}) {
 
   return {
     count,
-    // Present only when the live index could not answer a field — see `send` in runSearch. The
-    // controller spreads it into the response `meta`, so a degraded page says so instead of
-    // looking like a column the app forgot to ask for.
+    // Only when a field was dropped (see `send` in runSearch); the controller puts it in `meta`.
     ...(degraded ? { meta: { degraded } } : {}),
     items: value.map(hit => ({
       chunkId: hit.chunkId,
       documentId: hit.documentId,
       projectId: hit.projectId,
       pageNumber: hit.pageNumber,
-      // NORMALISED HERE, once. A chunk indexed before page provenance answers `null` for this
-      // column, and a live index that does not declare it yet drops it from the select entirely
-      // (`dropField`) — both mean "this number is a passage, not a page", which is what `false`
-      // says. Every layer above reads a boolean.
+      // Null or dropped both mean "a passage number, not a page"; every layer above reads a boolean.
       pageNumbered: hit.pageNumbered === true,
       read: hit.read,
       snippet: snippetFrom(hit)
@@ -1468,11 +969,8 @@ async function searchChunks(opts = {}) {
  */
 async function searchProjects(opts = {}) {
   const { configured, projectsIndex } = config();
-  // THROWS rather than answering empty, and the caller turns that into a 502. An unconfigured
-  // service has not searched anything, so `count: 0` would be a claim about the index that nobody
-  // measured — the rule this controller was rebuilt around. It matters more now than it did:
-  // every SORTED or FILTERED browse routes here, not only keyword search, so a degraded deploy
-  // would render an empty documents tab and an empty project list under a 200.
+  // Throws (the caller answers 502): `count: 0` from a search that never ran would be a false
+  // claim, and every sorted or filtered browse lands here too.
   if (!configured) {
     warnUnconfigured();
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
@@ -1480,28 +978,20 @@ async function searchProjects(opts = {}) {
 
   const { value, count, degraded } = await runSearch(projectsIndex, {
     ...opts,
-    // `!== false`, not `=== true`: type-ahead is the normal way this dataset is read, so a caller
-    // gets it without asking and opting out is the deliberate act.
+    // Type-ahead is on unless the caller opts out.
     prefix: opts.prefix !== false,
     searchFields: PROJECT_SEARCH_FIELDS,
-    // Every name here must exist in the index — a stray one is a 400 on EVERY query, not a
-    // missing field in the response. `trackProjectId` was in this list and is not in the index
-    // (it is an int in Cosmos), which turned all project search into a silent fallback.
     select: PROJECT_SELECT,
-    // Only the fields the result card renders. Highlighting a field nobody displays costs a
-    // response body for nothing.
+    // Only the fields the result card renders.
     highlight: 'name,displayName,description'
   });
 
   return {
     count,
-    // See searchChunks: only present when a field was dropped to keep the page answerable.
     ...(degraded ? { meta: { degraded } } : {}),
     items: value.map(hit => ({
       ...hit,
-      // The analyzer's own account of what it matched. The browser used to reconstruct this with a
-      // regex and a Levenshtein, which marks words the index never hit and misses the stemmed ones
-      // it did — `en.microsoft` matched `flooding` for `flood`, and the client marked neither.
+      // The analyzer's own marks, so stemmed matches (`flooding` for `flood`) are marked too.
       highlighted: {
         name: markedField(hit, 'name'),
         displayName: markedField(hit, 'displayName'),
@@ -1512,48 +1002,22 @@ async function searchProjects(opts = {}) {
 }
 
 /**
- * Document search, in TWO legs — and the second one is not optional.
- *
- * Typesense indexed `projectName` on every document and searched it, so "Ajax" returned that
- * project's documents whether or not their own metadata said "Ajax". A Cosmos document row has
- * no `projectName` (it is resolved through a lookup at sync time), and an AI Search indexer reads
- * ONE container, so the field cannot come along.
- *
- * Measured against the live Typesense index before this was written — hits with `projectName` in
- * `query_by` versus without:
- *
- *   Ajax             850 -> 199   (77% lost)
- *   pipeline       2,267 -> 771   (66% lost)
- *   Coastal GasLink  823 -> 319   (61% lost)
- *   Site C         2,158 -> 1,570 (27% lost)
- *
- * Dropping it would have been a silent, severe recall regression. So the project-name match is
- * recovered by searching projects first and pulling their documents in by `projectId`. Direct
- * metadata matches rank ahead of project-name matches, which is the same intent Typesense's
- * ranking had.
+ * Two legs: direct metadata matches, then documents of projects whose name matches. Documents
+ * carry no project name in the index, and without leg two most "Ajax" hits are lost.
  */
 async function searchDocuments(opts = {}) {
   const { configured, documentsIndex } = config();
-  // Same as searchProjects: not configured is not "no matches". See the comment there.
   if (!configured) {
     warnUnconfigured();
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
-  // A count wants the TOTAL, not the rows, but the two-leg sum is what makes that total right, so
-  // both legs still run — trimmed to one row each, which is the smallest page the service takes.
+  // A count still runs both legs, since the total is their sum; one row each is the smallest page.
   const countOnly = opts.countOnly === true;
   const top = countOnly ? 1 : Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
-  // Every name here must exist in the index — a stray one is a 400 on EVERY query. The five added
-  // 2026-08-23 are the ones eagle-public's document table renders and DEMI could not answer before
-  // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
-  // `idToList()` resolves against eagle-api's List collection.
   const select = DOCUMENT_SELECT;
-  // Leg two's exclusion clause below has to complement EXACTLY these fields, so it reads this name.
   const searchFields = DOCUMENT_SEARCH_FIELDS;
-  // Resolved once because leg two's exclusion clause re-serialises leg one's query: a `*` on one
-  // side and not the other stops the legs being complements, which is the paging bug it exists to
-  // fix. Default-on, as in searchProjects.
+  // Resolved once: leg two's exclusion clause must repeat leg one's query exactly, `*` included.
   const prefix = opts.prefix !== false;
 
   const direct = await runSearch(documentsIndex, {
@@ -1561,18 +1025,13 @@ async function searchDocuments(opts = {}) {
     top,
     prefix,
     searchFields,
-    // The row key alone under `countOnly`: nothing reads the row back, and the wide select is a
-    // response body per leg spent on fields the caller never receives.
     select: countOnly ? 'id' : select,
     ...(countOnly ? {} : { highlight: 'displayName,description' })
   });
 
   const items = [...direct.value];
-  // The total, assembled below from every leg that contributes rows. `direct.count` alone is what
-  // it starts as, and what it stays when there is no project leg to run.
   let total = direct.count;
-  // Every leg that ran, for the `degraded` mark alone: a narrow index shows up in whichever leg
-  // happens to ask first, and one page is one answer however many requests built it.
+  // For the `degraded` mark: one page is one answer however many legs built it.
   const legs = [direct];
 
   // Leg two runs on every page, since eagle-public pages by a total that counts its rows. Never with
@@ -1591,46 +1050,18 @@ async function searchDocuments(opts = {}) {
 
     const projectIds = projects.value.map(p => String(p.id)).filter(Boolean);
     if (projectIds.length > 0) {
-      // The caller's document ACL still applies — visibility of a project never widens access to
-      // its documents, it only decides which ids are worth asking about.
-      //
-      // `not search.ismatch(...)` IS THE PAGING FIX, not a tidy-up. It hands leg two exactly the
-      // documents the direct leg did NOT match, so the legs are disjoint sets and the sequence
-      // eagle-public pages through is plainly leg one followed by leg two. While they overlapped
-      // no stateless skip arithmetic could exist, because a row's position in `A ++ (B \ A)`
-      // depends on how many of B's EARLIER rows were already in A, and only a scan from 0 knows
-      // that. Measured on the live app before this clause, `keywords=pattullo` at pageSize=10 over
-      // pages 0-25: 260 slots but 197 distinct ids, 63 repeats spread over 13 non-adjacent pages,
-      // and 53 of the 250 matching documents unreachable from any page. Prod eagle-search walks
-      // the same 26 pages with 260 distinct and 0 repeats. The comment that used to sit on `skip`
-      // called the cost "one row on the boundary page"; that was wrong by two orders of magnitude,
-      // because it accounted for the boundary and not for the offset drift on every page after it.
-      //
-      // The excluded query has to be the direct leg's OWN, byte for byte — same terms, same fuzzy
-      // arm, same trailing `*`, same fields, `queryType: 'full'` — or the two stop being
-      // complements and the gap comes straight back. Single quotes are doubled for the OData
-      // literal: `tokenize` cannot emit one, but this is user text being spliced into a query
-      // string. The empty query that would 400 here cannot be reached — the projects leg
-      // short-circuits on an empty tokenisation, so `projectIds` is empty and this never runs.
+      // The document ACL still applies. `not search.ismatch` with leg one's exact query makes the
+      // legs disjoint, so paging is leg one then leg two with no repeats or gaps.
       const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, prefix);
       const scope = `${inClause('projectId', projectIds)} and ` +
         `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
-        // Sized to the DEFICIT, which is now exactly what the page can take: no row this leg
-        // returns is dropped any more, so asking for the whole `top` would fetch rows the page
-        // cannot use — and the next page re-fetches from the right offset regardless. One row
-        // where the page is ALREADY full: no row of this leg can be used there (the fill loop
-        // breaks immediately), and the count is the only reason the request is issued.
+        // Only the rows the page still lacks; one when full, as the request is then for the count.
         top: Math.max(1, top - items.length),
         select: countOnly ? 'id' : select,
         orderby: opts.orderby,
-        // Leg two continues where the DIRECT hits ran out, and with disjoint legs that arithmetic
-        // is exact rather than approximate. The direct leg owns union positions 0..direct.count,
-        // so a page starting at `skip` starts `skip - direct.count` rows into this leg, and
-        // consecutive pages cover consecutive ranges with no gap and no overlap. It is computed
-        // from `skip` alone, so page 17 fetched on its own returns what walking pages 0-16 first
-        // would have returned — there is no cross-request state here, and there cannot be.
+        // Leg one owns positions 0..direct.count, so this offset is exact and stateless.
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
         filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
       });
@@ -1641,29 +1072,20 @@ async function searchDocuments(opts = {}) {
         items.push(doc);
       }
 
-      // No intersection left to subtract: the exclusion clause already removed the direct matches
-      // from this leg, so `byProject.count` counts precisely what leg one does not return and the
-      // two simply add up. This replaced a fourth, count-only request that measured the overlap so
-      // it could be subtracted — the fix costs one service call per document page LESS than the
-      // bug did, three where there were four.
+      // Disjoint legs, so the counts simply add.
       total = direct.count + byProject.count;
     }
   }
 
   const degraded = mergeDegraded(legs);
 
-  // `count` keeps its name here rather than becoming a second key meaning the same number: the
-  // badge and the toolbar total have to be the same fact, and two names is how they drift.
   if (countOnly) {
     return { count: total, ...(degraded ? { meta: { degraded } } : {}), items: [] };
   }
 
-  // Leg two's documents matched on their PROJECT's name, not their own metadata, so they carry no
-  // `@search.highlights` — `markedField` returns their escaped text and the card renders unmarked,
-  // which is the honest result: nothing in that document's own fields matched the query.
+  // Leg two rows matched on their project's name, so they render unmarked.
   return {
     count: total,
-    // See searchChunks: only present when a field was dropped to keep the page answerable.
     ...(degraded ? { meta: { degraded } } : {}),
     items: items.map(hit => ({
       ...hit,
@@ -1676,14 +1098,10 @@ async function searchDocuments(opts = {}) {
 }
 
 /**
- * Native document ids, ranked: one leg over the document's own fields, with no project-name leg
- * and no highlight, because the rows are re-read from Cosmos. No keywords means matchAll; keywords
- * that tokenise to nothing match nothing, as in `runSearch`.
- *
- * @param {{keywords?: string, fuzzy?: boolean, prefix?: boolean, filter?: string, orderby?: string,
- *   top?: number, skip?: number}} opts
- * @returns {Promise<{ids: string[], count: ?number, meta?: {degraded: object}}>} `count` is
- *   `@odata.count`, index-wide for the filter.
+ * Native document ids, ranked: one leg, no highlight, rows re-read from Cosmos. No keywords means
+ * matchAll; keywords that tokenise to nothing match nothing.
+ * @param {{keywords?: string, fuzzy?: boolean, prefix?: boolean, filter?: string, orderby?: string, top?: number, skip?: number}} opts
+ * @returns {Promise<{ids: string[], count: ?number, meta?: {degraded: object}}>}
  */
 async function searchDocumentIds(opts = {}) {
   const { configured, documentsIndex } = config();
@@ -1712,21 +1130,11 @@ async function searchDocumentIds(opts = {}) {
   };
 }
 
-/**
- * The keyword search behind RecentActivity and ProjectNotification: one leg, one index, ids back.
- *
- * PARAMETERISED RATHER THAN COPIED because the two datasets differ only in which index and which
- * fields they name — there is no project-name leg to recover and no highlighting, since the rows
- * the caller receives are the Cosmos rows and the controller maps them exactly as the keywordless
- * page does. Both `searchProjects` and `searchDocuments` carry per-dataset behaviour this has none
- * of, so they are left as they are rather than folded in here.
- */
+/** Keyword search for RecentActivity and ProjectNotification: one leg, one index, ids back. */
 async function searchKeywordIndex(dataset, opts = {}) {
   const cfg = config();
   const index = dataset === 'activities' ? cfg.activitiesIndex : cfg.notificationsIndex;
-  // Same rule as searchProjects: not configured has not searched anything, so it throws rather than
-  // reporting zero. The controller checks the switch BEFORE calling and falls back to Cosmos; a
-  // throw reaching it means the switch said yes and the service still could not answer.
+  // The controller checks the switch first and falls back to Cosmos, so a throw here is real.
   if (!cfg.configured || index === '') {
     warnUnconfigured();
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
@@ -1735,7 +1143,6 @@ async function searchKeywordIndex(dataset, opts = {}) {
   const { searchFields, select } = KEYWORD_INDEXES[dataset];
   const { value, count, degraded } = await runSearch(index, {
     ...opts,
-    // Default-on, as in searchProjects: these pages are read by the same debounced keystroke.
     prefix: opts.prefix !== false,
     searchFields,
     select
@@ -1755,20 +1162,13 @@ const searchActivities = (opts = {}) => searchKeywordIndex('activities', opts);
 const searchNotifications = (opts = {}) => searchKeywordIndex('notifications', opts);
 
 /**
- * How many rows of an index a KEYWORD query matches, in one `$count`-only request.
- *
- * The twin of `countMatching`, which asks the same question of a filter alone. This one builds the
- * SAME query string `runSearch` would — same tokenizer, same fuzzy arm, same trailing `*`, same
- * `searchFields` — because a badge that counts a different query than the results page is worse
- * than no badge. What it does not do is ask for rows, highlights or a semantic rerank: `top: 0`
- * returns the count and nothing else, and the ranker cannot change how many rows match.
- *
+ * Keyword match count in one `top: 0` request. Builds the same query as `runSearch`, so the badge
+ * counts what the results page shows.
  * @returns {Promise<number|null>} null when the service answered without a count.
  */
 async function countKeyword(index, opts = {}) {
   const terms = tokenize(opts.keywords);
-  // Same short-circuit as `runSearch`: an empty tokenisation matches nothing, and asking anyway
-  // sends an empty query the service 400s on.
+  // An empty query is a 400, and an empty tokenisation matches nothing anyway.
   if (terms.length === 0 && !opts.matchAll) return 0;
 
   const body = {
@@ -1778,7 +1178,6 @@ async function countKeyword(index, opts = {}) {
     count: true
   };
   if (opts.searchFields) body.searchFields = opts.searchFields;
-  // Omitted when absent, never sent empty — an empty-string filter is UNRESTRICTED. See `runSearch`.
   if (opts.filter) body.filter = opts.filter;
 
   const data = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, body);
@@ -1789,8 +1188,7 @@ async function countKeyword(index, opts = {}) {
 /** The count behind the Projects badge, over the same fields `searchProjects` ranks on. */
 function countProjects(opts = {}) {
   const { configured, projectsIndex } = config();
-  // Throws rather than answering 0, for the reason `searchProjects` does: an unconfigured service
-  // has not counted anything, and the controller turns the rejection into an unknown count.
+  // Throws: the controller turns it into an unknown count, never 0.
   if (!configured) {
     warnUnconfigured();
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the count did not run');
@@ -1821,17 +1219,8 @@ const countActivities = (opts = {}) => countKeywordIndex('activities', opts);
 const countNotifications = (opts = {}) => countKeywordIndex('notifications', opts);
 
 /**
- * Whether a failure says THE INDEX IS NOT THERE, rather than that the search failed.
- *
- * The second half of the kill switch, for the case the first half cannot see: a setting naming an
- * index nobody PUT answers 404 on every query, and for the two keyword datasets the Cosmos read can
- * still answer the caller. `status` is read off the error rather than parsed out of its message —
- * see `request`, which carries it for exactly this reason — and the wording is checked on top so a
- * 404 from anything but a missing index stays a failure.
- *
- * DELIBERATELY NARROW. Every other failure — 403, a 400 over a bad field, a timeout — means the
- * index exists and the query did not work, and those stay fail-closed: answering them from Cosmos
- * would publish an unranked page as though the index had produced it.
+ * Only a 404 for a missing index lets the caller fall back to Cosmos. Every other failure stays
+ * one, so an unranked page never passes for an index answer.
  */
 function isMissingIndex(err, index) {
   if (!err || err.status !== 404) return false;
@@ -1884,20 +1273,8 @@ const DELETE_STALL_BUDGET_MS = 20000;
 const UNINDEX_CONCURRENCY = 4;
 
 /**
- * Write rows' ACLs straight into an index.
- *
- * REQUIRED since every document list became an index read: the indexer is a `_ts` high-water mark
- * on a PT5M schedule, so an unpublish hid the bytes at once and left the ROW listed and searchable
- * for up to five minutes. The Cosmos write stays authoritative; this only stops search lagging it.
- *
- * `merge`, never `mergeOrUpload`: a row the indexer has not created yet is not findable, so a
- * merge that misses withholds nothing, while an upload would insert a title-less half-row that
- * renders in results until the next pass.
- *
- * Best-effort, like `deleteFromIndex` — the visibility change has already landed in Cosmos and the
- * caller has already succeeded. Loud on failure: the row stays over-permissive until the indexer
- * catches up.
- *
+ * Best-effort ACL write so an unpublish does not stay searchable until the next indexer run.
+ * `merge`, not `mergeOrUpload`: an upload would insert a title-less half-row.
  * @param {Array<{id: string, read: string[], isPublished: boolean}>} rows
  * @returns {Promise<number>} rows the service accepted
  */
@@ -1923,9 +1300,7 @@ async function writeAcls(index, rows) {
         }))
       });
 
-      // A 207 is an `ok` response carrying per-row verdicts, so the status of the request says
-      // nothing about the rows. 404 is expected and benign — the indexer has not created that row
-      // yet, and a row that is not in the index is not findable.
+      // A 207 is `ok` with per-row verdicts; a 404 row is not indexed yet, so nothing to hide.
       const failed = (result.value || []).filter(r => r.status === false);
       merged += batch.length - failed.length;
 
@@ -1949,22 +1324,8 @@ async function writeAcls(index, rows) {
 }
 
 /**
- * Remove chunk rows from the chunks index by key.
- *
- * The bulk twin of `deleteFromIndex`, for the rows no document owns any more: the indexer's `_ts`
- * high-water mark cannot see a delete, so an orphaned chunk stays searchable until something says
- * so explicitly. `deleteChunksForDocument` covers the case where the parent is known; this one
- * takes keys a caller has already worked out.
- *
- * Keys are the index's own `id`, READ BACK from a search rather than re-derived — the indexer mints
- * them with a .NET base64 variant, and re-implementing that here would delete nothing while
- * reporting success.
- *
- * Batched at the service's own cap, like `writeAcls`, and best-effort the same way: a batch the
- * service refused is reported back rather than thrown, so a purge can name what is still findable
- * instead of failing whole. A 404 is not a failure here — the row is already gone, which is the
- * result the caller asked for.
- *
+ * Bulk delete by index key, as read back from a search (see deleteChunksForDocument). Refused
+ * batches are returned, not thrown, so a purge can name what is still findable.
  * @param {string[]} ids  index keys
  * @returns {Promise<string[]>} the ids that are still indexed as far as this call can tell
  */
@@ -1987,8 +1348,7 @@ async function deleteDocuments(ids) {
         value: batch.map(key => ({ '@search.action': 'delete', id: key }))
       });
 
-      // A 207 is an `ok` response carrying per-row verdicts, so the status of the request says
-      // nothing about the rows.
+      // A 207 is `ok` with per-row verdicts.
       const rejected = (result.value || [])
         .filter(row => row && row.status === false && row.statusCode !== 404)
         .map(row => String(row.key));
@@ -2035,11 +1395,8 @@ async function lookupChunkRows(index, batch) {
 }
 
 /**
- * Which of `chunkIds` the chunks index holds, so an ingest can tell a stored chunk that is also
- * searchable from one a failed delete or purge left in Cosmos only. Never throws: `null` when there
- * is no index to ask. The ids of a batch whose lookup failed count as held, so nothing is rewritten
- * on a guess.
- *
+ * Which `chunkIds` the index holds, or null with no index. A failed lookup counts its batch as
+ * held, so nothing is rewritten on a guess.
  * @param {string[]} chunkIds  Cosmos chunk ids
  * @returns {Promise<Set<string>|null>}
  */
@@ -2061,22 +1418,8 @@ async function indexedChunkIds(chunkIds) {
 }
 
 /**
- * Remove chunk rows from the chunks index by their Cosmos chunk id.
- *
- * For a re-ingest that drops chunks. The indexer's `_ts` high-water mark never sees a Cosmos
- * delete, so the caller runs this BEFORE deleting those chunks from Cosmos and keeps in Cosmos
- * every id returned here; the next attempt then finds them again. Index keys are the base64 form
- * of those ids, so they are read back through the filterable `chunkId` field rather than
- * re-derived — see `deleteChunksForDocument`.
- *
- * Known race: an indexer run already in flight can read a row before this delete and write it
- * after. That row stays searchable until the document's chunks are removed by `documentId`.
- *
- * Best-effort, like `deleteDocuments`: never throws, and reports the chunk ids that may still be
- * indexed. A chunk id the index does not hold is not a failure — nothing is left to find. With no
- * SEARCH_ENDPOINT nothing can be deleted, so every id comes back as `indexUnconfigured` rather than
- * being claimed as gone.
- *
+ * Run before the Cosmos delete; the caller keeps every id returned. Known race: an indexer run in
+ * flight can re-add a row, which stays until the document's chunks go by `documentId`.
  * @param {string[]} chunkIds  Cosmos chunk ids
  * @returns {Promise<{stillIndexed: string[], indexUnconfigured: string[]}>}
  */
@@ -2122,21 +1465,8 @@ function indexes() {
 }
 
 /**
- * Remove every indexed chunk of a document.
- *
- * REQUIRED for correctness, not tidiness: the indexer's `_ts` high-water mark cannot see deletes
- * at all (measured — a run right after a hard delete processed 0 items), so without this the full
- * text of a deleted document stays searchable indefinitely.
- *
- * Keys are READ BACK, never re-derived. The indexer mints them with `base64Encode`, which is .NET
- * `HttpServerUtility.UrlTokenEncode` — standard base64, `+`/`/` swapped for `-`/`_`, and the `=`
- * padding replaced by a DIGIT COUNT of the stripped padding (`…YzA=` indexes as `…YzA1`).
- * Re-implementing that here would delete nothing while reporting success the day it drifts.
- *
- * Runs BEFORE the Cosmos chunks go, so a caller that stops short can retry and find them again.
- * Best-effort by default: logs and returns the count removed. `opts.strict` throws instead
- * (`code: 'INDEX_DELETE_INCOMPLETE'`) whenever rows may be left, so the caller can keep its Cosmos
- * chunks and answer a retryable 503.
+ * Indexers never see deletes, so this is the only way out. Keys are read back, never re-derived
+ * from the indexer's .NET base64. `opts.strict` throws INDEX_DELETE_INCOMPLETE if rows may remain.
  */
 async function deleteChunksForDocument(documentId, opts = {}) {
   const { deleted, complete } = await drainIndexedChunks(documentId, opts);
@@ -2159,9 +1489,7 @@ async function drainIndexedChunks(documentId, opts) {
   }
 
   const id = String(documentId);
-  // Runs until the document drains. The cap only bounds a delete that lands nowhere yet still
-  // shows the count falling; the no-progress check below catches the common failure much sooner.
-  // 25 rounds once looked ample and was not: one document held 38,090 chunks.
+  // The cap only bounds a count that keeps falling; the no-progress check stops most failures.
   const maxRounds = opts.maxRounds || DELETE_MAX_ROUNDS;
   const sleep = opts.sleepFn || ((ms) => new Promise(r => setTimeout(r, ms)));
   let deleted = 0;
@@ -2175,8 +1503,7 @@ async function drainIndexedChunks(documentId, opts) {
         search: '*',
         filter: `documentId eq '${id.replace(/'/g, "''")}'`,
         select: 'id',
-        // The page cap, not the document's size. `count` reports how many are really left, which
-        // is what decides whether another round is needed.
+        // The page cap; `count` decides whether another round is needed.
         top: 1000,
         count: true
       });
@@ -2185,10 +1512,8 @@ async function drainIndexedChunks(documentId, opts) {
       if (keys.length === 0) return { deleted, complete: true };
 
       const remaining = found['@odata.count'] ?? keys.length;
-      // Deletes are not read-your-write on this service, so the count can lag the last delete: a
-      // stalled round waits and reads again. A total that stays put past that means the delete is
-      // not landing, and more rounds of the same call will not change it. The budget bounds the
-      // sum: a lag on every round of a large document would otherwise wait minutes in one request.
+      // The count can lag a delete, so a stalled round waits and rereads; past the stall rounds or
+      // the budget, the delete is not landing.
       if (round > 1 && remaining >= previousRemaining) {
         const overBudget = stalledMs + DELETE_STALL_WAIT_MS > DELETE_STALL_BUDGET_MS;
         if (++stalled > DELETE_STALL_ROUNDS || overBudget) {
@@ -2219,12 +1544,7 @@ async function drainIndexedChunks(documentId, opts) {
     );
     return { deleted, complete: false };
   } catch (err) {
-    // Reported, not thrown: see `opts.strict`. Loud, because the consequence is searchable text
-    // for a deleted document.
-    //
-    // Returns what was actually removed before the failure, not 0 — a later round throwing does not
-    // un-delete the earlier ones, and reporting 0 would understate `indexEntriesRemoved` in the
-    // purge summary.
+    // Earlier rounds stay deleted, so report their count, not 0.
     logger.error(
       `[ai-search] could not remove indexed chunks for document ${id} (${err.message}) ` +
       `after deleting ${deleted}. Its remaining text stays searchable until this is retried.`
@@ -2243,9 +1563,7 @@ module.exports = {
   // The live-schema gate and the error classification behind `SEARCH_SCHEMA_DRIFT`.
   probeIndexSchema,
   missingPropertyFrom,
-  // Exported for tests. Its refusals are the safety argument for the whole degrade — an emptied
-  // `select` returns every RETRIEVABLE field, chunk text included — and the one-retry latch above
-  // puts them out of reach of any `searchDocuments`/`searchChunks` call that could assert them.
+  // Exported for tests: the one-retry latch keeps its refusals out of reach of search calls.
   dropField,
   searchChunks,
   searchProjects,
@@ -2255,31 +1573,21 @@ module.exports = {
   LEG_TWO_SEARCH_FIELDS,
   searchActivities,
   searchNotifications,
-  // The `/search/counts` legs. `countKeyword` is exported for the guard test that pins the request
-  // body shape — `top: 0`, no highlight, no semantic — which is the whole reason a badge costs a
-  // fraction of a results page.
+  // The `/search/counts` legs; `countKeyword` for the test that pins its cheap request body.
   countKeyword,
   countProjects,
   countActivities,
   countNotifications,
-  // The controller's fallback test: a 404 for an index that was never created is a configuration
-  // state the Cosmos read can answer, not a search that failed.
   isMissingIndex,
   // The value-level health check's one primitive: rows whose value is wrong, not fields that exist.
   countMatching,
-  // Exported so the guard test can hold each `select` and `searchFields` against the committed
-  // index definition, the same invariant DOCUMENT_SELECT carries: a name the index does not
-  // declare is a 400 on every query, not a missing field in the response.
+  // For the test that holds each list against the committed index definition.
   KEYWORD_INDEXES,
   documentIdsMatching,
   DOCUMENT_SCOPE_CAP,
   chunkParentFieldStatus,
-  // The scoped twin of the count inside `chunkParentFieldStatus`: one place builds the stamp
-  // clause, so a controller cannot count a different population than the probe it gates on.
   staleChunkCount,
-  // The row-level twin of that count, for the orphan purge in `backfill-chunk-parent-fields.js`:
-  // a row the stamp cannot reach is one whose Cosmos chunk is gone, and only the index keys read
-  // back here can delete it.
+  // For the orphan purge in `backfill-chunk-parent-fields.js`.
   listStaleChunkIds,
   LIVE_SCHEMA_TTL_MS,
   UNKNOWN_STATUS_TTL_MS,
@@ -2290,39 +1598,25 @@ module.exports = {
   deleteDocuments,
   writeAcls,
   indexes,
-  // The controller refuses a larger page rather than letting this layer clamp one, so the limit
-  // has to be readable from there — two copies of it would drift into exactly the silent
-  // truncation it exists to prevent.
+  // The controller refuses larger pages, so it reads this one copy.
   MAX_PAGE_ROWS,
-  // Exported for the chunk window, which must stay inside ONE service request: a chunk page is
-  // fetched on every debounced keystroke against a Basic 1-SU service, and a window larger than
-  // this turns each of those into two requests.
+  // The chunk window stays inside one service request.
   SERVICE_MAX_TOP,
-  // Exported so a caller can tell "search is not configured" from "search found nothing". The API
-  // is right to treat the first as a degraded state and return []; an instrument is not, and must
-  // refuse to publish a zero it cannot distinguish from an unset app setting.
+  // So a caller can tell "not configured" from "found nothing".
   config,
   semanticStats,
-  // Exported for tests. The 402 latch clears on its own at the month rollover and no sooner, so
-  // without this seam one 402 test would disable semantic for every test after it inside the same
-  // calendar month. The counters reset with it for the same reason: a partial response asserted in
-  // one test would otherwise still be in the totals the next test reads.
+  // Test seam: the 402 latch would otherwise hold for the rest of the month across tests.
   resetSemanticExhausted: () => {
     semanticExhaustedMonth = null;
     Object.assign(semanticCounters, {
       requested: 0, partial: 0, lastPartialReason: null, lastPartialAt: null, exhaustedAt: null
     });
   },
-  // Exported for `src/scripts/apply-search-definitions.js`, which PUTs index and indexer
-  // definitions and needs the same data-plane token this module already knows how to mint:
-  // the `https://search.azure.com/.default` scope, the AZURE_CLIENT_ID identity selection, and
-  // the 5-minute-margin cache. A second credential in the script would be a second place for
-  // that scope string to be wrong.
+  // For `src/scripts/apply-search-definitions.js`, so the token scope lives in one place.
   getToken,
   tokenize,
   buildQuery,
-  // Exported for `search/eagle-query.js`, which wraps it in an OData `search.ismatch`. Lucene
-  // syntax is this module's job; one copy of the escaping, wherever the query is assembled.
+  // For `search/eagle-query.js`: one copy of the Lucene escaping.
   buildContainsQuery,
   snippetFrom,
   escapeHtml,
