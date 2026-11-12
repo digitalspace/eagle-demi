@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * Who may write the Eagle mirror, PUT /eagle/*, run end to end through the dispatcher.
- *
- * The mirror handlers write any project through systemAccess(), so the route chain is the only
- * thing between a caller and every mirrored row. `demi-service-write` is not enough on its own:
- * the extractor holds it and a sysadmin can mint more. Only eagle-api, as the APIM principal
- * `apim:eagle-api`, gets through. The route checks the same chain on every /eagle/ path
- * (test/helpers/access-coverage.test.js), so one path stands in for all of them here.
- */
+// Mirror handlers write through systemAccess(), and the extractor also holds demi-service-write,
+// so only `apim:eagle-api` may pass. access-coverage.test.js checks every /eagle/ path.
 
 process.env.NODE_ENV = 'test';
 

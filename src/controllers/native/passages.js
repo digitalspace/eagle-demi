@@ -1,8 +1,7 @@
 'use strict';
 
 /**
- * Native passage reads: `GET /documents/passages`, one row per chunks-index hit, on the list
- * contract in `helpers/native-query.js`. `q` is required; rows carry the index highlight as
+ * `GET /documents/passages`: one row per chunks-index hit, `q` required. Rows carry the highlight as
  * `snippet`, never chunk text, and only for chunks whose parent document the caller may read.
  */
 

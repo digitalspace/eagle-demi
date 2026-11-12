@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * The Updates mirror — `PUT /eagle/updates/:eagleId`.
- *
- * Two invariants, both silent when they break because the push still answers 200: the stored row
- * keeps the notification claim across an upsert (Cosmos REPLACES the item), and eagle-notify hears
- * about a publication exactly once. The claim is what makes "once" true, so most of this file is
- * about who holds it.
- */
+// Both invariants fail silently (the push still answers 200): the row keeps its notification
+// claim across an upsert, which Cosmos treats as a replace, and eagle-notify hears of it once.
 
 process.env.NODE_ENV = 'test';
 
@@ -35,11 +29,7 @@ function push(body, res = mockRes()) {
   ).then(() => res);
 }
 
-/**
- * The mirror with eagle-notify wired up: every claim, send and mark is recorded, no HTTP happens.
- * A granted claim answers the row the test's own `upsert` mock last wrote, as Cosmos answers the
- * patched row.
- */
+// A granted claim answers the row the `upsert` mock last wrote, as Cosmos answers the patched row.
 function wiredNotify(t, {
   claim = null, outcome = notify.OUTCOME.SENT, cancelOutcome = notify.OUTCOME.SENT, publicDocs = []
 } = {}) {
@@ -67,11 +57,7 @@ function wiredNotify(t, {
 
 const IMAGE = { document: '5cf00c03a266b7e187750001', alt: 'The site' };
 
-/**
- * The event body eagle-notify receives for a new update whose featured image document reads as
- * `row` (null: not public). The real payload builder runs, so the keys asserted are the ones the
- * email template renders from.
- */
+// `row` null = image not public. The real payload builder runs, so these keys are the template's.
 async function eventForImage(t, row) {
   t.mock.method(updates, 'readForWrite', async () => null);
   t.mock.method(updates, 'upsert', async (item) => item);
@@ -691,9 +677,8 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       [{ id: UPDATE_EAGLE_ID, mark: 'notifySentAt', at: seen.claims[0].now }]);
   });
 
-  // Same parent precedence as the mirrors: an update whose `projectId` is really a
-  // ProjectNotification _id must not be labelled with the Track project that carries that id in
-  // `eagleId` — subscribers would be told about a project the update is not under.
+  // A `projectId` that is a ProjectNotification _id must not pick up the Track project carrying
+  // that id in `eagleId`, or subscribers hear about the wrong project.
   await t.test('an update under a notification is announced with the notification name', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -1141,9 +1126,7 @@ test('an update emails once however often it is withdrawn and re-published', asy
   assert.deepStrictEqual(sent, { published: 1, cancelled: 1 }, 'and a second withdrawal cancels nothing');
 });
 
-// The claim only makes "once" true if the mirror write cannot hand it back. This drives the real
-// controller and the real repository against an in-memory Cosmos, so the write path is the thing
-// under test rather than a stubbed claim.
+// Real controller and repository against an in-memory Cosmos: the write must not drop the claim.
 test('the mirror write creates a new row and etag-replaces an existing one', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const calls = [];

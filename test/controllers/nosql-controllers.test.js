@@ -94,12 +94,8 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.statusCode, 404);
   });
 
-  /**
-   * eagle-public holds Eagle ObjectIds and DEMI ids are Track integers or `eagle-<ObjectId>`, so
-   * one route answers both spaces. Which repository call is made is the assertion: `getById` is a
-   * point read on the partition key and would miss an Eagle id entirely, answering 404 for a
-   * project the caller may see.
-   */
+  // One route answers Eagle ObjectIds and DEMI ids. `getById` is a partition-key point read and
+  // would 404 an Eagle id, so which repository call runs is the assertion.
   await t.test('a 24-hex :id is resolved as an Eagle id', async () => {
     const EAGLE_ID = '58851172aaecd9001b820335';
     const calls = [];
@@ -150,11 +146,8 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.body.shortUrl, `${config.linkBaseUrl}/s/kq7bt2rm`);
   });
 
-  /**
-   * eagle-public prints this as "Last updated". It is Eagle's edit date, not `updatedAt` — DEMI's
-   * sync stamp moves on every re-merge, so a page drawn from it would claim an edit that never
-   * happened.
-   */
+  // eagle-public prints this as "Last updated": Eagle's edit date, not `updatedAt`, which moves on
+  // every re-merge.
   await t.test('an anonymous read carries Eagle\'s dateUpdated', async () => {
     t.mock.method(projects, 'getById', async () => ({
       id: '207',
@@ -194,11 +187,8 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.statusCode, 404);
   });
 
-  /**
-   * The read ACL gates rows, not fields, so a caller entitled to the row was getting the raw
-   * upstream payloads with it — unbounded, and anonymous on both these routes. ENRICHMENT_SOURCES
-   * is the allowlist; everything unnamed goes without needing its own rule.
-   */
+  // The read ACL gates rows, not fields. ENRICHMENT_SOURCES is the allowlist of upstream payloads;
+  // everything unnamed is dropped.
   const STORED = {
     id: '207',
     name: 'Nicomen Wind Energy',
@@ -234,11 +224,8 @@ test('nosql project controller', async (t) => {
     }
   });
 
-  /**
-   * The reason the strip lives at res.json and not in the data layer. updateProject reads, spreads
-   * and upserts, so a stripped read would erase `sources` from the stored document on the next
-   * edit — including the wildfire aggregate nothing else can rebuild.
-   */
+  // The strip lives at res.json because updateProject reads, spreads and upserts: a stripped read
+  // would erase stored `sources`, including the wildfire aggregate nothing else rebuilds.
   await t.test('narrowing the response does not narrow what is stored', async () => {
     t.mock.method(projects, 'getById', async () => structuredClone(STORED));
     let saved;
@@ -441,8 +428,7 @@ test('nosql project controller', async (t) => {
   });
 
 
-  // Admission is level 1 (P3-3). Literal tokens, because reading them off a constant would pass
-  // whatever that constant becomes.
+  // Literal tokens: reading them off a constant would pass whatever that constant becomes.
   await t.test('a new project is admitted at level 1', async () => {
     let saved;
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
@@ -483,10 +469,8 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(upsert.mock.callCount(), 0);
   });
 
-  // ONE STORED NAME FOR THE PROJECT STATE. `status` is the wire name and the index alias
-  // (`c.projectState AS status`); `projectState` is what the sync writes and what 389 of the 393
-  // stored rows carry. Both write routes used to let the wire name through, which put the state
-  // under a key the data source does not read.
+  // `status` is the wire name and index alias (`c.projectState AS status`); the stored key the data
+  // source reads is `projectState`.
   await t.test('create renames the wire `status` to the stored `projectState`', async () => {
     let saved;
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
@@ -499,9 +483,8 @@ test('nosql project controller', async (t) => {
     assert.ok(!('status' in saved), 'the wire name must not reach the container');
   });
 
-  // A GET returns `projectState` (publicView reads the stored row), so the body a caller sends
-  // back carries the stored name. Accepting only the wire name dropped it silently — no error, an
-  // empty state — while the sibling PUT route honoured it. Both routes take both names now.
+  // A GET returns `projectState`, so a body sent back carries the stored name; both write routes
+  // accept both names.
   await t.test('create accepts the stored name too, and prefers it — GET then POST round-trips', async () => {
     let saved;
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
@@ -1038,11 +1021,8 @@ test('the route table mounts one data layer, unconditionally', async (t) => {
   };
 
   await t.test('no environment variable can change the route table', () => {
-    // USE_COSMOS_NOSQL was the rollback switch between the Mongo-API and NoSQL controllers.
-    // Both it and the layer it fell back to are gone; a stale value left on the deployed app
-    // must not resurrect a branch. Asserting the table is IDENTICAL either way is the check —
-    // a flag that silently changed which controller answers is how the wrong data layer got
-    // activated against an account that did not speak its query language.
+    // A stale USE_COSMOS_NOSQL left on a deployed app must not change which controller answers,
+    // so the route table must be identical either way.
     const withFlag = load({ USE_COSMOS_NOSQL: 'true' });
     const withoutFlag = load({ USE_COSMOS_NOSQL: 'false' });
 
@@ -1050,9 +1030,8 @@ test('the route table mounts one data layer, unconditionally', async (t) => {
   });
 
   await t.test('publish/unpublish and chunk ingest are always mounted', () => {
-    // Both used to be conditional, purely because the Mongo controller had no such handler.
-    // Mounting them behind a truthiness check on the controller export means a rename would
-    // silently drop the route instead of failing.
+    // Mounted unconditionally: a truthiness check on the controller export would let a rename
+    // drop the route silently.
     const paths = load();
     assert.ok(paths.includes('/documents/:id/published'));
     assert.ok(paths.includes('/documents/:id/chunks'));
@@ -1186,9 +1165,8 @@ test('chunk ingest route', async (t) => {
   });
 
   await t.test('an extraction with no page markers writes neither field', async () => {
-    // Every extraction taken before page provenance, which is the whole corpus today. `false`
-    // would claim this ingest measured something it could not, and a re-extraction would then be
-    // indistinguishable from a document nobody has looked at again.
+    // An extraction without page provenance. `false` would claim a measurement this ingest could
+    // not make.
     stubDoc(t);
     let written = null;
     let patched = null;
@@ -1210,10 +1188,8 @@ test('chunk ingest route', async (t) => {
       Object.keys(patched).filter(k => k === 'pageNumbered' || k === 'pageCount'), []);
   });
 
-  // Provenance exists because the extraction host ROUTES: a text-layer probe keeps digital PDFs on
-  // a CPU path and only text-poor ones reach OCR. Without recording which, a text-layer artefact
-  // and an OCR error are indistinguishable afterwards, and no claim about OCR quality can be
-  // evidenced or disproved.
+  // The extraction host routes digital PDFs to a CPU text-layer path and only text-poor ones to
+  // OCR; provenance records which, so text-layer and OCR errors can be told apart.
   const ingestOk = async (a, id, items) => ({ succeeded: items.length, failed: 0, statusCounts: {} });
 
   await t.test('the success patch lands in two, the done fields last', async () => {
@@ -1294,9 +1270,8 @@ test('chunk ingest route', async (t) => {
     assert.ok(eachPatchFits());
   });
 
-  // Absent provenance must stay ABSENT rather than becoming an empty object: "no field" is the
-  // honest signal for the ~80k rows written before this existed, and an empty object would read
-  // as "provenance recorded, path unknown", which is a different and false statement.
+  // Absent provenance stays absent: an empty object would read as "recorded, path unknown",
+  // which is false.
   await t.test('the field is omitted entirely when the host sends nothing', async () => {
     stubDoc(t);
     let patched = null;
@@ -1349,10 +1324,8 @@ test('chunk ingest route', async (t) => {
   });
 
   await t.test('a PARTIAL chunk write fails the request instead of claiming success', async () => {
-    // bulkVerified reports partial failure, it does not throw. Trusting the call rather than its
-    // report is how a sync once claimed 60,578 writes against 56,317 rows. Here it would mark a
-    // document extracted with part of its text missing — and `extracted=false` would never offer
-    // it again, so the gap would be permanent and invisible.
+    // bulkVerified reports partial failure instead of throwing; trusting the call would mark a
+    // document extracted with text missing, and `extracted=false` would never offer it again.
     stubDoc(t);
     const patches = [];
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
@@ -1657,9 +1630,8 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   const { chunkMarkdown } = require('../../src/chunker');
   const DOC = { id: 'd1', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false };
 
-  // A real Readable on `req.stream`, not a fake: the handler drives it with readline, and a stub
-  // that merely exposes the lines would not exercise the streaming at all — which is the entire
-  // feature. `stream` is what the dispatcher hands over for an unbuffered body.
+  // A real Readable, since the handler drives it with readline; a stub exposing lines would not
+  // exercise the streaming.
   const streamReq = (lines) => ({
     stream: Readable.from(lines.map(l => `${l}\n`)),
     params: { id: 'd1' }, query: {}, user: ADMIN_USER, is: (t2) => t2 === 'application/x-ndjson'
@@ -1696,9 +1668,8 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
 
   await t.test('a marker the probe meets late still numbers the pages from the first block',
     async () => {
-      // A stream cannot be read ahead, so blocks are held until a marker turns up. Everything
-      // before the first one belongs to page 1, which is only true if nothing was emitted while
-      // the question was open.
+      // A stream cannot read ahead, so blocks are held until a marker turns up; everything before
+      // the first marker is page 1.
       stubDoc(t);
       let patched = null;
       t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
@@ -1723,10 +1694,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     });
 
   await t.test('a first page bigger than any probe window still chunks by page', async () => {
-    // The door used to stop looking for markers after 20,000 characters, so a document whose first
-    // page ran past that was chunked as if it had no pages at all — passage numbers, and the form
-    // feeds of every later page left sitting inside chunk content — while the JSON door chunked
-    // the same text by page. Both doors, one corpus: the answer cannot depend on how long page 1 is.
+    // The NDJSON and JSON doors must page the same text the same way, however long page 1 is.
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
@@ -1800,12 +1768,8 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   });
 
   await t.test('ONE huge block is still flushed in bounded batches', async () => {
-    // The regression that killed the worker six times on 5cd1bf58f8f32d0024119fb9: that document
-    // is 30 MB across 2,247 lines with only FIVE blank ones, so it splits into ~6 blocks of ~5 MB
-    // and each one emits well over a thousand chunks in a single call. Checking the batch bound
-    // between blocks made the bound follow BLOCK size, which is the one thing that cannot be
-    // relied on. The test above uses 900 separate blocks and passed throughout — a single block
-    // is what distinguishes the two.
+    // One huge block, unlike the 900 small ones above: the batch bound must follow chunk count,
+    // not block size, which a document with few blank lines makes megabytes long.
     stubDoc(t);
     const batchSizes = [];
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
@@ -2100,9 +2064,8 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   });
 });
 
-// A writer could hand-craft an ACL by putting it in the PUT body: `req.body` was spread straight
-// into the upsert, so `read` and `isPublished` went in unexamined — past resolveDocumentAcl and
-// past the 409 that stops a document being published under a private project.
+// `read` and `isPublished` in a PUT body would skip resolveDocumentAcl and the 409 that stops a
+// document being published under a private project.
 test('PUT bodies cannot hand-craft an ACL', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -2126,8 +2089,8 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
   });
 
   await t.test('PUT no longer changes a level', async () => {
-    // Widening is an act: `PUT /api/projects/:id/level` is the only door (P3-4). A body that asks
-    // for publication is ignored, not refused, and the stored ACL is carried through untouched.
+    // Only `PUT /api/projects/:id/level` widens. A body asking for publication is ignored, not
+    // refused, and the stored ACL is kept.
     const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['team'], isPublished: false };
     let saved;
     t.mock.method(projects, 'getById', async () => existing);
@@ -2161,11 +2124,8 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
   });
 });
 
-// The same invariant one level up: a document must never out-rank its project. The document level
-// route enforces it upwards with a 409; nothing enforced it downwards, so narrowing a project left
-// every document under it carrying `public` — and `listVisible` gates on the document's own ACL,
-// so they stayed listable and searchable. Driven through `PUT /:id/level`, the only route that
-// moves a project's level.
+// A document never out-ranks its project. `listVisible` gates on the document's own ACL, so
+// narrowing a project must narrow its documents too.
 test('narrowing a project restricts its documents too', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -2195,15 +2155,8 @@ test('narrowing a project restricts its documents too', async (t) => {
   });
 
   await t.test('publishing a project DOES cascade — the formula is what protects documents', async () => {
-    // This assertion used to be `cascaded === false`, and that assertion WAS the defect: a
-    // re-publish left every document restricted with no counterpart to restore them, because the
-    // invariant "publishing a project must not publish its documents" was enforced by never
-    // running rather than by the formula.
-    //
-    // It is now enforced by the formula. `ownRead ∩ projectRead` returns `public` only to a
-    // document whose own ACL already carried it, so the cascade is safe to run in both directions —
-    // and running it is what lets a document come back. The narrowing itself is asserted where it
-    // lives, in the repository suite.
+    // `ownRead ∩ projectRead` gives `public` only to a document whose own ACL had it, so the
+    // cascade runs both ways and a re-publish restores documents. The formula is tested in the repo suite.
     const priv = { ...published, read: ['sysadmin'], isPublished: false };
     let sentRead = null;
     t.mock.method(projects, 'getById', async () => priv);
@@ -2267,10 +2220,8 @@ test('narrowing a project restricts its documents too', async (t) => {
   });
 });
 
-// Defect A: a chunk's read[] is a snapshot copied at ingest, and nothing used to refresh it. An
-// unpublished document kept chunks carrying `public` — in Cosmos, and in the AI Search index
-// indefinitely, because unpublishing never advanced their `_ts` and the indexer is a high-water
-// mark.
+// A chunk's read[] is copied at ingest. The indexer is a `_ts` high-water mark, so chunks must be
+// rewritten when their document is unpublished or the index keeps them public.
 test('unpublishing a document restricts its chunks too', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -2324,10 +2275,8 @@ test('unpublishing a document restricts its chunks too', async (t) => {
   });
 });
 
-// Since #148 every document and project LIST is served from the search index, and the indexer is a
-// `_ts` high-water mark on a PT5M schedule. A visibility change that reached Cosmos only left the
-// ROW listed and keyword-searchable under its old ACL for up to five minutes — the file itself was
-// hidden at once by the live point read, its metadata was not.
+// Lists are served from the search index, whose indexer runs every 5 minutes. A visibility change
+// written only to Cosmos would keep the row listed under its old ACL until then.
 test('a visibility change is written into the search index, not left to the indexer', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

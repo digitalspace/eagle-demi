@@ -9,12 +9,8 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const boundaries = require('../../src/repositories/boundaries');
 const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 
-// The frontend calls /boundaries/<name> with NO type. Requiring the partition key turned `type`
-// into the string "undefined", which matches nothing and 404s every lookup.
-//
-// The unscoped call is cross-partition, so it goes through `queryFirst`: one page of a
-// cross-partition query can come back empty while the boundary exists, and `items[0]` off that page
-// answered 404 for a boundary that was there.
+// The frontend calls /boundaries/<name> with no type, so `type` must never become "undefined".
+// Cross-partition pages can be empty while the row exists, hence `queryFirst`, not `items[0]`.
 
 const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
 
@@ -114,9 +110,8 @@ test('boundaries are ACL-gated', async (t) => {
 
 
   await t.test('this container has no unset-ACL allowance left', async () => {
-    // The allowance was for the 281 rows seeded before boundaries had an ACL. It is gone: a row
-    // with no ladder token reaches no unprivileged caller here either. Those rows are backfilled
-    // by re-running the boundaries seed stage, which stamps `read` on every one of them.
+    // A row with no ladder token reaches no unprivileged caller. Rows missing `read` are fixed by
+    // re-running the boundaries seed stage, which stamps it on every row.
     let spec;
     t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
 

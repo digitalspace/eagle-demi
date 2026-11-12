@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Administrative boundaries — Cosmos NoSQL.
- *
- * Reads are ACL-gated like every other container. The corpus is public reference geodata today,
- * but "public in practice" is not the same as "cannot be restricted", and a staff-only shapefile
- * has to be expressible. See repositories/boundaries.js for why project scope does not apply.
- *
- * Items now store simplified geometry only; full-resolution GeoJSON is a build artifact
- * served as a static asset, which the frontend already prefers. The old three-way
- * geometry=false|true|simplified juggling collapses to: omit geometry, or return the item.
+ * Administrative boundaries. Reads are ACL-gated so a staff-only shapefile stays possible. Items
+ * hold simplified geometry only; full-resolution GeoJSON is served as a static asset.
  */
 
 const boundaries = require('../../repositories/boundaries');
@@ -20,11 +13,7 @@ const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
 
 /**
- * The ACL a written boundary carries.
- *
- * Unlike a document, a boundary has no parent whose visibility it could out-rank, so the caller's
- * request is honoured directly — `isPublished: false` yields a staff-only shapefile. The default
- * is public, which is what every existing row is.
+ * No parent to out-rank, so the caller's `isPublished` is honoured directly; the default is public.
  */
 function resolveBoundaryAcl(isPublished) {
   const published = isPublished !== false;
@@ -52,45 +41,23 @@ exports.getBoundaries = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
-    // Reference data changes rarely and the frontend fetches it on every map load. The response
-    // varies by caller now, so `Vary: Authorization` rather than `private` — the anonymous
-    // response is byte-identical for every anonymous caller, which is very nearly all of them, and
-    // `private` would give up the shared cache for the one case that benefits from it most.
+    // `Vary: Authorization`, not `private`: the anonymous response is the same for nearly every
+    // caller, and `private` would lose the shared cache for it.
     if (typeof res.setHeader === 'function') {
       res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
       res.setHeader('Vary', 'Authorization');
     }
 
-    // BOUNDED, and the token comes back ONLY ON THE PATH THAT CAN CARRY ONE. The read used to pass
-    // no `pageSize` at all, which takes `cosmos.query`'s `fetchAll()` branch and drains the
-    // container cross-partition on an anonymous request — fine at 281 items across 3 partitions,
-    // and fine only because of that number.
-    //
-    // THE TWO PATHS PAGE DIFFERENTLY, and it is not a choice this code makes. With `type` the query
-    // sets `partitionKey`, runs single-partition through the SDK's `DefaultQueryExecutionContext`,
-    // and `x-ms-continuation` propagates — that path pages correctly. WITHOUT `type` it is
-    // cross-partition with `ORDER BY c.name ASC`, which the SDK serves through its pipelined
-    // `LegacyFetchImplementation`, whose `mergeHeaders` does not copy `x-ms-continuation`. So
-    // `continuationToken` comes back `undefined` no matter how many rows are left.
-    //
-    // That is why the full page below is REPORTED rather than quietly served. The old note here
-    // said paging was omitted because accepting `pageSize` without returning the token hands a
-    // caller a truncated map and no way to page it. On the unfiltered path that is still true and
-    // the SDK is the reason, so the honest thing is to bound the read and say when the bound bit —
-    // not to leave it draining the container. Both frontend list calls pass `type=`
-    // (`registry-state.service.ts:903,936`), so neither can reach it.
+    // Always bounded. Without `type` the SDK serves the cross-partition ORDER BY with no
+    // `x-ms-continuation`, so that path never gets a token and a full page is reported below.
     const { type, geometry, continuationToken } = req.query;
     const { items, continuationToken: nextPage, pageSize } = await boundaries.listByType(access, {
-      // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
-      // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
-      // polygons from both and blank the map without erroring.
+      // Opt-out: the frontend sends `geometry=simplified` or nothing, so requiring `true` would
+      // blank the map.
       type,
       withGeometry: geometry !== 'false',
-      // Passed through UNCLAMPED and read back below. `pageOptions` clamps to [1, 1000] and is the
-      // only place that does; clamping here as well produced two numbers that disagreed on junk
-      // input, and the guard below then compared against the one that had bounded nothing.
-      // `undefined` would skip `maxItemCount` entirely and take the `fetchAll()` drain, so the
-      // default is the ceiling rather than nothing.
+      // Unclamped: only `pageOptions` clamps, and the guard below reads its value back. The
+      // default is the ceiling because `undefined` takes the `fetchAll()` drain.
       pageSize: req.query.pageSize === undefined ? 1000 : req.query.pageSize,
       continuationToken
     });
@@ -99,22 +66,10 @@ exports.getBoundaries = async (req, res) => {
       res.setHeader('x-continuation-token', nextPage);
     }
 
-    // A FULL PAGE AND NO TOKEN is unresumable: either there are exactly `pageSize` rows and this is
-    // complete, or there are more and the caller can never reach them. The two are indistinguishable
-    // from here, which is precisely why it must not pass silently — a truncated map that says
-    // nothing is the failure this endpoint is meant to have stopped having.
-    // `pageSize` here is what `pageOptions` actually applied, not what the caller asked for — see
-    // the repository. No caller-supplied value is interpolated: this line is unauthenticated and
-    // winston forwards to Application Insights (`utils/logger.js:25-29`), so echoing `type` would
-    // let anyone write chosen text into telemetry, once per request, at unbounded cardinality.
+    // A full page with no token may be truncated and cannot be resumed. The log echoes no caller
+    // value: the route is anonymous and logs reach Application Insights.
     if (!nextPage && items.length >= pageSize) {
-      // SAID TO THE CALLER, not only to telemetry. A log line closes nothing for the client that
-      // just received a short map: the resumable path gets `x-continuation-token`, so this path
-      // must get something too, or a truncated answer is indistinguishable from a complete one.
-      //
-      // And it must not be CACHED as though complete. The handler sets `public, max-age=86400`
-      // above, which would pin a knowingly-incomplete map into shared caches for a day; a wrong
-      // answer that persists is worse than a slow one.
+      // Told to the caller too, and kept out of the day-long shared cache set above.
       if (typeof res.setHeader === 'function') {
         res.setHeader('x-truncated', 'true');
         res.setHeader('Cache-Control', 'no-store');
@@ -136,11 +91,8 @@ exports.getBoundary = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
-    // Falls back to a NAME lookup, matching the Mongo controller. The frontend calls
-    // `/boundaries/<name>` from loadSingleBoundaryGeometry — dropping the fallback made every
-    // boundary selection issue a request that 404s. It still rendered, because the list response
-    // carries simplifiedGeometry and the caller falls back to it, so the only visible symptom was
-    // a failing request per selection.
+    // Falls back to a name lookup: the frontend's loadSingleBoundaryGeometry calls
+    // `/boundaries/<name>`.
     let boundary = await boundaries.getById(access, req.params.id, req.query.type);
     if (!boundary) {
       boundary = await boundaries.getByName(access, String(req.params.id), req.query.type);
@@ -201,9 +153,8 @@ exports.updateBoundary = async (req, res) => {
       return res.status(400).json({ error: `Unknown body parameter(s): ${unknown.join(', ')}` });
     }
 
-    // type is the partition key — reassigning it is a delete-and-reinsert, not an update.
-    // `read` is derived from `isPublished` rather than taken from the body, so the two cannot
-    // disagree: read[] is authoritative and isPublished mirrors it, never the reverse.
+    // type is the partition key, so it is never reassigned. `read` derives from `isPublished`,
+    // never from the body, so the two cannot disagree.
     const {
       id: _ignoredId, type: _ignoredPk, read: _ignoredRead, isPublished, ...changes
     } = req.body;
@@ -221,9 +172,7 @@ exports.updateBoundary = async (req, res) => {
       updatedAt: new Date().toISOString()
     });
 
-    // The publish transition is recorded the way project.update records it: a boundary's `read[]`
-    // is derived from isPublished (resolveBoundaryAcl above), so flipping it is a visibility
-    // change, and that is the edit anyone reads this table to find.
+    // Records the publish flip as project.update does: it changes who can read the boundary.
     auditEvent(req, {
       action: 'boundary.update',
       targetType: 'boundary',

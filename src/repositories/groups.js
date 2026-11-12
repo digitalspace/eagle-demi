@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Groups repository — Cosmos NoSQL.
- *
- * Container `groups` (Eagle `Group`, a project's contact group), partitioned by `/projectId`: a
- * group belongs to one project and every list is "the groups of this project". `projectId` is the
- * DEMI project id, as `documents` and `commentPeriods` store it.
- *
- * A group Eagle deleted, or one with an `eagleId` that DEMI deleted, stays stored, flagged
- * `isDeleted`, for the reconcile and the ACL cascade; no read here serves it (`NOT_DELETED`).
+ * Container `groups` (Eagle `Group`), partitioned by `/projectId`, the DEMI project id. A deleted
+ * group stays stored with `isDeleted` for the reconcile and ACL cascade; reads skip it (`NOT_DELETED`).
  */
 
 const cosmos = require('../db/cosmos-nosql');

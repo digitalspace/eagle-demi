@@ -1,21 +1,8 @@
 'use strict';
 
 /**
- * The harness the Cosmos-backed `/search` suites share.
- *
- * Every one of them drives the DISPATCHER rather than the controller function, because half of what
- * can go wrong on this route lives in the guard chain rather than in the branch: the
- * `canScopeToProject` gate that zeroes a project filter, the `unknownParams` 400, and the
- * `meta[0].searchResultsTotal` the response wrapper attaches and eagle-public pages against.
- *
- * `cosmos.query`/`readItem` are the stub point, one level BELOW the repositories, so the SQL each
- * request emits is real and assertable. That is the only place the caller's ACL can be checked on
- * this path: a branch that read with `systemAccess()` would answer 200 with rows an anonymous
- * visitor may not see, and nothing in the response would say so.
- *
- * The Eagle ids come from `eagle-mirror-fixtures` rather than being restated here — the push suites
- * and the read suites have to agree about which id is which, or a round trip they both pass is
- * still broken.
+ * Harness for the Cosmos-backed `/search` suites: drives the dispatcher, so guards run, and stubs
+ * `cosmos.query`/`readItem` below the repositories, so the emitted SQL and its ACL are assertable.
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
@@ -55,9 +42,8 @@ const PARTITION_FIELD = {
 const bound = (spec) => Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
 
 /**
- * The role arm of `readClause`, run over a row the way Cosmos would: a spec carrying the
- * `EXISTS(... r IN (@role0, ...))` arm admits a row whose `read[]` holds one of those roles; a spec
- * without it (a privileged caller) admits every row. Team and credential arms are not modelled.
+ * The role arm of `readClause` run over a row as Cosmos would; a spec without it (privileged)
+ * admits every row. Team and credential arms are not modelled.
  */
 function admitsByRole(spec, row) {
   if (!/EXISTS\(SELECT VALUE r FROM r IN c\.read WHERE r IN \(/.test(spec.query)) return true;
@@ -80,13 +66,8 @@ function matchesCriteria(spec, row) {
 }
 
 /**
- * Serve Cosmos by CONTAINER, and record every spec.
- *
- * `rows` is keyed by container name; a `VALUE COUNT(1)` query is answered from `counts`, defaulting
- * to the number of rows served, so a branch that builds its total from a different predicate than
- * its read is still visible in `seen`. A `VALUE c.id` query answers the served rows' ids.
- * `strict: true` also runs the role arm of the read predicate (`admitsByRole`) and the criteria in
- * `matchesCriteria`, for suites that assert on rows rather than on SQL.
+ * Serve Cosmos by container and record every spec in `seen`. `counts` answers `COUNT(1)`, default
+ * the served rows; `strict` also applies `admitsByRole` and `matchesCriteria`.
  */
 function stubCosmos(t, rows, counts = {}, { strict = false } = {}) {
   const seen = [];
@@ -95,9 +76,7 @@ function stubCosmos(t, rows, counts = {}, { strict = false } = {}) {
   const run = (container, spec, options) => {
     cosmos.assertQuerySpec(spec, container);
     seen.push({ container, spec, options });
-    // A partition key is HONOURED, so a read aimed at a partition that does not exist answers
-    // nothing — the case an unresolved project id produces, and the one a stub that always serves
-    // its fixture would hide.
+    // A partition key is honoured, so a read aimed at an unresolved project id answers nothing.
     // The updates parent gate is APPLIED too, so a page and its count both lose a hidden row.
     const hidden = bound(spec)['@hiddenParents'] || [];
     // A by-Eagle-id lookup is honoured, so an Update's parent read finds its own project.
@@ -120,9 +99,8 @@ function stubCosmos(t, rows, counts = {}, { strict = false } = {}) {
   };
 
   t.mock.method(cosmos, 'query', async (container, spec, options) => run(container, spec, options));
-  // A single-row lookup is its OWN entry point, not a `query` with a page size: it holds one
-  // iterator and drains it, because the SDK hands no continuation token back on the cross-partition
-  // path. Same spec, so the assertions below still read it out of `seen`.
+  // Its own entry point: it drains one iterator, since the SDK gives no continuation token on the
+  // cross-partition path. Same spec, so assertions still read it out of `seen`.
   t.mock.method(cosmos, 'queryFirst', async (container, spec, options = {}) =>
     run(container, spec, options).items[0] ?? null);
   // A drained page: `OFFSET @skip LIMIT @size` is honoured over the served rows, as Cosmos would.

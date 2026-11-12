@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Chunk-index logic shared by compat `/search?dataset=DocumentChunk` and native passages: which
- * parent-field columns this scope can filter on, and the parent-document gate on a page of chunks.
- * See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
+ * Parent-field facet columns and the parent-document gate, shared by compat DocumentChunk search
+ * and native passages. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
  */
 
 const aiSearch = require('./ai-search');
@@ -26,24 +25,13 @@ function facetReasons(live) {
 }
 
 /**
- * Which of the asked chunk index columns the LIVE chunks index cannot answer for this scope.
- *
- * EXPRESSIBLE IS TWO FACTS, NOT ONE: the live index has to carry the column, AND every row this
- * request can see has to already hold the current stamp. A chunk the backfill has not reached
- * holds `null` in all four, so a clause over a carried-but-unstamped column is not a narrower
- * answer — it is 0 rows under a 200, which reads as "no documents of that type" rather than as a
- * backfill that has not finished. `eagle-query` reads the packaged `chunks.json`, which an operator
- * PUT applies separately, so package and service disagree for the length of a deploy window.
+ * Which asked chunk columns the live index cannot answer for this scope. A column must be carried
+ * AND stamped on every visible row: an unstamped one answers 0 rows under a 200, not an error.
  *
  * @param {string[]} columns        chunk index columns the request filters on
  * @param {{filter: ?string}} acl   the caller's clause, as the chunk query itself receives it
  * @param {string[]} projectIds     DEMI project ids from the request, empty for a corpus-wide read
- * @returns {Promise<{unavailable: string[], unstampedScope: boolean, unknownScope: boolean,
- *   missingColumn: boolean}>}
- *   `unavailable` are the columns not to send. `unstampedScope` is true ONLY for a MEASURED backlog
- *   in this caller's own scope. `unknownScope`: a column withheld because a question went
- *   unanswered. `missingColumn`: the live index does not carry the column at all, which is a deploy
- *   whose `chunks.json` PUT has not been applied. None of the three says a count.
+ * @returns {Promise<{unavailable: string[], unstampedScope: boolean, unknownScope: boolean, missingColumn: boolean}>}
  */
 async function liveFacetColumns(columns, acl, projectIds) {
   if (!columns.length) {
@@ -91,23 +79,13 @@ async function liveFacetColumns(columns, acl, projectIds) {
   };
 }
 
-/**
- * How many SCOPES of stale-chunk count are remembered at once. Bounded because the key carries a
- * project id, so an unbounded map grows with every project ever searched in this process.
- * Oldest-first eviction: a refreshed entry is re-inserted, which keeps a busy scope near the end.
- */
+// Bounded because the key carries project ids; oldest-first eviction, a hit is re-inserted.
 const STALE_SCOPE_CACHE_MAX = 32;
 const staleScopeCounts = new Map();
 
 /**
- * How many chunks THIS REQUEST could see still carry an older parent-field stamp than the code
- * writes — `null` when the question could not be answered, never 0.
- *
- * SCOPED, because the mark it gates says the caller's own filter is missing rows: same predicate,
- * same population, one answer. Never the caller's keywords — a stale chunk that does not match the
- * terms is still a row the facet filter had to skip. Cached per scope for `LIVE_SCHEMA_TTL_MS`,
- * since Deep Search fires on a debounced keystroke; an unanswered count is held for
- * `UNKNOWN_STATUS_TTL_MS` only. See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
+ * Stale-stamp chunks under the caller's own scope, never their keywords; `null` when unanswered.
+ * Cached per scope because Deep Search fires per keystroke. See wiki Search-Query-Construction.
  *
  * @param {{filter: ?string}} acl  the caller's clause, as the chunk query itself received it
  * @param {string[]} projectIds    DEMI project ids from the request, empty for a corpus-wide read
@@ -153,23 +131,17 @@ async function staleChunksInScope(acl, projectIds) {
   return entry.promise;
 }
 
-/**
- * Test seam: the counts live for the schema TTL, which outlives a whole test process, so without
- * it whether a probe is issued depends on which test ran first.
- */
+// Test seam: the cache outlives a test file, so probe counts would depend on test order.
 const resetStaleChunkScopeCache = () => staleScopeCounts.clear();
 
 /**
- * THE GATE, not a label lookup: a caller who cannot see a chunk's parent document cannot see its
- * text. Parents are read under the CALLER's access, never systemAccess(), and redacted before any
- * label is read off them. `listByIds` is ACL-enforcing and unbounded, so a miss means DENIED, not
- * truncated. See wiki Search-Query-Construction#the-parent-document-is-the-chunk-gate.
+ * The access gate: a chunk is visible only if its parent document is, read under the caller's
+ * access, never systemAccess(). `listByIds` is unbounded, so a miss means denied, not truncated.
  *
  * @param {object} access    the caller's resolved access
  * @param {object[]} items   one page of chunk hits, each with `documentId` and `projectId`
  * @param {number} count     the index-wide passage total for the query
  * @returns {Promise<{visible: object[], docById: Map, projById: Map, count: number}>}
- *   `count` is net of what this page withheld, floored at `visible.length`.
  */
 async function gateChunksByParent(access, items, count) {
   const projectIds = items.map(c => c.projectId);

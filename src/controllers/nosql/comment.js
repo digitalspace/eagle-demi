@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Comment controller — the Eagle mirror for `Comment`, and the only writer of `comments`.
- *
- * A comment may never out-rank its period, which may never out-rank its project, so a comment under
- * an unpublished period is stored private however Eagle's own `eaoStatus` reads.
- *
- * The submitter's name is stored and withheld, never dropped: `author` is at level 2 with the
- * `commentAttributed` predicate (src/vis/catalog/comments.js), so staff keep the attribution the
- * EAO needs while the public sees it only on a comment that was not submitted anonymously. NO EMAIL
- * IS MIRRORED — the Eagle Comment model has none, and nothing here may add one.
+ * Eagle mirror for `Comment`, the only writer of `comments`; a comment never out-ranks its period.
+ * `author` is stored and withheld by the catalog. No email is mirrored, and none may be added.
  */
 
 const comments = require('../../repositories/comments');
@@ -116,11 +109,8 @@ async function admitPeriod(ref, childId) {
 }
 
 /**
- * Mirror one raw Eagle `Comment`, whoever asked — the push handler below or the backfill
- * (src/scripts/seed-public-reads.js). NULL when the parent period is not in DEMI.
- *
- * @param {object} [periodRow] the DEMI comment-period row, when the caller already holds it. The
- *   backfill walks period by period, so it passes one and saves a read per comment.
+ * Mirror one raw Eagle `Comment` (push or backfill); null when its period is not in DEMI.
+ * @param {object} [periodRow] the DEMI period row, when the caller holds it; saves a read each.
  * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}
  *   |null>}
  */

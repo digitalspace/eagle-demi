@@ -7,10 +7,8 @@ const assert = require('node:assert');
 
 const { bulk, bulkVerified } = require('../../src/db/cosmos-nosql');
 
-// Cosmos rejects a whole bulk REQUEST — not individual operations — when serverless throughput
-// runs out, and the SDK surfaces that as a thrown error with no per-operation statuses. Measured
-// 2026-08-03: one 30 MB document streams ~60 bulk calls back to back, dev could not keep up, and
-// the throw escaped the retry loop and failed the ingest. These tests are that path.
+// Out of serverless throughput, Cosmos rejects the whole bulk request and the SDK throws with no
+// per-operation statuses.
 const RU = () => Object.assign(new Error(
   'Bulk request errored with: The request rate is too large.'), { code: 429 });
 
@@ -85,12 +83,8 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
   });
 
   await t.test('failedIds names the rows still unwritten, for Upsert and Patch shapes alike', async () => {
-    // `resourceBody` is the Upsert shape every caller in this repo builds — documents
-    // `bulkUpsertForProject`, chunks `upsertBatch` and `replaceForDocument` all use it. An earlier
-    // version of this fixture used `resource`, which nothing emits, so `failedIds` came back as a
-    // row of `undefined` in production while this stayed green. The seed and the List-id backfill
-    // both filter their chunk re-stamp on these ids, so undefined there re-stamps the chunks of
-    // documents whose row never landed.
+    // `resourceBody` is the Upsert shape every caller builds. The seed and the List-id backfill
+    // filter their chunk re-stamp on these ids, so an undefined id re-stamps unwritten documents.
     const mixed = [
       { operationType: 'Upsert', partitionKey: 'p', resourceBody: { id: 'u1' } },
       { operationType: 'Patch', partitionKey: 'p', id: 'p1', resourceBody: {} },
@@ -121,16 +115,8 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
   });
 });
 
-/**
- * A bulk response SHORTER than the request.
- *
- * The SDK builds its result array by sparse index assignment from what the service answered
- * (@azure/cosmos 4.10.0, dist/commonjs/client/Item/Items.js:504-506) and never reconciles it
- * against the operations sent, so a truncated or empty response is structurally possible — and with
- * `continueOnError: false` it is what a rejected batch produces. Iterating the RESPONSE dropped the
- * tail: those operations were never counted, never retried and never named in `failedIds`, so the
- * caller was told the batch landed.
- */
+// The SDK never reconciles its bulk result array with the operations sent, so a short or empty
+// response can happen; with `continueOnError: false` a rejected batch produces one.
 test('bulkVerified treats an unanswered operation as failed, not as written', async (t) => {
   await t.test('a truncated response retries the tail rather than losing it', async () => {
     let calls = 0;
@@ -172,9 +158,8 @@ test('bulkVerified treats an unanswered operation as failed, not as written', as
   });
 });
 
-// RU is the variable cost on a serverless account. The figure has to include what was paid for
-// REJECTED work, or the number understates the bill in exactly the case worth watching — a
-// throttled ingest, where the same operations are billed on every attempt.
+// The figure must include RU paid for rejected work, or it understates the bill of a throttled
+// ingest, where the same operations are billed on every attempt.
 test('bulkVerified reports the RU actually billed', async (t) => {
   await t.test('charges from a retried attempt are added, not replaced', async () => {
     let calls = 0;
@@ -215,9 +200,8 @@ test('bulkVerified reports the RU actually billed', async (t) => {
   });
 });
 
-// Cosmos rejects a bulk REQUEST carrying more than 100 operations. `bulk()` splits for that, and
-// the split only ever matters on a large partition — the seeder's 8,000-document projects — so a
-// regression here would surface in production and nowhere else.
+// The split matters only on large partitions (8,000-document projects), so a regression here would
+// surface in production and nowhere else.
 test('bulk splits requests at the 100-operation ceiling', async (t) => {
   // Records what each request received. `bulk()` reads `container.items.bulk`, so the fake only
   // has to satisfy that one path.
@@ -258,9 +242,8 @@ test('bulk splits requests at the 100-operation ceiling', async (t) => {
   });
 
   await t.test('a throw mid-way discards the earlier results rather than returning a short array', async () => {
-    // The dangerous failure is a SILENT one: returning the first 100 results after the second
-    // request died would tell `bulkVerified` that 100 operations succeeded and the other 150 were
-    // never attempted — indistinguishable from a partition that only had 100 rows.
+    // A short array would look to `bulkVerified` like a partition with only 100 rows, hiding the
+    // 150 operations never attempted.
     const { sent, containerFn } = spyContainer((chunk, n) => {
       if (n === 2) throw Object.assign(new Error('Bulk request errored with: The request rate is too large.'), { code: 429 });
       return chunk.map(() => ({ statusCode: 200 }));
@@ -288,14 +271,8 @@ test('bulk splits requests at the 100-operation ceiling', async (t) => {
   });
 });
 
-/**
- * A SUSTAINED throttle, not a transient one.
- *
- * Measured 2026-09 on the serverless test account: a full chunk-parent walk of ~1M PATCH operations
- * came back {200: 1004569, 412: 12248, 429: 523144, thrown: 291} and left 70 documents part-stamped
- * with 99,633 operations rejected. Four attempts of 1s/2s/3s spend the whole budget inside the same
- * overload, so the budget, the doubling, the 20s ceiling and Cosmos's own hint are pinned here.
- */
+// A serverless throttle can last minutes; short linear waits spend every attempt inside it. Pins
+// the attempt budget, the doubling, the 20s ceiling and Cosmos's own hint.
 test('bulkVerified sits out a sustained throttle', async (t) => {
   // Records the wait instead of spending it: even the four-attempt default is seconds of real time,
   // and a raised budget is over a minute, which no unit test can afford to sleep through.
@@ -345,10 +322,8 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
   });
 
   await t.test('the ceiling clips a long hint for a request-path caller, not for a walk', async () => {
-    // The request paths share this default: three retries on an unclipped 30s hint is 90s behind an
-    // APIM gateway that gives the whole request 30s. An offline walk names its own ceiling instead,
-    // because clipping a 45s hint there resends into a partition the service just said has no
-    // budget, spending an attempt to be rejected again.
+    // Request paths sit behind APIM's 30s cut, so the default clips. A walk sets its own ceiling:
+    // clipping its 45s hint resends into a partition that still has no budget.
     const hinted = () => {
       let calls = 0;
       return async (pending) => (++calls === 1
@@ -373,9 +348,8 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
   });
 
   await t.test('per-operation 429s get four attempts by default, doubling', async () => {
-    // Four, not more: this is the budget an ingest upsert and the ACL cascade inherit inside an
-    // `/api` request that APIM cuts off at 30s. 1s+2s+4s is about 7s of waiting; the offline walks
-    // that need to outlast a longer throttle ask for a bigger budget through `maxAttempts`.
+    // Four, not more: ingest and the ACL cascade run inside `/api` requests APIM cuts at 30s, and
+    // 1s+2s+4s is about 7s. Offline walks ask for more through `maxAttempts`.
     const { waits, sleepFn } = recorder();
     let calls = 0;
     const res = await bulkVerified('chunks', ops(3), {

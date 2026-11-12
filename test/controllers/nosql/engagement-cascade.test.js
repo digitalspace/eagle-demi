@@ -1,17 +1,7 @@
 'use strict';
 
-/**
- * A project visibility change, carried down to its comment periods and their comments.
- *
- * `PUT /api/projects/:id/level` is the surface: everything below it — the controller, both
- * repositories and the derivation in `helpers/acl-cascade` — is real here, and only Cosmos is
- * doubled. What is asserted is therefore what would be STORED: the bulk patch each container
- * receives, in the partition it receives it.
- *
- * The rule the wiring has to get right is that a comment follows ITS PERIOD, not the project. The
- * period is already capped by the project, so passing the project's ACL down a second time would
- * publish a comment under a period Eagle never published.
- */
+// A comment follows its period, not the project: passing the project's ACL down would publish a
+// comment under a period Eagle never published. Only Cosmos is doubled here.
 
 process.env.NODE_ENV = 'test';
 
@@ -51,14 +41,8 @@ function mockRes() {
   };
 }
 
-/**
- * A fixture row as the SQL projection would return it: a field the repository's `select` does not
- * name does not come back.
- *
- * `isDeleted` reaches `deriveAcls` only through that projection and nothing else reads it, so a
- * stub that handed the whole fixture over would stay green after the field was trimmed out of the
- * query — with the deleted period republished on the next project publish.
- */
+// `isDeleted` reaches `deriveAcls` only through the select, so returning whole fixtures would stay
+// green after the field left the query and a deleted period was republished.
 function projected(rows, query) {
   if (!query || query.includes('SELECT *')) return rows;
   return rows.map(row => Object.fromEntries(Object.entries(row).filter(
@@ -66,9 +50,7 @@ function projected(rows, query) {
 }
 
 /**
- * Cosmos, and only Cosmos. Period rows come back for the `commentPeriods` read; comment rows are
- * keyed by the partition the read asks for, which is the period id. Both are projected through the
- * query the repository actually sent.
+ * Comment rows are keyed by the partition the read asks for, which is the period id.
  *
  * @returns {{writes: Array, unexpected: Array}} the bulk patches, in the order they were sent
  */
@@ -240,9 +222,8 @@ test('a takedown takes the engagement down with it', async (t) => {
 
   await t.test('a period Eagle deleted is not handed back to the public on a re-publish',
     async (tt) => {
-      // The delete push narrowed it and flagged it (see public-read-push.test.js). Publishing the
-      // project re-derives every period from its raw Eagle copy, which still reads `public`, so
-      // without the flag this is where a deleted period comes back — and its comments with it.
+      // Publishing re-derives every period from its raw Eagle copy, which still reads `public`;
+      // only the delete flag keeps a deleted period and its comments hidden.
       const { writes } = stubCosmos(tt, {
         periods: [
           { id: 'cp1', read: STAFF_READ, eagleRead: ['public'], isDeleted: true },

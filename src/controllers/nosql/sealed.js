@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * The sealed compartment — level 0 (docs/rbac-architecture.md §1, "Level 0").
- *
- * A sealed record IS a document: same container, same partition, `read: ['compliance']`. There is
- * no second store and no second ACL mechanism — what seals the row is that every read outside these
- * routes carries an exclusion, the privileged ones and `systemAccess()` included.
- *
- * READS ARE AUDITED HERE AND NOWHERE ELSE IN DEMI. That asymmetry is the compartment's point, and
- * `compartmentAccess` below is what makes it true: holding `compliance` opens a sealed row only on
- * an access context these routes built, so the ordinary ladder routes cannot answer with one.
- *
- * Separate from `controllers/nosql/document.js` on purpose: these five routes run their own guard
- * chain (`sealed-auth` + `requireRole('compliance')`), and nothing on the ladder may reach them.
+ * Level 0, the sealed compartment (docs/rbac-architecture.md §1): a document with `read:
+ * ['compliance']` that only these audited routes, with their own guard chain, can open.
  */
 
 const crypto = require('crypto');
@@ -51,18 +41,16 @@ exports.createSealed = async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: project, displayName, s3Key' });
     }
 
-    // systemAccess for the PARENT EXISTENCE CHECK only, as the Eagle mirror does: a `compliance`
-    // holder is not privileged on the ladder, so an ordinary staff-only project would 404 the very
-    // seal it is being asked for.
+    // systemAccess for the parent check only: a `compliance` holder is not privileged on the
+    // ladder, so a staff-only project would 404 its own seal.
     const parentProject = await projects.getById(systemAccess(), String(project));
     if (!parentProject) {
       return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
     }
 
     const now = new Date().toISOString();
-    // NOT resolveDocumentAcl: level 0 is off the ladder and narrower than any parent, so there is
-    // nothing to cap against. The row is written with its real `read[]`, which is also what the
-    // documents indexer carries into AI Search — `filterFor` hides it there by the same exclusion.
+    // Not resolveDocumentAcl: level 0 is narrower than any parent. In AI Search, `filterFor`
+    // hides the row by the same exclusion.
     const saved = await documents.upsert({
       id: crypto.randomUUID(),
       projectId: String(project),
@@ -148,11 +136,7 @@ exports.getSealed = async (req, res) => {
   }
 };
 
-/**
- * Presigned download for a sealed record's bytes — the same URL `document.js`'s own download
- * route hands out, gated the same way `getSealed` is: only the compartment's own access opens a
- * level-0 row, and a row that is not sealed is not this route's to serve.
- */
+/** Presigned download for a sealed record, gated like `getSealed`. */
 exports.downloadSealed = async (req, res) => {
   try {
     const access = compartmentAccess(req);
@@ -190,10 +174,8 @@ exports.downloadSealed = async (req, res) => {
 };
 
 /**
- * The ONLY exit from level 0. `PUT /documents/:id/level` refuses level 0 in both directions, so
- * nothing else moves a record in or out of the compartment.
- *
- * One `compliance` holder is enough; two-person release is a later policy toggle.
+ * The only exit from level 0: `PUT /documents/:id/level` refuses level 0 both ways. One
+ * `compliance` holder is enough to release.
  */
 exports.releaseSealed = async (req, res) => {
   try {

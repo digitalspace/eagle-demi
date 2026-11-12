@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * User controller — the Eagle mirror for `User`. DEMI's own writes are in domain/users.js.
- *
- * No parent: a user's own `read[]` through `eagleBaseAcl` is the whole ACL, so Eagle's default
- * `['sysadmin']` stays privileged-only. Contact fields are 2/2 in catalog/users.js. Eagle's `password`
- * and `salt` are dropped before anything is built, the raw copy under `sources` included: eagle-api
- * already strips them, and a legacy row it missed must still not land here.
- *
- * A user DEMI owns (`sourceSystem: 'demi'`, set by any DEMI write) takes only the raw copy on a push.
+ * Eagle mirror for `User`; DEMI's own writes are in domain/users.js. `password` and `salt` are
+ * dropped, raw copy included, and a DEMI-owned user takes only the raw copy on a push.
  */
 
 const users = require('../../repositories/users');

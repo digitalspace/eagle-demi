@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * API key administration.
- *
- * Every route here is behind `authMiddleware` + `requireAdmin`, so reaching this file already
- * means a privileged caller that may administer the service — NOT merely one that may write data.
- * `demi-service-write` is refused at the route. Nothing here re-checks that.
- *
- * There is deliberately no update endpoint. Rotation is issue-new-then-revoke-old, which is what
- * makes it possible to rotate without a window where the consumer has no working credential — and
- * it means a key's roles can never be silently widened after issuance.
+ * API key administration, behind `requireAdmin`. There is no update endpoint on purpose: rotation
+ * is issue-new-then-revoke-old, so a key's roles never widen after issue.
  */
 
 const apiKeys = require('../../repositories/api-keys');
@@ -24,23 +17,15 @@ const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
 /**
- * Roles a key may be granted. A key can never be given a role DEMI does not recognise.
- *
- * Derived from AUTHENTICATED_ROLES rather than listed, so a new tier is grantable the moment it
- * exists. SECURE_ROLES alone would drop `staff`, which left it in P3-2, and make staff keys
- * unmintable.
- * Exported for the test that asserts the derivation still reaches `demi-service-write` — a role
- * the mint route rejects as unknown is a role nobody can hold.
+ * Derived from AUTHENTICATED_ROLES so a new tier is grantable once it exists; SECURE_ROLES alone
+ * lacks `staff`. Exported so a test checks it still reaches `demi-service-write`.
  */
 const GRANTABLE_ROLES = Array.from(new Set([...AUTHENTICATED_ROLES, SEALED_TOKEN, 'public']));
 exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
 
 /**
- * The only id a caller may choose: an APIM subscription's identity row.
- *
- * These rows carry roles and no secret — APIM has already verified the subscription key, and
- * `helpers/auth.js:resolveGatewaySubscription` looks the row up by exactly this id. Every other id
- * stays a random one, so no caller can squat an id or overwrite a minted key by naming it.
+ * The only id a caller may choose: an APIM subscription's row, which `resolveGatewaySubscription`
+ * reads by this id. Other ids stay random, so no caller can squat or overwrite a minted key.
  */
 const APIM_ROW_ID = /^apim:[a-z0-9-]+$/;
 
@@ -65,20 +50,14 @@ exports.createApiKey = async (req, res) => {
 
     const held = rolesFor(req);
 
-    // The compartment issues its own keys. This route's gate is `requireAdmin`, which every staff,
-    // sysadmin and demi-admin caller passes, so without this any of them mints itself into level 0
-    // (docs/rbac-architecture.md §1, condition 3). The list stays grantable; the caller is gated.
+    // `requireAdmin` passes staff and demi-admin too, so without this any of them could mint
+    // itself into level 0 (docs/rbac-architecture.md §1, condition 3).
     if (roles.includes(SEALED_TOKEN) && !holdsSealed(held)) {
       return res.status(400).json({ error: `${SEALED_TOKEN} is not grantable by this caller` });
     }
 
-    // Same gate, same reason, for every PRIVILEGED role: a caller may only hand out privilege it
-    // already holds. `requireAdmin` passes staff and demi-admin too, so without this a staff caller
-    // mints itself `demi-admin` — every admin route, this one and the search definition apply
-    // included — or `demi-service-read`, which reads every row at every level with no compartment
-    // exclusion. `sysadmin` is the exception because it is the top role and the only issuer the
-    // machine roles have: nothing holds `demi-service-read` or `demi-service-write` but the keys
-    // minted here, so gating them on the holder would make them unmintable.
+    // A caller grants only privileged roles it holds. `sysadmin` is exempt: it is the only issuer
+    // of the machine roles, which no person holds.
     const escalating = held.includes(SYSADMIN_ROLE)
       ? []
       : roles.filter(role => SECURE_ROLES.includes(role) && !held.includes(role));
@@ -88,8 +67,8 @@ exports.createApiKey = async (req, res) => {
       });
     }
 
-    // A typo here used to mint a key with a junk expiry; verify() now fails closed on one, so
-    // without this the caller would get a 201 for a key that never authenticates.
+    // verify() fails closed on a junk expiry, so without this the caller gets a 201 for a key
+    // that never authenticates.
     if (expiresAt && !(new Date(expiresAt).getTime() > Date.now())) {
       return res.status(400).json({ error: 'expiresAt must be a future date' });
     }
@@ -115,9 +94,8 @@ exports.createApiKey = async (req, res) => {
       });
     }
 
-    // No key material for an APIM row: there would be nothing to present it to, and a stored
-    // digest nobody can use is a credential to leak for no reason. `verify` fails closed on a
-    // record with no `hash`, so such a row can never authenticate through the X-Api-Key path.
+    // No key material for an APIM row: nothing would present it. `verify` fails closed on a
+    // record with no `hash`, so the row never authenticates through X-Api-Key.
     const minted = id ? null : generateKey(config.environmentName || 'dev');
     const keyId = id || minted.keyId;
 
@@ -138,9 +116,7 @@ exports.createApiKey = async (req, res) => {
     await apiKeys.upsert(record);
     logger.info(`[demi-api] API key ${keyId} issued to '${name}' by ${record.createdBy}`);
 
-    // keyId is the PUBLIC half and is safe to record; `plaintext` and `hash` are not in this
-    // object and must never be added to it — an audit table is exactly the wrong place to put a
-    // credential that is kept for seven years.
+    // Never add `plaintext` or `hash` here: audit rows are kept for seven years.
     auditEvent(req, {
       action: 'apikey.create',
       targetType: 'apikey',
@@ -155,9 +131,8 @@ exports.createApiKey = async (req, res) => {
       }
     });
 
-    // The plaintext is returned HERE and nowhere else, ever. It is not stored and cannot be
-    // recovered — a lost key is reissued, not looked up. An APIM row has none: its caller
-    // authenticates at the gateway, and the row only says what that caller may do.
+    // The only place the plaintext is returned; it is not stored, so a lost key is reissued.
+    // An APIM row has none: its caller authenticates at the gateway.
     return res.status(201).json(minted
       ? { ...apiKeys.redact(record), key: minted.plaintext }
       : apiKeys.redact(record));

@@ -49,9 +49,8 @@ test('me controller', async (t) => {
       ['credentials', 'level', 'privileged', 'roles', 'staffUi', 'tier']);
   });
 
-  // `privileged` is the whole reason this field exists: a client that re-derived it from `tier`
-  // gets the scoped staff row wrong, and that is a real credential shape (a staff key minted for
-  // one project).
+  // A client re-deriving `privileged` from `tier` gets the scoped staff row wrong, a real
+  // credential shape (a staff key minted for one project).
   await t.test('privileged answers the row-plane short-circuit, not the tier', () => {
     assert.strictEqual(meFor(['sysadmin']).privileged, true);
     assert.strictEqual(meFor(['demi-admin']).privileged, true);

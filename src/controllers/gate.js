@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * POST /api/gate — the public site's access curtain.
- *
- * Ported from eagle-api `api/controllers/gate.js` so eagle-public stops calling eagle-api for it.
- * Same contract, same three answers: 404 where no curtain is in use, 401 wrong password, 204 match.
- *
- * UNAUTHENTICATED, and it has to be: the caller is a visitor who holds nothing yet. The password is
- * only ever compared here, so it never ships in a bundle and must never enter `PUBLIC_KEYS`.
- *
- * ponytail: no per-caller throttle — APIM Consumption has no `rate-limit-by-key` (same limitation
- * noted on /health/search-schema), so password entropy is the only bound; needs a higher APIM tier.
+ * POST /api/gate, eagle-api's contract: 404 no curtain, 401 wrong password, 204 match. The password
+ * is only compared here, never shipped in a bundle, never in `PUBLIC_KEYS`.
  */
 
 const config = require('../config');
@@ -20,20 +12,17 @@ const { callerIp } = require('../utils/caller-ip');
 const { isKeyVaultReference } = require('../utils/key-vault-reference');
 const { logger } = require('../utils/logger');
 
-/**
- * The `ACCESS_GATE` the site itself boots on, so the flag that shows the gate and the flag that
- * makes it answer cannot disagree. Null where the document could not be read.
- */
+/** The `ACCESS_GATE` the site boots on, so showing and answering cannot disagree; null if unread. */
 async function accessGateEnabled() {
   const stored = await configRepository.getPublic();
   if (!stored) return null;
   return stored.ACCESS_GATE === true;
 }
 
+// ponytail: no per-caller throttle (APIM Consumption lacks rate-limit-by-key); needs a higher APIM tier.
 exports.postGate = async (req, res) => {
-  // The flag is checked before the password on every request now, so a password left in app
-  // settings after the curtain was lifted can never leak through as a false "gate is on": no
-  // Cosmos-skip shortcut for the empty-password case anymore.
+  // Flag before password, always: a password left in app settings after the curtain lifts must
+  // never read as "gate is on".
   let enabled;
   try {
     enabled = await accessGateEnabled();
@@ -42,9 +31,8 @@ exports.postGate = async (req, res) => {
     enabled = null;
   }
 
-  // An unreadable or unseeded document is NOT "the gate is off". 503 for the same reason
-  // GET /config/public answers 503 rather than defaulting — see getPublicConfig. A 404 here would
-  // tell eagle-public this environment runs ungated, which is the one wrong answer available.
+  // Unreadable or unseeded is NOT "gate off": a 404 would tell eagle-public this environment runs
+  // ungated. Same 503 as getPublicConfig.
   if (enabled === null) {
     logger.warn('[gate] attempt refused as 503 — public config document is unavailable');
     return res.set('Cache-Control', 'no-store').status(503)
@@ -56,9 +44,8 @@ exports.postGate = async (req, res) => {
     return res.status(404).json({ message: 'Not Found' });
   }
 
-  // src/config.js already empties an unresolved Key Vault reference read from the environment.
-  // Re-checked here because the literal is public in this repository, so a value that reached the
-  // field any other way must not double as the password.
+  // src/config.js already empties an unresolved Key Vault reference; re-checked because that
+  // literal is public in this repo and must never double as the password.
   const password = config.accessGatePassword;
   const expected = isKeyVaultReference(password) ? '' : password;
 

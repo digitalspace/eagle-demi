@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * Edge ban history — Cosmos NoSQL, container `edgeBans`, partitioned by `/id`.
- *
- * One row per banned prefix (`203.0.113.7/32`, `2001:db8:1:2::/64`) holding its offences, how
- * many bans it has served and when the current one ends. Cosmos ids cannot hold `/`, so the id is
- * the prefix with `/` swapped for `_`; `address` keeps the real prefix. Every write resets the row
- * TTL to 7 days, which is also how long a past ban counts toward the next one's length.
- *
- * One more row, id `feed:crawlers`, caches the published crawler ranges so a failed fetch falls
- * back to the last good copy. No prefix id can collide with it.
- *
- * Not application data: written and read only by src/scripts/edge-ban.js, no ACL applies. Each
- * function takes the cosmos-nosql module the timer hands the detector, defaulting to this process's.
+ * Container `edgeBans`, one row per banned prefix; Cosmos ids cannot hold `/`, so the id swaps it for `_`.
+ * Each write resets the 7-day TTL, also how long a past ban counts. Only src/scripts/edge-ban.js reads it.
  */
 
 const cosmos = require('../db/cosmos-nosql');

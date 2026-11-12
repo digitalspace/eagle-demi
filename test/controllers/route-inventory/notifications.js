@@ -1,8 +1,7 @@
 'use strict';
 
-// Project notification writes. Format: test/controllers/route-inventory.test.js. `roles` are eagle-api's
-// x-security-scopes (swagger.yaml:4763,4817), which already name sysadmin and staff; publish and
-// unpublish borrow the PUT's.
+// Format: test/controllers/route-inventory.test.js. eagle-api's x-security-scopes here already
+// name sysadmin and staff; publish and unpublish borrow the PUT's.
 const IN = 'domain/notifications.js';
 const ROLES = ['staff', 'sysadmin'];
 

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Native comment reads: `GET /comments` and `GET /comments/:id`, on the list contract in
- * `helpers/native-query.js`. `q` searches the comment text only, never the author, and its terms
- * stay out of the analytics events (`UNLOGGED_SEARCH_KINDS` in mirror-reads).
+ * `GET /comments` and `/comments/:id`. `q` searches comment text only, never the author, and its
+ * terms stay out of analytics events (`UNLOGGED_SEARCH_KINDS` in mirror-reads).
  */
 
 const comments = require('../../repositories/comments');

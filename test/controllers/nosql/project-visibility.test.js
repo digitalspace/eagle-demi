@@ -1,18 +1,11 @@
 'use strict';
 
-/**
- * PATCH /api/projects/:id/visibility — the classify endpoint.
- *
- * Two things are worth testing here and neither is the happy path: the gates that decide who may
- * rewrite access policy, and the fact that the write is a PATCH. An upsert would take the copy of
- * the record this caller read and write it back whole, so classifying one field would silently
- * revert every content edit that landed in between — the failure api-keys.touchLastUsed documents.
- */
+// The classify write must be a PATCH: an upsert of the copy read would silently revert every
+// content edit that landed in between.
 
 process.env.NODE_ENV = 'test';
-// Before src/config is first required: the audit writer is inert without them, so the ordering
-// assertion below would otherwise pass by recording nothing at all. A batch of 1 makes enqueue
-// flush through the stub transport synchronously, which is what lets "before" be observed.
+// Before src/config is first required: the audit writer is inert without the DCR pair, and a
+// batch of 1 flushes synchronously so the "audit before response" order can be observed.
 process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
 process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 process.env.AUDIT_MAX_BATCH = '1';
@@ -112,9 +105,8 @@ test('403 without sysadmin', async (t) => {
   });
 
   await t.test('and the route really carries that gate, not just requireWrite', () => {
-    // Asserted on the table because the gate is only real where it is mounted: the handler itself
-    // checks no roles, so a route missing this guard would pass every test above while being
-    // reachable by any staff member.
+    // The handler checks no roles itself, so a route missing this guard would pass every test
+    // above while any staff member could reach it.
     const route = apiRoutes.find(
       (r) => r.method === 'patch' && r.path === '/projects/:id/visibility');
     assert.ok(route, 'PATCH /projects/:id/visibility must be in the route table');

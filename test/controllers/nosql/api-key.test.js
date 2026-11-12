@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * Who may mint a `compliance` key (docs/rbac-architecture.md §1, condition 3).
- *
- * The route's own gate is `requireAdmin`, which every `staff`, `sysadmin` and `demi-admin` caller
- * passes, and `compliance` is grantable — so without the caller check any of them mints itself into
- * the sealed compartment, and the level-0 exclusion in `access-sql.js` protects nothing.
- */
+// `requireAdmin` passes staff, sysadmin and demi-admin, so without the caller check any of them
+// could mint itself a compliance key into the sealed compartment (docs/rbac-architecture.md §1).
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: the audit writer is inert without a collection rule.
@@ -72,13 +67,8 @@ test('minting a compliance key', async (t) => {
   });
 });
 
-/**
- * Who may mint a `sysadmin` key.
- *
- * Same shape as the compliance gate above and the same reason: `requireAdmin` passes `staff` and
- * `demi-admin` too, and `sysadmin` is grantable — so without a caller check either of them mints
- * itself a key that administers the service, this route included.
- */
+// Same reason as the compliance gate: staff and demi-admin pass `requireAdmin` and would mint
+// themselves a key that administers the service.
 test('minting a sysadmin key', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -110,13 +100,8 @@ test('minting a sysadmin key', async (t) => {
   });
 });
 
-/**
- * Who may mint the rest of the privileged roles.
- *
- * `sysadmin` was gated on its own while `demi-admin` and the two service roles were not, so a
- * `staff` caller — who passes `requireAdmin` — could mint itself a key that reads every row at
- * every level (`SECURE_ROLES`, src/helpers/access-sql.js) and administers the service.
- */
+// demi-admin and the service roles are in `SECURE_ROLES` (src/helpers/access-sql.js): a staff
+// caller minting one would read every row at every level.
 test('minting a privileged key', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

@@ -14,19 +14,13 @@ const { filterFor } = require('../../src/helpers/access-odata');
 const { TIER } = require('../../src/helpers/access-sql');
 const { projectedColumns } = require('../helpers/search-datasource');
 
-// The anonymous caller's ACL, from the builder the controller uses rather than a literal: these
-// tests assert that a degraded retry carries it back UNCHANGED, and a hand-written approximation
-// would stop being the thing that ships the moment `filterFor` changes shape.
+// Built by the same `filterFor` the controller uses, not a literal: a hand-written copy would
+// drift from what ships once `filterFor` changes shape.
 const ANONYMOUS_ACL = filterFor(
   { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] }
 ).filter;
 
-/**
- * Replace global.fetch and the token call.
- *
- * The token is stubbed by pre-seeding the module's credential path — the tests never touch Entra,
- * and a real credential lookup in CI would hang rather than fail.
- */
+/** Replace global.fetch. A real credential lookup in CI would hang rather than fail. */
 function captureFetch(t, responder) {
   const calls = [];
   const originalFetch = global.fetch;
@@ -63,10 +57,8 @@ function stubToken() {
 }
 stubToken();
 
-// An unconfigured service has not searched anything. Answering `{items: [], count: 0}` asserts
-// "no matches" as a fact — and since every sorted or filtered browse now routes through these two
-// functions, a degraded deploy would render an empty documents tab and an empty project list under
-// a 200. The controller turns the throw into a 502, which is the only true answer.
+// An empty answer would claim "no matches" and render empty lists under a 200. The controller
+// turns the throw into a 502.
 test('a search with no SEARCH_ENDPOINT throws rather than reporting zero matches', async () => {
   const saved = process.env.SEARCH_ENDPOINT;
   process.env.SEARCH_ENDPOINT = '';
@@ -85,16 +77,13 @@ test('ai-search query construction', async (t) => {
   });
 
   await t.test('the fuzzy variant is down-weighted, and the plain term is NOT', () => {
-    // Measured 2026-08-04: pooled recall@10 0.592 -> 0.620, recall@1 and MRR both up, 0 hit->miss.
-    // The boost belongs on the fuzzy arm alone — the exact arm is what it exists to protect, so a
-    // `^` next to the plain term would defeat the whole change.
+    // The boost belongs on the fuzzy arm alone: the exact arm is what it protects.
     assert.ok(!aiSearch.buildQuery(['river'], true).includes('river^'));
   });
 
   await t.test('the down-weight never revives ~1 on an analyzer-removed term', () => {
-    // The earlier fix: on a term en.microsoft removes, the unanalyzed ~1 side is the only matchable
-    // half of the clause and acts as a near-random MANDATORY filter. Scoring it lower does not make
-    // it satisfiable, so the term must still get no ~1 at all.
+    // On a term en.microsoft removes, ~1 is the only matchable half and acts as a near-random
+    // mandatory filter. A lower score does not make it satisfiable.
     assert.strictEqual(aiSearch.buildQuery(['that', 'river'], true),
       'that AND (river OR river~1^0.5)');
   });
@@ -105,9 +94,8 @@ test('ai-search query construction', async (t) => {
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false), 'peace AND river');
   });
 
-  // Measured on the live corpus: "the and of" with fuzzy on returned a full page of OCR noise
-  // (`the~1` matched a scanned "th"), because a fuzzy term skips the analyzer and so skips
-  // stopword removal too. The same query with fuzzy off returned 0.
+  // A fuzzy term skips the analyzer and its stopword removal: `the~1` matched OCR noise like "th"
+  // across a full page.
   await t.test('short terms are never fuzzed, even when fuzzy is requested', () => {
     assert.strictEqual(aiSearch.buildQuery(['the', 'and', 'of'], true), 'the AND and AND of');
     assert.strictEqual(aiSearch.buildQuery(['the', 'river'], true), 'the AND (river OR river~1^0.5)');
@@ -124,10 +112,8 @@ test('ai-search query construction', async (t) => {
       'accented letters must survive or French place names become unsearchable');
   });
 
-  // Found against the live index, on a corpus phrase:
-  // "EAST TOBA AND MONTROSE HYDROELECTRIC PROJECT" came back
-  // `Failed to parse query string at line 1, column 42` — column 42 is exactly where the bare AND
-  // lands. Any public query containing a standalone AND/OR/NOT was answering HTTP 400.
+  // A bare AND/OR/NOT in a project name ("EAST TOBA AND MONTROSE") is a query parse error, so a
+  // 400 from the service.
   await t.test('reserved boolean words are demoted to terms, not left as operators', () => {
     assert.strictEqual(aiSearch.buildQuery(['EAST', 'TOBA', 'AND', 'MONTROSE'], false),
       'EAST AND TOBA AND and AND MONTROSE');
@@ -140,9 +126,7 @@ test('ai-search query construction', async (t) => {
       '(river OR river~1^0.5) AND and AND (creek OR creek~1^0.5)');
   });
 
-  // The outer ` AND ` was the suspect behind recall@10 ≈ 0.5 and an ` OR ` arm cleared it
-  // (wiki: Search-and-Retrieval). This pins that the join stayed AND — a later reader should not re-derive
-  // the experiment from the absence of a knob.
+  // An OR join was tried and ruled out (wiki: Search-and-Retrieval); there is deliberately no knob.
   await t.test('terms are joined with AND', () => {
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false), 'peace AND river');
     // The per-term (t OR t~1) group is a DIFFERENT OR and must survive intact — flattening it
@@ -151,10 +135,8 @@ test('ai-search query construction', async (t) => {
       '(peace OR peace~1^0.5) AND (river OR river~1^0.5)');
   });
 
-  // Measured 2026-08-04: the label "Sediments from the proposed Lodgepole mine will move
-  // downstream and accumulate" returned 0 hits with fuzzy on and 1 with fuzzy off, against a chunk
-  // holding the sentence verbatim. `mine` and `from` are removed by en.microsoft, so `mine~1`
-  // demanded a literal the index does not hold and the AND join zeroed the whole query.
+  // en.microsoft removes `mine` and `from`, so `mine~1` demands a literal the index does not hold
+  // and the AND join zeroes the whole query.
   await t.test('analyzer stopwords get no unanalyzed variant', () => {
     assert.strictEqual(aiSearch.buildQuery(['sediments', 'from', 'mine'], true),
       '(sediments OR sediments~1^0.5) AND from AND mine');
@@ -224,19 +206,14 @@ test('ai-search query construction', async (t) => {
     assert.ok(!/[?:"~^]\S|["?:]/.test(query.replace(/~1\^0\.5/g, '')),
       'no operator character survives but the ones this module emits');
     assert.strictEqual((query.match(/\*/g) || []).length, 1, 'exactly one star, and we added it');
-    // A reserved boolean word in last position is demoted BEFORE the star is appended, so the
-    // prefix hangs off the term rather than the operator — and `and` is then an analyzer stopword,
-    // so it gets no star either. The join is the operator this module wrote; the caller's word is
-    // the bare term after it.
+    // A reserved word is demoted before the star is added, and `and` is then a stopword, so it gets
+    // no star. The join is this module's operator; the caller's word is the bare term after it.
     assert.strictEqual(aiSearch.buildQuery(['river', 'AND'], false, true), 'river AND and');
   });
 });
 
-/**
- * The name cell of the search grid, which prefixes EVERY word rather than the last one. That makes
- * the stopword gate load-bearing mid-phrase: `of*` in the middle of a conjunction is unsatisfiable
- * and zeroes the whole query, where in `buildQuery` it could only ever land on the final word.
- */
+// Prefixes EVERY word, not the last, so the stopword gate matters mid-phrase: one `of*` in the
+// conjunction is unsatisfiable and zeroes the whole query.
 test('ai-search buildContainsQuery', async (t) => {
   await t.test('every word is required, and each one matches as a prefix', () => {
     assert.strictEqual(aiSearch.buildContainsQuery('Sediment Sampling Plan'),
@@ -250,9 +227,8 @@ test('ai-search buildContainsQuery', async (t) => {
     assert.strictEqual(aiSearch.buildContainsQuery('Site C dam'), 'Site* AND C AND dam*');
   });
 
-  // The documented answer for a stopword: KEEP the word, drop only its star. `of*` demands a
-  // literal `of` the index does not hold, and one such term zeroes the conjunction — so this is
-  // the difference between finding "Notice of Commencement" and answering 0 rows for it.
+  // `of*` demands a literal `of` the index does not hold, and one such term zeroes the conjunction:
+  // "Notice of Commencement" would answer 0 rows.
   await t.test('a stopword keeps its word and loses its star', () => {
     assert.strictEqual(aiSearch.buildContainsQuery('Notice of Commencement'),
       'Notice* AND of AND Commencement*');
@@ -278,9 +254,8 @@ test('ai-search buildContainsQuery', async (t) => {
     assert.ok(!/[\\()[\]{}^~?:|!+"]/.test(aiSearch.buildContainsQuery('a+b (c) "d" e:f')));
   });
 
-  // Prefix terms skip the query analyzer, and `en.microsoft` strips punctuation out of the index
-  // tokens — so `LNG,*` asks for a token the index cannot hold, and one such term under the AND
-  // join answers 0 rows for a project whose name is on screen.
+  // Prefix terms skip the analyzer, and the index tokens hold no punctuation: `LNG,*` matches
+  // nothing and the AND join answers 0 rows.
   await t.test('punctuation separates words instead of riding along on one', () => {
     assert.strictEqual(aiSearch.buildContainsQuery('Kitimat LNG, Phase 2'),
       'Kitimat* AND LNG* AND Phase* AND 2');
@@ -319,9 +294,8 @@ test('ai-search buildContainsQuery', async (t) => {
 });
 
 test('ai-search snippets are escaped before they are marked', async (t) => {
-  // THE security test for this module. Chunk text comes from arbitrary uploaded PDFs and the
-  // frontend renders the snippet with [innerHTML], so the only tag allowed to survive is the
-  // <mark> this layer adds itself.
+  // Security: chunk text comes from uploaded PDFs and the frontend renders the snippet with
+  // [innerHTML], so only the <mark> this layer adds may survive.
   await t.test('document markup cannot reach the DOM as markup', () => {
     const snippet = aiSearch.snippetFrom({
       '@search.highlights': {
@@ -340,9 +314,8 @@ test('ai-search snippets are escaped before they are marked', async (t) => {
     assert.strictEqual(aiSearch.snippetFrom({ '@search.highlights': { content: [] } }), '');
   });
 
-  // Measured on the live index: a fragment is a window cut out of the chunk, and the cut can land
-  // INSIDE a highlight. One came back carrying a closing sentinel whose opener had been trimmed,
-  // which rendered as a stray `</mark>` in an [innerHTML] binding.
+  // A fragment is a window cut from the chunk, and the cut can land inside a highlight, leaving a
+  // stray `</mark>` in an [innerHTML] binding.
   await t.test('a fragment cut inside a highlight still yields balanced tags', () => {
     const orphanClose = aiSearch.snippetFrom({
       '@search.highlights': { content: [`Injected${aiSearch.HL_POST}: rest of the text`] }
@@ -396,9 +369,8 @@ test('ai-search request shape', async (t) => {
     assert.ok(!body.select.includes('content'), 'chunk text must not be requested');
   });
 
-  // The index stores `pageNumbered` only on chunks whose extraction recorded pages, and answers
-  // `null` for every row written before that. Null is not false to a consumer that tests for the
-  // key, so this is the one place it becomes a boolean.
+  // The index answers `null` for chunks whose extraction recorded no pages. Null is not false to a
+  // consumer that tests for the key, so this is where it becomes a boolean.
   await t.test('a chunk hit reports pageNumbered as a boolean, never the index null',
     async (tt) => {
       captureFetch(tt, () => ({
@@ -453,11 +425,8 @@ test('ai-search request shape', async (t) => {
 
     await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 500, skip: 100000 });
 
-    // Reachable from the controller as pageSize=500&pageNum=200. Both iterations clamp to the same
-    // `MAX_SKIP - top`, so before the fix the loop issued a SECOND request at the SAME offset and
-    // appended its rows: 500 rows, 250 distinct, row 251 identical to row 1, for the price of a
-    // wasted service call. Asserted on the requests rather than the rows because searchChunks
-    // reshapes hits — the offsets are what the defect is actually about.
+    // Reachable as pageSize=500&pageNum=200. Both rounds clamp to `MAX_SKIP - top`, so a second
+    // request would repeat the offset and its rows. Asserted on offsets, since hits are reshaped.
     const offsets = calls.map(c => c.body.skip);
     assert.deepStrictEqual(offsets, [100000 - 250], 'one request, clamped, and no repeat of it');
     assert.strictEqual(new Set(offsets).size, offsets.length, 'no two requests may share an offset');
@@ -486,11 +455,8 @@ test('ai-search request shape', async (t) => {
     assert.strictEqual(calls.length, 0, 'must not reach the service');
   });
 
-  // eagle-public's "Show All" asks for 500 rows (`table-template.component.ts:122-126`,
-  // MAX_SHOW_ALL_ITEMS) and the service returns at most 250 per request. The page used to be
-  // truncated to the first 250 under a total in the thousands, with nothing on the wire to say the
-  // rest had been dropped — a status-code or row-count-under-250 assertion cannot see that, so this
-  // asserts on the REQUESTS: the second one has to continue where the first ended.
+  // eagle-public's "Show All" asks for 500 rows and the service returns at most 250 per request.
+  // Asserted on the requests, since a silently truncated page still answers 200.
   await t.test('a page larger than the service cap is filled, not truncated', async (tt) => {
     const rows = (n, from) => Array.from({ length: n }, (_, i) => ({ id: `c${from + i}` }));
     const calls = captureFetch(tt, (i) => ({
@@ -544,14 +510,11 @@ test('ai-search request shape', async (t) => {
   });
 });
 
-// The document search runs in two legs and the total belongs to both of them. Reporting the PAGE
-// LENGTH — `Math.max(direct.count, items.length)`, which is what this used to do — told
-// eagle-public there was one page and made every later page unreachable. A status code cannot see
-// it and neither can the row count; the returned total is the only place it shows.
+// The document search runs in two legs and the total spans both. A total equal to the page length
+// tells eagle-public there is one page and makes every later page unreachable.
 test('ai-search document totals', async (t) => {
-  // Probe shape from the review: 3 direct matches, one matching project, and 500 documents under
-  // that project which the direct leg did NOT match — leg two's filter excludes those, so its
-  // count is already net of the intersection and there is no fourth request to go and measure one.
+  // Leg two's filter excludes the direct matches, so its count is already net of the overlap and
+  // no fourth request measures it.
   const legs = (i) => {
     if (i === 0) return { json: { value: [{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }], '@odata.count': 3 } };
     if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
@@ -563,11 +526,8 @@ test('ai-search document totals', async (t) => {
     };
   };
 
-  // [R3] WHAT LEG TWO MEANS WITH NO KEYWORDS: nothing. It recovers documents whose PROJECT's NAME
-  // matches the query, and `matchAll` has no name to match — run anyway it would search the projects
-  // index for `*`, take every project the caller can read, and widen the document filter by
-  // `projectId` to the whole corpus. That is the unfiltered-list answer the filter path exists to
-  // stop. One request goes out, and the total is the direct leg's alone.
+  // Leg two matches project NAMES, and `matchAll` has none: run anyway it would take every readable
+  // project and widen the document filter to the whole corpus.
   await t.test('a match-all document search runs one leg, not the project-name leg', async (tt) => {
     const calls = captureFetch(tt, () => ({
       json: { value: [{ id: 'd1' }, { id: 'd2' }], '@odata.count': 2 }
@@ -585,12 +545,8 @@ test('ai-search document totals', async (t) => {
     assert.strictEqual(calls[0].body.highlight, undefined, 'no highlight to ask for under match-all');
   });
 
-  // The same assertion where the TOKENIZER cannot make it true by accident. A keywordless leg two
-  // short-circuits inside `runSearch` on its own — `tokenize('')` yields no terms — so the test
-  // above passes with or without the guard. `matchAll` alongside keyword text is the shape that
-  // separates them: `runSearch` prefers `matchAll`, so the query the caller is asking for is still
-  // `*`, and only the guard stops leg two from searching the projects index for that text and
-  // widening the document filter to every project it finds.
+  // With no keywords `tokenize` already short-circuits leg two, so the test above passes without
+  // the guard. Keyword text alongside `matchAll` leaves only the guard to stop leg two.
   await t.test('match-all decides the legs, not whether keyword text happens to be present',
     async (tt) => {
       const calls = captureFetch(tt, () => ({
@@ -618,10 +574,8 @@ test('ai-search document totals', async (t) => {
     assert.strictEqual(calls.length, 3, 'direct, projects, by-project — and no overlap probe');
   });
 
-  // The legs must not double-count, and — see the paging test below — their ROWS must not overlap
-  // either. Both follow from one clause: leg two is asked only for the documents the direct leg
-  // did not match, using the direct leg's OWN query string and its own fields. Anything less than
-  // byte-for-byte identical and the two stop being complements.
+  // Leg two excludes leg one by leg one's own query string and fields, byte for byte. Anything less
+  // and the legs stop being complements: counts double and rows overlap across pages.
   await t.test('leg two excludes the direct leg by its own query, and still applies the ACL',
     async (tt) => {
       const calls = captureFetch(tt, legs);
@@ -642,10 +596,8 @@ test('ai-search document totals', async (t) => {
         'and the caller ACL still gates it — a project match never widens document access');
     });
 
-  // `opts.fuzzy === true`, never `opts.fuzzy`, and the strictness is the whole assertion. The wire
-  // value is a STRING: under the truthy form `fuzzy: 'false'` enables fuzzing, which is the exact
-  // opposite of what the caller asked for — and it would show up only as leg two excluding a
-  // WIDER set than leg one matched, i.e. as documents missing from the page, not as an error.
+  // `opts.fuzzy === true`, never truthy: the wire value is a string, and `'false'` fuzzing would
+  // show up only as documents missing from the page, not as an error.
   await t.test('leg two fuzzes only on a real boolean true, never on the string "false"',
     async (tt) => {
       const calls = captureFetch(tt, legs);
@@ -672,9 +624,8 @@ test('ai-search document totals', async (t) => {
       'and leg two must exclude the fuzzed set, not the exact one');
   });
 
-  // The count leg runs even when the direct hits already fill the page. Skipping it there made
-  // the total jump the moment a caller reached the last page of direct hits — a pager that grows
-  // under the user is the same defect wearing a different hat.
+  // The count leg runs even when direct hits fill the page; skipping it makes the total jump at
+  // the last page of direct hits.
   await t.test('a full page of direct hits still measures the project leg', async (tt) => {
     const calls = captureFetch(tt, (i) => {
       if (i === 0) {
@@ -702,27 +653,19 @@ test('ai-search document totals', async (t) => {
   });
 });
 
-// THE PAGING INVARIANT: consecutive pages cover consecutive ranges of the union, with no row
-// repeated and none skipped. It was measurably false on the live app until leg two stopped
-// overlapping leg one — `keywords=pattullo` at pageSize=10, pages 0-25: 260 slots holding 197
-// distinct ids, 63 repeats spread over 13 non-adjacent pages, and 53 of the 250 matching documents
-// unreachable from any page, against prod eagle-search's 260 distinct and 0 repeats over the same
-// 26 pages. A single page cannot show any of that. Only a walk can, so these tests walk.
+// Paging invariant: consecutive pages tile the union, no row repeated, none skipped. A single
+// page cannot show a repeat or a gap, so these tests walk.
 test('ai-search document paging', async (t) => {
   const DIRECT = Array.from({ length: 12 }, (_, n) => `d${String(n).padStart(2, '0')}`);
-  // The first six direct hits are ALSO inside the matching project, which is the normal case
-  // rather than a contrived one: a document whose own name matches a project-shaped query usually
-  // sits in that project. That overlap is precisely what used to break the offsets.
+  // Direct hits that also sit in the matching project: the normal case, and the overlap that
+  // breaks offsets when the legs are not disjoint.
   const SHARED = DIRECT.slice(0, 6);
   const PROJECT_ONLY = Array.from({ length: 18 }, (_, n) => `p${String(n).padStart(2, '0')}`);
   // The known full set the walk is measured against: leg one in its order, then what leg two adds.
   const UNION = [...DIRECT, ...PROJECT_ONLY];
 
-  // A fake index, not a fixed slab: it honours `skip` and `top`, and it honours the exclusion
-  // clause. Asked WITH `not search.ismatch(...)` the project leg answers the project's documents
-  // minus the direct matches; asked without it — which is what this code did before the fix — it
-  // answers all of them, direct hits included, and its count says so. Modelling the service rather
-  // than the code is what lets these assertions go red.
+  // A fake index that honours `skip`, `top` and the exclusion clause; without the clause the project
+  // leg answers the direct hits too. Modelling the service is what lets these assertions go red.
   const index = ({ body, url }) => {
     let rows;
     if (url.includes('/indexes/projects/')) rows = ['prj1'];
@@ -786,9 +729,7 @@ test('ai-search document paging', async (t) => {
     assert.strictEqual(calls.length, 3, 'three service calls per page: direct, projects, project leg');
   });
 
-  // Leg two used to be asked for the WHOLE page because dedup would eat some of the rows. With
-  // nothing left to eat, the deficit is exactly what the page takes — and the page still fills,
-  // which is the assertion the old sizing bug (a 7-row page under a total of 20) failed.
+  // With disjoint legs there is no dedup, so leg two is asked for exactly the deficit.
   await t.test('leg two is asked for the deficit, and the page still fills', async (tt) => {
     let calls;
     calls = captureFetch(tt, (i) => index(calls[i]));
@@ -798,12 +739,8 @@ test('ai-search document paging', async (t) => {
     });
 
     assert.strictEqual(calls[2].body.top, 8, '12 direct hits of a 20-row page leaves 8');
-    // THE SHARPEST ASSERTION IN THIS FILE, and it was missing. The disjoint-legs skip arithmetic
-    // presupposes leg two returns rows in a deterministic order: without the caller's `orderby`,
-    // ties under `search.score()` are free to move between requests, and the repeated-and-
-    // unreachable-rows defect this whole change closes comes straight back — intermittently, which
-    // is worse than reliably. Deleting `orderby: opts.orderby` from leg two used to leave the
-    // entire suite green.
+    // The skip arithmetic needs a stable leg-two order: without the caller's `orderby`, score ties
+    // move between requests and rows repeat or vanish, intermittently.
     assert.strictEqual(calls[2].body.orderby, 'datePosted desc',
       'leg two must page in the caller\'s order, or its ties move between requests');
     assert.strictEqual(res.items.length, 20);
@@ -851,9 +788,8 @@ test('ai-search delete propagation', async (t) => {
     assert.strictEqual(calls[0].body.filter, "documentId eq 'd1'' or id ne '''");
   });
 
-  // The reason this loops at all. `top: 1000` is a page cap, not a document size — before this,
-  // a document over 1000 chunks had the first page deleted and the rest left permanently
-  // searchable, because the indexer's high-water mark never revisits a deleted row.
+  // `top: 1000` is a page cap, not a document size. The indexer never revisits a deleted row, so
+  // any page not deleted here stays searchable for good.
   await t.test('a document larger than one page is deleted across rounds', async (tt) => {
     const page = (n) => Array.from({ length: n }, (_, i) => ({ id: `KEY-${i}` }));
     const calls = captureFetch(tt, (i) => {
@@ -998,9 +934,8 @@ test('ai-search request resilience', async (t) => {
     assert.ok(Date.now() - started < 500, 'waited the header value, not the default backoff');
   });
 
-  // A 400 from a field name that is not in the index returns the same 400 every time. Retrying it
-  // triples the latency of a guaranteed failure — and this is the exact status that broke project
-  // search once already.
+  // A 400 (say, a field not in the index) repeats every time; retrying only triples the latency
+  // of a certain failure.
   await t.test('a 400 is not retried', async (tt) => {
     const calls = captureFetch(tt, () => ({ ok: false, status: 400, json: { error: 'bad field' } }));
 
@@ -1044,10 +979,8 @@ test('ai-search request resilience', async (t) => {
   });
 });
 
-// Project and document highlighting used to be reconstructed in the browser by a regex plus a
-// hand-rolled Levenshtein. That marks words the index never hit and misses stemmed ones it did —
-// `en.microsoft` matches `flooding` for `flood`, and the client marked neither. Asking the service
-// for the highlight is asking the analyzer what it actually matched.
+// Only the analyzer knows what it matched (`flooding` for `flood`), so highlights come from the
+// service, not from a client-side guess.
 test('project and document search return the analyzer\'s highlights', async (t) => {
   const PRE = aiSearch.HL_PRE;
   const POST = aiSearch.HL_POST;
@@ -1155,9 +1088,8 @@ test('project and document search return the analyzer\'s highlights', async (t) 
 });
 
 test('semantic reranking', async (t) => {
-  // The 402 latch is module state that survives a test. Without this, the first test to exhaust
-  // the allowance turns semantic OFF for every test declared after it, and the assertions that
-  // semantic IS requested would pass for the wrong reason — or fail depending on file order.
+  // The 402 latch is module state: without a reset, one test that exhausts the allowance turns
+  // semantic off for every later test.
   t.beforeEach(() => aiSearch.resetSemanticExhausted());
 
   await t.test('always on for chunks — it is the shipped ranking', async (tt) => {
@@ -1168,11 +1100,8 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(calls[0].body.semanticConfiguration, 'demi-chunks-semantic');
   });
 
-  // The assertion that makes a staged index rename survivable. The configuration name is scoped to
-  // the index that declares it, so a constant here would 400 every chunk search the moment
-  // SEARCH_INDEX moved off `demi-chunks` — and a 400 is not a degrade to BM25, it is an empty
-  // results table with nothing in it that says why. The live cutover is exactly this: one app
-  // setting, no code release.
+  // The configuration name is scoped to its index, so a constant would 400 every chunk search once
+  // SEARCH_INDEX moves. An index cutover is one app setting, no code release.
   await t.test('the configuration name follows SEARCH_INDEX, it is not a constant', async (tt) => {
     const previous = process.env.SEARCH_INDEX;
     process.env.SEARCH_INDEX = 'chunks';
@@ -1199,9 +1128,8 @@ test('semantic reranking', async (t) => {
   });
 
   await t.test('on, it adds L2 WITHOUT disturbing the Lucene query that drives L1', async (tt) => {
-    // The whole reason for `semanticQuery` over `queryType: 'semantic'`. If this assertion ever
-    // fails, retrieval has been silently downgraded to plain text and every measured fix in
-    // buildQuery — fuzzy arm, boost, stopword guard — is gone.
+    // Why `semanticQuery` over `queryType: 'semantic'`: the latter drops to plain text and loses
+    // every buildQuery fix (fuzzy arm, boost, stopword guard).
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
     await aiSearch.searchChunks({ filter: null, keywords: 'peace river', fuzzy: true, semantic: true });
@@ -1226,12 +1154,8 @@ test('semantic reranking', async (t) => {
   });
 
   await t.test('semanticQuery carries no Lucene operators', async (tt) => {
-    // `tokenize` is the thing that strips them. Operator syntax inside the semantic string is
-    // unsupported, and `~`/`^`/`(` reaching it would be sent as literal text to the ranker.
-    //
-    // The `2` of `^2` survives on purpose: tokenize keeps digits, and it is right that it does —
-    // drawing numbers and section numbers are content in this corpus, not syntax. What must not
-    // survive is the operator CHARACTER.
+    // Operators in the semantic string reach the ranker as literal text. The `2` of `^2` survives
+    // on purpose: drawing and section numbers are content here.
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
     await aiSearch.searchChunks({
@@ -1253,9 +1177,8 @@ test('semantic reranking', async (t) => {
 
   await t.test('402 retries once WITHOUT the semantic parameters and still returns results',
     async (tt) => {
-      // The free allowance is spent for the rest of the MONTH. Rethrowing would 500 every Deep
-      // Search until the calendar rolls over; serving the BM25 order is what the product ran on
-      // until now.
+      // The free allowance is spent for the rest of the month; rethrowing would 500 every Deep
+      // Search until then, so it serves the BM25 order.
       const calls = captureFetch(tt, (i) => (
         i === 0
           ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
@@ -1276,9 +1199,8 @@ test('semantic reranking', async (t) => {
 
   await t.test('after a 402 it stops ASKING — later searches cost one round trip, not two',
     async (tt) => {
-      // The point of the latch. The allowance is spent for the rest of the month, so a later
-      // search asking again cannot succeed — it just pays a 402 before the stripped retry. Without
-      // the gate that is every Deep Search, twice, until the calendar rolls over.
+      // Asking again cannot succeed this month; without the latch every Deep Search pays a 402
+      // before the stripped retry.
       const calls = captureFetch(tt, (i) => (
         i === 0
           ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
@@ -1405,15 +1327,8 @@ test('semantic reranking', async (t) => {
   });
 
   await t.test('the latch is scoped to the MONTH, not to the process', async (tt) => {
-    // `alwaysOn` is true, so the worker outlives the allowance. This is the only test in the file
-    // that controls the clock, because it is the only behaviour that spans a calendar boundary —
-    // `apis: ['Date']` so the retry backoff's timers stay real.
-    //
-    // AND THE ONLY ONE THAT PINS A TIMEZONE. The runner, CI and App Service all sit at UTC+0, so a
-    // rollover read off the LOCAL calendar is indistinguishable from a UTC one here — measured:
-    // reimplementing the stamp as `getFullYear()/getMonth()` left this file fully green. Under
-    // UTC-7, 2026-09-01T00:00:01Z is still 31 August, so the same mutant goes red. The module's
-    // docblock says not to move this to local time; without the pin, nothing enforced that.
+    // `apis: ['Date']` keeps the backoff timers real. The TZ pin makes a local-calendar rollover go
+    // red: CI runs at UTC, where local and UTC months agree.
     const originalTZ = process.env.TZ;
     process.env.TZ = 'America/Vancouver';
     tt.after(() => {
@@ -1431,13 +1346,8 @@ test('semantic reranking', async (t) => {
     await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: true });
     assert.ok(calls[0].body.semanticQuery, 'the first search asked');
 
-    // BOTH HALVES, because either alone passes on a broken implementation: a latch that never
-    // latches satisfies the rollover assertion, and a latch that never clears satisfies this one.
-    //
-    // A DIFFERENT DAY of the same month, not the same instant. Asserting this at 12:00 on the 30th
-    // and the reset on 1 September moves the clock across a day boundary and a month boundary at
-    // once, so it cannot tell a monthly reset from a daily one — measured: slicing the stamp to
-    // `YYYY-MM-DD` instead of `YYYY-MM` left the whole test green.
+    // Both halves: a latch that never latches passes one, a latch that never clears the other. A
+    // different day of the same month tells a monthly reset from a daily one.
     tt.mock.timers.setTime(new Date('2026-08-31T12:00:00Z').getTime());
     await aiSearch.searchChunks({ filter: null, keywords: 'site c', semantic: true });
     assert.ok(!calls[2].body.semanticQuery, 'still latched on a LATER DAY of the same month');
@@ -1452,17 +1362,8 @@ test('semantic reranking', async (t) => {
 });
 
 test('the deploy template pins every index name to the code defaults', () => {
-  // THE TEMPLATE AND THE CODE MUST NAME THE SAME INDEX, and nothing else checks it. They are one
-  // decision: the code default is what applies when a setting is absent, so a default that drifts
-  // from the template it deploys alongside points the app at nothing — an unknown index is a 404 per
-  // query, which the frontend renders as an empty results table.
-  //
-  // Both sides read the definition names under `azure/search/indexes`. Rolling back means moving
-  // BOTH back together.
-  //
-  // The second half of the pair matters just as much. `appSettings` is a WHOLE-COLLECTION PUT, so a
-  // name the app reads but the template omits is DELETED on the next deploy and the value silently
-  // falls back to the code default — which is how a finished cutover would undo itself.
+  // Template and code default must name the same index: an unknown index is a 404 per query. A
+  // setting the template omits is deleted on deploy (whole-collection PUT) and falls back.
   const fs = require('node:fs');
   const path = require('node:path');
   const bicep = fs.readFileSync(
@@ -1488,9 +1389,8 @@ test('the deploy template pins every index name to the code defaults', () => {
       `${param} must default to '${value}', the live index name`);
   }
 
-  // Activities and project-notifications are a deliberate kill switch, not a drifted pin: the
-  // bicep param defaults to '' until the index is PUT and the indexer has run, so the deploy
-  // never points the app at an index that does not exist yet.
+  // Kill switch, not drift: the param stays '' until the index is PUT and indexed, so a deploy
+  // never points the app at a missing index.
   for (const [setting, param] of [
     ['SEARCH_INDEX_ACTIVITIES', 'searchIndexActivities'],
     ['SEARCH_INDEX_PROJECT_NOTIFICATIONS', 'searchIndexProjectNotifications']
@@ -1501,20 +1401,16 @@ test('the deploy template pins every index name to the code defaults', () => {
       `${param} must default to '', the kill switch until the index exists`);
   }
 
-  // AND SO MUST THE CODE, which is the half that was missing. A default name here applied wherever
-  // the app setting was never deployed at all — test, where the index does not exist — so the
-  // switch read "on" and every keyword search 404'd into a 502. The template and the code now hold
-  // the same position: off until something explicitly names an index.
+  // The code default must be off too: a default name applies wherever the setting is absent, and
+  // every keyword search 404s into a 502 there.
   assert.strictEqual(codeDefaults.activitiesIndex, '',
     'an absent SEARCH_INDEX_ACTIVITIES must mean Cosmos, never a guessed index name');
   assert.strictEqual(codeDefaults.notificationsIndex, '',
     'an absent SEARCH_INDEX_PROJECT_NOTIFICATIONS must mean Cosmos, never a guessed index name');
 });
 
-// A name in `select` that the index does not carry is a 400 on EVERY query — the code says so and
-// nothing held it up: changing `datePosted` to `datePostedXYZ` left the whole suite green. The
-// committed index definition is the same file `eagle-query.js` reads its field metadata from, so
-// this compares the two rather than restating either.
+// A `select` name the index lacks is a 400 on every query. Compared against the committed index
+// definition `eagle-query.js` also reads, not restated.
 test('every field the document search selects exists in the committed index', () => {
   const definition = require('../../azure/search/indexes/documents.json');
   const inIndex = new Set(definition.fields.map(f => f.name));
@@ -1522,11 +1418,8 @@ test('every field the document search selects exists in the committed index', ()
   assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
 });
 
-// The same invariant for projects, and it is the one that was missing. Widening the index, the data
-// source and the response mapper still left the Type, Phase and Decision columns blank on every
-// keyword search, because the project `select` was an inline literal nobody widened and no test
-// read. The controller test could not catch it: it mocks `searchProjects` and so asserts a row
-// shape the real function could not produce.
+// Same invariant for projects. The controller test mocks `searchProjects`, so it cannot see a
+// select that the index or the row mapper outgrew.
 test('every field the project search selects exists in the committed index', () => {
   const definition = require('../../azure/search/indexes/projects.json');
   const inIndex = new Set(definition.fields.map(f => f.name));
@@ -1534,9 +1427,8 @@ test('every field the project search selects exists in the committed index', () 
   assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
 });
 
-// Presence in the index is not the same question as presence in the select — a field can be in
-// the index, be filterable, and still come back undefined because nobody asked for it. Named
-// literally rather than derived from the select under test.
+// A field in the index still comes back undefined if the select omits it. Named literally, not
+// derived from the select under test.
 test('the project search selects the columns the project list renders', () => {
   const selected = new Set(aiSearch.PROJECT_SELECT.split(','));
   for (const name of ['type', 'currentPhaseName', 'currentPhaseNameId',
@@ -1548,30 +1440,23 @@ test('the project search selects the columns the project list renders', () => {
   }
 });
 
-// `vis` is not rendered — it is the dial map the redactor reads — so the list-columns case above
-// would never name it, and the select-vs-index guard only checks the subset direction. Deleting
-// `,vis` from PROJECT_SELECT therefore left the whole suite green while every per-record dial went
-// inert on the search path: no column, no `hit.vis`, no dials, every field back at defaultVis,
-// which is the fail-OPEN direction.
+// `vis` is the dial map the redactor reads, not a rendered column. Without it every field falls
+// back to defaultVis on the search path, which fails open.
 test('the project search selects the vis dial map', () => {
   assert.ok(aiSearch.PROJECT_SELECT.split(',').includes('vis'),
     'without vis every per-record dial is silently inert on the project search path');
 });
 
-// Same guard as the project-list-columns case above, for the document side: `fileSize` backs
-// eagle-public's size column, and the select-vs-index test only proves the field exists in the
-// index, not that this query asks for it — a field absent from `select` comes back undefined on
-// every hit under a 200, and that reads as a blank column, not an error.
+// Same guard for documents: a field absent from `select` comes back undefined under a 200 and
+// reads as a blank column, not an error.
 test('the document search selects the columns the document list renders', () => {
   const selected = new Set(aiSearch.DOCUMENT_SELECT.split(','));
   assert.ok(selected.has('fileSize'),
     'fileSize is not selected, so every hit returns it undefined and the size column reads blank');
 });
 
-// Every searchable projects field is analyzed `en.microsoft`, which strips stopwords: `keywords=mine`
-// matched none of the 32 projects named "... Mine". `nameTokens` is `name` again under the
-// stopword-free `filename` analyzer, and BOTH callers need it — the same query runs against the
-// projects index from `searchProjects` and from `searchDocuments`' project-name leg.
+// `en.microsoft` strips stopwords, so `mine` matched no "... Mine" project. `nameTokens` is `name`
+// under the stopword-free `filename` analyzer; both project-index callers need it.
 test('project searches search the stopword-free copy of the name', async (t) => {
   await t.test('searchProjects', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
@@ -1647,8 +1532,8 @@ test('project keyword searches match the stored tags', async (t) => {
   });
 });
 
-// A release that searches `tags` reaches a live index nobody widened: the projects tab must stay up
-// without the two columns, not 400 on every keyword. The messages are the service's own (test, 2026-09-29).
+// A release that searches `tags` can reach an index without them: the projects tab must stay up,
+// not 400 on every keyword. The messages are the service's own.
 test('a projects index that cannot search tags', async (t) => {
   const refused = (message) => ({ ok: false, status: 400, json: { error: { message } } });
   const unknown = (field) => refused(`Unknown field '${field}' in search field list.\r\nParameter name: searchFields`);
@@ -1746,9 +1631,8 @@ test('a projects index that cannot search tags', async (t) => {
   });
 });
 
-// A searchFields name the committed index does not mark searchable would degrade every keyword query
-// to a narrower 200, so a typo has to fail here. Read off the requests, so inline lists count too;
-// `/health/search-schema` holds the lists against the live index.
+// A searchFields name the index does not mark searchable narrows every query under a 200. Read off
+// the requests so inline lists count; `/health/search-schema` checks the live index.
 test('every searchFields list a keyword search sends is searchable in the committed index', async (t) => {
   const files = { 'demi-chunks': 'chunks', projects: 'projects', documents: 'documents' };
   const calls = captureFetch(t, () => ({ json: { value: [{ id: '207' }], '@odata.count': 1 } }));
@@ -1848,21 +1732,10 @@ test('type-ahead is on by default for the two keyword datasets', async (t) => {
   });
 });
 
-// THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
-// page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
-// the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back
-// again. Asserted on the two constants rather than on either alone: mutating SERVICE_MAX_TOP to
-/**
- * The two keyword indexes behind RecentActivity and ProjectNotification.
- *
- * They rank rows and return ids; the row itself is read back from Cosmos by the controller. So what
- * matters here is the QUERY: the fields it searches, the half-typed last word, the caller's filter,
- * and the ids that come back — nothing about the shape of a row.
- */
+// These indexes rank rows and return ids; the controller reads the row back from Cosmos, so only
+// the query and the returned ids matter here.
 test('keyword search over the two Cosmos-backed datasets', async (t) => {
-  // The switch is OFF until a setting names an index — there is no code default to fall back on —
-  // so asking the index anything means turning it on first, exactly as a param file does in an
-  // environment where these two indexes exist.
+  // No code default: the switch is off until a setting names an index.
   process.env.SEARCH_INDEX_ACTIVITIES = 'activities';
   process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS = 'project-notifications';
   t.after(() => {
@@ -1933,9 +1806,8 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     assert.strictEqual(result.count, 3);
   });
 
-  // The kill switch. An empty app setting means the dataset is served from Cosmos, and the
-  // controller checks that BEFORE calling — a call that gets here anyway must not report zero
-  // matches as a fact about an index nobody searched.
+  // An empty setting means Cosmos serves the dataset and the controller never calls; a call that
+  // gets here anyway must not report zero matches.
   await t.test('an emptied index setting throws rather than searching nothing', async (tt) => {
     const calls = captureFetch(tt, () => rows('a'));
     const saved = process.env.SEARCH_INDEX_ACTIVITIES;
@@ -1953,9 +1825,8 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     assert.strictEqual(calls.length, 1);
   });
 
-  // An ABSENT setting is the state a deploy that never carried one leaves behind, and it has to
-  // mean what an emptied one means. It did not: the code guessed a name, the index was not there,
-  // and the dataset 502'd instead of falling back.
+  // An absent setting must mean what an empty one does; a guessed name 502s where the index is
+  // missing instead of falling back.
   await t.test('an unset setting names no index at all, like an emptied one', async (tt) => {
     const calls = captureFetch(tt, () => rows('a'));
     const saved = { ...process.env };
@@ -1974,9 +1845,8 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     assert.strictEqual(calls.length, 0, 'no request may be issued against an unnamed index');
   });
 
-  // What the controller falls back on. Narrow on purpose: a 403 or a 400 means the index is there
-  // and the query is not, and answering those from Cosmos would publish an unranked page as if the
-  // index had produced it.
+  // Narrow on purpose: a 403 or 400 means the index exists, and a Cosmos fallback would publish an
+  // unranked page as if the index had produced it.
   await t.test('only a 404 naming the index reads as "that index does not exist"', () => {
     const err404 = Object.assign(
       new Error("HTTP 404 No index with the name 'activities' was found in the service"),
@@ -1989,9 +1859,8 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     for (const err of [
       Object.assign(new Error('HTTP 403 Forbidden'), { status: 403 }),
       Object.assign(new Error("HTTP 400 Could not find a property named 'x'"), { status: 400 }),
-      // A TIMEOUT CARRIES THE INDEX NAME — `request` formats the path into its message — and has
-      // no status at all. Reading the name alone would turn a service outage into a quiet
-      // unranked page.
+      // A timeout message carries the index path but no status; matching the name alone would turn
+      // an outage into a quiet unranked page.
       Object.assign(new Error(
         '/indexes/activities/docs/search failed after 30000ms (TimeoutError) [abc]'), {}),
       // A 404 about something else entirely — a route, not an index.
@@ -2040,28 +1909,16 @@ test('the activities index strips HTML before it tokenizes the content', () => {
   assert.deepStrictEqual(analyzer.tokenFilters, ['lowercase']);
 });
 
-// 600 left every test that compares against itself green.
+// `windowFor` is handed SERVICE_MAX_TOP. Above MAX_PAGE_ROWS, `runSearch` clamps `top` below the
+// window while `skip` advances by all of it, leaving chunks unreachable.
 test('the service page cap stays inside the page-assembly cap', () => {
   assert.ok(aiSearch.SERVICE_MAX_TOP <= aiSearch.MAX_PAGE_ROWS,
     `SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP} must not exceed MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
   assert.strictEqual(aiSearch.SERVICE_MAX_TOP, 250, 'the chunk window is a multiple of this');
 });
 
-/**
- * `documentIdsMatching` — the resolver behind the chunk filters no chunk row can answer.
- *
- * It had no test at all. Every reference to it in `test/` was a `t.mock.method` stub, so the
- * controller tests that look like cap coverage were asserting the CONTROLLER's handling of a
- * hand-supplied `{ids, total, withinCap}` and exercising none of the code that decides it. Deleting
- * the over-cap guard outright left the whole suite green, and a cap set above what one request can
- * return truncated every real filter to a 500-id prefix and reported it as applied.
- *
- * STILL LIVE: the document-only keys (`datePosted*`, `isFeatured`, `legislation`,
- * `documentSource`) come here on every request that sends one, and so does a facet the live chunks
- * index has not been widened for yet.
- *
- * These stub `fetch`, not the function.
- */
+// `documentIdsMatching` resolves chunk filters no chunk row can answer. These stub `fetch`, not
+// the function: the controller tests stub the function and never reach the cap logic.
 test('ai-search document id resolution', async (t) => {
   const page = (n, count) => ({
     json: { value: Array.from({ length: n }, (_, i) => ({ id: `doc${i}` })), '@odata.count': count }
@@ -2081,9 +1938,7 @@ test('ai-search document id resolution', async (t) => {
   });
 
   await t.test('a match set over the cap yields NO ids, not a prefix', async (tt) => {
-    // The measured defect: a `type` filter matching 2,911 documents scoped the chunk query to 500
-    // of them — 17.2% coverage — and reported the filter as applied. Returning a prefix at all is
-    // the failure; the caller cannot tell it from a complete answer.
+    // Returning a prefix at all is the failure: the caller cannot tell it from a complete answer.
     captureFetch(tt, () => page(aiSearch.DOCUMENT_SCOPE_CAP + 1, 2911));
     const res = await aiSearch.documentIdsMatching("type eq 'x'");
 
@@ -2093,9 +1948,8 @@ test('ai-search document id resolution', async (t) => {
   });
 
   await t.test('a full page with NO count is over the cap too', async (tt) => {
-    // The count is authoritative when present. When it is missing the old fallback was
-    // `ids.length`, which for a truncated page reports the truncation as the whole match set —
-    // the same defect arriving through the error path instead of the happy one.
+    // Without a count, falling back to `ids.length` would report a truncated page as the whole
+    // match set.
     captureFetch(tt, () => ({
       json: { value: Array.from({ length: aiSearch.DOCUMENT_SCOPE_CAP + 1 }, (_, i) => ({ id: `d${i}` })) }
     }));
@@ -2105,9 +1959,8 @@ test('ai-search document id resolution', async (t) => {
   });
 
   await t.test('an over-cap page is not walked to find that out', async (tt) => {
-    // The cap decision is a comparison against `@odata.count`, and every filter measured on prod
-    // is over the cap — so the common path used to build a 250-id array, then discard it. The ids
-    // are read here through getters, which is the only way to assert that they were not read.
+    // Over the cap (the common case on prod) the decision needs only `@odata.count`. Getters are
+    // the only way to assert the ids were not read.
     let reads = 0;
     captureFetch(tt, () => ({
       json: {
@@ -2123,18 +1976,15 @@ test('ai-search document id resolution', async (t) => {
   });
 
   await t.test('the cap cannot exceed what one request returns', () => {
-    // The two numbers drifted once and nothing noticed: `runSearch` clamps `top` to MAX_PAGE_ROWS,
-    // so a cap above it is unreachable by construction and every match set between them is
-    // silently truncated. Derived rather than chosen now, and pinned so it stays derived.
+    // `runSearch` clamps `top`, so a cap above it is unreachable and every match set in between is
+    // silently truncated.
     assert.ok(aiSearch.DOCUMENT_SCOPE_CAP < aiSearch.SERVICE_MAX_TOP,
       `cap ${aiSearch.DOCUMENT_SCOPE_CAP} must be under SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP}`);
   });
 
   await t.test('it asks for one more than the cap, across however many requests that takes', async (tt) => {
-    // Asserted as the SUM and the CALL COUNT together, because the two are the whole design: the
-    // cap is `SERVICE_MAX_TOP - 1` precisely so that `cap + 1` fits in one request. At the previous
-    // cap of 499 this took two calls and then discarded all 500 rows to conclude "too many" — on
-    // every filter measured on prod, since all of them are over the cap.
+    // The cap is `SERVICE_MAX_TOP - 1` so that `cap + 1` fits in one request: sum and call count
+    // are asserted together.
     const calls = captureFetch(tt, () => page(250, 600));
     await aiSearch.documentIdsMatching("type eq 'x'");
     const asked = calls.reduce((n, c) => n + c.body.top, 0);
@@ -2182,9 +2032,8 @@ test('writeAcls', async (t) => {
   });
 
   await t.test('a per-row failure is counted, not thrown', async (tt) => {
-    // A 207 is an `ok` response carrying per-row verdicts, so the request status says nothing
-    // about the rows. 404 is the benign one: the indexer has not created that row yet, and a row
-    // that is not in the index is not findable.
+    // A 207 is `ok` with per-row verdicts. A row 404 is benign: a row not in the index is not
+    // findable.
     captureFetch(tt, () => ({
       json: {
         value: [
@@ -2389,13 +2238,8 @@ test('indexedChunkIds', async (t) => {
   });
 });
 
-/**
- * `deleteDocuments` — bulk key deletes on the chunks index, for rows whose parent is gone.
- *
- * The indexer is a `_ts` high-water mark and cannot see a delete, so a chunk nothing owns any more
- * stays searchable until something removes it by key. What comes back is what is STILL THERE: a
- * purge that reports success for a row the service refused is worse than one that reports nothing.
- */
+// The indexer cannot see deletes, so an orphan chunk stays searchable until removed by key. The
+// result names what is still there: a refused row must never read as deleted.
 test('deleteDocuments', async (t) => {
   await t.test('it deletes by key on the chunks index', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [{ key: 'c1', status: true }] } }));
@@ -2457,9 +2301,7 @@ test('deleteDocuments', async (t) => {
   });
 });
 
-// The third select, and the one that had no guard at all while both of its neighbours had one: it
-// was an inline literal inside `searchChunks`, so a name that is not in the index would have been a
-// 400 on every Deep Search — the same failure `fileSize` caused on the document side.
+// The chunk select: a name the index lacks is a 400 on every Deep Search.
 test('every field the chunk search selects exists in the committed index', () => {
   const definition = require('../../azure/search/indexes/chunks.json');
   const inIndex = new Set(definition.fields.map(f => f.name));
@@ -2467,10 +2309,8 @@ test('every field the chunk search selects exists in the committed index', () =>
   assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
 });
 
-// One step further back than the three subset tests. A field can be declared by the index, be
-// selected by the app, and still be null on every row because the DATA SOURCE query never projects
-// it — a 200 with a blank column, which is what `fileSize` and `displayNameSort` are on prod today.
-// The indexer names both halves, so the pairing here is the committed one rather than one restated.
+// A selected, declared field is still null on every row if the data source query never projects
+// it. The indexer names both halves, so the pairing is the committed one.
 const SELECT_SOURCES = [
   ['DOCUMENT_SELECT', require('../../azure/search/indexers/documents-indexer.json')],
   ['PROJECT_SELECT', require('../../azure/search/indexers/projects-indexer.json')],
@@ -2494,10 +2334,8 @@ for (const [selectName, indexer] of SELECT_SOURCES) {
   });
 }
 
-// The failure that took the prod Document tab down for 65 minutes on 2026-09-08: the deployed app
-// selected `fileSize`, the live index did not carry it, and a 400 on a `$select` field is a 400 on
-// EVERY query. Nothing in the deploy applies index definitions, so this is reachable on any release
-// that widens a select — the degrade keeps the tab up and says, loudly, that it did.
+// Deploy applies no index definitions, so a release that widens a select can 400 every query. The
+// degrade keeps the tab up and logs that it did.
 test('a field the live index cannot answer', async (t) => {
   const narrow = (field) => ({
     ok: false,
@@ -2562,9 +2400,8 @@ test('a field the live index cannot answer', async (t) => {
     assert.strictEqual(res.meta, undefined);
   });
 
-  // Dropping one of these does not narrow the answer, it WIDENS it — a hit with no `vis` has every
-  // field back at its `defaultVis`, and a row with no `read` cannot be checked against the caller
-  // at all. Staying up is not worth serving rows nobody was cleared to see.
+  // Dropping a gate field widens the answer: no `vis` means every field at `defaultVis`, no `read`
+  // means no ACL check. Staying up is not worth that.
   for (const field of ['read', 'isPublished', 'vis']) {
     await t.test(`is never dropped when it is the ${field} gate`, async (tt) => {
       const calls = captureFetch(tt, () => narrow(field));
@@ -2593,9 +2430,8 @@ test('a field the live index cannot answer', async (t) => {
   });
 
   await t.test('and the budget is the whole page, not each request that fills it', async (tt) => {
-    // A page wider than the service's 250-row cap is assembled from several requests against the
-    // SAME body. Without one budget across them, a stale index buys a fresh strip per request and
-    // the page arrives with an arbitrary number of columns gone.
+    // A page over 250 rows takes several requests; without one budget across them each request
+    // strips another field.
     const page = Array.from({ length: 250 }, (_, i) => ({ id: `d${i}` }));
     const calls = captureFetch(tt, (i) => {
       if (i === 0) return narrow('fileSize');
@@ -2611,10 +2447,8 @@ test('a field the live index cannot answer', async (t) => {
   });
 
   await t.test('a 400 naming a field only the filter sends is not retried at all', async (tt) => {
-    // `sourceSystem` is filterable and in no select — the shape `buildFilter` emits for
-    // `and[sourceSystem]=eagle`, which puts the caller's own term first and the ACL last. A filter
-    // that lost either term admits MORE rows, so there is nothing here it is safe to strip:
-    // the retry would fail identically and is not made.
+    // A filter field is in no select, and dropping a filter term admits more rows, so nothing is
+    // safe to strip and no retry is made.
     const calls = captureFetch(tt, () => narrow('sourceSystem'));
 
     await assert.rejects(
@@ -2628,9 +2462,8 @@ test('a field the live index cannot answer', async (t) => {
   });
 });
 
-// The refusals inside the drop, asserted directly on it. A search cannot reach them: the one-retry
-// latch caps a call at a single drop, and every select the app emits is wider than one field — so
-// without this the guard that stops a degrade from emptying `select` has no test at all.
+// Asserted directly: a search cannot reach these refusals, since the one-retry latch allows a
+// single drop and every app select is wider than one field.
 test('the field drop behind the degrade', async (t) => {
   await t.test('refuses the whole drop rather than emptying the select', () => {
     const body = { search: '*', select: 'id', filter: ANONYMOUS_ACL };
@@ -2650,9 +2483,8 @@ test('the field drop behind the degrade', async (t) => {
   });
 });
 
-// The committed-vs-live gate. The subset tests above compare the code with the JSON in this repo,
-// and both passed while prod's live index was narrower than either — nothing applies these
-// definitions on deploy. This asks the service instead.
+// The subset tests compare code with committed JSON, which deploy never applies; this asks the
+// live service.
 test('the schema probe', async (t) => {
   await t.test('asks for no rows, so the answer is a status and not data', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: {} }));
@@ -2674,7 +2506,7 @@ test('the schema probe', async (t) => {
     });
   });
 
-  // The 400 the live service answered on 2026-09-08, verbatim.
+  // A 400 the live service answered, verbatim.
   await t.test('names the field the live index does not carry', async (tt) => {
     captureFetch(tt, () => ({
       ok: false,
@@ -2706,7 +2538,7 @@ test('the schema probe', async (t) => {
       assert.strictEqual(calls[0].body.top, 0);
     });
 
-  // The 400s demi-search-test answered on 2026-09-29, verbatim.
+  // 400s demi-search-test answered, verbatim.
   for (const [label, message] of [
     ['not searchable',
       "The field 'sector' in the search field list is not searchable.\r\nParameter name: searchFields"],
@@ -2737,18 +2569,14 @@ test('the schema probe', async (t) => {
     });
 });
 
-// EXPRESSIBILITY IS A FACT ABOUT THE SERVICE. The packaged `azure/search/indexes/chunks.json` says
-// what the index SHOULD carry; nothing on the deploy path applies it, so between an app release and
-// the index PUT the two disagree and every emitted `typeId eq …` is a 400 the controller answers as
-// The count behind that mark, asked for one caller's scope. The controller used to build this
-// clause itself, which is two places that had to agree about a field only this module knows.
+// The count behind that mark, for one caller's scope. Built here, since only this module knows
+// the field.
 test('the scoped stale-chunk count', async (t) => {
   const VERSION = 3;
 
   await t.test('counts the stamp clause, the ACL and the project scope together', async (tt) => {
-    // BRACKETED, and that is the whole reason this is one function. `or` binds looser than `and`,
-    // so `parentFieldsVersion lt 3 or parentFieldsVersion eq null and <acl>` counts every chunk
-    // below the revision REGARDLESS of who may see it — a count over rows the caller cannot read.
+    // Bracketed: `or` binds looser than `and`, so unbracketed the ACL would gate only the `eq null`
+    // arm and the count would cover rows the caller cannot read.
     const calls = captureFetch(tt, () => ({ json: { '@odata.count': 12 } }));
 
     const count = await aiSearch.staleChunkCount(
@@ -2802,9 +2630,8 @@ test('the scoped stale-chunk count', async (t) => {
   });
 
   await t.test('a failure that is not the missing stamp field is raised', async (tt) => {
-    // A 403 or a timeout is not an answer about the backfill, and swallowing it as null here would
-    // hide the difference between "nothing is behind" and "the service is refusing us" from the
-    // caller that decides how long to cache it.
+    // A 403 says nothing about the backfill; null would hide "the service refuses us" from the
+    // caller that decides how long to cache.
     captureFetch(tt, () => ({ ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
 
     await assert.rejects(() => aiSearch.staleChunkCount({ version: VERSION }));
@@ -2884,7 +2711,8 @@ test('listing the unstamped chunk rows', async (t) => {
   });
 });
 
-// a 502 over the whole tab.
+// Expressibility is asked of the live service: nothing on deploy applies chunks.json, so a field
+// the live index lacks makes every emitted `typeId eq …` a 400, a 502 over the whole tab.
 test('the live chunk parent-field status', async (t) => {
   const FIELDS = ['typeId', 'milestoneId', 'projectPhaseId', 'documentAuthorTypeId'];
   const VERSION = 3;
@@ -2910,9 +2738,8 @@ test('the live chunk parent-field status', async (t) => {
     assert.deepStrictEqual(calls[0].body, {
       search: '*', top: 0, count: false, filter: "typeId eq 'probe'"
     }, 'the probe must cost one empty page, not a page of chunks');
-    // THE STAMP, NEVER THE VALUES. "All four ids are null" is true forever of every chunk of every
-    // document that carries no List refs — a permanent population on prod — so a count of those
-    // can never reach zero and the degraded mark it gates could never clear.
+    // The stamp, never the values: documents with no List refs keep all four ids null forever, so
+    // a count of those never reaches zero.
     assert.strictEqual(calls[FIELDS.length].body.filter,
       'parentFieldsVersion lt 3 or parentFieldsVersion eq null');
     assert.strictEqual(calls[FIELDS.length].body.count, true);
@@ -2929,9 +2756,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('a field the index carries but cannot filter on is missing too', async (tt) => {
-    // The other spelling of the same fact. A field declared `filterable: false` answers a 400 that
-    // names it without the words "could not find" — read as anything else, the app would go on
-    // emitting a clause the service refuses, which is the 502 over the whole tab.
+    // A `filterable: false` field answers a 400 naming it without "could not find"; it must still
+    // read as inexpressible, or every query 502s.
     captureFetch(tt, (i) => (i === 1 ? {
       ok: false,
       status: 400,
@@ -2953,9 +2779,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('an index with no stamp field answers UNKNOWN, not zero', async (tt) => {
-    // The index PUT that adds `parentFieldsVersion` is an operator step of its own, so an index
-    // carrying the four fields and not the stamp is a real deploy state. Answering 0 there reports
-    // the backfill as finished off an index that cannot tell, and the mark never appears at all.
+    // An index with the four fields but not the stamp is a real deploy state; answering 0 there
+    // would report the backfill finished.
     captureFetch(tt, (i) => (i < FIELDS.length ? { json: {} } : missingField('parentFieldsVersion')));
 
     const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 5 * TTL });
@@ -2966,9 +2791,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('a 400 about something else answers "unknown", never a drop', async (tt) => {
-    // ONLY a 400 naming the probed property means "this index cannot filter on it". A 400 about a
-    // malformed clause, a quota, or another field entirely says nothing about the schema, and
-    // reading it as "the field is missing" drops a working filter for ten minutes.
+    // Only a 400 naming the probed property means the index cannot filter on it; any other 400
+    // read that way drops a working filter for the TTL.
     captureFetch(tt, () => ({
       ok: false,
       status: 400,
@@ -3002,9 +2826,8 @@ test('the live chunk parent-field status', async (t) => {
     assert.strictEqual(calls.length, perRead,
       'the frontend searches on a debounced keystroke — a probe per request is one per keypress');
 
-    // AND IT EXPIRES. The index is widened by a PUT no app release is involved in, so a process
-    // that cached "the field is not there" forever would keep dropping the filter until somebody
-    // restarted the Function.
+    // The index is widened by a PUT outside any release, so "field missing" must expire, not last
+    // until a restart.
     await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 + TTL });
     assert.strictEqual(calls.length, perRead * 2);
   });
@@ -3036,9 +2859,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('no version to compare against is unknown, and asks nothing', async (tt) => {
-    // The write side owns the revision number. Interpolating an undefined one into OData asks the
-    // service `parentFieldsVersion lt undefined`, whose 400 is about the clause rather than the
-    // field and would read as a service fault.
+    // The write side owns the revision. `lt undefined` would 400 about the clause, not the field,
+    // and read as a service fault.
     const calls = captureFetch(tt, () => ({ json: {} }));
 
     const status = await aiSearch.chunkParentFieldStatus(FIELDS, undefined, { now: 12 * TTL });
@@ -3048,9 +2870,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('a probe that dies partway keeps the fields it already decided', async (tt) => {
-    // The reader drops every field this does not vouch for, so throwing away two settled answers
-    // because the third field's probe hit a 403 drops two working filters for the length of the
-    // hiccup — the fail-closed reader turns a discarded answer into a lost filter.
+    // The reader drops every field not vouched for, so discarding settled answers over one 403
+    // would drop working filters.
     captureFetch(tt, (i) => (i < 2
       ? { json: {} }
       : { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
@@ -3064,9 +2885,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('a count that fails leaves every field usable', async (tt) => {
-    // The other end of the same rule. Every probe answered, so expressibility IS settled; only the
-    // backfill mark went unanswered, and marking all four inexpressible over that would drop four
-    // working filters to avoid showing one advisory banner.
+    // Every probe answered, so expressibility is settled; an unanswered backfill count must not
+    // drop four working filters.
     captureFetch(tt, (i) => (i < FIELDS.length
       ? { json: {} }
       : { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
@@ -3079,9 +2899,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('one field failing costs nothing to the fields after it', async (tt) => {
-    // The probes are independent reads and are issued together. Asked in series, a 403 on the
-    // second field left the third and fourth unasked, so one hiccup dropped three filters — and
-    // put four sequential round trips in front of every filtered Deep Search.
+    // Independent probes go out together: in series, one 403 leaves later fields unasked and adds
+    // round trips to every filtered Deep Search.
     captureFetch(tt, (i) => (i === 1
       ? { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }
       : { json: {} }));
@@ -3096,14 +2915,8 @@ test('the live chunk parent-field status', async (t) => {
   });
 
   await t.test('a probe that REJECTS is an unknown, not a ten-minute outage', async (tt) => {
-    // THE CACHED REJECTION. The promise is memoised, not its value, so a rejected one is handed to
-    // every caller that touches the entry — and it is awaited by every filtered Deep Search there
-    // is. Held under the schema TTL it rethrows for ten minutes, and this route answers a throw
-    // with 502: one bad probe takes the whole tab down until the TTL runs out.
-    //
-    // Reached here through the argument the reader itself supplies, which is the one throw ahead of
-    // the internal try/catch: everything inside is already caught per field. The mechanism under
-    // test is the memoisation, not this particular trigger.
+    // The promise is memoised, so a cached rejection would 502 every filtered Deep Search for the
+    // TTL. The bad argument is only a trigger; the memoisation is under test.
     let status;
     await assert.doesNotReject(async () => {
       status = await aiSearch.chunkParentFieldStatus(null, VERSION, { now: 16 * TTL });

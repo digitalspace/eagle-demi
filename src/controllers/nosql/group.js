@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Group controller — the Eagle mirror for `Group`, a project's contact group, and the only writer
- * of `groups`.
- *
- * A group may never out-rank its project, so its read is derived under the project's through
- * `eagleReadUnder`, as a comment period's is. eagle-api hard-deletes a group and pushes the removed
- * record with `isDeleted: true`; the row is kept, flagged, and narrowed to level 2.
- *
- * A group DEMI owns (`sourceSystem: 'demi'`, set by any DEMI write) takes only the raw copy: the push
- * answers 200 and leaves its name, members, read and delete flag as DEMI wrote them.
+ * Eagle mirror for `Group`, the only writer of `groups`; a group never out-ranks its project. A
+ * deleted group is kept and narrowed to level 2; a DEMI-owned group takes only the raw copy.
  */
 
 const groups = require('../../repositories/groups');

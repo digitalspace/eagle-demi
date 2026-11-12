@@ -9,9 +9,8 @@ const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const projectsRepo = require('../../src/repositories/projects');
 
-// A Track-only project has no Eagle `sector`; the displayed `sector` shows Track's sub-type in its
-// place, in eagle-admin's vocabulary, and 'Other' only when neither exists. Display only:
-// `and[sector]` and `sortBy=sector` still read the stored column, so they do not match the fallback.
+// Track-only projects show Track's sub-type as `sector`, 'Other' when neither exists. Display only:
+// `and[sector]` and `sortBy=sector` read the stored column, not the fallback.
 
 async function sectors(query) {
   let body;

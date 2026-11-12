@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Shared SQL-building helpers for the repositories.
- *
- * Deliberately small. This is NOT a query builder or an ORM — every repository writes its own
- * SQL so the emitted text is readable at the call site and reviewable in a diff. These helpers
- * only remove the mechanical parts (parameter naming, paging) that would otherwise be
- * copy-pasted nine times and drift.
+ * Not a query builder: each repository writes its own SQL so the text is reviewable at the call
+ * site. These helpers only cover the mechanical parts, such as parameter naming and paging.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -19,10 +15,8 @@ const { duplicateIdError } = require('../helpers/duplicate-id');
 const { ANONYMOUS_LEVEL, LEVELS, levelOf } = require('../vis/level');
 
 /**
- * A criterion is a SQL fragment plus its parameters — the same shape as readClause/scopeClause,
- * so everything composes through andClauses.
- *
- * Values are ALWAYS bound, never interpolated.
+ * A criterion has the readClause/scopeClause shape, so all of them compose through andClauses.
+ * Values are always bound, never interpolated.
  */
 function eq(field, value, paramName, alias = 'c') {
   return { clause: `${alias}.${field} = ${paramName}`, params: [{ name: paramName, value }] };
@@ -64,14 +58,8 @@ function withCriteria(kind, fixed) {
 }
 
 /**
- * Membership test against a bounded list of values.
- *
- * An EMPTY list renders as `false`, never as an omitted clause: `IN ()` is not valid SQL, and the
- * tempting alternative — dropping the criterion — would silently widen the query from "these
- * specific rows" to "every row the caller may see".
- *
- * The caller supplies the parameter prefix so two IN clauses in one query cannot collide;
- * andClauses throws on a duplicate name rather than quietly dropping one.
+ * An empty list renders `false`: `IN ()` is invalid SQL, and dropping the criterion would widen the
+ * read to every row the caller may see. The caller's prefix keeps two IN clauses from colliding.
  */
 function inList(field, values, prefix, alias = 'c') {
   if (!Array.isArray(values) || values.length === 0) {
@@ -85,20 +73,16 @@ function inList(field, values, prefix, alias = 'c') {
 }
 
 /**
- * Build a SELECT with the caller's visibility predicate ANDed to the supplied criteria.
- *
- * The visibility fragment always comes first and is never optional — a repository cannot
- * accidentally emit an unfiltered read by forgetting it.
+ * SELECT with the caller's visibility predicate first and never optional, so no read goes out
+ * unfiltered.
  *
  * @param {object}   opts
  * @param {object}   opts.access           from resolveAccess()
- * @param {string|null} opts.partitionField 'id' on projects, 'projectId' elsewhere, NULL for a
- *                                        container with no project axis (boundaries)
+ * @param {string|null} opts.partitionField 'id' on projects, 'projectId' elsewhere, null with no project axis (boundaries)
  * @param {Array}    [opts.criteria]       extra fragments
  * @param {string}   [opts.select='*']     projection — use to omit fields a caller may not see
  * @param {string}   [opts.orderBy]        e.g. 'c.name ASC' (the path must be indexed)
- * @param {string}   [opts.groupBy]        e.g. 'c.projectId'. Cosmos REFUSES it beside an ORDER BY,
- *                                        so a grouped read sorts its own rows in JS.
+ * @param {string}   [opts.groupBy]        e.g. 'c.projectId'; Cosmos refuses it beside ORDER BY, so sort grouped rows in JS
  * @returns {{query: string, parameters: Array}}
  */
 function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy, groupBy }) {
@@ -128,21 +112,12 @@ function assertFilterable(entity, field, access) {
 }
 
 /**
- * The `select` projection for this caller: the catalog fields whose ceiling reaches their level, so
- * a value they could never see does not leave Cosmos at all.
- *
- * Defence in depth only — `redactForAccess` at the response boundary is what enforces the policy,
- * because a per-record dial can restrict below `maxVis` and a projection cannot read one it has not
- * fetched yet. Level 0 takes `*`: every field is visible to it.
- *
- * The row-plane fields are unconditional. `read` and the partition field feed `canRead` and the
- * derived `isPublished`, and the dial map has to be readable to be applied — dropping them would
- * blank `isPublished` for every caller.
+ * Projection of the catalog fields this caller's level can ever see. Defence in depth only:
+ * `redactForAccess` enforces policy, since a per-record dial can restrict below `maxVis`.
  *
  * @param {string} entity          a key of src/vis/catalog
  * @param {object} access          from resolveAccess()
- * @param {string} partitionField  'id' on projects, 'projectId' elsewhere. Required: a default
- *   would give the next entity a projection missing its own partition key.
+ * @param {string} partitionField  'id' on projects, 'projectId' elsewhere; required, a default would miss another entity's key
  */
 function selectFor(entity, access, partitionField) {
   if (!partitionField) throw new Error('[vis] selectFor needs the entity partition field');
@@ -152,6 +127,7 @@ function selectFor(entity, access, partitionField) {
   const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
   if (level === 0) return '*';
 
+  // Always projected: canRead and the derived isPublished read them, and the dial map must be readable.
   const fields = new Set(['id', partitionField, 'read', 'isPublished', 'vis']);
   // Sealed like `read`, but the `pinsPublished` predicate reads it, so the redactor needs it.
   if (catalogFor(entity).pinsRead) fields.add('pinsRead');
@@ -167,9 +143,8 @@ function selectFor(entity, access, partitionField) {
 }
 
 /**
- * COUNT using the IDENTICAL predicate as the read.
- * A count built from a different filter leaks the true size of a collection the caller
- * cannot see, which is why this shares selectWhere rather than rebuilding the predicate.
+ * COUNT through selectWhere, with the read's own predicate: a count from any other filter leaks
+ * the size of rows the caller cannot see.
  */
 function countWhere({ access, partitionField, criteria = [] }) {
   const spec = selectWhere({ access, partitionField, criteria, select: 'VALUE COUNT(1)' });
@@ -191,20 +166,15 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
 }
 
 /**
- * Every row a query matches, at the SDK's own page size and following any continuation token.
- *
- * For bounded whole-container reads only (the seeder's reconcile and per-project extraction
- * state). A request path may call it ONLY when the result set is bounded by something other than
- * the corpus: `documents.projectUploadMaxima` groups to one row per project. Anything that returns
- * one row per document reads through `pageOptions` instead.
+ * Every row a query matches. A request path may call it only when something other than the corpus
+ * bounds the result, as in `documents.projectUploadMaxima` (one row per project).
  */
 async function fetchAll(container, spec, opts = {}) {
   const rows = [];
   let continuationToken;
   do {
-    // No maxItemCount, deliberately: it is what makes cosmos.query page by hand instead of taking
-    // the SDK's own fetchAll(), which drains the whole result set itself. This call wants the full
-    // set, not a page — paged reads keep their token since query() asks for query control.
+    // No maxItemCount on purpose: cosmos.query then takes the SDK's fetchAll(), which drains the
+    // whole set, and this call wants the whole set.
     const page = await cosmos.query(container, spec,
       pageOptions({ ...opts, continuationToken }));
     for (const item of page.items) rows.push(item); // spread caps at ~125k args
@@ -214,18 +184,13 @@ async function fetchAll(container, spec, opts = {}) {
 }
 
 /**
- * `ORDER BY` for a Cosmos list read, from eagle-public's `sortBy` and an allow-list of fields.
- *
- * ONE key only, and never a tiebreak beside it: Cosmos needs a composite index for any multi-
- * property ORDER BY, and none of these containers defines one. A single-property ORDER BY also
- * drops every row that lacks the property, so `allowed` may only name fields the mirror writes
- * unconditionally.
+ * One key, no tiebreak: a multi-property ORDER BY needs a composite index none of these containers
+ * has. ORDER BY drops rows lacking the field, so `allowed` names only fields the mirror always writes.
  *
  * @param {string|string[]} sortBy  the raw query value, in any of the three wire shapes
  * @param {string[]} allowed        field names a caller may order by
  * @param {string} fallback         e.g. 'c.id ASC' — used when the caller named nothing usable
- * @param {object} [aliases]        wire key -> stored field, for the keys eagle-public sorts by
- *                                  that no mirrored row carries (`score`, `_id`)
+ * @param {object} [aliases]        wire key -> stored field, for sort keys no mirrored row carries (`score`, `_id`)
  */
 function orderByFrom(sortBy, allowed, fallback, aliases = {}) {
   for (const entry of sortEntries(sortBy)) {
@@ -236,13 +201,8 @@ function orderByFrom(sortBy, allowed, fallback, aliases = {}) {
 }
 
 /**
- * Whole-item write for a mirror row, addressed at the partition the row is IN.
- *
- * Etag-guarded `replace` while the row stays put, so a concurrent push fails with 412 instead of
- * losing an update. A row whose partition key CHANGED has no item at the new key for `replace` to
- * address — it would throw 404 and the caller's stale-partition cleanup would never run — so that
- * case goes through `upsert`, which routes on the item's own key. The caller then deletes the row
- * left behind in the old partition.
+ * Etag-guarded `replace` while the row keeps its partition, so a concurrent push gets 412. A changed
+ * partition key would 404 on replace, so it upserts; the caller deletes the old-partition row.
  */
 async function upsertItem(container, partitionField, item, existing) {
   if (!existing) return cosmos.create(container, item);
@@ -253,13 +213,11 @@ async function upsertItem(container, partitionField, item, existing) {
 }
 
 /**
- * The stored row with no visibility predicate, for a write's existence check only: never return it
- * in a response. A point read in `partitionKey` when the caller knows it, and a hit there wins; a
- * miss (the row moved parent) searches every partition.
+ * Stored row with no visibility predicate, for a write's existence check only: never return it in a
+ * response. A miss in `partitionKey` (the row moved parent) searches every partition.
  *
  * @param {string} [partitionField] names the partition keys in the log when the id is duplicated
- * @throws an error with `code === DUPLICATE_ID` when the search finds the id in more than one row,
- *   except the two rows of a half-finished move, where the marked row is returned
+ * @throws an error with `code === DUPLICATE_ID` when the id is in more than one row, see oneRowOf
  */
 async function readForWriteIn(container, id, partitionKey, partitionField) {
   if (partitionKey !== undefined && partitionKey !== null) {
@@ -274,9 +232,8 @@ async function readForWriteIn(container, id, partitionKey, partitionField) {
 }
 
 /**
- * The one row a cross-partition lookup found, null for none. A move whose old-partition delete failed
- * leaves two rows, the new one naming the old one's partition: one row owed a delete, not a duplicate,
- * so the marked row is current. Any other second row throws `DUPLICATE_ID`.
+ * A move whose old-partition delete failed leaves two rows, the new one naming the old one's
+ * partition: that marked row is current. Any other second row throws `DUPLICATE_ID`.
  */
 function oneRowOf(container, key, items, partitionField) {
   if (items.length === 2 && partitionField) {
@@ -320,11 +277,8 @@ function racedAs(err, expected, message) {
 }
 
 /**
- * Whole-item write guarded on the revision the caller read: it lands only while the row is still
- * that revision, and a loser gets a 412 to rebuild from instead of silently replacing the winner.
- *
- * No `etag` means no guard — a row this caller found absent has no revision to test against, so
- * use `createItem` for that case instead.
+ * Lands only while the row is still the revision the caller read; a loser gets 412. No `etag`
+ * means no guard, so use `createItem` for a row the caller found absent.
  *
  * @param {string} container
  * @param {object} item
@@ -340,10 +294,8 @@ async function upsertWithEtag(container, item, { etag, label }) {
 }
 
 /**
- * Insert a row the caller read as absent. `create` rather than an unguarded upsert, because an
- * upsert has no revision to guard on and would replace a row another writer created in between —
- * the one hole the etag guard cannot cover. Cosmos answers 409, which the caller re-reads and
- * re-judges exactly as it does a 412.
+ * `create`, not an unguarded upsert, which would replace a row another writer created in between.
+ * Cosmos answers 409, which the caller re-reads and re-judges as it does a 412.
  *
  * @throws an error with `code === 409` when the row was created behind the caller
  */
@@ -356,9 +308,8 @@ async function createItem(container, item, label) {
 }
 
 /**
- * Offset paging onto Cosmos, which has continuation tokens and no offsets: overfetch `skip + size`
- * rows and slice. `size` is clamped to MAX_PAGE_SIZE; `readPage` refuses `skip + size` past
- * MAX_PAGE_DEPTH.
+ * Cosmos has no offsets: overfetch `skip + size` rows and slice. `size` clamps to MAX_PAGE_SIZE;
+ * `readPage` refuses `skip + size` past MAX_PAGE_DEPTH.
  */
 function pageSlice({ pageNum, pageSize } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || MAX_PAGE_SIZE, 1), MAX_PAGE_SIZE);

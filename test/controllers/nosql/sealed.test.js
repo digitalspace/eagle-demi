@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * The sealed compartment — `/api/sealed` (docs/rbac-architecture.md §1, "Level 0").
- *
- * Three things are worth pinning and none of them is the happy path: that the ladder cannot see a
- * sealed row however privileged it is, that the compartment's own chain admits `compliance` and
- * nothing else, and that every route writes an audit row — READS INCLUDED, which is true nowhere
- * else in DEMI.
- */
+// Sealed compartment (docs/rbac-architecture.md §1). Unlike anywhere else in DEMI, every route
+// here writes an audit row, reads included.
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: the audit writer is inert without the DCR pair, so the
@@ -104,12 +98,8 @@ const bearerReq = () => ({
   params: { id: 's1' }, query: {}, body: {}
 });
 
-/**
- * A fake Cosmos honouring TWO things: the sealed exclusion and an `@id` criterion. Everything the
- * emitted SQL does not exclude comes back — so dropping the exclusion from `readClause` hands the
- * sealed row straight to the assertion below instead of quietly passing. The id is honoured because
- * a point read that ignored it would answer with the first row of the container.
- */
+// Honours only the sealed exclusion and `@id`, so dropping the exclusion from `readClause`
+// hands the sealed row to the assertions instead of passing quietly.
 const fakeCosmosQuery = (stored) => async (_container, spec) => {
   const visible = /NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)/.test(spec.query)
     ? stored.filter(row => !(row.read || []).includes('compliance'))
@@ -118,13 +108,8 @@ const fakeCosmosQuery = (stored) => async (_container, spec) => {
   return { items: id ? visible.filter(row => row.id === id.value) : visible };
 };
 
-/**
- * Both read entry points off the same fake.
- *
- * A single-row lookup goes through `queryFirst`, not through `query` with a page size: it holds one
- * iterator and drains it, because the SDK hands no continuation token back on the cross-partition
- * path. It emits the SAME spec, which is what these assertions are about.
- */
+// Single-row lookups use `queryFirst`, not paged `query`: the SDK returns no continuation token
+// on the cross-partition path. Both emit the same spec.
 function stubCosmosReads(t, stored) {
   const answer = fakeCosmosQuery(stored);
   t.mock.method(cosmos, 'query', answer);
@@ -191,9 +176,7 @@ test('the sealed compartment routes', async (t) => {
     assert.strictEqual(res.statusCode, 403);
   });
 
-  // The ladder routes, for BOTH the caller that never held `compliance` and the one that does. The
-  // holder is the interesting case: it may read the row at `/api/sealed/:id`, and the compartment's
-  // whole mechanism is that it cannot read it anywhere the read goes unaudited.
+  // A `compliance` holder may read the row at `/api/sealed/:id`, but nowhere the read goes unaudited.
   for (const caller of [SYSADMIN, COMPLIANCE]) {
     const who = caller.realm_access.roles[0];
 
@@ -450,10 +433,8 @@ test('the sealed compartment routes', async (t) => {
   });
 
   await t.test('no script names the sealed role', () => {
-    // Condition 2 of the seal (docs/rbac-architecture.md §1): exports and backups stay locked down,
-    // so no seed, export or reconcile script may put `compliance` into its access context.
-    // `probe-acl.js` is the one exception — it mints keys through the gated admin route to probe
-    // the matrix from outside, and builds no access context of its own.
+    // No script may put `compliance` in its access context. `probe-acl.js` is exempt: it mints
+    // keys through the gated admin route and builds no access context of its own.
     const scripts = fs.readdirSync(SCRIPTS_DIR)
       .filter(name => name.endsWith('.js') && name !== 'probe-acl.js');
 

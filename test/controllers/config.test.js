@@ -32,8 +32,8 @@ test('config controller', async (t) => {
 
     await configController.getConfig(REQ, res);
 
-    // A database outage must not take the frontend down — this endpoint was a non-DB route
-    // before and has to degrade to what it used to return.
+    // A database outage must not take the frontend down, so this endpoint degrades to the
+    // app-settings answer.
     assert.equal(res.body.configEndpoint, true);
     assert.ok(res.body.KEYCLOAK_URL);
   });

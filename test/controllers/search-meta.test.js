@@ -25,10 +25,8 @@ function capture() {
 
 const anonymous = query => ({ query, header: () => null });
 
-// A caller `filterFor` answers `{filter: null, empty: false}` for — an UNFILTERED read, not an
-// empty one. Every probe in this file was anonymous before, and an anonymous caller always has a
-// filter, which is exactly why the last route to compose a clause over `filter` took staging down
-// with `(undefined) and ...` and nothing caught it.
+// `filterFor` answers `{filter: null, empty: false}` here: an unfiltered read. Anonymous callers
+// always have a filter, so they cannot catch a clause built as `(undefined) and ...`.
 const privileged = query => ({
   query,
   header: () => null,
@@ -38,9 +36,7 @@ const privileged = query => ({
 test('the response says which keys it could not express', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // A filter the index cannot express was named in `logger.warn` and NOWHERE ELSE. The caller got
-  // a 200 and a full-corpus page: measured against test, `and[proponent]=<ObjectId>` on Project
-  // answers `pageSize` rows under `searchResultsTotal: 348`, which is the unfiltered corpus.
+  // A dropped filter still answers 200 over the unfiltered corpus, so the caller must be told.
   await t.test('a dropped filter key is named in meta, not only in the log', async () => {
     t.mock.method(aiSearch, 'searchDocuments', async () => ({ count: 61, items: [] }));
 
@@ -65,9 +61,8 @@ test('the response says which keys it could not express', async (t) => {
     assert.deepStrictEqual(out.body[0].meta[0].dropped, { filter: [], sort: ['notAField'] });
   });
 
-  // `sortBy` on DocumentChunk can only ever be discarded — no field in the `chunks` index is
-  // sortable, so the branch sends no `$orderby` at all. It used to discard it without a word, which
-  // would make `dropped` lie by omission on the one dataset where the drop is unconditional.
+  // No `chunks` field is sortable, so `sortBy` on DocumentChunk is always discarded and must
+  // still be reported.
   await t.test('a chunk sort is reported even though the branch never builds one', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchChunks', async (opts) => {
@@ -83,14 +78,10 @@ test('the response says which keys it could not express', async (t) => {
     assert.deepStrictEqual(out.body[0].meta[0].dropped.sort, ['datePosted']);
   });
 
-  // ONE SHAPE ACROSS ALL THREE DATASETS, and across both backends: the keywordless Cosmos list
-  // can apply no `and[]` filter at all, and `project` is inexpressible against the `projects`
-  // index either way. Same key, same two arrays.
+  // Same `dropped` shape on every dataset and both backends.
   await t.test('a project filter the dataset cannot express answers NOTHING, and says so', async () => {
-    // `projects` has no `projectId` column — a project is its own scope — so `buildFilter` drops
-    // the key. Reporting the drop and then answering the whole ACL-visible corpus is the widest
-    // possible reading of the narrowest possible request: measured, `dataset=Project&project=<id>`
-    // returned `count: 348`, every project this caller can see, to someone who asked for one.
+    // `projects` has no `projectId` column, so the key drops; answering the whole visible corpus
+    // to a request for one project is the widest reading of the narrowest ask.
     let searched = false;
     t.mock.method(projectsRepo, 'listPage', async () => { searched = true; return []; });
     t.mock.method(projectsRepo, 'countVisible', async () => { searched = true; return 348; });
@@ -139,9 +130,8 @@ test('the response says which keys it could not express', async (t) => {
 test('an unparseable pageSize takes the documented default', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // `parseInt('abc')` is NaN, `Math.min(NaN, 5000)` is NaN, and NaN reached the repository's own
-  // page size: measured against test, `pageSize=abc` answered 348 rows — the entire visible
-  // corpus — where `pageSize=10` answers 10.
+  // `parseInt('abc')` is NaN and `Math.min(NaN, 5000)` is NaN; a NaN page size reaching the
+  // repository answers the whole visible corpus.
   await t.test('pageSize=abc asks for the same page an absent pageSize does', async () => {
     const asked = [];
     t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
@@ -158,10 +148,8 @@ test('an unparseable pageSize takes the documented default', async (t) => {
     assert.deepStrictEqual(asked, [10, 10], 'unparseable and absent must land on the same default');
   });
 
-  // The shapes the first pass missed, and they matter more than `abc` because they are NUMBERS:
-  // `|| 10` never fires on -1, `Math.min(-1, 5000)` is -1, and the `> MAX_PAGE_ROWS` refusal
-  // cannot fire on a negative either. Measured before the clamp, `pageSize=-5&pageNum=3` reached
-  // Azure AI Search as `{top: -5, skip: -15}`.
+  // `|| 10` never fires on -1, `Math.min(-1, 5000)` is -1 and the `> MAX_PAGE_ROWS` refusal
+  // misses negatives, so without the clamp `pageSize=-5&pageNum=3` sends `{top: -5, skip: -15}`.
   await t.test('a zero or negative pageSize takes the default too', async () => {
     const asked = [];
     t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
@@ -216,10 +204,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   });
 
   await t.test('a field the live index does not carry is never sent', async (tt) => {
-    // THE DEPLOY HAZARD. Expressibility used to come from the packaged `chunks.json`, so between an
-    // app release and the index PUT the app emitted `typeId eq …` against an index with no such
-    // field: a 400, which this route answers as 502 "Deep Search is unavailable" — the whole tab,
-    // for every caller, not just the ones filtering.
+    // Between an app release and the index PUT, `typeId eq …` against the live index is a 400,
+    // which this route answers as 502 for the whole Deep Search tab.
     let chunkFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
     typeIsMissing(tt);
@@ -235,11 +221,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type']);
     assert.ok(!/typeId/.test(chunkFilter),
       `the clause the live index cannot answer was still sent: ${chunkFilter}`);
-    // A REASON OF ITS OWN, because the three clear differently and this one clears only when an
-    // operator applies the index definition. Naming it as an unknown would tell them to wait for
-    // something that is not coming; naming nothing at all — which is what this did — put a key in
-    // `dropped.filter` with no reason beside it, the exact shape of an ordinary over-cap drop, so
-    // the deploy window was indistinguishable on the wire from a filter this API never supported.
+    // Its own reason: this state clears only when an operator applies the index definition, and
+    // without a reason it looks like a filter the API never supported.
     assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-missing']);
     assert.deepStrictEqual(Object.keys(out.body[0].meta[0].degraded), ['reasons'],
       `no count may reach the caller: ${JSON.stringify(out.body[0].meta[0].degraded)}`);
@@ -247,9 +230,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
   await t.test('the missing-column reason waits for the recovery to run out of room too',
     async (tt) => {
-      // Same rule as the other two: the documents index answers the facet in full up to the scope
-      // cap, and a page that is not short has nothing to report. Marking on the absent column alone
-      // would banner every project-scoped Deep Search for the length of a deploy window.
+      // The documents index answers the facet in full up to the scope cap; marking on the absent
+      // column alone would banner every project-scoped Deep Search during a deploy window.
       stubChunkSearch(tt);
       typeIsMissing(tt);
       tt.mock.method(projectsRepo, 'getByEagleId', async () => null);
@@ -266,11 +248,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     });
 
   await t.test('a field the live index does not carry is resolved through documents', async (tt) => {
-    // AND THE DEPLOY WINDOW KEEPS THE OLD BEHAVIOUR. The facet is inexpressible on the CHUNKS index
-    // only; `documents` carries it, and that is exactly what this route did before the chunk copy
-    // existed. Taking the key out of the query instead — which is what the first version did — put
-    // it past `dropped` and past this recovery, so the one filter the caller sent quietly did
-    // nothing for the length of the window the probe exists to cover.
+    // The facet is missing on the chunks index only; `documents` carries it. The key must stay in
+    // the query so `dropped` and this recovery see it.
     let chunkFilter = null;
     let docFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
@@ -289,10 +268,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
       'and[type]': '5cf00c03a266b7e1877504e9'
     }), res);
 
-    // THE CALLER'S OWN PROJECT SCOPE COMES ALONG, and it is what decides whether the rest fits: a
-    // corpus-wide `type` resolves to 2,911 documents and is over the cap, where the project-scoped
-    // set is a handful. `project` is never in `dropped` here — chunks carry `projectId` — which is
-    // why a `narrowed` object built only from `dropped` would have asked corpus-wide.
+    // The project scope must come along or a corpus-wide `type` runs over the cap. `project` is never
+    // in `dropped` (chunks carry `projectId`), so it cannot be read from there.
     assert.ok(docFilter && docFilter.includes("projectId eq '207'"),
       `the document query must carry the caller's project scope, got: ${docFilter}`);
     assert.ok(docFilter.includes("typeId eq '5cf00c03a266b7e1877504e9'"),
@@ -305,13 +282,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   });
 
   await t.test('the nested and:{} shape is recovered through documents too', async (tt) => {
-    // THE RECOVERY READS THE WIRE SHAPE BACK. `recoverChunkFilters` rebuilds a `dropped` base name
-    // (`type`) into a query the documents index can be asked with, and it reads the caller's value
-    // through `andParams`, which accepts BOTH `and[type]=x` and a nested `and: {type: 'x'}` object.
-    // Rebuilding from `query[key]` alone finds nothing under the nested shape, so the key is
-    // reported dropped and the filter silently does nothing — a 200 over the unfiltered corpus.
-    // Unreachable under the shipped parser, which is exactly what makes it the kind of thing a
-    // parser swap turns on with no test to catch it.
+    // `recoverChunkFilters` must read values through `andParams`; `query[key]` alone misses the
+    // nested shape. Unreachable under the shipped parser, but a parser swap would expose it.
     let chunkFilter = null;
     let docFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
@@ -375,10 +347,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     assert.strictEqual(out.body[0].meta[0].dropped, undefined);
   });
 
-  // A live index that carries all four columns and a scope the backfill has not finished stamping.
-  // The column being present is what the schema probe answers; whether the ROWS hold a value is a
-  // different question, and it is the one that decides whether a clause over that column measures
-  // anything.
+  // All four columns present, but the backfill has not stamped this scope: the schema probe sees
+  // the column, not whether rows hold a value.
   const carriedButBehind = (tt, behind = 4210) => {
     stubStatus(tt, {
       known: true, available: chunksRepo.CHUNK_PARENT_FIELDS.slice(), missing: [], unstamped: behind
@@ -389,12 +359,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
   await t.test('an unstamped scope sends the facet to the documents index, not the chunk query',
     async (tt) => {
-      // THE DEFECT. A column the index carries but the backfill has not filled holds `null` on
-      // every chunk it has not reached, so `milestoneId eq 'm1'` over it is not a narrower answer —
-      // it is zero rows under a 200, which reads as "this project has no such documents". The
-      // schema probe cannot see it: the column is there and the clause is valid. Withheld, the key
-      // is dropped, and dropped is what the documents index answers — the same path that served
-      // this filter before a chunk carried a copy at all.
+      // Unstamped chunks hold `null`, so `milestoneId eq 'm1'` answers zero rows under a 200.
+      // The key is withheld and answered through the documents index instead.
       let chunkFilter = null;
       let docFilter = null;
       stubChunkSearch(tt, f => { chunkFilter = f; });
@@ -423,10 +389,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
   await t.test('the mark is for the recovery that ran out of room, not for the backfill',
     async (tt) => {
-      // The one state with nowhere left to go: the scope is mid-backfill AND the documents-index
-      // recovery is over the scope cap, so the page really is short. Marking on the backfill alone
-      // put this banner in front of every filtered Deep Search for the length of a backfill run,
-      // including the ones the recovery answered in full.
+      // Marked only when the scope is mid-backfill AND the documents-index recovery is over the
+      // scope cap, so the page really is short.
       stubChunkSearch(tt);
       carriedButBehind(tt);
       tt.mock.method(aiSearch, 'documentIdsMatching', async () =>
@@ -438,9 +402,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
       }), res);
 
       assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-unstamped']);
-      // THE REASON, NEVER THE NUMBER. This route is reachable anonymously, and the number behind
-      // the mark is a backfill statistic nobody outside can act on — the named reason is the whole
-      // of what a UI can render.
+      // The reason, never the number: the route is anonymous and the count is an internal
+      // backfill statistic.
       assert.deepStrictEqual(Object.keys(out.body[0].meta[0].degraded), ['reasons'],
         `no count may reach the caller: ${JSON.stringify(out.body[0].meta[0].degraded)}`);
       assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['milestone'],
@@ -448,11 +411,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     });
 
   await t.test('a backfill state the service could not report is not a stamped one', async (tt) => {
-    // `unstamped: null` is "the index cannot tell" — a live index carrying the four columns but no
-    // version stamp, and a scoped count that cannot answer either. UNKNOWN IS NOT ZERO in either
-    // direction: nothing may be marked off it, and nothing may be filtered on it. Sending the
-    // clause on the optimistic reading is the zero-rows-under-a-200 above; the documents index has
-    // no stamp to be behind on, so that is where the key goes.
+    // `unstamped: null` means the index cannot tell. Unknown is not zero: nothing is marked off it
+    // and nothing filtered on it, so the key goes to the documents index.
     let chunkFilter = null;
     let docFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
@@ -481,11 +441,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
   await t.test('an unknown stamp state marks the short page as unknown, not as a backlog',
     async (tt) => {
-      // The other half of the same rule. The page IS short here — the recovery ran out of room —
-      // and the caller has to be told, because a filter named in `dropped` with no reason beside it
-      // reads as a key this API never supported. But "the backfill is behind" is a claim about the
-      // corpus and the count that would support it went unanswered, so what is reported is the
-      // unanswered question, which clears when the service answers again.
+      // The page is short, so it is marked, but the backlog count went unanswered: the reason is
+      // "unknown", which clears when the service answers again.
       stubChunkSearch(tt);
       stubStatus(tt, {
         known: true, available: chunksRepo.CHUNK_PARENT_FIELDS.slice(), missing: [], unstamped: null
@@ -506,10 +463,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     });
 
   await t.test('a probe shape the service never promised does not 502 the tab', async (tt) => {
-    // The reader takes `available` off whatever the probe resolved with, and the probe now resolves
-    // rather than rejects on a failure — an object with no field list at all is what that recovery
-    // is closest to. Reading `.available` off it unguarded throws, and this route answers a throw
-    // with 502 over the whole Deep Search tab.
+    // The probe resolves rather than rejects on failure; reading `.available` off a bare object
+    // unguarded throws, and a throw is a 502 over the whole Deep Search tab.
     let chunkFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
     stubStatus(tt, { known: false });
@@ -559,11 +514,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   });
 
   await t.test('a probe that could not run never sends the facet to the live index', async (tt) => {
-    // `known: false` is "the question was not answered", and the unknown that matters is the one
-    // the probe exists for: the app is live and the index PUT has not happened yet. Sending the
-    // clause on a guess is a 400, which this route answers as 502 — the whole Deep Search tab, for
-    // every caller, not only the ones filtering. Withholding it costs one filter, and the caller is
-    // told which one.
+    // `known: false` may mean the index PUT has not happened yet; sending the clause on a guess is
+    // a 400 and a 502 over the whole tab. Withholding costs one filter, and the caller is told.
     let chunkFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
     stubStatus(tt, { known: false, available: [], missing: [], unstamped: null });
@@ -582,9 +534,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   });
 
   await t.test('a probe that could not run leaves the facet to the documents index', async (tt) => {
-    // And the drop is not the end of it. `dropped` is the input to the documents-index recovery, so
-    // a facet the chunks index cannot be vouched for is still answered — by the index that answered
-    // it before a chunk carried a copy at all, which is the whole reason it is dropped rather than
+    // `dropped` feeds the documents-index recovery, which is why the key is dropped rather than
     // deleted from the query.
     let chunkFilter = null;
     let docFilter = null;
@@ -611,10 +561,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   });
 
   await t.test('only the columns a facet filters on are probed', async (tt) => {
-    // `projectId` is stamped beside the four List refs, but no facet filters on it and the probe
-    // costs one service request per field on a cold cache. The request is the smaller half: a
-    // `projectId` probe that comes back undecided withholds every facet in the request over a
-    // column nobody asked about.
+    // No facet filters on `projectId`; probing it costs a request and, if undecided, would
+    // withhold every facet over a column nobody asked about.
     let probed = null;
     stubChunkSearch(tt);
     tt.mock.method(aiSearch, 'chunkParentFieldStatus', async (fields) => {
@@ -635,10 +583,8 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
   await t.test('a facet withheld on an unanswered probe is named as unknown, not as unstamped',
     async (tt) => {
-      // The state that had no reason at all: one field's probe died, so that facet is withheld,
-      // and the documents-index recovery that should have answered it was over the cap. The page
-      // is short and nothing said why — a key in `dropped` with no reason beside it reads as a
-      // filter this API does not support, rather than as one that will work again shortly.
+      // One field's probe died and the recovery is over the cap; without a reason the key in
+      // `dropped` reads as a filter the API does not support.
       stubChunkSearch(tt);
       stubStatus(tt, {
         known: false, available: ['milestoneId'], missing: [],
@@ -659,18 +605,16 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     });
 
   await t.test('a probe that only got partway keeps the fields it did settle', async (tt) => {
-    // A probe asks one question per field and can die on the third. Answering that with "nothing
-    // is known" drops every facet in the request over one field's hiccup, so the probe reports per
-    // field and this route sends exactly the ones it vouched for.
+    // The probe reports per field, so one field's failure must not withhold the facets it did
+    // settle.
     let chunkFilter = null;
     stubChunkSearch(tt, f => { chunkFilter = f; });
     stubStatus(tt, {
       known: false, available: ['milestoneId'], missing: [],
       unknown: ['typeId', 'projectPhaseId', 'documentAuthorTypeId'], unstamped: null
     });
-    // A partial schema answer carries no index-wide count, so the stamp state is decided under this
-    // request's own scope — stamped here, or the settled field would be withheld for that instead
-    // and this case would be measuring the backfill rather than the probe.
+    // A partial answer has no index-wide count, so the scope is stamped here; otherwise this would
+    // measure the backfill, not the probe.
     tt.mock.method(aiSearch, 'staleChunkCount', async () => 0);
     searchController.resetStaleChunkScopeCache();
     tt.mock.method(aiSearch, 'documentIdsMatching', async () =>
@@ -703,16 +647,13 @@ test('the unstamped-backfill mark is measured over the rows the caller asked for
 
   const chunk = { chunkId: 'd1::p1::c0', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'x' };
 
-  // Index-wide, something is behind. That is the state in which the question "is anything behind
-  // for THIS caller" is worth asking, and the state in which the old corpus-wide gate marked every
-  // page there was.
+  // Index-wide, something is behind: the state where "is anything behind for this caller" matters.
   const somethingIsBehindSomewhere = tt =>
     tt.mock.method(aiSearch, 'chunkParentFieldStatus', async () => ({
       known: true, available: chunksRepo.CHUNK_PARENT_FIELDS.slice(), missing: [], unstamped: 4210
     }));
 
-  // The clause is `ai-search`'s to build — this route's job is to hand it the scope the page was
-  // read under, so what is asserted here is the ARGUMENT, not the OData it renders to.
+  // `ai-search` builds the clause; this route hands it the scope, so the argument is asserted.
   const stubScopedCount = (tt, count, onFilter) => {
     const probes = [];
     tt.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'A' }]));
@@ -749,10 +690,8 @@ test('the unstamped-backfill mark is measured over the rows the caller asked for
   });
 
   await t.test('a scope with nothing behind filters the chunks directly', async (tt) => {
-    // The whole point, and now both halves of it. One project mid-backfill used to put "filter
-    // partially applied" on every other project's page for the length of the backfill, over rows
-    // that are all stamped — and a corpus-wide backlog must not push a fully stamped scope's facet
-    // onto the documents index and its cap either. A stamped scope is the fast path.
+    // A backlog elsewhere must not mark this page or push its facet onto the documents index and
+    // its cap. A stamped scope is the fast path.
     let chunkFilter = null;
     const probes = stubScopedCount(tt, 0, f => { chunkFilter = f; });
     somethingIsBehindSomewhere(tt);
@@ -831,10 +770,8 @@ test('the unstamped-backfill mark is measured over the rows the caller asked for
     assert.strictEqual(probes.length, 1, 'the second request reads the cached count');
   });
 
-  // A count of `null` is `staleChunkCount` RESOLVING with "cannot say" — an index carrying no stamp
-  // column answers that, and so does a version this process could not supply. It is not a fact
-  // about the backfill, and the two cases below are the same rule the schema probe already applies
-  // to `known: false`.
+  // `null` from `staleChunkCount` means "cannot say", not a backlog: the same rule the schema
+  // probe applies to `known: false`.
   const keystrokeOn = project => searchController.search(anonymous({
     dataset: 'DocumentChunk', keywords: 'river', project, 'and[milestone]': 'm1'
   }), capture().res);
@@ -854,11 +791,8 @@ test('the unstamped-backfill mark is measured over the rows the caller asked for
   });
 
   await t.test('the scope being searched hardest is not the one evicted', async (tt) => {
-    // The map is bounded at 32 scopes, and eviction takes the oldest INSERTION. Without a hit
-    // moving its key back to the end, "oldest insertion" means the scope that has been searched
-    // continuously since the process started — the busiest one on the box — while 32 one-off
-    // reads keep their entries. It evicts exactly backwards, and the cost is a count request per
-    // keystroke on the tab that is actually in use.
+    // The map holds 32 scopes and evicts the oldest insertion; a hit must move its key to the end
+    // or the busiest scope is evicted first.
     const probes = stubScopedCount(tt, 4210);
     somethingIsBehindSomewhere(tt);
     tt.mock.method(aiSearch, 'documentIdsMatching', async () =>
@@ -902,17 +836,12 @@ test('chunk filters land on the chunks index itself', async (t) => {
     tt.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'A', type: 'Letter' }]));
     tt.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
   };
-  // ONE service call. The filter used to be resolved by querying `documents` for matching ids and
-  // scoping the chunk query to them, which is bounded by what a single request returns — every
-  // filter measured on prod was over that bound and came back reported as inexpressible. A second
-  // read appearing here means that design is back.
+  // One service call: resolving facets through `documents` ids is bounded by one request's
+  // size, and real facets exceed it.
   const onlyChunkCall = (tt, onFilter) => {
     let calls = 0;
-    // THE PREMISE OF THIS SUITE: a live index that carries all four parent fields. Left unstubbed
-    // the probe answers `known: false` here — no SEARCH_ENDPOINT in a test process — and an
-    // unanswered probe is UNEXPRESSIBLE, so every facet below would be dropped and this suite
-    // would be measuring the deploy window instead of the filter. `unstamped: 0` keeps it to one
-    // service call: a corpus with nothing behind is never re-counted per scope.
+    // Unstubbed, the probe answers `known: false` (no SEARCH_ENDPOINT) and every facet drops.
+    // `unstamped: 0` means no per-scope recount.
     tt.mock.method(aiSearch, 'chunkParentFieldStatus', async () => ({
       known: true, available: chunksRepo.CHUNK_PARENT_FIELDS.slice(), missing: [], unstamped: 0
     }));
@@ -975,9 +904,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('the nested and:{} wire shape reaches the chunk query too', async (tt) => {
-    // `andParams` accepts BOTH shapes — `and[type]=x` and a nested `and: {type: 'x'}` object, which
-    // is what a qs/extended parser produces. Unreachable under the shipped parser, which is
-    // precisely what makes it the kind of thing a parser swap turns on silently.
+    // A qs/extended parser produces the nested shape. Unreachable under the shipped parser, but a
+    // parser swap would turn it on silently.
     let chunkFilter = null;
     onlyChunkCall(tt, f => { chunkFilter = f; });
     stubHydration(tt);
@@ -995,9 +923,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('a key the chunks index cannot express is still reported as dropped', async (tt) => {
-    // `documentAuthor` is in no demi index at all. Sent alongside a key that IS expressible,
-    // because the failure this closes is reporting a working filter and an inexpressible one
-    // identically — in either direction.
+    // `documentAuthor` is in no demi index. Sent beside an expressible key so the two cannot be
+    // reported the same way.
     let chunkFilter = null;
     onlyChunkCall(tt, f => { chunkFilter = f; });
     stubHydration(tt);
@@ -1016,10 +943,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('a document-only key is still resolved through the documents index', async (tt) => {
-    // THE RESIDUE. A chunk carries no `datePosted`, so the only way to answer a date range on Deep
-    // Search is to ask which documents match and scope the chunk query to their ids. That path was
-    // deleted along with the facet resolver it also served, which silently turned every date,
-    // `isFeatured`, `legislation` and `documentSource` filter on this dataset into no filter at all.
+    // A chunk has no `datePosted`, so date, `isFeatured`, `legislation` and `documentSource`
+    // filters resolve matching document ids and scope the chunk query to them.
     let chunkFilter = null;
     let docFilter = null;
     onlyChunkCall(tt, f => { chunkFilter = f; });
@@ -1044,9 +969,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('a facet never reaches the documents index', async (tt) => {
-    // The inverse, and the whole point of the chunk copy: `type` is answerable on the chunk row, so
-    // resolving it through documents would put the 249-document cap back in front of the one filter
-    // eagle-public sends most.
+    // `type` is answerable on the chunk row; resolving it through documents would put the
+    // 249-document cap in front of eagle-public's most used filter.
     let resolved = 0;
     onlyChunkCall(tt, () => {});
     stubHydration(tt);
@@ -1083,10 +1007,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('the size of the matching document set no longer decides anything', async (tt) => {
-    // The inversion. `type` matches 2,911 documents on prod, `projectPhase` 1,425, `milestone`
-    // 36,471 — every one of them over the old 249-document scoping bound, so every one of them was
-    // answered UNFILTERED with the key named in `meta.dropped`. Nothing counts documents now, so a
-    // corpus-wide filter is applied exactly like a project-scoped one.
+    // Real facets match thousands of documents, far over the 249-document cap, so facets are not
+    // resolved by document count at all.
     let chunkFilter = null;
     const documentReads = onlyChunkCall(tt, f => { chunkFilter = f; });
     stubHydration(tt);
@@ -1101,10 +1023,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
       'a broad filter is applied, not reported inexpressible');
   });
 
-  // A CREDENTIAL NAMES A FIELD, AND THE FIELD DIFFERS PER INDEX: a document-scoped grant compares
-  // `documentId` on chunks and `id` on documents. Sending the chunk clause to the documents index
-  // is a 400 naming `documentId`, which this route answers as 502 — every Deep Search with a
-  // document-only key, for every holder of such a credential.
+  // A document grant compares `documentId` on chunks but `id` on documents; the chunk clause on
+  // the documents index is a 400, answered as 502.
   const holding = (query, scope) => ({
     query,
     header: () => null,
@@ -1163,10 +1083,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
   });
 
   await t.test('a PRIVILEGED caller does not get "(undefined) and ..." into the service', async (tt) => {
-    // `filterFor` returns `{filter: null, empty: false}` for an unscoped privileged caller — an
-    // unfiltered read. A bare template over that produces the literal string "(undefined) and ...",
-    // which the service 400s and this route turns into a 502. That is how the provenance clause
-    // took staging down, and every probe that missed it was anonymous.
+    // A null filter in a bare template renders "(undefined) and ...", which the service 400s and
+    // this route turns into a 502.
     let chunkFilter = null;
     onlyChunkCall(tt, f => { chunkFilter = f; });
     stubHydration(tt);
@@ -1185,9 +1103,8 @@ test('chunk filters land on the chunks index itself', async (t) => {
 test('a Cosmos project row carries its location', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // The value has been at rest and unread all along: the merge renames Eagle's `location` to
-  // `address` on the way in, and neither row mapper read it back. `/projects` map popups render
-  // "Location: -" and the marker tooltip renders the literal string "null".
+  // The merge stores Eagle's `location` as `address`; the row mapper must read it back for the
+  // `/projects` map popups and tooltips.
   await t.test('location comes from the stored address', async () => {
     t.mock.method(projectsRepo, 'listPage', async () => [{
         id: '207',
@@ -1207,10 +1124,8 @@ test('a Cosmos project row carries its location', async (t) => {
 test('the summary is gated on the parent document, like the chunk search', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // A chunk's own `read[]` is a snapshot taken at ingest, so it can outlive its document's
-  // visibility — which is why the chunk SEARCH path gates on the parent document rather than on
-  // the chunk. This path did not, so the full text of a withheld document reached the model and
-  // came back paraphrased, with only the citation LABEL falling back to 'Untitled Document'.
+  // A chunk's `read[]` is an ingest snapshot that can outlive its document's visibility, so the
+  // summary gates on the parent document, as chunk search does.
   await t.test('a chunk whose parent document is not readable never reaches the model', async () => {
     t.mock.method(aiSearch, 'searchChunks', async () => ({
       items: [
