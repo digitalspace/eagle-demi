@@ -17,7 +17,13 @@
     "db:backfill-trim-project-labels": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-trim-project-labels.js",
     "db:date-assessment-phases": "NODE_PATH=node_modules node -r dotenv/config src/scripts/date-assessment-phases.js",
     "rbac:sync-teams": "NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-track-teams.js",
-    "ai:project-summary": "NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
+    "works:extract": "node scripts/works-import/extract.js",
+    "works:crosswalk": "NODE_PATH=node_modules node -r dotenv/config src/scripts/works-crosswalk.js",
+    "works:import-key": "NODE_PATH=node_modules node -r dotenv/config src/scripts/works-import-key.js",
+    "works:load": "NODE_PATH=node_modules node -r dotenv/config src/scripts/load-business-works.js",
+    "works:rollback": "NODE_PATH=node_modules node -r dotenv/config src/scripts/rollback-business-works.js",
+    "works:parity": "NODE_PATH=node_modules node -r dotenv/config src/scripts/check-business-works-parity.js",
+    "ai:project-summary":"NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint . && node scripts/eslint-size-freeze.cjs --check api",
     "lint:fix": "eslint . --fix",
@@ -45,6 +51,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.11.0",
+    "exceljs": "4.4.0",
     "globals": "^17.12.0"
   }
 }
