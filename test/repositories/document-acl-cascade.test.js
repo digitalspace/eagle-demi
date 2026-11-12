@@ -299,9 +299,10 @@ test('setAclForProject — an Eagle privileged-only document stays privileged-on
 
 /** Capture the patch operations one setPublished call would send. */
 function capturePatch(tt) {
-  const captured = { ops: null };
-  tt.mock.method(cosmos, 'patch', async (container, id, pk, operations) => {
+  const captured = { ops: null, etag: null };
+  tt.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition, etag) => {
     captured.ops = operations;
+    captured.etag = etag;
     return {};
   });
   return captured;
@@ -354,6 +355,16 @@ test('setPublished writes the requested level', async (t) => {
     assert.deepStrictEqual(patchValue(cap.ops, '/read'), ['staff', 'idir']);
     assert.deepStrictEqual(patchValue(cap.ops, '/ownRead'), ['staff', 'idir']);
     assert.strictEqual(patchValue(cap.ops, '/isPublished'), false);
+  });
+
+  await t.test('an etag guards the write; without one the write is unguarded', async (tt) => {
+    const cap = capturePatch(tt);
+
+    await documents.setPublished('d1', '207', 4, { etag: '"e1"' });
+    assert.strictEqual(cap.etag, '"e1"');
+
+    await documents.setPublished('d1', '207', 4);
+    assert.strictEqual(cap.etag, undefined);
   });
 
   await t.test('a level outside the ladder writes nothing', async (tt) => {

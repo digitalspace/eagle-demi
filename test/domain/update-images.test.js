@@ -51,6 +51,23 @@ test('update image cascade', async (t) => {
     assert.strictEqual(store.level(OWN), 2);
   });
 
+  await t.test('publishFor leaves the images when the parent check says the parent closed', async (t) => {
+    const store = fakeImages(t, [{ id: OWN, level: 2, ...UPLOAD }]);
+    const published = await images.publishFor(CTX, showingAll([OWN]), PARENT, async () => false);
+    assert.deepStrictEqual(published, []);
+    assert.strictEqual(store.level(OWN), 2);
+  });
+
+  await t.test('an image written between its read and the move is skipped, the next still publishes', async (t) => {
+    const store = fakeImages(t, [{ id: OWN, level: 2, ...UPLOAD }, { id: SECOND, level: 2, ...UPLOAD }]);
+    // A closing cascade landing after the image read and before the move.
+    const check = async () => { store.bump(OWN); return true; };
+    const published = await images.publishFor(CTX, showingAll([OWN, SECOND]), PARENT, check);
+    assert.deepStrictEqual(published.map(doc => doc.id), [SECOND]);
+    assert.strictEqual(store.level(OWN), 2);
+    assert.strictEqual(store.level(SECOND), 4);
+  });
+
   await t.test('release unpublishes an upload no published update shows', async (t) => {
     const store = fakeImages(t, [{ id: OWN, level: 4, ...UPLOAD }]);
     await images.release(CTX, [OWN], 'u-1');
