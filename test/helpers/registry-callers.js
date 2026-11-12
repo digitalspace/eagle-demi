@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Callers for the request-level auth suites, as the registry sees them.
- *
- * `stubRegistry` swaps the api-keys repository for an in-memory map, so a key minted through
- * POST /admin/api-keys in the same test authenticates afterwards. `presentedKey` is a registry key
- * sent as X-Api-Key; `gatewayCaller` is a row APIM proves, sent with the headers the gateway stamps.
+ * `stubRegistry` keeps api-keys in memory, so a key minted through POST /admin/api-keys in the same
+ * test authenticates afterwards.
  */
 
 const apiKeys = require('../../src/repositories/api-keys');

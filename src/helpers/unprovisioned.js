@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Reads against a container the infrastructure may not have created yet. The user, group and
- * inspection containers ship in a separate infra change, and code that reaches them must not fail
- * the project cascade or the reconcile until they exist.
+ * Reads against a container infra may not have created yet; a missing one must not fail the
+ * project cascade or the reconcile.
  */
 
 const { logger } = require('../utils/logger');
@@ -11,9 +10,8 @@ const { logger } = require('../utils/logger');
 const warned = new Set();
 
 /**
- * `work()`'s result, or null when Cosmos answers 404 for the container itself. A query never
- * 404s for a missing row, so on these read paths a 404 means the container is not there. Any
- * other error is thrown as it was. Warns once per container per process.
+ * Null on a 404: a query never 404s for a missing row, so on these paths the container is absent.
+ * Warns once per container per process.
  */
 async function unlessUnprovisioned(container, work) {
   try {

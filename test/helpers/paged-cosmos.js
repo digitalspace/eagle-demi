@@ -8,12 +8,8 @@ const { MAX_PAGE_SIZE } = require('../../src/helpers/access-sql');
 const ids = (prefix, n) => Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}` }));
 
 /**
- * `cosmos.query` under the real repositories. A paged read (`maxItemCount`) gets at most
- * `pageSize` rows a fetch — MAX_PAGE_SIZE unless lower, as a short cross-partition fetch is — and
- * the rest behind a continuation; the first `emptyFetches` paged fetches answer no rows but a token.
- * A read with no `maxItemCount` drains, as the real one does. `rowsOf(container)` serves each
- * container in the order its query sorts; a COUNT answers that set's size. Returns the
- * `{container, spec, options}` of every query.
+ * A paged read gets `pageSize` rows a fetch, the rest behind a continuation; the first
+ * `emptyFetches` answer no rows but a token. Returns the `{container, spec, options}` of every query.
  */
 function pagedCosmos(t, rowsOf, { pageSize = MAX_PAGE_SIZE, emptyFetches = 0 } = {}) {
   // The updates parent gate caches its parent rows per process; drop them on both sides.

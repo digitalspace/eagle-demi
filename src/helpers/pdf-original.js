@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Reads what `checkTail` needs from a stored original by following its cross-reference
- * structure: the last startxref, then each section by byte offset through /Prev and /XRefStm.
- * The original is never searched as text, so bytes inside a stream cannot pose as an object.
- * Every doubt is a refusal with an `original-*` reason, and the caller then refuses the tail.
+ * Follows the original's xref sections by byte offset, never a text search, so stream bytes cannot
+ * pose as an object. Every doubt is an `original-*` refusal, and the caller then refuses the tail.
  */
 
 const zlib = require('zlib');
@@ -251,9 +249,8 @@ async function readSection(src, inflate, offset, rowsLeft) {
 }
 
 /**
- * `{prev, root, info, size, metadata, catalog, infoKept}` of the original, or `{error}` with an
- * `original-*` reason. `catalog` is the `fingerprint` of the Catalog without /Metadata, `infoKept`
- * of the Info without /Title (null without an Info).
+ * `{prev, root, info, size, metadata, catalog, infoKept}`, or `{error}`. `catalog` fingerprints the
+ * Catalog without /Metadata, `infoKept` the Info without /Title (null without an Info).
  */
 async function read(readRange, originalLength) {
   try {

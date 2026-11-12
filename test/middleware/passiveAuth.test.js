@@ -93,10 +93,8 @@ test('Passive Auth Middleware Tests', async (t) => {
     assert.ok(req.user.realm_access.roles.includes('demi-admin'));
   });
 
-  // The regression this ticket exists for. Before the fix, `authenticate()` rejected any verified
-  // token without sysadmin/staff/demi-admin with a 403; passiveAuth caught it and continued as
-  // anonymous, so `req.user` stayed unset and the scoped tier was unreachable. This test fails on
-  // the old code (req.user === undefined) and passes on the new.
+  // A 403 from `authenticate()` for a non-privileged token would leave passiveAuth anonymous,
+  // `req.user` unset and the scoped tier unreachable.
   await t.test('populates req.user for a verified token that is NOT privileged', () => {
     config.keycloakEnabled = true;
 

@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * A sysadmin caller for suites that need one: the break-glass ADMIN_API_KEY, set for this test
- * process. src/helpers/auth.js has no built-in test key, so a suite that wants this caller says so
- * by requiring this file. `config.adminApiKey` is a getter read per request, so setting the
- * variable here is enough even after src/config has loaded.
+ * The break-glass ADMIN_API_KEY for this test process; src/helpers/auth.js has no built-in test key.
+ * `config.adminApiKey` is read per request, so setting it here works even after src/config loaded.
  */
 
 const SUITE_KEY = 'suite-break-glass-key';

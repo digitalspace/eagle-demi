@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * One id stored in more than one row where a write expects at most one. The write-path existence
- * reads throw it rather than pick a row: writing to either copy leaves the other one serving its
- * own ACL, and nothing tells the two apart.
- *
- * The mirrors answer 409, not a 5xx: eagle-api's push client retries a 500-and-up only, and a
- * retry finds the same rows.
+ * Write-path reads throw on a duplicated id rather than pick a row: the other copy keeps its own ACL.
+ * Mirrors answer 409, not 5xx: eagle-api's push client retries 5xx only, and a retry finds the same rows.
  */
 
 const { logger } = require('../utils/logger');

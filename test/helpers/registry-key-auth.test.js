@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The `X-Api-Key` registry branch of `authenticate()` — the async path that owns the outcome of
- * every API-key request. The helper's parsing and verification are covered in api-key.test.js;
- * what is covered here is the wiring around them: the identity handed to the caller, the lookup
- * cache, and the usage stamp.
+ * The `X-Api-Key` registry branch of `authenticate()`: identity, lookup cache and usage stamp.
+ * Parsing and verification are covered in api-key.test.js.
  */
 
 process.env.NODE_ENV = 'test';
@@ -103,10 +101,8 @@ test('a key id Cosmos could never store is a bad key, not an outage', async (t) 
 });
 
 test('the usage stamp is by id and happens once per cache TTL, not once per request', async (t) => {
-  // It used to pass the whole cached RECORD to an upsert, which rewrote every field — including
-  // putting `revokedAt: null` back from a copy cached before the revocation. Passing the id is
-  // what makes the write a patch that cannot erase what it does not name, and the cache-miss
-  // condition is what keeps it off the hot path of a busy consumer.
+  // A whole cached record upserted would put `revokedAt: null` back from a copy cached before the
+  // revocation; passing the id makes the write a patch that cannot erase what it does not name.
   const { plaintext, record } = stored();
   const touched = stub(t, record);
 

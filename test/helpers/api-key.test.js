@@ -36,11 +36,8 @@ test('generateKey', async (t) => {
 
 test('parseKey', async (t) => {
   await t.test('accepts a secret containing underscores', () => {
-    // base64url's alphabet includes '_', so real secrets contain them routinely. A fixed
-    // four-part split rejected those keys — and only for the fraction of randomly generated
-    // secrets that happened to contain one, which is exactly the kind of intermittent auth
-    // failure that gets blamed on the network. Deterministic on purpose: the round-trip test
-    // above catches this only by luck.
+    // base64url secrets contain '_' routinely. Deterministic on purpose: the round-trip test above
+    // catches a split on '_' only when a random secret happens to hold one.
     const parsed = parseKey('demi_dev_abc123_aa_bb-cc_dd');
     assert.ok(parsed);
     assert.strictEqual(parsed.keyId, 'abc123');

@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Does the increment after a stored original hold exactly what `pdf-title/titler.py` writes, and
- * nothing else? The titler appends an Info dictionary with /Title, optionally a new XMP /Metadata
- * stream (unfiltered) under a new number with the Catalog revised to name it, and one xref section
- * (table plus trailer, or an xref stream). Anything else in the increment could change what the
- * public sees, so it is refused.
- *
- * The original's facts come from `readOriginal` in `pdf-original.js`, which follows its xref
- * structure.
+ * Accepts only the increment `pdf-title/titler.py` writes (Info /Title, optional new XMP, one xref
+ * section); anything else could change what the public sees, so it is refused.
  */
 
 const crypto = require('crypto');
@@ -307,9 +301,8 @@ function isInertText(text) {
 }
 
 /**
- * The new XMP packet, read as strict XML: no DOCTYPE, entity, CDATA or comment, and no '<' or '>'
- * inside a processing instruction. Every dc:title (element or attribute) holds `wanted`; every
- * other text is inert if the packet is ever read as page content, and no attribute ends a tag early.
+ * Strict XML, no DOCTYPE, entity, CDATA or comment. Every dc:title holds `wanted`; all other text
+ * stays inert if the packet is ever read as page content, and no attribute ends a tag early.
  */
 function checkXmp(data, wanted) {
   const bad = () => refuse('tail-xmp-body');

@@ -26,9 +26,8 @@ function run(gate, roles) {
 const runGate = roles => run(requireWrite, roles);
 const runAdminGate = roles => run(requireAdmin, roles);
 
-// The pair below is the point of this file. A read-only tier that is merely *declared* would pass
-// a test that only checks it can read. It has to be shown BOTH reading and being refused a write —
-// otherwise `demi-service-read` doing nothing at all would look identical to it working.
+// Shown both reading and refused a write: a read-only tier that did nothing at all would pass a
+// test that only checks it can read.
 test('demi-service-read reads everything and writes nothing', async (t) => {
   await t.test('it is privileged for reads, so the ACL predicate does not restrict it', () => {
     assert.strictEqual(isPrivileged(['public', 'demi-service-read']), true);
@@ -43,8 +42,7 @@ test('demi-service-read reads everything and writes nothing', async (t) => {
 });
 
 test('requireWrite admits every role that could write before this existed', async (t) => {
-  // Regression guard: this middleware was added to make a read-only tier possible, NOT to take
-  // anything away. If this fails, a previously working consumer has just been locked out.
+  // The read-only tier must take nothing away from the roles that write.
   for (const role of ['sysadmin', 'staff', 'demi-admin']) {
     await t.test(`${role} still writes`, () => {
       const r = runGate(['public', role]);
@@ -85,10 +83,8 @@ test('requireWrite refuses anything unprivileged', async (t) => {
   });
 });
 
-// The mirror of the demi-service-read pair above, and the same reason it is written as a pair: a
-// write tier that is merely *declared* would pass a test that only checks it can write. It has to
-// be shown BOTH writing data and being refused the admin surface — otherwise granting it
-// `demi-admin` in all but name would look identical to this working.
+// Shown both writing and refused the admin surface: a tier that was `demi-admin` in all but name
+// would pass a test that only checks it can write.
 test('demi-service-write writes data and administers nothing', async (t) => {
   await t.test('it reads like staff, so the ACL predicate does not restrict it', () => {
     assert.strictEqual(isPrivileged(['public', 'demi-service-write']), true);
@@ -119,8 +115,8 @@ test('demi-service-write writes data and administers nothing', async (t) => {
   });
 });
 
-// A role the mint route rejects as unknown is a role nobody can hold. `staff` left SECURE_ROLES in
-// P3-2, so GRANTABLE_ROLES derives from AUTHENTICATED_ROLES instead.
+// A role the mint route rejects is a role nobody can hold. `staff` is not in SECURE_ROLES, so
+// GRANTABLE_ROLES derives from AUTHENTICATED_ROLES.
 test('staff and compliance API keys can still be minted', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(apiKeys, 'upsert', async (record) => record);

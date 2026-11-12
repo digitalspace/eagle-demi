@@ -17,9 +17,8 @@ const SEARCH_REFUSED = 'The search service could not run this query.';
 const SEARCH_FAILED = 'The search service is unavailable.';
 
 /**
- * What the caller sees of a search-service failure, or null for any other error. The service's
- * message can quote the `$filter`, the caller's ACL clause included, so it reaches the log only.
- * Its 400 answers to a query built from the caller's input; anything else is the service's fault.
+ * The service's message can quote the `$filter`, ACL clause included, so it reaches the log only.
+ * Null for an error that is not the search service's.
  */
 function searchServiceReply(err) {
   if (!err || !err.searchService) return null;
@@ -35,12 +34,8 @@ function searchServiceError(res, err, context) {
 }
 
 /**
- * A 500 that logs the detail and tells the caller nothing.
- *
- * `sendError` echoes `error.message`, which is right for a 400 the caller caused and wrong for a
- * driver fault: a Cosmos SDK message carries the account endpoint, the database and container
- * names, and RU/status detail — and the read routes that surface it are reachable with no
- * credential at all. The detail still reaches the log stream, which is where it is useful.
+ * A 500 that logs the detail and tells the caller nothing: a Cosmos SDK message names the account
+ * endpoint, database and container, and unauthenticated read routes surface it.
  */
 function serverError(res, err, context) {
   logger.error(context || 'Unhandled error', {

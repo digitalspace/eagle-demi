@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * PDF tab titles written into the stored original, by a worker that holds no storage credential.
- *
- * The worker asks for a lease on one document, reads a frozen backup through a GET link, writes
- * `original + one increment` through a PUT link for exactly the leased key, and reports back. This
- * module is the only caller of `storage.getUploadUrl` and `storage.copyObject`. Every step that
- * fails leaves the stored object whole: the untouched original or a verified new object, and a
- * verify that fails copies the backup back. The record is the DEMI-owned field `pdfTitle`.
- *
- * Lease state lives in `pdfTitle.lease`, and every record write is guarded by the row's `_etag`,
- * so two workers on one document lose with 412 rather than both writing. Every step acts on the
- * key the lease recorded, never on whatever `s3Key` the row holds by then.
+ * The titler worker holds no storage credential: it gets signed links for one leased key only. A
+ * failed step leaves the stored object whole; every step acts on the leased key, never on `s3Key`.
  */
 
 const crypto = require('crypto');
@@ -40,21 +31,15 @@ const PUT_MARGIN_MS = 60 * 1000;
 const PUT_SKEW_MS = 30 * 1000;
 /** Owner decision 6: larger files are skipped. */
 const MAX_BYTES = 256 * 1024 * 1024;
-/**
- * The titler's increment: the Info dictionary (title at most ~4 bytes a character as UTF-16 hex,
- * plus the original's other Info strings), the original's XMP packet rewritten with the title,
- * and one xref section. 256 KiB leaves room for a large XMP packet; a file whose XMP is bigger is
- * refused at commit.
- */
+/** The titler's increment (Info, rewritten XMP, one xref); a file whose XMP is bigger is refused at commit. */
 const MAX_GROWTH = 256 * 1024;
 const PAGE_DEFAULT = 100;
 const PAGE_MAX = 500;
 const SWEEP_DEFAULT = 5;
 const SWEEP_MAX = 20;
 /**
- * Leases a row may end with no word from the worker before it is skipped. A file that kills the
- * worker (out of memory) leaves no report, but so does a large PDF that runs out of time, and those
- * can take many leases to finish. 10 gives them room and still ends a crash loop after 10 runs.
+ * Leases a row may end with no worker report before it is skipped: a large PDF may time out many
+ * times before it finishes, while a file that crashes the worker must stop looping.
  */
 const MAX_SILENT_RELEASES = 10;
 // Failed backup copies in a row before a row is parked for review. The worker tries a 503 lease
@@ -257,11 +242,8 @@ async function release(row, extra = {}) {
 }
 
 /**
- * What a skip records. A file that holds no title is marked skipped for this title, so it is not
- * offered again. A titled file stays `titled`, or a later withheld name would never be restored,
- * and records the title it was skipped for. A restore that cannot run needs a person. A lease that
- * ended with no report and no worker failure counts, and at MAX_SILENT_RELEASES is marked as a
- * skip report would mark it.
+ * A titled file stays `titled` on a skip, or a later withheld name would never be restored.
+ * A silent lease end counts toward MAX_SILENT_RELEASES, then is marked as a skip report would be.
  */
 function skipFields(row, lease, report, workerFailure = null) {
   if (!report) {
@@ -301,9 +283,7 @@ function onLeasedKey(row) {
   return lease && lease.key && lease.key !== row.s3Key ? { ...row, s3Key: lease.key } : row;
 }
 
-// ---------------------------------------------------------------------------------------------
 // Settle: the one place that decides what a lease ends as, for a worker report and for the sweep.
-// ---------------------------------------------------------------------------------------------
 
 /** Copy the backup back over the leased key: did the key end up holding the backup's bytes, and what was overwritten? */
 async function copyBack(row, fields) {
@@ -339,9 +319,8 @@ async function park(row, reason, restored, overwritten, fields) {
 }
 
 /**
- * What the store holds for the in-flight write: `good` (the new object, fully checked), `source`
- * (the pre-lease bytes), or `bad` with a reason. `shape` marks an increment that is not the
- * titler's, which a verified undo turns into a skip rather than a review.
+ * `good` (new object, fully checked), `source` (pre-lease bytes) or `bad`. `shape` marks an
+ * increment that is not the titler's; a verified undo turns it into a skip, not a review.
  */
 async function inspect(row) {
   const { lease, inFlight } = recordOf(row);
@@ -397,13 +376,8 @@ async function endLease(row, lease, report, workerFailure) {
 }
 
 /**
- * End a lease from the store's state; the one path for a worker report and for the sweep.
- * `report` is the worker's skip, if it sent one; `workerFailure` its failure text, only logged.
- *
- * - No in-flight write: nothing was ever signed, so drop the backup and clear.
- * - PUT link maybe still live: undo a bad object at once, then wait (`outcome: 'waiting'`).
- * - After the link is dead: a good object is recorded `titled` or `restored`; the source (or the
- *   undone bad write) releases the lease; anything else is undone and parked for review.
+ * While the PUT link may live, a bad object is undone and the lease waits. Once it is dead: good is
+ * recorded, the source releases the lease, anything else is undone and parked for review.
  */
 async function settle(stored, report = null, workerFailure = null) {
   const row = onLeasedKey(stored);
@@ -429,10 +403,8 @@ async function settle(stored, report = null, workerFailure = null) {
     verdict = { kind: 'bad', reason: 'check-failed', shape: true, retry: true };
   }
 
-  // INVARIANT: while the PUT link can still land (now < putExpiresAt + skew), never release the
-  // lease, never delete the backup and never record a final status, whatever the store holds now:
-  // the same link can PUT again and undo any of them. A failed check is undone at once and noted
-  // on inFlight; the decision is made from a fresh look once the link is dead.
+  // INVARIANT: while the PUT link can still land, never release the lease, delete the backup or
+  // record a final status: the same link can PUT again and undo any of them.
   if (Date.now() < Date.parse(record.inFlight.putExpiresAt) + PUT_SKEW_MS) {
     if (verdict.kind !== 'bad') return { row: stored, outcome: 'waiting' };
     const { restored, overwritten } = await copyBack(row, fields);
@@ -462,9 +434,7 @@ async function settle(stored, report = null, workerFailure = null) {
   return park(row, verdict.reason, restored, overwritten, fields);
 }
 
-// ---------------------------------------------------------------------------------------------
 // Routes
-// ---------------------------------------------------------------------------------------------
 
 function pageLimit(value, fallback, max) {
   return Math.min(Math.max(parseInt(value, 10) || fallback, 1), max);
@@ -485,10 +455,8 @@ async function queryPage(req, res, spec, limit) {
 }
 
 /**
- * GET /documents/pdf-title/pending — one page of work. Reads only.
- *
- * Rows come back as `{id, projectId, mode, title}`. A cross-partition page may be short or empty
- * while more rows exist: follow `continuation` until it is null.
+ * GET /documents/pdf-title/pending. A cross-partition page may be short or empty while more rows
+ * exist: follow `continuation` until it is null.
  */
 async function listPending(req, res) {
   if (unsupportedBackend(res)) return undefined;
@@ -524,10 +492,8 @@ async function listPending(req, res) {
 }
 
 /**
- * POST /documents/pdf-title/sweep — settle one page of expired leases. A row still under a live
- * PUT link is left (`waiting`); a row that fails is named in `failed`. Follow `continuation`, with
- * the `before` cutoff the first page returned, so every page reads the same query and rows that
- * keep failing never hold the others back.
+ * POST /documents/pdf-title/sweep. Follow `continuation` with the first page's `before` cutoff, so
+ * every page reads the same query and rows that keep failing never hold the others back.
  */
 async function sweep(req, res) {
   if (unsupportedBackend(res)) return undefined;
@@ -846,9 +812,8 @@ async function commit(req, res) {
       logger.info('pdf-title.original', { id: row.id, s3Key: row.s3Key, length: original.length, sha256: original.sha256 });
     }
 
-    // Signed first, so putExpiresAt (taken after signing) is never earlier than the link's own
-    // expiry. A link whose inFlight save then fails is never handed out. PUT_SKEW_MS covers the
-    // store's clock running behind this one; that skew was not measured on ECS.
+    // Signed first, so putExpiresAt is never earlier than the link's own expiry. A link whose
+    // inFlight save then fails is never handed out.
     const uploadUrl = await storage.getUploadUrl(row.s3Key, { expirySeconds: PUT_SECONDS, contentMd5: body.newMd5 });
     const putExpiresAt = new Date(Date.now() + PUT_SECONDS * 1000).toISOString();
     const inFlight = {
@@ -887,9 +852,8 @@ function cleanReason(reason, max = 200) {
 }
 
 /**
- * PUT /documents/:id/pdf-title — the worker's report. `{leaseId}` releases the lease, after a PUT
- * or after a failure that wrote nothing (its `reason` only logged); `{leaseId, skipped: true, reason}` records a skip. The
- * store decides the outcome either way. 409 `put-window-open` while the PUT link may still land.
+ * PUT /documents/:id/pdf-title, the worker's report. The store decides the outcome either way;
+ * 409 `put-window-open` while the PUT link may still land.
  */
 async function report(req, res) {
   if (unsupportedBackend(res)) return undefined;
