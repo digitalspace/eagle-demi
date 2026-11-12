@@ -3,11 +3,7 @@
 const clients = new Map();
 
 /**
- * The one way this app reaches a storage queue.
- *
- * Identity-based against the account the Functions host uses for `AzureWebJobsStorage`
- * (`AzureWebJobsStorage__accountName`), so there is no connection string here and none is wanted.
- * Memoised per queue: building a `QueueClient` per send re-runs the credential chain.
+ * Identity-based, no connection string; memoised because a new client re-runs the credential chain.
  *
  * @param {object} queue `{name}` from config, `{setting}` the app setting that carries it and
  *                       `{feature}` what is off when it is missing.

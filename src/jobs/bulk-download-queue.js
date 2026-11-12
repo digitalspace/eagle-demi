@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The bulk-download work queue — the only producer side.
- *
- * The message body is the bare job id, unencoded: `host.json` sets `messageEncoding: "none"`, and
- * base64 on this side would reach the trigger as a corrupt id.
+ * The message body is the bare job id: `host.json` sets `messageEncoding: "none"`, so base64 here
+ * would reach the trigger as a corrupt id.
  */
 
 const config = require('../config');
