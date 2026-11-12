@@ -80,8 +80,9 @@ they print or write out is unredacted and is handled as level-0 material:
 
 `src/scripts/backfill-chunk-parent-fields.js`, `backfill-document-list-ids.js`, `backfill-eac-number.js`,
 `backfill-objects.js`, `backfill-trim-project-labels.js`, `backup-originals.js`,
-`date-assessment-phases.js`, `purge-extraction.js`, `reconcile-eagle.js`, `restore-originals.js`,
-`seed-nosql.js`, `seed-public-reads.js`, `sync-track-projects.js`, `sync-wildfires.js`.
+`build-phase-catalog.js`, `check-works-parity.js`, `date-assessment-phases.js`, `purge-extraction.js`,
+`reconcile-eagle.js`, `restore-originals.js`, `seed-nosql.js`, `seed-public-reads.js`,
+`sync-track-projects.js`, `sync-track-run.js`, `sync-wildfires.js`.
 
 `grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
 
