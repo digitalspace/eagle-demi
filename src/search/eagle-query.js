@@ -137,7 +137,7 @@ function sectorFallbackTerm(value, access, read) {
   });
   if (sources.length === 0) return null;
   reads.forEach(f => read.add(f));
-  const any =sources.length === 1 ? sources[0] : `(${sources.join(' or ')})`;
+  const any = sources.length === 1 ? sources[0] : `(${sources.join(' or ')})`;
   return `((sector eq null or sector eq '') and ${any})`;
 }
 
