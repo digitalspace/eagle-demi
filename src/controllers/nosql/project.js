@@ -173,10 +173,7 @@ const LOOSE_JOINER = /(?<=^|\s)[\u200C\u200D]+|[\u200C\u200D]+(?=\s|$)/g;
 const cleanTag = (tag) => tag.normalize('NFC').replace(ZERO_WIDTH, '').replace(LOOSE_JOINER, '')
   .replace(/\s+/g, ' ').trim();
 
-/**
- * Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left.
- * @returns {{ tags: string[] } | { error: string }}
- */
+/** Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left. */
 function normalizeTags(value) {
   if (!Array.isArray(value) || value.some(tag => typeof tag !== 'string')) {
     return { error: 'tags must be an array of strings' };
@@ -205,11 +202,7 @@ function trimLabels(row) {
   return row;
 }
 
-/**
- * A number or a four-digit string to a number, blank to null. The index field is an Int32, so
- * anything else is refused rather than stored.
- * @returns {{ value: number|null } | { error: string }}
- */
+/** A number or a four-digit string to a number, blank to null; anything else is refused, as the index field is an Int32. */
 function normalizeLegislationYear(value) {
   if (value === null || value === '') return { value: null };
   const year = typeof value === 'string' && /^\d{4}$/.test(value.trim()) ? Number(value) : value;
@@ -218,10 +211,7 @@ function normalizeLegislationYear(value) {
     : { error: 'legislationYear must be a year, such as 2002 or 2018' };
 }
 
-/**
- * A PUT body's tags, labels and year, cleaned in place.
- * @returns {string|null} the message to 400 with, or null
- */
+/** A PUT body's tags, labels and year, cleaned in place; the message to 400 with, or null. */
 function cleanChanges(changes) {
   if (changes.tags !== undefined) {
     const normalized = normalizeTags(changes.tags);
@@ -260,10 +250,7 @@ async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = tru
   return failures.length ? failures.join(' ') : null;
 }
 
-/**
- * Re-derive the comment periods' and comments' ACLs; the mirror constrains them to the project only at push time.
- * Returns an error message the caller must 500 with, or null.
- */
+/** Re-derive the comment periods' and comments' ACLs, which the mirror caps only at push time; an error message, or null. */
 async function cascadeEngagementVisibility(projectId, read) {
   try {
     const periods = await commentPeriods.setAclForProject(systemAccess(), projectId, read);
@@ -295,11 +282,7 @@ async function cascadeEngagementVisibility(projectId, read) {
   }
 }
 
-/**
- * The project's Updates, which the push capped by it. Keyed by the EAGLE id: `updates.projectId`.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
- */
+/** The project's Updates, keyed by the EAGLE id (`updates.projectId`); an error message the caller must 500 with, or null. */
 async function cascadeUpdateVisibility(projectId, eagleId, read) {
   try {
     const cascade = await updateAcl.setAclForProject(eagleId, read);
@@ -319,10 +302,8 @@ async function cascadeUpdateVisibility(projectId, eagleId, read) {
 }
 
 /**
- * The project's groups, or its inspections and the elements and items under each: every row was
- * capped by the project at push time and is gated by its own stored `read[]`.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * The project's groups, or its inspections with their elements and items, each capped by the project at push time
+ * and gated by its own `read[]`. An error message the caller must 500 with, or null.
  */
 async function cascadeMirrorVisibility(label, repo, projectId, read) {
   try {
@@ -949,10 +930,7 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
-/**
- * Whether a push leaves the row deleted: its own flag, else the stored delete if it stands.
- * Once DEMI owns the row, the stored flag decides.
- */
+/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands; on a DEMI-owned row, the stored flag. */
 function pushDeleted(doc, existing) {
   if (isDemiOwnedProject(existing)) return existing.isDeleted === true;
   if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
