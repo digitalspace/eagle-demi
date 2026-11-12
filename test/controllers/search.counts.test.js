@@ -171,9 +171,8 @@ test('GET /search/counts answers one badge per record type', async (t) => {
   });
 });
 
-// This endpoint counts every record type at once and filters belong to one type, so there is
-// no filter it could honour. Accepting one and answering the unfiltered total is the failure these
-// cover: the caller would read the number as filtered and nothing in the body says otherwise.
+// Counts span every record type, so no filter applies; an unfiltered total for a filtered ask
+// would be read as filtered.
 test('a filter /search accepts is refused here, not counted without', async (t) => {
   t.beforeEach(() => searchController.resetCountsCache());
   t.afterEach(() => t.mock.restoreAll());

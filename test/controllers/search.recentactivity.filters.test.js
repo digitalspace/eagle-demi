@@ -1,19 +1,7 @@
 'use strict';
 
-/**
- * `GET /search?dataset=RecentActivity` — the activities filter panel on the KEYWORDLESS page.
- *
- * "Documents attached" and the posted-on range were accepted, answered 200 and narrowed nothing:
- * the branch read the container by project and keywords only, and both keys came back under
- * `meta[0].dropped.filter`. A filter panel that quietly does nothing returns the whole corpus and
- * reads as a filter that matched everything, so the two assertions every case here makes are that
- * the SQL carries the clause and that the key is NOT reported dropped.
- *
- * The page and its total are asserted TOGETHER wherever both run: a total measured with a looser
- * predicate than the page describes rows the page cannot hold, and eagle-public pages against it.
- *
- * Harness, stub points and row fixtures: `test/helpers/search-reads.js`.
- */
+// A filter that quietly does nothing reads as one that matched everything, so each case checks
+// the SQL carries the clause and the key is not reported dropped; page and total move together.
 
 process.env.NODE_ENV = 'test';
 
@@ -63,7 +51,7 @@ test('GET /search?dataset=RecentActivity&and[documentUrl]', async (t) => {
       '/api/search?dataset=RecentActivity&and%5BdocumentUrl%5D=true');
 
     assert.strictEqual(status, 200);
-    // THE WHOLE POINT: `documentUrl` used to come back under `meta.dropped.filter`.
+    // `documentUrl` must not come back under `meta.dropped.filter`.
     assert.deepStrictEqual(droppedFilters(body), []);
 
     const specs = specsFor(seen, 'updates');
@@ -151,9 +139,8 @@ test('GET /search?dataset=RecentActivity&and[dateAdded…]', async (t) => {
     }
   });
 
-  // The end date INCLUDES its own day, which is only true because the bound is the midnight after
-  // it. `<= 2026-09-10T00:00:00Z` would hide every update posted during the day the caller named —
-  // the same arithmetic `eagle-query`'s rangeTerm does for the index path.
+  // The end date includes its own day only because the bound is the next midnight; the index path
+  // does the same in eagle-query's rangeTerm.
   await t.test('an end date covers its own day, by bounding at the next midnight', async () => {
     const seen = stubCosmos(t, rowsFor([WITH_DOC]));
 

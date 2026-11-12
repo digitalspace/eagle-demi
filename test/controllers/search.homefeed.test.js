@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * `GET /search?dataset=RecentActivity&top=true&pageSize=N` and `dataset=HomeFeed` — the home page's
- * strip with a caller-chosen length, and the feed that merges updates with decisions.
- *
- * The updates stub here honours the pinned/unpinned split and the type IN clause, because both
- * reads are built from them: a stub that served every row to both queries could not tell a pinned
- * strip from an unordered one. The ACL still cannot be evaluated by a stub, so it is asserted on
- * the predicates each read sent, as in `search.commentperiods.test.js`.
- *
- * Harness, stub points and row fixtures: `test/helpers/search-reads.js`.
- */
+// The updates stub honours the pinned split and the type IN clause, else a pinned strip looks like
+// an unordered one. A stub cannot run the ACL, so it is asserted on the predicates each read sent.
 
 process.env.NODE_ENV = 'test';
 
