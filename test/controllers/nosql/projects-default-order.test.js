@@ -17,9 +17,9 @@ const { fakeWhereQuery } = require('../../helpers/updates-store');
 const STAFF = { realm_access: { roles: ['staff'] } };
 
 const ROWS = [
-  { id: 'open', name: 'Alpha', read: ['public'] },
-  { id: 'dialled', name: 'Bravo', read: ['public'], vis: { name: 2 } },
-  { id: 'plain', name: 'Charlie', read: ['public'], vis: { region: 2 } }
+  { id: 'open', name: 'Alpha', projectType: 'Mines', read: ['public'] },
+  { id: 'dialled', name: 'Bravo', projectType: 'Energy', read: ['public'], vis: { name: 2 } },
+  { id: 'plain', name: 'Charlie', projectType: 'Water', read: ['public'], vis: { region: 2 } }
 ];
 
 /** `fakeWhereQuery` over ROWS, with `COUNT(1)` answered as the length of the same match. */
@@ -56,6 +56,14 @@ test('GET /projects default name order honours each row\'s name dial', async (t)
     const res = await call('count=true', STAFF);
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.ids, ['open', 'dialled', 'plain']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
+  });
+
+  await t.test('an explicit sort on another field lists and counts the row for an anonymous caller', async (t) => {
+    fakeProjects(t);
+    const res = await call('sort=projectType&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.ids, ['dialled', 'open', 'plain']);
     assert.strictEqual(res.headers['x-total-count'], '3');
   });
 });
