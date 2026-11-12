@@ -61,7 +61,7 @@
   "src/sync-out/eagle.js": {"complexity":[26,21],"max-lines":[648]},
   "src/sync-out/index.js": {"complexity":[36]},
   "test/ai/project-summary.test.js": {"max-lines":[3114]},
-  "test/azure/main-bicep-wiring.test.js": {"max-lines":[1956]},
+  "test/azure/main-bicep-wiring.test.js": {"max-lines":[1875]},
   "test/controllers/document-download.test.js": {"max-lines":[991]},
   "test/controllers/nosql-controllers.test.js": {"max-lines":[2396]},
   "test/controllers/nosql/eagle-push.test.js": {"max-lines":[1436]},

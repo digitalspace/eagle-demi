@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * azure/modules/audit-logs.bicep — every summary rule's output columns match the destination
- * table it declares. A mismatch does not fail the deployment; it fails the rule's hourly write,
- * so the rollup goes quiet with nothing to say why.
- */
+// A summary rule whose columns miss its destination table still deploys, then its hourly write
+// fails and the rollup goes quiet with no error.
 
 const test = require('node:test');
 const assert = require('node:assert');

@@ -1,14 +1,5 @@
-// Azure Monitor — the destination for every log line DEMI writes.
-//
-// Before this template existed the API had nowhere to log to. `host.json` configured Application
-// Insights sampling against an Application Insights resource that was never created, and the only
-// workspace in the resource group was a portal-created orphan (`workspace-c4b0a8devrgYb8e`) that
-// held zero rows. Errors were visible in the live log stream and nowhere else, which means they
-// were visible only while somebody happened to be watching.
-//
-// Application Insights is workspace-based and pinned to the same region as its workspace: it
-// cannot function without Log Analytics, so splitting the two across regions would double the
-// blast radius of a regional outage for no benefit.
+// Application Insights stays in its workspace's region: it cannot run without Log Analytics, so
+// splitting regions only doubles the outage risk.
 
 @description('Location for the workspace and Application Insights component')
 param location string = resourceGroup().location
@@ -52,16 +43,8 @@ var isProd = environmentName == 'prod'
 var workspaceName = 'demi-logs-${environmentName}'
 var appInsightsName = 'demi-insights-${environmentName}'
 
-// Ingestion and retention are what Azure Monitor actually bills for, not query volume, so both
-// are capped rather than left at their defaults. `dailyQuotaGb` stops collection for the rest of
-// the day once the cap is hit — a blunt backstop against a runaway log loop, not a tuning knob.
-// The reset hour is the workspace's own, set when it was created, NOT midnight UTC.
-//
-// The numbers are sized against the consumption budget in cost-budget.bicep, which is scope-wide
-// and so already counts this workspace's spend: at roughly $2.76/GB, a sustained 1 GB/day would be
-// ~$83/month and would eat that $100 ceiling on its own. Real DEMI log volume is orders of
-// magnitude below these caps — they only bind when something has gone wrong, which is the point.
-// Revisit after a week of real traffic.
+// Caps sized against the cost-budget.bicep ceiling; they bind only on a runaway log loop. The
+// daily quota resets at the workspace's own hour, not midnight UTC.
 var retentionDays = isProd ? 90 : 30
 // Bicep has no float literal, hence json(): a bare 0.5 will not parse.
 var dailyQuotaGb = isProd ? json('2') : json('0.5')
@@ -79,8 +62,7 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
       dailyQuotaGb: dailyQuotaGb
     }
     features: {
-      // Read access follows the monitored resource rather than the workspace, so someone with
-      // Reader on the app can see the app's logs without being granted the whole workspace.
+      // Reader on the app is enough to read its logs; no workspace grant needed.
       enableLogAccessUsingOnlyResourcePermissions: true
     }
     publicNetworkAccessForIngestion: 'Enabled'
@@ -88,9 +70,8 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-// Log Analytics Reader. Read-only, and narrower than it looks: the app already WRITES here
-// through Application Insights — this only lets it query AppRequests back (src/azure/monitor.js).
-// A new assignment takes minutes to be honoured — retry a 403, do not re-grant.
+// Lets src/azure/monitor.js query AppRequests back. A new grant takes minutes to apply: retry a
+// 403, do not re-grant.
 var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
 
 resource appLogsReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -117,16 +98,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// The cap is a backstop with a nasty second effect: when `dailyQuotaGb` is reached, collection
-// stops for the rest of the day — and that silences the audit-drop alert in audit-logs.bicep
-// too, because that alert queries AppTraces in this workspace. A cap that disables the alarm is
-// worse than no cap, so the approach to it has to be visible BEFORE it lands.
-//
-// This matters more now that the adapter emits 'finish' and every request produces an access-log
-// line: log volume went from startup-and-errors to one line per request.
+// Hitting the daily cap stops collection, which also silences the audit-drop alert in
+// audit-logs.bicep, so the approach to the cap must alert first.
 var dailyQuotaMb = isProd ? 2048 : 512
-// 80%. Integer arithmetic on purpose — Bicep has no float literals, and a percentage does not
-// need one.
 var warnAtMb = dailyQuotaMb * 8 / 10
 
 resource alertGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
@@ -157,10 +131,8 @@ resource quotaAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT1H'
-    // A rolling 24 hours, not the workspace's own quota day. The rule's window is the only
-    // time filter that applies — adding `startofday()` to the query would INTERSECT with the window
-    // rather than widen it, and a one-hour window would then measure one hour of ingest against a
-    // daily quota. Rolling is the honest approximation; it warns early rather than late.
+    // Rolling 24 hours, not the quota day: a startofday() filter would intersect the window, not
+    // widen it. Rolling warns early rather than late.
     windowSize: 'P1D'
     criteria: {
       allOf: [
@@ -183,14 +155,8 @@ resource quotaAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   }
 }
 
-// Drift between Eagle and DEMI, caught nightly. eagle-api hard-deletes with no tombstone, so the
-// push cannot tell DEMI a row is gone — this rule is the only thing that notices, and it notices
-// only because src/scripts/reconcile-eagle.js writes one machine-readable line per run.
-//
-// The line is `[reconcile] projects: … documents: … parentFieldsPending=N drift=N`, and zero in
-// both is clean — the second counts documents whose chunks never got their parent fields. Nothing
-// alerts when the run does not happen at all: a nightly job that stops writing is a silent alert,
-// which is the accepted ceiling here rather than a second rule counting absences.
+// eagle-api hard-deletes with no tombstone, so this rule is the only thing that sees a lost row.
+// A run that never happens stays silent; that ceiling is accepted.
 resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployReconcileDriftAlert) {
   name: 'demi-reconcile-drift-${environmentName}'
   location: location
@@ -199,22 +165,17 @@ resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   properties: {
     displayName: 'DEMI reconcile reports Eagle drift'
     description: 'The nightly reconcile found rows Eagle publishes and DEMI does not, or DEMI rows gone from Eagle. Report-only: nothing was changed. Run src/scripts/reconcile-eagle.js --json for the ids.'
-    // Warning, not error: drift is a mirror that has fallen behind, not a broken service, and the
-    // report changes nothing on its own.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT1H'
-    // A day, because the run is nightly — a shorter window would look at hours in which no line
-    // was ever written and evaluate to nothing 23 times out of 24. Re-alerting hourly on the same
-    // line is what `autoMitigate` is for.
+    // The run is nightly; a shorter window would mostly see no line at all.
     windowSize: 'P1D'
     criteria: {
       allOf: [
         {
-          // `AppTraces` (workspace-based App Insights has no `traces` table) and `contains` (`has`
-          // tokenises on brackets), both as in audit-logs.bicep. Every night writes this line, so
-          // the count comes from `drift=` in the message rather than from the number of rows.
+          // Workspace App Insights has AppTraces, not traces; `has` tokenises on brackets, so
+          // `contains`. Every night writes the line, so drift comes from `drift=`, not row count.
           query: 'AppTraces | where Message contains "[reconcile] projects" | extend drift = toint(extract("drift=([0-9]+)", 1, Message)), pending = toint(extract("parentFieldsPending=([0-9]+)", 1, Message)) | where drift > 0 or pending > 0'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
@@ -233,10 +194,8 @@ resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   }
 }
 
-// A bulk download that died. The worker writes `[bulk] job failed` on its LAST attempt only, so
-// one line is one job that will not be retried and the rule fires on a single occurrence — the
-// retries in between are logged at warn and deliberately not alerted on. It reads the log rather
-// than the poison queue because per-queue length is not a metric the storage account emits.
+// The worker logs this line on the last attempt only, so one line is one dead job. Reads the log
+// because storage emits no per-queue length metric.
 resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployBulkDownloadPoisonAlert) {
   name: 'demi-bulk-download-failed-${environmentName}'
   location: location
@@ -245,20 +204,17 @@ resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   properties: {
     displayName: 'DEMI bulk download job failed'
     description: 'A bulk download job failed after its retries. The requester sees status `failed`; the job row holds the error. See the Bulk-Download wiki page for the poison-queue runbook.'
-    // Warning: one requester lost one download, and they can ask again.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT15M'
-    // Same length as the frequency — no overlap, so one failure is not counted twice.
+    // Same as the frequency, so one failure is not counted twice.
     windowSize: 'PT15M'
     criteria: {
       allOf: [
         {
-          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
           query: 'AppTraces | where Message contains "[bulk] job failed"'
           timeAggregation: 'Count'
-          // One line, one dead job.
           operator: 'GreaterThanOrEqual'
           threshold: 1
           failingPeriods: {
@@ -275,12 +231,8 @@ resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
-// A chunk re-stamp that died. Same shape as bulkDownloadPoisonAlert above, including why it reads
-// the log rather than the `${chunkRestampQueue}-poison` queue: per-queue length is not a metric
-// the storage account emits. `src/jobs/restamp-chunks.js` writes `[chunk restamp] job failed` once,
-// on the attempt that runs out of retries — its own retries log a different line, and the
-// redeliveries that spend the message into the poison queue log none — so one line is one document
-// whose chunks are stale.
+// Same shape as bulkDownloadPoisonAlert: src/jobs/restamp-chunks.js logs this line once, on the
+// last attempt, so one line is one document with stale chunks.
 resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(chunkRestampQueue)) {
   name: 'demi-chunk-restamp-failed-${environmentName}'
   location: location
@@ -289,20 +241,16 @@ resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   properties: {
     displayName: 'DEMI chunk re-stamp job failed'
     description: 'A chunk parent-field re-stamp job failed after its retries. The document\'s chunks are stale; the repair is src/scripts/backfill-chunk-parent-fields.js --live --project <id>, which re-stamps that project and clears the pending flag on the documents it verifies.'
-    // Warning: one document's chunks are stale, not a service outage.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT15M'
-    // Same length as the frequency — no overlap, so one failure is not counted twice.
     windowSize: 'PT15M'
     criteria: {
       allOf: [
         {
-          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
           query: 'AppTraces | where Message contains "[chunk restamp] job failed"'
           timeAggregation: 'Count'
-          // One line, one dead job.
           operator: 'GreaterThanOrEqual'
           threshold: 1
           failingPeriods: {
@@ -319,8 +267,7 @@ resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
-// A sync-out message that died. The worker itself moves the message to the poison queue on the attempt
-// that runs out of retries, then writes `[sync-out] job failed` once.
+// The worker moves the message to the poison queue itself, then logs the line once.
 resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncOutQueue)) {
   name: 'demi-sync-out-failed-${environmentName}'
   location: location
@@ -329,7 +276,6 @@ resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' 
   properties: {
     displayName: 'DEMI sync-out job failed'
     description: 'A sync-out message failed after its retries, so Eagle did not get that comment period change. The worker moved the message to the `${syncOutQueue}-poison` queue before it wrote the line, and the line names the row.'
-    // Warning: one period is stale in Eagle until the next send or reconcile.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
@@ -356,19 +302,8 @@ resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' 
   }
 }
 
-// Chunk ingest is failing over and over. In September 2026 a retry loop on chunk writes burned 4-8M
-// RU an hour on demi-cosmos-test for five days, and the first thing to notice was the budget alert,
-// a day or two late. The Cosmos RU alert in cosmos-alerts.bicep sees the cost; this one sees the
-// cause, and names it. The lines come from src/controllers/nosql/document.js: `chunk write
-// incomplete` when a batch lands short, `chunk ingest rejected: …` (`chunk cap exceeded`, `repeated
-// failures`) when the guard refuses a document, and `Chunk ingest failed: …`, the catch-all that
-// wraps both. The catch-all is the line the September loop actually wrote — `Bulk request errored`,
-// 90 hours of it, at most 7 an hour — so without it this rule would have stayed quiet throughout.
-//
-// Unconditional: every environment that ingests writes these lines. Five in an hour, not one: one
-// document that is too big is a warning worth reading in the log, while a loop writes these
-// continuously. The window is an hour and the check every fifteen minutes, so the windows overlap
-// and a loop keeps the alert raised rather than firing once per line.
+// Sees the cause of an RU burn that cosmos-alerts.bicep sees only as cost. Five in an hour: one
+// oversized document is noise, a retry loop writes these lines without pause.
 resource chunkIngestFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-chunk-ingest-failures-${environmentName}'
   location: location
@@ -377,7 +312,6 @@ resource chunkIngestFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-0
   properties: {
     displayName: 'DEMI chunk ingest is failing repeatedly'
     description: 'Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour. A retry loop on chunk writes spends Cosmos RU for as long as it runs: check the Cosmos RU alert and the documents named in the lines, and stop the push that keeps resending them.'
-    // Warning, like the other job alerts: nothing is down, but money is being spent.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
@@ -386,8 +320,7 @@ resource chunkIngestFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-0
     criteria: {
       allOf: [
         {
-          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
-          // `contains` is case-insensitive, so `chunk ingest failed` matches the capitalised line.
+          // `contains` is case-insensitive, so this also matches the capitalised `Chunk ingest failed`.
           query: 'AppTraces | where Message contains "chunk write incomplete" or Message contains "chunk ingest rejected" or Message contains "chunk ingest failed"'
           timeAggregation: 'Count'
           operator: 'GreaterThanOrEqual'
@@ -406,17 +339,8 @@ resource chunkIngestFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-0
   }
 }
 
-// Search is down. On 2026-09-08 every `dataset=Document` query answered 502 for 65 minutes and
-// nothing raised a hand: the cause sat in `AppTraces` as `[search] document search failed` and was
-// found by eye. This rule reads that line.
-//
-// Unconditional, unlike the two rules above: every environment serves search, so the line this
-// matches is one an environment can always write.
-//
-// Three in five minutes, not one. `search.js` logs one line per failed request, so a single line is
-// a client that asked for something the index could not answer; a broken index or a dead upstream
-// produces them continuously. Three is the smallest count that separates the two at the 5-minute
-// window a page has to fit inside.
+// Three in five minutes: one line is one bad request, a broken index or upstream writes them
+// without pause.
 resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-search-failures-${environmentName}'
   location: location
@@ -425,33 +349,16 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   properties: {
     displayName: 'DEMI search is failing'
     description: 'Three or more search errors in five minutes, from either of two branches: `[search] … failed` and `[search/summary] … failed`, where the caller got a 502 or an empty summary, and `[ai-search] … retried without it`, where the live index could not answer a field, so the page was SERVED as a 200 with `meta.degraded` and is missing a column. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: docs/runbook-search-outage.md in the eagle-demi repo.'
-    // Error, not warning: the public site cannot search at all while this is true.
     severity: 1
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT5M'
-    // Same length as the frequency — no overlap, so one failure is not counted twice.
     windowSize: 'PT5M'
     criteria: {
       allOf: [
         {
-          // One alternative per tag, each tag CLOSED. An unclosed `[search` prefix also matches
-          // `[search-schema]`, which the anonymous /health/search-schema probe writes — a path that
-          // serves nobody and would page at severity 1 on a caller's malformed request.
-          // `startswith` rather than `has` because `has` tokenises on the brackets (see
-          // reconcileDriftAlert); every message in this workspace begins at its tag.
-          //
-          // `[search/summary]` is its own alternative because that route answers 200 on failure, so
-          // this rule is the ONLY thing that can see a summary outage. The warn lines under both
-          // tags say nothing about failure and are excluded by the `failed` literal.
-          //
-          // The third is the schema-drift degrade in src/search/ai-search.js: it drops the field the
-          // index cannot answer and retries, so a 200 is served, no 502 is logged and NOTHING else
-          // here would fire. `contains` rather than `startswith` because no `[ai-search]` line has
-          // been observed in this workspace to anchor the tag against.
-          //
-          // The fourth is the top-level search error in src/controllers/search.js: when no dataset
-          // branch succeeds, the catch-all handler logs with [demi-api search] and returns 500.
+          // Tags stay closed: `[search` alone would match the anonymous [search-schema] probe. The
+          // summary route and the ai-search degrade both answer 200, so only this rule sees them.
           query: 'AppTraces | where (Message startswith "[search]" and Message contains "failed") or (Message startswith "[search/summary]" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it") or (Message startswith "[demi-api search]" and Message contains "error")'
           timeAggregation: 'Count'
           operator: 'GreaterThanOrEqual'
@@ -470,13 +377,8 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   }
 }
 
-// The same outage seen from the other side, and the one that still fires when the process dies
-// before it can log anything. A ratio rather than a count, because search traffic swings by two
-// orders of magnitude between a crawler pass and a quiet night, and a fixed count of 5xx is either
-// deaf at the top or screaming at the bottom.
-//
-// `total >= 5` is the floor that keeps a single failed request in an idle five minutes from reading
-// as 100% broken.
+// Still fires when the process dies before it can log. A ratio, since traffic swings 100x;
+// `total >= 5` keeps one failure in an idle window from reading as 100%.
 resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-search-5xx-ratio-${environmentName}'
   location: location
@@ -493,19 +395,9 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
     criteria: {
       allOf: [
         {
-          // Filtered on the PATH, not on `OperationName`. api/index.js registers ONE catch-all
-          // function (`app.http('api', { route: '{*path}' })`) because the Functions host matches
-          // routes in discovery order, so every request in this workspace — search, projects,
-          // health — carries the same operation name and only the URL tells them apart. `endswith`
-          // rather than an equality: the host mounts these under `/api`, which src/http/router.js
-          // strips at dispatch, so the recorded path is `/api/search` today and `/search` if that
-          // mount ever changes. The timer and queue functions land in this table too, with no Url
-          // at all; the same filter drops them.
-          // `ResultCode` is a string column; `toint` is what makes `>= 500` a numeric comparison
-          // rather than a lexicographic one.
+          // One catch-all function serves every route, so only the Url path tells search apart.
+          // ResultCode is a string; toint makes `>= 500` numeric.
           query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/counts" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
-          // The query answers with one row or none, so the rule counts rows: a row means the ratio
-          // was already over the line.
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
@@ -523,12 +415,8 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   }
 }
 
-// The Track -> DEMI project poll stalled or failed, from the `[track-projects-poll] mode=live …
-// failures=N` line src/scripts/sync-track-run.js writes every run. Unlike reconcileDriftAlert it
-// also fires on silence: no line means the timer, the app or its logging is down.
-// `absent` and `failing` each return a row or none; `summarize` without `by` yields one row on empty
-// input, which is how `absent` sees zero. `missing` and `failed` are KQL keywords, hence the names.
-// The span lives in the query and the window is the next size up, so the window never narrows it.
+// Also fires on silence: `summarize` without `by` yields one row on empty input. The window is
+// one size above the query span so it never narrows it; `missing` and `failed` are KQL keywords.
 resource trackProjectsPollAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncProjectsSchedule)) {
   name: 'demi-track-projects-poll-${environmentName}'
   location: location
@@ -537,7 +425,6 @@ resource trackProjectsPollAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-
   properties: {
     displayName: 'DEMI Track project poll stalled or failing'
     description: 'In the last 20 minutes the Track project poll wrote no `[track-projects-poll] mode=live` line, or a line with failures above 0, or `run failed`. Track project edits are not reaching DEMI. Check the demi-api function app, then run src/scripts/sync-track-run.js by hand for the error.'
-    // Warning, like reconcileDriftAlert: DEMI keeps serving, its Track mirror falls behind.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
@@ -570,9 +457,7 @@ union absent, failing
   }
 }
 
-// The daily Track teams sync stalled or failed. Same shape as trackProjectsPollAlert, on the
-// `[track-teams] mode=live … failures=N` line src/scripts/sync-track-teams.js writes once a day.
-// 26 hours is one run plus slack for a slow or late one; the window is the next size up.
+// Same shape as trackProjectsPollAlert; 26 hours is one daily run plus slack for a late one.
 resource trackTeamsAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncTeamsSchedule)) {
   name: 'demi-track-teams-${environmentName}'
   location: location
@@ -581,7 +466,6 @@ resource trackTeamsAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = i
   properties: {
     displayName: 'DEMI Track teams sync stalled or failing'
     description: 'In the last 26 hours the Track teams sync wrote no `[track-teams] mode=live` line, or a line with failures above 0, or `nightly run failed`. Project team roles, the Track project mirror or the assessment pass are not being updated. With ASSESSMENT_PASS on, a failed assessment pass adds to that failures count, and its own `[assessment-phases]` lines name the project. Check the demi-api function app, then run src/scripts/sync-track-teams.js (dry run) by hand for the error.'
-    // Warning, like trackProjectsPollAlert.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
@@ -624,7 +508,6 @@ resource trackPushAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   properties: {
     displayName: 'DEMI Track push failed'
     description: 'In the last 30 minutes DEMI refused Track (`[demi-api] Track refused apim:`), found no registry row for the `track` subscription, wrote an error-level `[track-push]` line that is not retryable, or wrote 2 or more retryable lines for one project id. Retryable lines are `write failed` and `delete lost its etag race`; one alone is left to the retry Track sends. APIM 401, 429 and 504 write no app line and show only in the Track log. A registry row with no write role is refused by requireWrite with no log line, so it also shows only in the Track log. Check the demi-api function app; the nightly Track teams sync repairs a lost project write, but not a lost delete.'
-    // Warning: DEMI keeps serving, one project's mirror is behind until the repair.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
@@ -670,7 +553,6 @@ resource trackDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = i
   properties: {
     displayName: 'DEMI Track project mirror drifted'
     description: 'The latest `[track-teams] mode=live` line with trackProjects above 0 shows created or updated above 0, or more orphaned projects than the night before. A Track write did not reach DEMI by push, and the nightly sync caught it. Alembic data migrations, a test DB refresh and lookup renames also trigger this by design. Limit: a missing or failed night leaves no baseline within the 48 hour maximum, so that night\'s orphan rise is missed. Check Track logs for `demi-push failed`; the orphan rise names its ids in the sync output.'
-    // Warning, like trackTeamsAlert: the nightly already repaired the rows it counted.
     severity: 2
     enabled: true
     scopes: [ workspace.id ]

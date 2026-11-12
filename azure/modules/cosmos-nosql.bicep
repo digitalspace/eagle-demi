@@ -1,12 +1,5 @@
-// Azure Cosmos DB for NoSQL — DEMI's target data store.
-//
-// Replaced the MongoDB-API account, whose template (azure/modules/cosmos-db.bicep) was deleted at
-// Phase 8. An account's API is fixed at creation, so this was a new account plus a re-seed, not an
-// in-place conversion. The Mongo account itself is deleted after the clean week ends 2026-08-08.
-//
-// Cost note: serverless bills per request plus storage (~76 MB of data), so an idle account
-// is effectively free. The private endpoint is the one flat recurring charge, which is why
-// this template is deployed only when the seed and cutover are ready to run.
+// Serverless bills per request plus storage, so an idle account is nearly free; the private
+// endpoint is the one flat recurring charge.
 
 @description('Location for Cosmos DB Account')
 param location string = resourceGroup().location
@@ -29,13 +22,8 @@ param readerPrincipalId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips control-plane auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
-// The wildfires container exists only to serve `sources.wildfires` enrichment. Prod publishes none
-// (ENRICHMENT_SOURCES empty), so declaring it there would create a container nothing reads or writes.
-//
-// `boundaries` is deliberately NOT gated on this. It is reference data, not enrichment output:
-// `GET /boundaries` and `GET /db/stats` query it unconditionally in every environment, and an empty
-// container answers those with `[]` and `0`. A missing one answers both with a Cosmos 404 → HTTP 500,
-// and /db/stats is the deploy-verification endpoint.
+// Never gate `boundaries` on this: GET /boundaries and /db/stats read it everywhere, and a missing
+// container turns both into a 500.
 @description('Declare the Cosmos wildfires container. False leaves the environment without `sources.wildfires`.')
 param deployEnrichment bool = true
 
@@ -48,10 +36,8 @@ var privateDnsZoneName = 'privatelink.documents.azure.com'
 var dataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 var dataReaderRoleId = '00000000-0000-0000-0000-000000000001'
 
-// Only the paths actually filtered, sorted or joined on are indexed. Cosmos indexes every
-// path by default, which on this data would mean indexing raw upstream payloads
-// (sources.*, sourceData), boundary geometry and chunk content — pure write amplification.
-// /read/[]/? is security-critical: without it every ACL-filtered read is a full scan.
+// Index only paths that are filtered or sorted on; the default indexes raw payloads and content.
+// Every container keeps /read/[]/?, else each ACL-filtered read is a full scan.
 var noIndex = [
   {
     path: '/*'
@@ -72,19 +58,14 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
   properties: {
     databaseAccountOfferType: 'Standard'
     publicNetworkAccess: !empty(peSubnetId) ? 'Disabled' : 'Enabled'
-    // No account keys. The API authenticates with its managed identity via Entra, so there
-    // is no connection string to leak — this repository is public.
+    // Managed identity only: no connection string to leak from a public repo.
     disableLocalAuth: true
     disableKeyBasedMetadataWriteAccess: true
     minimalTlsVersion: 'Tls12'
     // On live in both environments; a template that omits it turns it off on every deploy.
     enablePartitionKeyMonitor: true
-    // All three are on the live account. The two preview enrolments are VESTIGIAL: Cosmos native
-    // full-text search was ruled out (fuzzy `distance` is a silent no-op even with the preview
-    // enrolled, MIGRATION.md §F) and nothing generates embeddings, so neither is used by any query.
-    // They are declared anyway because a deployment that omitted them would strip capabilities off
-    // a live account as a side effect of describing it — removing them is a decision, not a
-    // consequence of writing this file down.
+    // Both previews are unused but live on the account; dropping them here would strip them on the
+    // next deploy, which needs its own decision.
     capabilities: [
       {
         name: 'EnableServerless'
@@ -107,10 +88,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
       }
     ]
 
-    // On, matching the live account. It does nothing on a single-region account — there is nowhere
-    // to fail over TO — but the ARM default is false, so omitting it would silently turn a flag off
-    // as a side effect of writing this file down. It becomes meaningful only if a second region is
-    // ever added, which is a cost decision nobody has made.
+    // No effect with one region, but matches the live account; the ARM default would turn it off.
     enableAutomaticFailover: true
   }
 }
@@ -125,13 +103,10 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15
   }
 }
 
-// ── Containers ───────────────────────────────────────────────────────────────
-// Partition keys are chosen from the real access patterns and are irreversible once data
-// lands. Project-scoped authorization rides these keys rather than the read[] ACL, so a
-// scoped caller becomes a partition filter instead of a cross-partition scan.
+// Partition keys cannot change once data lands. Project scoping rides them, so a scoped caller is
+// a partition filter, not a cross-partition scan.
 
-// ~392 items. Every query is either a point read or a full list; there is no grouping
-// dimension any query filters on, so /id gives perfect distribution and 1 RU point reads.
+// Point reads or full lists only, so /id.
 resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'projects'
@@ -256,11 +231,8 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             // documents.js filters on it for the extraction-failure count on /db/stats.
             path: '/contentExtractionError/?'
           }
-          // No '/id/?' here, and it cannot go here: Cosmos rejects the whole policy with "the
-          // specified path '/id/?' could not be accepted because it overrides system property
-          // 'id'". `id` is always indexed and cannot be included or excluded, so the by-id
-          // cross-partition fallback documents.getById uses when no ?project is supplied — the
-          // frontend's path on every document open — is already served.
+          // No '/id/?': Cosmos rejects a policy that names the system property, which is always
+          // indexed, so the by-id cross-partition fallback is already served.
           {
             path: '/sourceSystem/?'
           }
@@ -284,9 +256,7 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/pdfTitle/lease/expiresAt/?'
           }
-          // Intake sweep: pending rows by scanStatus in createdAt order (an ORDER BY needs the range
-          // index), and the month-to-date scan total filtered on scannedAt. Adding them reindexes the
-          // container online, so the next prod foundation deploy reindexes prod even with intake off.
+          // Intake sweep paths. A new path reindexes the container online, even where intake is off.
           {
             path: '/scanStatus/?'
           }
@@ -303,10 +273,7 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
-// Public Updates (Eagle `RecentActivity`), mirrored on every eagle-api write. Small and read
-// whole, so /id gives perfect distribution and 1 RU point reads. No TTL: an update is retired by
-// unpublishing it, not by expiring. /notifiedAt is indexed because the publish-notify claim is a
-// conditional patch on it.
+// Eagle `RecentActivity`. No TTL: an update is retired by unpublishing it.
 resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'updates'
@@ -440,9 +407,7 @@ resource commentPeriodsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatab
   }
 }
 
-// Public comments (Eagle `Comment`). /periodId, not /projectId: every list is "the comments of this
-// period", and a busy project's periods would otherwise share one logical partition against the
-// 20 GB serverless cap. /projectId is still indexed — it is the axis a scoped caller is confined to.
+// /periodId, not /projectId: a busy project's comments in one partition would near the 20 GB cap.
 resource commentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'comments'
@@ -484,9 +449,7 @@ resource commentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
   }
 }
 
-// Project notifications (Eagle `ProjectNotification`) — ~17 rows, no project axis of their own.
-// Kept out of `projects` on purpose: folded in, they would appear in the project list, the map and
-// the projects index.
+// Kept out of `projects`, or they would show in the project list, the map and the projects index.
 resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'notifications'
@@ -606,10 +569,7 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
-// Eagle `User`, mirrored by eagle-api (docs/rbac-architecture.md, "User, group and inspection
-// mirrors"). Lists order on c.id, which the system index serves, or on the `sort` key
-// /displayName, /orgName, /email or /phoneNumber (email and phoneNumber are staff-only); the
-// mirror writes each on every row, so that ORDER BY drops none.
+// The mirror writes every sort key on every row, since an ORDER BY drops rows missing its field.
 resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'users'
@@ -795,9 +755,8 @@ resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
-// 244 reference items. /type is only three values — normally an anti-pattern, correct here:
-// the sole list query filters on it, and the whole container is a few MB once raw geometry
-// is dropped (full-resolution GeoJSON is a build artifact served as a static asset).
+// /type has three values, fine here: the only list query filters on it and the container is a
+// few MB, since full GeoJSON is served as a static asset.
 resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'boundaries'
@@ -847,11 +806,8 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
   }
 }
 
-// The sync (manual: POST /admin/sync/wildfires) re-upserts every fire still in the DataBC
-// feed, refreshing _ts. Anything
-// that drops out of the feed expires itself — that deletes the stale-fire purge problem
-// rather than solving it. No spatial index on /location: nothing reads this container — the
-// proximity endpoint is gone, and the frontend's fire layer reads the DataBC WFS directly.
+// Each sync re-upserts fires still in the DataBC feed, so dropped fires expire by TTL. No spatial
+// index: nothing reads this container, the fire layer reads DataBC WFS.
 resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
   parent: database
   name: 'wildfires'
@@ -895,19 +851,8 @@ resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
-// No syncState container. It was defined here and nothing ever read or wrote it — there is no
-// sync cursor to persist, because the AI Search indexers hold their own high-water mark on _ts.
-// The container still exists in the live account; this template is not deployed, so removing the
-// definition deletes nothing. Delete it with the account teardown if it is still empty.
-
-// Registry API keys, one item per consumer. Partitioned on /id, where the id IS the public keyId
-// carried in the key itself — that makes verification a point read in a single partition on the
-// hot path of every X-Api-Key request, instead of a scan comparing every stored hash.
-//
-// /hash is deliberately NOT indexed: nothing queries by it (verification is a point read plus a
-// constant-time compare in helpers/api-key.js), and an index is one more copy of a secret digest.
-// No TTL — expiry is a field checked at verify time, because a key must remain visible in the
-// admin listing after it expires or is revoked, or the audit trail vanishes with it.
+// The id is the key's public keyId, so verification is a point read. /hash stays out of the index,
+// and no TTL: expired keys stay visible for the audit trail.
 resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'apikeys'
@@ -945,14 +890,8 @@ resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }
 
-// Selected Credentials — one item per grant (docs/rbac-architecture.md §1). Partitioned on
-// /party/id, because the read that matters runs on every request: "what does THIS party hold",
-// resolved in a single partition. The admin listing and the bulk revokes go cross-partition, and
-// both are rare and small.
-//
-// /scope/ids and /batchId are indexed: revoking every grant over a closed project and revoking a
-// batch are queries on them. No TTL — `end` is a field the middleware checks, and an expired grant
-// must stay visible to an operator, or the audit trail loses what was granted to whom.
+// /party/id: every request reads one party's grants. No TTL: an expired grant stays visible for
+// the audit trail, and middleware checks `end`.
 resource credentialsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'credentials'
@@ -992,14 +931,7 @@ resource credentialsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabase
   }
 }
 
-// Runtime configuration for the frontend, one item with id 'config'. Partitioned on /id so the
-// read GET /api/config performs is a point read in a single partition — ~1 RU, and serverless
-// bills consumption, so an idle container costs nothing.
-//
-// Its own container rather than a row in `apikeys`, whose indexing policy exists to keep /hash out
-// of the index — not the right neighbour for a document served to the public verbatim.
-//
-// No indexing policy: one item, read by id, never queried.
+// Served to the public verbatim, so it stays out of `apikeys`. One item, read by id, never queried.
 resource configContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'config'
@@ -1051,10 +983,7 @@ resource linksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
-// Stored per-project AI summaries, one row per project. Partitioned on /id (the project id): the
-// page read is a point read, and there is nothing to query across. Only /generatedAt is indexed —
-// the refresh pass asks "which rows are older than their project's documents"; nothing filters on
-// the generated prose, and indexing it would index every condition bullet of every project.
+// One row per project, id = project id. Only /generatedAt is indexed, for the refresh pass.
 resource projectSummariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'projectSummaries'
@@ -1088,9 +1017,7 @@ resource projectSummariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDat
   }
 }
 
-// Per-user data — saved lassos, preferences. Partitioned on /userId (the owner's IDIR username):
-// every read and write is one user's partition, and the id carries the type (`lasso:<slug>`).
-// `/ring/*` stays out of the index — a 500-vertex polygon is stored, never filtered on.
+// Partitioned on the owner's IDIR username; the id carries the type (`lasso:<slug>`).
 resource userDataContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'userdata'
@@ -1130,14 +1057,8 @@ resource userDataContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
   }
 }
 
-// Bulk download jobs. Partitioned on /id — the job id is a UUID the requester holds as its
-// capability token, so every read is a point read in its own partition. `defaultTtl: -1` enables
-// per-item `ttl`: a finished job expires itself, and the row outlives the zip so the sweep still
-// sees who owned it. The big arrays stay out of the index — a 2,500-id list is stored, never
-// filtered on.
-//
-// Also holds one `quota:<requester>` counter row per requester (repositories/bulk-downloads.js),
-// read and patched by id like everything else here.
+// The job id is the requester's capability token. Per-item ttl outlives the zip, so the sweep still
+// sees the owner. Also holds `quota:<requester>` counter rows.
 resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'bulkDownloads'
@@ -1156,8 +1077,7 @@ resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
         automatic: true
         includedPaths: [
           {
-            // The cleanup sweep is the only query over this container; everything else — a status
-            // poll, a quota row — is a point read. It filters on both of these.
+            // The cleanup sweep, the only query here, filters on both of these.
             path: '/status/?'
           }
           {
@@ -1171,9 +1091,7 @@ resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
   }
 }
 
-// Edge ban history (src/repositories/edge-bans.js), partitioned on id (the prefix with `/` as `_`, plus
-// the `feed:crawlers` row). Rows set their own ttl of 7 days, reset on each write; `-1` only turns TTL on.
-// Default indexing: the container is small, and TTL needs indexing on.
+// Rows set their own 7-day ttl; `-1` only turns TTL on. Default indexing, since TTL needs it.
 resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'edgeBans'
@@ -1191,10 +1109,7 @@ resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
   }
 }
 
-// ── Data-plane RBAC ──────────────────────────────────────────────────────────
-// Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
-// have to live here. Built-in definitions are used rather than a custom role — a custom
-// definition with one consumer would be an abstraction with a single implementation.
+// The portal cannot manage Cosmos data-plane role assignments, so they live here.
 
 resource apiDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = {
   parent: cosmosAccount
@@ -1217,10 +1132,7 @@ resource humanDataReader 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignmen
   }
 }
 
-// ── Private networking ───────────────────────────────────────────────────────
-// groupIds is 'Sql' for the NoSQL API — 'MongoDB' (used by the old account) silently
-// produces an endpoint that never resolves. The DNS zone differs too:
-// privatelink.documents.azure.com rather than privatelink.mongo.cosmos.azure.com.
+// NoSQL needs groupIds 'Sql' and zone privatelink.documents.azure.com; 'MongoDB' never resolves.
 
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!empty(peSubnetId)) {
   name: privateEndpointName
@@ -1244,10 +1156,8 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!
   }
 }
 
-// Who changed the database itself — containers, throughput, firewall, RBAC. The app's audit trail
-// covers authenticated writes to the DATA; this covers authenticated changes to the store holding
-// it, which the app cannot see and the landing-zone policy ships only to a central workspace we
-// cannot read.
+// Control-plane changes to the account, which the app cannot see and the landing-zone policy ships
+// only to a central workspace we cannot read.
 resource cosmosAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(auditWorkspaceId)) {
   scope: cosmosAccount
   // Distinct from the landing zone's `setByPolicy-LogAnalytics` on this same account — a shared
@@ -1258,9 +1168,7 @@ resource cosmosAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
     // Without Dedicated these land in the shared AzureDiagnostics column soup and
     // CDBControlPlaneRequests never appears as a table at all.
     logAnalyticsDestinationType: 'Dedicated'
-    // ControlPlaneRequests ONLY. DataPlaneRequests is one row per Cosmos operation — a single
-    // corpus re-extraction is ~1.13M chunk writes — and it duplicates what the app already logs.
-    // Turn that on for the length of an incident, never as a standing setting.
+    // DataPlaneRequests logs one row per operation (~1.13M on a re-extraction): incidents only.
     logs: [
       {
         category: 'ControlPlaneRequests'
@@ -1270,9 +1178,7 @@ resource cosmosAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
   }
 }
 
-// No connection-string output. The previous module emitted one through a @secure() output,
-// which pushed a live credential across a module boundary. Local auth is disabled here, so
-// the endpoint plus the managed identity is all the app needs.
+// No connection-string output: local auth is off, endpoint plus managed identity is enough.
 output cosmosAccountId string = cosmosAccount.id
 output cosmosAccountName string = cosmosAccount.name
 output cosmosEndpoint string = cosmosAccount.properties.documentEndpoint
