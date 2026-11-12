@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * `GET /search` for what eagle-api's search serves a staff or sysadmin caller: the User, Group and
- * inspection datasets, `dataset=Item`, the staff project fields, `x-total-count` and Eagle's
- * comment `eaoStatus` filter.
- *
- * The stub runs in `strict` mode: it applies the role arm of the read predicate the request
- * emitted, so a dataset that reads without the caller's ACL serves a sysadmin-only row to an
- * anonymous caller and fails here. Harness: `test/helpers/search-reads.js`.
- */
+// `GET /search` as eagle-api serves staff: User, Group, inspections, Item, staff project fields, `eaoStatus`.
+// The `strict` stub applies the read's role arm, so a read without the caller's ACL fails here.
 
 process.env.NODE_ENV = 'test';
 
