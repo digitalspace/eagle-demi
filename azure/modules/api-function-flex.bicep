@@ -33,8 +33,8 @@ param searchIndexProjects string = 'projects'
 @description('Azure AI Search index holding document metadata.')
 param searchIndexDocuments string = 'documents'
 
-// Empty is the kill switch for these two: keyword searches fall back to a Cosmos CONTAINS read.
-// Set the index name only after the index PUT and the first indexer run.
+// Empty is the kill switch for these two (keyword searches fall back to a Cosmos CONTAINS read);
+// the other three have no fallback. Set the name only after the index PUT and first indexer run.
 @description('Azure AI Search index holding recent activity (updates). Empty falls back to Cosmos.')
 param searchIndexActivities string = ''
 
@@ -130,7 +130,7 @@ param ssoAudience string = ''
 
 // Empty keys every visitor arriving through one of our proxies on that proxy's address, which is
 // one shared anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
-@description('Comma-separated egress IPs of proxies we run (the OpenShift rproxy). For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
+@description('Comma-separated egress IPs of proxies we run in front of APIM. For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
 param trustedProxyIps string = ''
 
 // Empty keys every visitor arriving through Front Door on its egress address, which is one shared
@@ -282,7 +282,7 @@ param bulkMaxTotalBytes int = 21474836480
 @description('Object opens the worker keeps ahead of the archive append, so the next documents overlap the current one. Sockets and buffers in flight per instance.')
 param bulkFetchAhead int = 3
 
-@description('Objects READ at once, the entry being appended included. 1 keeps the transfers serial, which is what bulkFetchAhead alone does; above 1 it supersedes bulkFetchAhead. One connection to NRS carries about 6.4 MB/s.')
+@description('Objects READ at once, the entry being appended included. 1 keeps the transfers serial, which is what bulkFetchAhead alone does; above 1 it supersedes bulkFetchAhead. One connection to NRS carries about 6 MB/s.')
 param bulkFetchConcurrency int = 1
 
 @description('Bytes those concurrent reads hold in total, split evenly between them. The memory this trades for the throughput, on top of the one 64 MiB multipart upload buffer.')
@@ -453,8 +453,8 @@ resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobService
   name: 'devbox-run-output'
 }
 
-// Encrypted works spreadsheet extracts for the devbox import. Ciphertext only, so the account's
-// shared-key access is accepted; the app identity reads through blobDataOwner, operators by hand.
+// Encrypted works extracts for the devbox import; ciphertext only, so shared-key access is OK.
+// The app identity can read, write and delete here via blobDataOwner; operator roles are by hand.
 resource worksImportContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: 'works-import'
@@ -463,8 +463,8 @@ resource worksImportContainer 'Microsoft.Storage/storageAccounts/blobServices/co
   }
 }
 
-// The account's only lifecycle policy. The trailing slash keeps the delete rule off every other
-// container, including any whose name starts with works-import.
+// Replaces any lifecycle rule set by hand on the account. The trailing slash keeps the delete rule
+// off every other container, including any whose name starts with works-import.
 resource storageLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: apiStorage
   name: 'default'
@@ -656,8 +656,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
     }
     siteConfig: {
       minTlsVersion: '1.2'
-      // WHOLE-COLLECTION PUT: a live setting absent here is DELETED next deploy. No FUNCTIONS_* or
-      // WEBSITE_NODE_DEFAULT_VERSION/RUN_FROM_PACKAGE: Flex rejects them.
+      // WHOLE-COLLECTION PUT: list every setting, empty values included, or the deploy DELETES it.
+      // Runtime is `functionAppConfig.runtime`; Flex rejects FUNCTIONS_WORKER_RUNTIME, FUNCTIONS_EXTENSION_VERSION, WEBSITE_RUN_FROM_PACKAGE.
       appSettings: [
         // src/controllers/config.js falls back to DEV values for both of these — pin them per app.
         {
@@ -1200,7 +1200,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           value: trustedProxyIps
         }
         // Proves a request came through our Front Door, so X-Azure-SocketIP can be trusted. Empty
-        // is off; a reference because a plain value would land in ARM history.
+        // is off; a reference, not the value, because a plain value would land in ARM history.
         {
           name: 'EDGE_SECRET'
           value: empty(edgeSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${edgeSecretUri})'
