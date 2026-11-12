@@ -37,22 +37,8 @@ const { analyticsEvent } = require('../utils/audit');
 const config = require('../config');
 
 /**
- * The body of a 502 from a search that FAILED — never a search that found nothing.
- *
- * The status and the public sentence are unchanged; what is added is enough to act on. On
- * 2026-09-08 the browser console said only "Document search is unavailable" for 65 minutes while
- * the cause — the live index missing `fileSize` — sat in AppTraces, and finding it took a Log
- * Analytics query, the code and the git history.
- *
- * `code` separates the two failures an operator handles differently: SEARCH_SCHEMA_DRIFT means the
- * live index cannot answer what this app asks (widen the index — `/health/search-schema` names the
- * field), SEARCH_UPSTREAM means the service did not answer (a role, a timeout, a Cosmos fault).
- * `traceId` is the request id every log line for this request already carries, so the body names
- * the trace to open rather than describing it.
- *
- * THE UPSTREAM TEXT ITSELF NEVER GOES IN: this route is reachable anonymously, and a search error
- * message carries the service endpoint, the index name and sometimes the OData filter — which is
- * the caller's ACL clause. `field` is a name from the app's own select, not caller data.
+ * The 502 body for a FAILED search. Never the upstream message: the route is anonymous and that
+ * text can carry the endpoint, the index name and the caller's ACL filter.
  */
 function searchUnavailable(req, err, message) {
   const field = aiSearch.missingPropertyFrom(err);
@@ -77,12 +63,8 @@ function geoPoint(centroid) {
 }
 
 /**
- * Label document rows with their project, under the CALLER's access — never systemAccess(): a label
- * must not outlive the ACL of the row it describes.
- *
- * A project this caller cannot read yields `{_id: <DEMI id>, name: 'Associated Project'}`. The row
- * still returns — this is a label, not a gate — because a missing `project` object throws inside
- * eagle-public's row template and takes out every render of the row.
+ * Label rows under the CALLER's access, never systemAccess(): a label must not outlive the row's ACL.
+ * An unreadable project still gets a stub label, since eagle-public's row template throws without one.
  */
 async function labelWithProjectNames(access, docs) {
   const projectIds = docs.map(d => d.project).filter(Boolean);
@@ -102,15 +84,8 @@ async function labelWithProjectNames(access, docs) {
 }
 
 /**
- * Rewrite `&project=`/`&and[project]=` from Eagle ObjectIds into DEMI project ids.
- *
- * A `ProjectNotification` id stays itself: it IS the partition its periods and documents live
- * under, and it outranks a project row carrying the same id (`helpers/parent-admit`).
- *
- * Done here and not in `buildFilter` because the translation is a read. An unresolved ObjectId is
- * passed through as a literal rather than refused — see
- * wiki Search-Query-Construction#unresolved-project-ids-pass-through-as-literals.
- *
+ * Rewrite `&project=`/`&and[project]=` from Eagle ObjectIds into DEMI project ids. Unresolved ids pass
+ * through, see wiki Search-Query-Construction#unresolved-project-ids-pass-through-as-literals.
  * @returns {object} the query with every project id in DEMI's id space.
  */
 async function resolveProjectFilter(access, query) {
@@ -123,11 +98,8 @@ async function resolveProjectFilter(access, query) {
       demiIds.push(id);
       continue;
     }
-    // Both containers, under the CALLER's access, and `pickParent` decides — the same rule the
-    // mirrors partition by, so the filter names the partition the rows are actually in. A project
-    // row may carry a notification's id in `eagleId` (a Track `epic_guid` that is really a
-    // `ProjectNotification` _id), and translating to that project would search a partition holding
-    // none of the notification's rows.
+    // `pickParent` is the rule the mirrors partition by. A project's `eagleId` can be a
+    // notification's id, and that project's partition holds none of the notification's rows.
     const [project, notification] = await Promise.all([
       projectsRepo.getByEagleId(access, id),
       notificationsRepo.getById(access, id)
@@ -142,18 +114,9 @@ async function resolveProjectFilter(access, query) {
 }
 
 /**
- * Recover the DOCUMENT-ONLY chunk filters, by resolving them against the `documents` index.
- *
- * THE RESIDUE, not the main path: the four filter-panel facets are copied onto every chunk and
- * filter directly, so what arrives here is the keys a chunk carries no copy of — dates,
- * `isFeatured`, `legislation`, `documentSource` — plus any facet the live chunks index turns out
- * not to carry. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
- *
- * @returns {{scope: ?string, recovered: string[], capped: boolean}} `scope` is an OData clause to
- *   AND into the chunk filter, or null. `recovered` are the keys to REMOVE from the dropped report
- *   — everything else stays reported, the over-cap case included. `capped` says the recovery was
- *   the thing that failed: the keys are expressible here and the match set is simply too large to
- *   name, which is the only state the caller has nothing better to fall back on.
+ * Resolve the chunk filters a chunk carries no copy of against the `documents` index. See
+ * wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
+ * @returns {{scope: ?string, recovered: string[], capped: boolean}} `capped`: too many documents match.
  */
 async function recoverChunkFilters(query, dropped, access) {
   if (!dropped.length) return { scope: null, recovered: [], capped: false };
@@ -161,9 +124,8 @@ async function recoverChunkFilters(query, dropped, access) {
   // `documentId` there and `id` here, and the chunk clause sent to this index is a 400.
   const acl = documentsAcl(access);
 
-  // Which dropped keys the DOCUMENTS index can express, asked by building a filter from them and
-  // seeing which survive — a hardcoded list goes stale when an index widens. Rebuilt in the WIRE
-  // shape: `dropped` holds base names (`legislation`), the query holds `and[legislation]`.
+  // Ask the index which keys it can express by building a filter, not a hardcoded list that goes
+  // stale. Rebuilt in the WIRE shape: `dropped` holds base names, the query holds `and[name]`.
   const narrowed = {};
   // The caller's project scope comes along, and it is what decides whether the rest fits under the
   // cap. `project` is never in `dropped` here, so nothing else would offer it.
@@ -201,9 +163,8 @@ async function recoverChunkFilters(query, dropped, access) {
 }
 
 /**
- * The facet WIRE KEYS this request sent that the live chunks index cannot answer, through the
- * column-keyed check in chunk-query. Unavailable keys go to `buildFilter` as inexpressible, so the
- * documents-index recovery can still answer them.
+ * The facet WIRE KEYS this request sent that the live chunks index cannot answer. They go to
+ * `buildFilter` as inexpressible, so the documents-index recovery can still answer them.
  */
 async function liveChunkFacets(query, acl, projectIds) {
   const asked = new Set(eagleQuery.filterKeysIn(query));
@@ -218,11 +179,7 @@ exports.resetStaleChunkScopeCache = chunkQuery.resetStaleChunkScopeCache;
 
 /**
  * The OData scope for `?docIds=<pipe-separated Eagle ids>`, or null when the caller sent none.
- *
- * A PRESENT-BUT-EMPTY value matches nothing rather than everything: `docIds=` asks for a named set
- * of documents and the named set is empty, which is the same measurement `recoverChunkFilters`
- * makes when no document matches. `inClause` renders its list comma-delimited — the pipe is the
- * WIRE separator, and a document id carries neither character.
+ * A PRESENT-BUT-EMPTY value matches nothing, not everything: it names an empty set.
  */
 function documentIdScope(raw) {
   if (raw === undefined || raw === null) return null;
@@ -233,9 +190,8 @@ function documentIdScope(raw) {
 }
 
 /**
- * One filter value in EITHER wire shape — `&key=v` and `&and[key]=v` are both live, exactly as
- * `projectIdsFrom` handles both for `project`. A repeat takes the first: these are point lookups,
- * and a second value would silently pick one of two records.
+ * One filter value in EITHER wire shape, `&key=v` or `&and[key]=v`. A repeat takes the first:
+ * these are point lookups.
  */
 function filterValue(query, key) {
   for (const [k, v] of eagleQuery.andParams(query || {})) {
@@ -247,17 +203,8 @@ function filterValue(query, key) {
 }
 
 /**
- * EVERY value of one filter key, in either wire shape, split the way a multi-select means it.
- *
- * `filterValue` above is for point lookups and deliberately takes the first value only. This is for
- * the keys a grid column offers several of at once — `and[type]=News,Other`, or the same key
- * repeated — and it is `eagleQuery.valuesOf` doing the splitting, the same function the INDEX path
- * runs, so one URL cannot mean two things depending on which path answered it.
- *
- * `null` for "the caller did not send this key" versus `[]` for "sent it, but `valuesOf` split it
- * into nothing" — `and[type]=` is the latter. What each answer means is the CALLER's call, same as
- * the index path: `eagleQuery.buildFilter` applies no clause and drops nothing for either one, so a
- * consumer that wants that same "no filter" reading treats both the same, as `typeCriteria` does.
+ * EVERY value of one filter key, in either wire shape, split by `eagleQuery.valuesOf` as the INDEX
+ * path does. `null` = key not sent; `[]` = sent but empty (`and[type]=`).
  */
 function filterValues(query, key) {
   const raw = [];
@@ -287,16 +234,8 @@ function utcDayStart(value) {
 }
 
 /**
- * `and[dateAddedStart]`/`and[dateAddedEnd]` as the half-open window the INDEX path builds for the
- * same two keys (`eagleQuery`'s `rangeTerm`): whole UTC days, the start inclusive and the end
- * covering its own day by running to the midnight after it. A caller who asks for one day gets that
- * day, not nothing.
- *
- * `applied` names the keys this consumed, so the generic dropped report stays honest: a key sent
- * EMPTY (`and[dateAddedStart]=`) is a cleared filter and counts as consumed — the index path adds no
- * clause for it either — while a value no `Date` can read is left out and reported dropped rather
- * than silently widening the page to every update.
- *
+ * `and[dateAddedStart]`/`and[dateAddedEnd]` as the INDEX path's half-open window of whole UTC days.
+ * An unreadable date is left out of `applied`, so it is reported dropped rather than ignored.
  * @returns {{dateAddedFrom?: string, dateAddedBefore?: string, applied: string[]}}
  */
 function activityWindow(query) {
@@ -315,11 +254,8 @@ function activityWindow(query) {
 }
 
 /**
- * `and[documentUrl]` — "Documents attached", a presence question with `true` and `false` as its
- * WHOLE value space, exactly as `eagleQuery` PRESENCE_KEYS reads it on the index path. A URL, or
- * any other value, is not a question this filter can ask: it is left unapplied and reported
- * dropped, because filtering on the URL itself would make one key mean two things.
- *
+ * `and[documentUrl]` is a presence filter: only `true` and `false`, as on the index path. Any other
+ * value is reported dropped, never matched as a URL.
  * @returns {{hasDocument?: boolean, applied: string[]}}
  */
 function documentFilter(query) {
@@ -332,16 +268,8 @@ function documentFilter(query) {
 }
 
 /**
- * The eagle-search wire shape for a Cosmos row: the REDACTED row as stored, plus the keys
- * eagle-public indexes on.
- *
- * Spread rather than field-by-field on purpose. These containers hold only what a mirror chose to
- * store and the catalog already decides what leaves; a hand-written field list here would be a
- * second policy that goes stale the day a mirror grows a field, and the symptom is a blank cell
- * rather than an error.
- *
- * `_id` is the EAGLE id — eagle-public keys every one of these models on it, and the mirrors store
- * that id as the row key, so the two agree today and the fallback covers a backfilled row.
+ * The eagle-search wire shape for a REDACTED Cosmos row. Spread on purpose: the catalog decides what
+ * leaves, and a field list here would be a second policy. `_id` is the EAGLE id eagle-public keys on.
  */
 function cosmosRows(entity, rows, access, schemaName, decorate) {
   return redactAllForAccess(entity, rows, access).map((row) => ({
@@ -380,12 +308,8 @@ async function withoutDialHidden(access, filter, fields, keywords, searchedColum
 }
 
 /**
- * One `projects` INDEX hit, redacted for this caller. The catalog is keyed on INDEX field names
- * because the data source renames columns (docs/rbac-architecture.md §2 item 9).
- *
- * The index has no map type, so the dials arrive as a JSON string. A malformed one fails closed to
- * no dials — every field at its `defaultVis`, never the raw row. `dialsForIndex` restates the stored
- * keys as index ones, or a dial would be inert on exactly the renamed fields.
+ * One `projects` INDEX hit, redacted for this caller. The dials arrive as a JSON string; a malformed
+ * one fails closed to no dials, every field at its `defaultVis`.
  */
 function redactIndexProject(hit, access) {
   let dials;
@@ -411,11 +335,8 @@ function indexActiveWork(doc) {
 }
 
 /**
- * The wire `sector`: Track's sub-type, named for the legislation year, when the STORED row has no
- * sector. Asked of the stored row, not the redacted one, or a sector a dial withholds would come
- * back as the sub-type. Trimmed, as the merge stores it; rows written before that may still carry
- * a trailing space. `and[sector]` matches the fallback too (search/eagle-query.js); `sortBy=sector`
- * still orders on the index column.
+ * The wire `sector`, falling back to Track's sub-type when the STORED row has none. Asked of the
+ * stored row, not the redacted one, or a sector a dial withholds would come back as the sub-type.
  */
 function wireSector(stored, shown, legislationYear) {
   const text = v => (typeof v === 'string' ? v.trim() : '');
@@ -443,18 +364,8 @@ function imageOut(entry, document) {
 }
 
 /**
- * Label update rows with the project each announces, under the CALLER's access — same rule as
- * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
- * is `listByEagleIds` and not `listByIds`.
- *
- * ONE query for the whole page, like `labelWithProjectNames` and `periodRows`: a per-row lookup
- * made a 200-row page 200 cross-partition reads, and `pageSlice` allows a page of 1000.
- * A project this caller cannot see yields `null`, which is what eagle-api's own pipeline emits for
- * an orphaned reference (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News
- * model expects.
- *
- * Attachments, the featured image and the gallery are resolved the same way: a document this
- * caller cannot read drops out, so a public page never links a download that answers 404.
+ * Resolve update rows' projects and documents under the CALLER's access, one query per kind for the
+ * page. `updates.projectId` holds the EAGLE id. Unreadable: project gives null, document drops out.
  */
 async function updateProjects(access, rows) {
   const idsOf = (field) => Array.from(new Set(rows.map(r => r[field]).filter(Boolean).map(String)));
@@ -501,13 +412,8 @@ async function updateProjects(access, rows) {
       ? byNotificationId.get(String(row.projectNotification))
       : null;
 
-    // `{name, _id}` and NOT eagleQuery.ref: the News model reads `project.name` and the card links
-    // by `project._id`, which is the Eagle id it already holds on the row.
-    //
-    // `pcp` and `projectNotification` are OBJECTS or absent, never the bare id the mirror stores:
-    // the News template reads `pcp.isMet` and `projectNotification.name` off them, and a string
-    // answers both with undefined. Unresolved drops the key — `undefined` is not serialised — so a
-    // reference this caller may not see reads as no reference at all.
+    // `pcp` and `projectNotification` are OBJECTS or absent, never the stored bare id: the News
+    // template reads fields off them. Unresolved leaves `undefined`, which drops the key.
     const image = row.featuredImage && row.featuredImage.document
       ? documentRef(row.featuredImage.document)
       : null;
@@ -552,17 +458,12 @@ async function updateResults(access, rows) {
 const CLOSED_WINDOW_DAYS = 30;
 
 /**
- * Every period open right now, with the number that closed in the last CLOSED_WINDOW_DAYS beside it.
- *
- * `count` IS the answer, not a page of a larger set — `listOpen` is capped, like the RecentActivity
- * strip above, because a continuation token across every partition is not a page anybody pages.
- * `closedCount` is measured separately and is NOT a total for these rows; the envelope carries it
- * under its own key so the two numbers cannot be read as one.
+ * Every period open at this moment, plus how many closed in the last CLOSED_WINDOW_DAYS. `count` is
+ * the whole answer, not a page; `closedCount` is a separate number, not a total for these rows.
  */
 async function openPeriods({ access, pageSize }) {
-  // ONE capture, given to both reads below: two separate `new Date()` calls, milliseconds apart,
-  // could each land on a different side of a period's boundary and break the complement the two
-  // reads are meant to form — see `countClosedSince`'s doc.
+  // ONE capture for both reads: two `new Date()` calls could fall either side of a period's
+  // boundary and break the complement the reads form.
   const now = new Date();
   const since = new Date(now.getTime() - CLOSED_WINDOW_DAYS * 86400000);
   const [rows, closedCount] = await Promise.all([
@@ -774,8 +675,7 @@ function oneProject(filterQuery) {
 
 /**
  * Eagle's `project` (its ObjectId) beside the stored DEMI `projectId`, looked up under the caller's
- * access. A project the caller cannot read gives `project: null`; the row itself already passed its
- * own ACL, which is capped by the project's.
+ * access. A project the caller cannot read gives `project: null`.
  */
 async function eagleProjectOf(access, rows) {
   const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
@@ -832,14 +732,8 @@ async function inspectionRows(dataset, { access, query, filterQuery, pageNum, pa
 }
 
 /**
- * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api's
- * own `/api/search`, `/api/organization`, `/api/commentperiod`, `/api/public/comment` and
- * `/api/public/recentActivity`.
- *
- * Every one answers `{searchResults, count}` on the SAME envelope the Project bare-list branch
- * uses, so `res.json`'s wrapper attaches `meta[0].searchResultsTotal` and eagle-public can page.
- * `applied` names the filter keys the branch consumed; everything else the caller sent is reported
- * as dropped, because a filter panel that quietly does nothing returns the whole corpus.
+ * The Cosmos-backed `/search` datasets, each answering `{searchResults, count}`. `applied` names the
+ * keys consumed; every other key is reported dropped, so a filter that did nothing is visible.
  */
 const COSMOS_DATASETS = {
   /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
@@ -856,9 +750,8 @@ const COSMOS_DATASETS = {
       return { searchResults, count: searchResults.length, applied: ['_id'] };
     }
 
-    // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id (or, for a
-    // period parented by a ProjectNotification, the notification's own id; see `periodRows`), so the
-    // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
+    // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI id (or a notification's
+    // id), so it needs the ids `resolveProjectFilter` translated.
     const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
 
     const statuses = filterValues(query, 'status');
@@ -930,9 +823,7 @@ const COSMOS_DATASETS = {
   },
 
   async RecentActivity({ access, query, pageNum, pageSize, sortBy }) {
-    // A POINT READ on the `/id` partition — what serves eagle-public's `/updates/:id` route cold,
-    // with no list to page and nothing for keywords to rank. Same branch, same shape and the same
-    // `count: 0` miss as CommentPeriod and ProjectNotification.
+    // A POINT READ on the `/id` partition: eagle-public's `/updates/:id` route, opened cold.
     const id = filterValue(query, '_id');
     if (id) {
       const row = await updatesRepo.getById(access, id);
@@ -948,21 +839,14 @@ const COSMOS_DATASETS = {
       return { searchResults, count: searchResults.length, applied: ['top'] };
     }
 
-    // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id (the id eagle-api
-    // pushed), so the translated DEMI id would match nothing. The mirror image of CommentPeriod.
+    // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id, so the translated
+    // DEMI id would match nothing.
     const [projectId] = eagleQuery.projectIdsFrom(query);
-    // The news page searches this dataset by text. Reached with keywords only when the index is
-    // switched off (see KEYWORD_INDEX_DATASETS): the container is small, so the repository answers
-    // with CONTAINS — a substring match, without ranking, stemming or a half-typed last word.
+    // Keywords reach here only when the index is off: the repository answers with an unranked
+    // CONTAINS substring match.
     const keywords = query.keywords || query.q || '';
-    // `and[type]` is a real column on this container, so the Cosmos path applies it instead of
-    // reporting it dropped. The KEYWORD path already filters type through the `activities` index;
-    // this is the same filter on the read that answers when there are no keywords.
     const types = filterValues(query, 'type');
-    // The other two filters the activities list offers: "Documents attached" and the posted-on
-    // range. Both are questions the `activities` index answers for a keyword search, and the
-    // keywordless page is the same page — a filter panel that narrows nothing here would return
-    // the whole corpus and look like a filter that matched everything.
+    // The same filters the `activities` index applies to a keyword search, so both pages narrow alike.
     const { hasDocument, applied: documentApplied } = documentFilter(query);
     const { dateAddedFrom, dateAddedBefore, applied: windowApplied } = activityWindow(query);
 
@@ -976,9 +860,8 @@ const COSMOS_DATASETS = {
     return {
       searchResults: await updateResults(access, rows),
       count,
-      // `!== null`, not truthy: `filterValues` answers `[]` (still not `null`) for `and[type]=` sent
-      // empty, and that key was still SEEN — reporting it dropped here, unlike the index path, would
-      // read as "the container could not filter on type" when it is really "nothing to narrow by".
+      // `!== null`, not truthy: `and[type]=` sent empty gives `[]`, a key SEEN with nothing to
+      // narrow by, not one the container could not apply.
       applied: [
         ...(projectId ? ['project'] : []),
         ...(types !== null ? ['type'] : []),
@@ -1081,24 +964,18 @@ const ITEM_SCHEMAS = Object.freeze([
 ]);
 
 /**
- * The two Cosmos datasets a KEYWORD search is answered from the index instead.
- *
- * Only the ranking moves. The index carries ids and the text it ranks on, never the row: every row
- * a caller receives is read back from Cosmos through the same mapper the keywordless page uses, so
- * the wire shape cannot drift between the two paths and a row the index still holds but Cosmos no
- * longer admits simply drops out. Without keywords, or with the switch off, nothing here runs.
+ * The two Cosmos datasets whose KEYWORD search the index ranks. Rows are read back from Cosmos
+ * through the keywordless mapper, so the wire shape cannot drift and a stale index hit drops out.
  */
 const KEYWORD_INDEX_DATASETS = {
   RecentActivity: {
     index: () => aiSearch.config().activitiesIndex,
     search: (opts) => aiSearch.searchActivities(opts),
-    // `?top=true` is the home-page strip, which eagle-api answers whole and by pinned-ness rather
-    // than by relevance. It stays a Cosmos read whatever else the caller sent, and so does
-    // `and[_id]`: a point read of one record, which keywords say nothing about.
+    // `?top=true` (the home strip, ordered by pinned-ness) and `and[_id]` (a point read) stay Cosmos
+    // reads whatever else the caller sent.
     cosmosOnly: (query) => String(query.top) === 'true' || filterValue(query, '_id') !== null,
-    // `updates.projectId` holds the EAGLE project id, so the UNTRANSLATED ids are the ones to
-    // filter with — the mirror image of the Cosmos branch. Flattened onto `project` because that
-    // is the one form `buildFilter` applies.
+    // `updates.projectId` holds the EAGLE id, so filter on the UNTRANSLATED ids, flattened onto
+    // `project`, the one form `buildFilter` applies.
     indexQuery: (query) => eagleQuery.withProjectIds(query, eagleQuery.projectIdsFrom(query)),
     acl: updatesIndexAcl,
     rows: async (access, ids) => {
@@ -1126,11 +1003,8 @@ function inIdOrder(rows, ids) {
 }
 
 /**
- * The filter keys an INDEX page did not apply, in the form the Cosmos branch reports them.
- *
- * `buildFilter` names only what it could not EXPRESS; a bare key (`period`, `docIds`) never reaches
- * it at all. Both are the same fact to the caller — a filter panel that quietly does nothing — so
- * this is built from what was applied rather than from what was refused.
+ * The filter keys an INDEX page did not apply. Built from what was applied, since a bare key
+ * (`period`, `docIds`) never reaches `buildFilter` to be refused.
  */
 function unappliedFilterKeys(query, indexQuery, dropped) {
   const offered = [
@@ -1143,9 +1017,8 @@ function unappliedFilterKeys(query, indexQuery, dropped) {
 }
 
 /**
- * Once per process per dataset, like `warnUnconfigured` in ai-search and for the same reason: the
- * frontend searches on every debounced keystroke, so a per-request line would be pure noise. The
- * Cosmos path still answers — this says the ranking the caller got is not the one they asked for.
+ * Once per process per dataset: the frontend searches on every debounced keystroke, so a
+ * per-request line would be noise.
  */
 const keywordFallbackWarned = new Set();
 
@@ -1199,9 +1072,8 @@ async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
 }
 
 /**
- * eagle-public compares `legislation === 2002`, so a row that stored the year as a string renders
- * under no legislation at all. Coerced HERE and not only in the writer, because the backfill is the
- * only writer of these rows and the ones already in the container would need re-running otherwise.
+ * eagle-public compares `legislation === 2002`, so a year stored as a string matches nothing.
+ * Coerced on read so rows already stored need no re-run of the backfill.
  */
 function listRow(row) {
   if (row.legislation === undefined || row.legislation === null || row.legislation === '') return {};
@@ -1210,16 +1082,8 @@ function listRow(row) {
 }
 
 /**
- * A period row carries `project` as the EAGLE parent id STRING, because eagle-public's
- * CommentPeriod model reads `period.project` and passes it straight back into a project URL. The
- * stored `projectId` is the DEMI id and stays on the row beside it, never in place of it.
- *
- * The two ids are not derived from each other, so the Eagle one is READ — under the caller's own
- * access, deduplicated, and null when the parent is not visible to them.
- *
- * A period parented by a `ProjectNotification` is partitioned under the notification's own Eagle
- * id, so the second lookup answers with that id itself. Without it those rows carry
- * `project: null` and eagle-public has nothing to link them to.
+ * Period rows with `project` as the EAGLE parent id, which eagle-public puts into a project URL, read
+ * under the caller's access. A notification-parented period links to the notification's own id.
  */
 async function periodRows(access, rows) {
   const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
@@ -1262,9 +1126,8 @@ async function periodRows(access, rows) {
 }
 
 /**
- * A notification row carries `proponent` as a NAME. Eagle stores either a name or an Organization
- * id there, and the notifications page renders the value as it arrives — an id renders as an id.
- * Resolved in one query under the caller's own access, and left as sent when nothing matches.
+ * A notification row carries `proponent` as a NAME: Eagle stores a name or an Organization id there,
+ * and the page renders it as sent. An id that matches nothing stays as sent.
  */
 async function notificationRows(access, rows) {
   const orgIds = Array.from(new Set(rows
@@ -1291,23 +1154,19 @@ exports.search = async (req, res) => {
   try {
     const dataset = req.query.dataset;
     const keywords = req.query.keywords || req.query.q || '';
-    // FORCED ON, and the wire value is deliberately ignored — see
-    // wiki Search-Query-Construction#why-the-fuzzy-parameter-is-ignored. Still an ACCEPTED parameter,
-    // because dropping it from unknownParams would 400 every saved URL.
+    // FORCED ON; the wire value is ignored but still accepted, see
+    // wiki Search-Query-Construction#why-the-fuzzy-parameter-is-ignored.
     const fuzzy = true;
-    // On unless the caller sends the exact string `false`: the frontend searches on debounced
-    // keystrokes, so the last word is half-typed on nearly every request. Reaches Project and
-    // Document only — chunk search has no half-typed word and stays off.
+    // On unless the caller sends `false`: debounced keystroke searches end in a half-typed word.
+    // Project and Document only.
     const prefix = req.query.prefix !== 'false';
-    // `>= 1` and NOT `Math.max(1, ... || 10)`: NaN, 0 and negatives all land on the one default
-    // this endpoint documents, where the `Math.max` form would clamp -1 to a one-row page instead.
-    // See wiki Search-Query-Construction#page-size-clamping.
+    // `>= 1`, not `Math.max(1, ...)`: NaN, 0 and negatives all get the default, see
+    // wiki Search-Query-Construction#page-size-clamping.
     const parsedPageSize = parseInt(req.query.pageSize, 10);
     const requestedPageSize = parsedPageSize >= 1 ? parsedPageSize : 10;
     const pageSize = Math.min(requestedPageSize, 5000);
 
-    // A parameter this endpoint does not read is REFUSED; a filter key the INDEX cannot express is
-    // dropped and reported instead. See
+    // Unknown parameter: REFUSED. Inexpressible filter key: dropped and reported. See
     // wiki Search-Query-Construction#unsupported-parameters-400-inexpressible-filter-keys-drop.
     const unknown = eagleQuery.unknownParams(req.query);
     if (unknown.length > 0) {
@@ -1317,25 +1176,21 @@ exports.search = async (req, res) => {
       return res.status(400).json({ error: '_schemaName applies to dataset=Item only' });
     }
 
-    // The name filter carries typed text rather than an id, so a dataset that has no name cell and
-    // a value past the cap are refused here rather than trimmed into a filter nobody asked for.
+    // Typed text, so no name cell or a value past the cap is refused, never trimmed.
     const nameContainsRefused = eagleQuery.nameContainsError(req.query, dataset);
     if (nameContainsRefused) {
       return res.status(400).json({ error: nameContainsRefused });
     }
 
-    // Did the caller ask for a filter or a sort? Decides BOTH the page-size ceiling below and which
-    // backend answers — see eagleQuery.hasCriteria for why `project` is not in it.
+    // Decides BOTH the page-size ceiling and which backend answers; see eagleQuery.hasCriteria.
     const criteria = eagleQuery.hasCriteria(req.query);
 
-    // An INDEXED page larger than the search layer will assemble is REFUSED, not truncated. All
-    // three conditions are load-bearing, the `keywords` test especially — see
-    // wiki Search-Query-Construction#why-large-pages-are-refused-not-truncated.
+    // An oversized INDEXED page is REFUSED, not truncated; all three conditions are load-bearing.
+    // See wiki Search-Query-Construction#why-large-pages-are-refused-not-truncated.
     if ((keywords || criteria || dataset === 'Document') &&
         requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
       return res.status(400).json({
-        // Names WHO the ceiling applies to: a bare document list is served by the index too now,
-        // so this fires for a request carrying neither a filter nor a keyword.
+        // A bare document list is served by the index too, so this fires with no filter or keyword.
         error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for ${
           dataset === 'Document' ? 'a document search' : 'a filtered or keyword search'}`
       });
@@ -1349,13 +1204,11 @@ exports.search = async (req, res) => {
     // disagree about what this caller may see.
     const access = resolveAccess(req);
 
-    // ONE unit for the whole request: rows, counted in the caller's own `pageSize`. Skipping by the
-    // service's 250-row cap instead served every page past the first twice over.
+    // Rows in the caller's own `pageSize`; skipping by the service's 250-row cap repeats pages.
     const skip = pageNum * pageSize;
 
-    // EVERY KEY THIS REQUEST COULD NOT EXPRESS, told to the caller and not only to the log — see
-    // wiki Search-Query-Construction#the-dropped-keys-report. Accumulated through `noteDropped` so the
-    // log line and the response fact cannot drift apart.
+    // Every key this request could not express, told to the caller and the log alike. See
+    // wiki Search-Query-Construction#the-dropped-keys-report.
     const droppedKeys = { filter: [], sort: [] };
     const noteDropped = (kind, keys) => {
       if (!keys || !keys.length) return;
@@ -1369,8 +1222,7 @@ exports.search = async (req, res) => {
     const noteDegraded = (meta) => {
       if (!meta || !meta.degraded) return;
       const merged = { ...(degraded || {}), ...meta.degraded };
-      // The two list-valued keys are unioned rather than overwritten; everything else is a scalar
-      // the later mark owns.
+      // List keys are unioned; scalars belong to the later mark.
       for (const key of ['missing', 'reasons']) {
         const both = [...((degraded && degraded[key]) || []), ...(meta.degraded[key] || [])];
         if (both.length) merged[key] = Array.from(new Set(both));
@@ -1378,15 +1230,12 @@ exports.search = async (req, res) => {
       degraded = merged;
     };
 
-    // The eagle envelope AND the usage event, applied once by wrapping the response rather than at
-    // each of a dozen exits. `meta` is additive, and `searchResultsTotal` is emitted only where a
-    // total was MEASURED — see wiki Search-Query-Construction#totals-are-measured-never-the-page-length.
+    // The eagle envelope and the usage event, once for every exit. `searchResultsTotal` only when
+    // MEASURED: wiki Search-Query-Construction#totals-are-measured-never-the-page-length.
     const sendJson = res.json.bind(res);
     res.json = (payload) => {
       const first = Array.isArray(payload) ? payload[0] : null;
-      // KNOWN LIMIT: a future branch answering something other than `[{ searchResults }]` stops
-      // being counted, silently, exactly as a missed call site would. Count on the way IN if the
-      // response shape ever varies.
+      // KNOWN LIMIT: a branch answering any shape but `[{ searchResults }]` goes uncounted, silently.
       if (first && Array.isArray(first.searchResults)) {
         const total = Number.isFinite(first.count) ? first.count : undefined;
         // eagle-admin pages on this header, as eagle-api's list routes set it. Measured totals only.
@@ -1400,9 +1249,8 @@ exports.search = async (req, res) => {
         analyticsEvent(req, {
           eventName: 'search',
           searchTerm: keywords,
-          // Left off when the total is unknown rather than filled in from the page. KNOWN LIMIT:
-          // `audit.js` writes 0 for an absent ResultCount, so an unmeasured search still lands in
-          // the table as a zero-result one; fixing that means a nullable column in DemiEvents_CL.
+          // KNOWN LIMIT: `audit.js` writes 0 for an absent ResultCount, so an unmeasured search
+          // lands as zero-result until DemiEvents_CL has a nullable column.
           resultCount: total,
           detail: { dataset, fuzzy, pageSize }
         });
@@ -1413,8 +1261,7 @@ exports.search = async (req, res) => {
           ...(dataset === 'DocumentChunk'
             ? { countsPassages: true, documentsOnPage: first.searchResults.length }
             : {}),
-          // OMITTED when nothing was dropped, and carrying BOTH `.filter` and `.sort` when present
-          // — see wiki Search-Query-Construction#the-dropped-keys-report.
+          // See wiki Search-Query-Construction#the-dropped-keys-report.
           ...(droppedKeys.filter.length || droppedKeys.sort.length ? { dropped: droppedKeys } : {}),
           // OMITTED unless a field was dropped to keep the search answerable at all.
           ...(degraded ? { degraded } : {})
@@ -1427,9 +1274,8 @@ exports.search = async (req, res) => {
     // once for every dataset, before any filter is built, because the translation is a read.
     const filterQuery = await resolveProjectFilter(access, req.query);
 
-    // A PROJECT FILTER THE DATASET CANNOT EXPRESS ANSWERS NOTHING, never everything: `projects` has
-    // no project axis, so `buildFilter` drops the key and the request would answer the whole
-    // ACL-visible corpus to a caller who asked for one project. `count: 0` is a measurement here.
+    // A project filter the dataset cannot express ANSWERS NOTHING, never everything: dropping it
+    // would answer the whole ACL-visible corpus to a caller who asked for one project.
     if (eagleQuery.projectIdsFrom(filterQuery).length && !eagleQuery.canScopeToProject(dataset)) {
       noteDropped('filter', ['project']);
       // `res.json`, not `sendJson` — the wrapper is what attaches `meta`, and the `dropped` key
@@ -1481,8 +1327,7 @@ exports.search = async (req, res) => {
                 // Redact the INDEX row, then map, exactly as the Cosmos branch below does.
                 const doc = redactIndexProject(hit, access);
                 return {
-                // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
-                // Falls back to the DEMI id for a Track-only project. See
+                // THE EAGLE ObjectId, or the DEMI id for a Track-only project. See
                 // wiki Search-Query-Construction#project-id-spaces.
                 _id: doc.legacyEagleId || String(doc.id),
                 _schemaName: 'Project',
@@ -1499,9 +1344,8 @@ exports.search = async (req, res) => {
                 region: doc.region ?? null,
                 description: doc.description || 'No project description provided.',
                 proponent: { name: doc.proponent || 'Proponent Organization' },
-                // Rebuilt into the `{_id, name}` shape the template binds and the filter panel
-                // sends, from the flat label/id pair the index stores — the same reconstruction
-                // eagle-search does, so a saved filter URL means the same thing against either.
+                // `{_id, name}` rebuilt from the flat label/id pair the index stores, the shape the
+                // template binds and the filter panel sends.
                 type: doc.type || '',
                 currentPhaseName: eagleQuery.ref(doc.currentPhaseNameId, doc.currentPhaseName),
                 eacDecision: eagleQuery.ref(doc.eacDecisionId, doc.eacDecision),
@@ -1518,9 +1362,8 @@ exports.search = async (req, res) => {
                   name: (doc.highlighted || {}).name || (doc.highlighted || {}).displayName || '',
                   description: (doc.highlighted || {}).description || ''
                 },
-                // `read[]` is NOT emitted, here or on any other row shape: it is the caller's own
-                // ACL restated, it publishes internal role names, and nothing reads it. The
-                // redactor drops it and derives `isPublished`, the mirror the frontends render.
+                // `read[]` is NOT emitted on any row shape: it publishes internal role names. The
+                // redactor drops it and derives `isPublished`.
                 isPublished: doc.isPublished,
                 // No `sources`: the `projects` index has no such field.
                 ...staffFields.get(String(doc.id))
@@ -1530,9 +1373,8 @@ exports.search = async (req, res) => {
               return res.json([{ searchResults, count }]);
             }
 
-            // No rows on THIS page; `count` distinguishes an empty corpus from a page past the end
-            // of a large one. Answered here rather than falling through to the keywordless Cosmos
-            // read below, which ignores the keywords and returns an arbitrary page.
+            // No rows on THIS page; `count` tells an empty corpus from a page past the end. Never
+            // fall through to the Cosmos read, which ignores the keywords.
             return res.json([{ searchResults: [], count }]);
           }
 
@@ -1540,9 +1382,8 @@ exports.search = async (req, res) => {
           // 0 is measured, because no filter can express this caller's visibility.
           return res.json([{ searchResults: [], count: 0 }]);
         } catch (err) {
-          // A FAILED search is not an empty one, and it must not become the keywordless list
-          // either — see wiki Search-Query-Construction#a-failed-search-is-never-an-empty-one. The
-          // status stays 502 whatever eagle-public does with it.
+          // A FAILED search is neither empty nor the keywordless list. See
+          // wiki Search-Query-Construction#a-failed-search-is-never-an-empty-one.
           logger.error(`[search] project search failed: ${err.message}`);
           return res.status(502).json(searchUnavailable(req, err, 'Project search is unavailable'));
         }
@@ -1556,16 +1397,13 @@ exports.search = async (req, res) => {
 
         const projects = await projectsRepo.listPage(access, { pageNum, pageSize });
 
-        // Counted on EVERY request. Running it only when `pageNum` was present let the response
-        // wrapper fill the gap with the page length, so `pageSize=500` with no `pageNum` — DEMI's
-        // own frontend — reported 500 for a registry of any size.
+        // Counted on EVERY request, `pageNum` or not: an unmeasured total must never fall back to
+        // the page length.
         const count = await projectsRepo.countVisible(access);
 
-        // A NoSQL row has `id` and no `_id`. `_id` is kept in the RESPONSE because the frontend
-        // still keys on it — dropping it would empty the project list without any error.
+        // A NoSQL row has no `_id`; the RESPONSE keeps it because the frontend keys on it.
         const mapped = projects.map(p => {
-          // Redact the repository ROW, then map. The mapper below emits eagle-search wire names
-          // (`_id`, `proponent.name`, `location`), so the catalog must never run over its output
+          // Redact the ROW, then map: the catalog must never run over wire names
           // (docs/rbac-architecture.md §2 item 9).
           const row = redactForAccess('projects', p, access);
           return {
@@ -1573,35 +1411,29 @@ exports.search = async (req, res) => {
             _id: row.eagleId || String(row.id),
             _schemaName: 'Project',
             id: String(row.id),
-            // NULL when absent, NOT the DEMI id, and a String to match the index branch. `== null`
-            // and not `||`, because Track id 0 is falsy. See
+            // NULL when absent, NOT the DEMI id. `== null`, not `||`: Track id 0 is falsy. See
             // wiki Search-Query-Construction#project-id-spaces.
             trackProjectId: row.trackProjectId == null ? null : String(row.trackProjectId),
-            // COSMOS FIELD NAMES, not the indexer's aliases. Reading `p.status` here was always
-            // undefined, so `|| 'Active'` fired on every row and asserted that every project in the
-            // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
+            // COSMOS FIELD NAMES, not the indexer's aliases. See
+            // wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
             legacyEagleId: row.eagleId || '',
             name: row.name || 'Unnamed Project',
             // `legislation` too: the index has only `legislationYear`, so a row with the label
             // alone reads as 2018 on the keyword path.
             sector: wireSector(p, row, row.legislationYear ?? row.legislation),
-            // ONE stored name: the writers now rename at the edge (`controllers/nosql/project.js`),
-            // so `status` is a wire name only and no row can carry it.
+            // The writers rename at the edge (`controllers/nosql/project.js`), so `status` is a
+            // wire name only and no row carries it.
             status: row.projectState || 'Active',
             // Same helper as the AI Search branch — one definition of the fallback centroid.
             centroid: geoPoint(row.centroid),
             region: row.region ?? null,
-            // `location` on the wire, `address` at rest: the merge renames Eagle's `location` on the
-            // way in, and nothing read it back. THE COSMOS BRANCH ONLY — `address` is not a column of
-            // the `projects` index, so the two mappers disagree about this one field until it is.
+            // `location` on the wire, `address` at rest. COSMOS BRANCH ONLY: `address` is not a
+            // column of the `projects` index.
             location: row.address || '',
             description: row.description || 'No project description provided.',
             proponent: { name: row.proponentName || 'Proponent Organization' },
-            // THE COSMOS BRANCH ONLY, same as `location` above: `eaCertificate` is not a column of
-            // the `projects` index, so a keyword search carries no certificate number.
+            // COSMOS BRANCH ONLY: `eaCertificate` is not a column of the `projects` index.
             eaCertificate: row.eaCertificate || null,
-            // Cosmos field names again: `p.type` would be undefined on every row of the DEFAULT
-            // view, the one a visitor lands on before typing a keyword.
             type: row.projectType || '',
             currentPhaseName: eagleQuery.ref(row.currentPhaseName?._id, row.currentPhaseName?.name),
             eacDecision: eagleQuery.ref(row.eacDecision?._id, row.eacDecision?.name),
@@ -1611,12 +1443,10 @@ exports.search = async (req, res) => {
             assessments: row.assessments ?? null,
             phaseIds: row.phaseIds ?? null,
             activeWork: row.activeWork ?? null,
-            // 'public' in the read ACL is what makes a record public; isPublished mirrors it, and
-            // the redactor derives it. The frontend derives its staged/admitted badge from this.
+            // Derived by the redactor from 'public' in the read ACL.
             isPublished: row.isPublished,
-            // Only DEMI's own wildfire aggregate. The raw Track and Eagle payloads sharing this
-            // field are traceability, not API surface — the catalog publishes `sources.wildfire`
-            // and nothing else.
+            // The catalog publishes only `sources.wildfire`; the raw Track and Eagle payloads here
+            // are traceability, not API surface.
             sources: row.sources || {},
             ...staffProjectFields(row)
           };
@@ -1626,15 +1456,13 @@ exports.search = async (req, res) => {
       } catch (cosmosErr) {
         // A page past MAX_PAGE_DEPTH, refused by `readPage` before it reads anything.
         if (cosmosErr.status === 400) return res.status(400).json({ error: cosmosErr.message });
-        // See the keyword branch above: a search that FAILED is not a search that found nothing.
-        // 200 with `[]` told every visitor of /projects that the EA registry contains no projects.
+        // A search that FAILED is not a search that found nothing: `[]` would say the registry is empty.
         logger.error(`[search] project list failed: ${cosmosErr.message}`);
         return res.status(502).json(searchUnavailable(req, cosmosErr, 'Project search is unavailable'));
       }
     } else if (dataset === 'Document') {
-      // EVERY document read is answered by the index — NOT the Project rule, and the difference is
-      // paging: the Cosmos read could not page past its 1000-row clamp, and there is no fallback
-      // under this. See wiki Search-Query-Construction#every-document-read-goes-to-the-index.
+      // EVERY document read goes to the index, with no fallback. See
+      // wiki Search-Query-Construction#every-document-read-goes-to-the-index.
       try {
         const acl = documentsAcl(access);
         // Projects are scoped on their own id; the same caller, a different index.
@@ -1659,9 +1487,8 @@ exports.search = async (req, res) => {
           const { items, count, meta } = await aiSearch.searchDocuments({
             filter: scopedDocFilter,
             orderby,
-            // Rows in the caller's own `pageSize`, computed once above and shared with every other
-            // index read. The service's own `$skip` ceiling of 100,000 binds on ROWS and the corpus
-            // cannot reach it, so nothing enforces it here; revisit as the count approaches it.
+            // The service's `$skip` ceiling of 100,000 rows is not enforced here: the corpus is
+            // below it. Revisit as the document count nears it.
             skip,
             // Passed so the project-name leg runs under the caller's project visibility. Undefined
             // would disable that leg; null legitimately means "unrestricted".
@@ -1686,8 +1513,7 @@ exports.search = async (req, res) => {
               _id: String(doc.id),
               _schemaName: 'Document',
               displayName: doc.displayName || 'Untitled Document',
-              // No `s3Key` basename to fall back to — the index carries no such field. Measured
-              // before dropping it: 0 of 2,000 sampled documents render this placeholder.
+              // The index has no `s3Key` to fall back to; sampled documents never hit this.
               documentFileName: doc.documentFileName || 'document.pdf',
               documentType: doc.type || 'PDF Document',
               isFeatured: doc.isFeatured === true,
@@ -1727,8 +1553,7 @@ exports.search = async (req, res) => {
         // Scoped to nothing: 0 is measured, not assumed.
         return res.json([{ searchResults: [], count: 0 }]);
       } catch (err) {
-        // Same rule as the project branch: a search that failed is not a search that found nothing,
-        // and there is nothing to fall through to now.
+        // A search that failed is not a search that found nothing.
         logger.error(`[search] document search failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, 'Document search is unavailable'));
       }
@@ -1741,9 +1566,8 @@ exports.search = async (req, res) => {
       }
 
       try {
-        // The visibility filter is evaluated BY THE SERVICE alongside the match, so ranking is
-        // computed only over rows this caller may read. Roles come from the verified token only.
-        // A chunk carries its document as `documentId`; its own id is not filterable.
+        // The service applies the ACL with the match, so ranking covers only readable rows. A chunk
+        // carries its document as `documentId`; its own id is not filterable.
         const acl = filterFor(access, 'projectId', 'documentId');
 
         // Fail-closed, and it MUST short-circuit here: OData has no `false` literal, so issuing the
@@ -1752,10 +1576,8 @@ exports.search = async (req, res) => {
           return res.json([{ searchResults: [], count: 0 }]);
         }
 
-        // THE FOUR FACETS GO STRAIGHT ONTO THE CHUNK QUERY — every chunk carries a copy of its
-        // parent's ids — but only once this request's own rows are stamped. A facet the live index
-        // does not carry, or carries over rows the backfill has not reached, is made INEXPRESSIBLE
-        // rather than deleted, so it lands in `dropped` and the recovery below still answers it.
+        // Facets filter on the chunk's own copy. One the live index cannot answer is made
+        // INEXPRESSIBLE, not deleted, so it lands in `dropped` and the recovery answers it.
         const liveFacets = await liveChunkFacets(filterQuery, acl, eagleQuery.projectIdsFrom(filterQuery));
         const { unavailable } = liveFacets;
 
@@ -1765,9 +1587,8 @@ exports.search = async (req, res) => {
         // Reported only for what STAYED dropped: a recovered key is one that worked.
         const { scope, recovered, capped } = await recoverChunkFilters(filterQuery, dropped, access);
         noteDropped('filter', dropped.filter(key => !recovered.includes(key)));
-        // `filter` is UNDEFINED for an unscoped privileged caller — an unfiltered read, not an
-        // empty one — and a bare template over it emits `(undefined) and …`, a 400 this route
-        // answers as 502.
+        // `filter` is UNDEFINED for an unscoped privileged caller; a bare template would emit
+        // `(undefined) and …`.
         const scopedFilter = scope
           ? (filter ? `(${filter}) and ${scope}` : scope)
           : filter;
@@ -1779,20 +1600,16 @@ exports.search = async (req, res) => {
           if (reasons.length) noteDegraded({ degraded: { reasons } });
         }
 
-        // A `sortBy` reaching this line is always dropped: every field in `chunks` is
-        // `sortable: false`, so `buildOrderBy` is called for its drop list and nothing else. Not on
-        // every request — the keywordless return above fires first and reports no `dropped` at all.
+        // Every `chunks` field is `sortable: false`, so `buildOrderBy` runs only for its drop list.
         noteDropped('sort', eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access).dropped);
 
-        // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS, so the window is the paging unit too and
-        // `pageSize` is a fetch knob for this dataset, not a row count. See
+        // The chunk window is the paging unit; `pageSize` is a fetch knob here. See
         // wiki Search-Query-Construction#chunk-paging-is-a-window.
         const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
         const { items, count, meta } = await aiSearch.searchChunks({
           filter: scopedFilter,
-          // No `orderby`: every field in `chunks` is `sortable: false`, the key included, and
-          // naming a non-sortable field is a 400. Chunk pages are relevance-ordered with no
-          // tiebreak, which makes a deep chunk page unstable.
+          // No `orderby`: naming a non-sortable field is a 400. With no tiebreak, a deep chunk
+          // page is unstable.
           skip: pageNum * chunkWindow,
           keywords,
           fuzzy,
@@ -1831,19 +1648,14 @@ exports.search = async (req, res) => {
             documentName:
               (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
             documentType: (parent && parent.type) || 'PDF Document',
-            // The date and milestone chips, from the SAME parent this mapper already holds. It
-            // builds its row field by field, so a column nobody names here never reaches
-            // `groupByDocument`. `milestone` is the LABEL and `milestoneId` the id — prod's shape,
-            // and not the Document dataset's; see `group-chunks.js`.
+            // `milestone` is the LABEL and `milestoneId` the id, unlike the Document dataset; see
+            // `group-chunks.js`.
             milestone: (parent && parent.milestone) || null,
             milestoneId: (parent && parent.milestoneId) || null,
             datePosted: (parent && parent.datePosted) || null,
             pageNumber: chunk.pageNumber ?? 0,
-            // Whether that number is a real PDF page. eagle-public labels the passage "Page N" and
-            // links `#page=N` only when this is true; otherwise it reads "Passage N" and links
-            // nowhere. A BOOLEAN on every row, never an absent key: `searchChunks` normalises the
-            // index's null, and this row is also built by the summary and chunk-list callers, whose
-            // chunks come from Cosmos where the field is absent on everything pre-provenance.
+            // Whether that number is a real PDF page (eagle-public links `#page=N` only then). A
+            // BOOLEAN on every row: Cosmos chunks may lack the field.
             pageNumbered: chunk.pageNumbered === true,
             // Empty by design: `content` is not retrievable from the index, so the API never ships
             // whole chunks. The UI renders `snippet` and falls back to `content` only without one.
@@ -1853,11 +1665,8 @@ exports.search = async (req, res) => {
             snippet: chunk.snippet || ''
           };
         });
-        // The index-wide total for this query, reported net of what this page withheld — see
-        // wiki Search-Query-Construction#the-parent-document-is-the-chunk-gate. Added only to the success
-        // path: absent means "not measured", where a 0 would be a claim about the index.
-        // GROUPED AFTER THE GATE, never before: a withheld chunk must not contribute a snippet or a
-        // match to a document row.
+        // GROUPED AFTER THE GATE, so a withheld chunk adds no snippet or match to a document row.
+        // See wiki Search-Query-Construction#the-parent-document-is-the-chunk-gate.
         const grouped = groupChunks.groupByDocument(mappedChunks);
 
         return res.json([{
@@ -1867,9 +1676,7 @@ exports.search = async (req, res) => {
           count: netCount
         }]);
       } catch (err) {
-        // An empty result caused by a fault is NOT the same fact as "nothing matched", and the
-        // status code is the only place that difference can be said. DEMI's chunk leg already
-        // renders a non-2xx as an unknown count.
+        // A fault is NOT "nothing matched", and the status code is the only place to say so.
         logger.error(`[search] chunk search failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, 'Deep Search is unavailable'));
       }
@@ -1899,9 +1706,8 @@ exports.search = async (req, res) => {
       // else here is a Cosmos list read. See KEYWORD_INDEX_DATASETS for why only the ranking moves.
       const indexed = keywords ? KEYWORD_INDEX_DATASETS[dataset] : null;
       if (indexed && !indexed.cosmosOnly(req.query)) {
-        // The kill switch: an unset SEARCH_ENDPOINT, or an app setting that is absent or emptied
-        // for this one dataset. Falls through to the Cosmos read below rather than failing — that
-        // read answers keywords too, on CONTAINS instead of BM25.
+        // The kill switch: SEARCH_ENDPOINT or this dataset's index setting empty. Falls through to
+        // the Cosmos read, which answers keywords on CONTAINS instead of BM25.
         if (!aiSearch.config().configured || indexed.index() === '') {
           warnKeywordFallback(dataset);
         } else {
@@ -1929,16 +1735,13 @@ exports.search = async (req, res) => {
             });
             noteDegraded(meta);
 
-            // `count` is the index-wide total, as on every other indexed branch. The page can be
-            // shorter than the index promised — a row whose Cosmos ACL no longer admits it drops
-            // out at the read — and that is the fail-closed direction.
+            // `count` is the index-wide total; the page can be shorter when Cosmos denies a row,
+            // which is the fail-closed direction.
             const searchResults = await indexed.rows(access, items.map(hit => String(hit.id)));
             return res.json([{ searchResults, count }]);
           } catch (err) {
-            // THE SWITCH THE SETTING COULD NOT THROW. A setting naming an index that was never
-            // created 404s on every query, and no configuration this app can read says so — which
-            // is how test served 502s to every keyword search over these two datasets. Falls
-            // through to the Cosmos read below, like an emptied setting does.
+            // A setting naming an index that does not exist 404s on every query, and no config says
+            // so: fall through to the Cosmos read, like an emptied setting.
             if (aiSearch.isMissingIndex(err, indexed.index())) {
               droppedKeys.filter.length = notedBefore.filter;
               droppedKeys.sort.length = notedBefore.sort;
@@ -1954,9 +1757,8 @@ exports.search = async (req, res) => {
         }
       }
 
-      // The reads eagle-public used to make against eagle-api. The guard chain is the Project
-      // bare-list branch's — one measured count per request, every row through the catalog, and a
-      // 502 on failure because a read that FAILED is not a read that found nothing.
+      // Same guards as the Project bare list: one measured count, every row through the catalog,
+      // and 502 on failure.
       try {
         const result = await COSMOS_DATASETS[dataset]({
           access, query: req.query, filterQuery, pageNum, pageSize, sortBy: req.query.sortBy
@@ -1965,9 +1767,7 @@ exports.search = async (req, res) => {
         // A branch that refuses the request rather than answering it — see the Comment branch.
         if (result.error) return res.status(400).json({ error: result.error });
 
-        // Everything the caller asked to filter on that this branch did NOT consume. `project` is
-        // already handled by the canScopeToProject guard above for the datasets that cannot express
-        // it, so anything left here is a key the container has no axis for.
+        // Every filter key this branch did NOT consume.
         const applied = new Set(result.applied || []);
         noteDropped('filter', eagleQuery.filterKeysIn(req.query).filter(key => !applied.has(key)));
         noteDropped('sort', result.sortDropped);
@@ -1975,9 +1775,8 @@ exports.search = async (req, res) => {
         return res.json([{
           searchResults: result.searchResults,
           count: result.count,
-          // A SECOND measurement, not a second total: the open-period rail counts what closed
-          // recently as well, and `meta[0].searchResultsTotal` can only carry one number. Omitted
-          // by every other branch, so a caller that does not ask for it never sees the key.
+          // A SECOND measurement, not a second total: `meta[0].searchResultsTotal` carries one
+          // number. Only the open-period rail sets it.
           ...(result.closedCount === undefined ? {} : { closedCount: result.closedCount })
         }]);
       } catch (err) {
@@ -2001,19 +1800,14 @@ exports.search = async (req, res) => {
 const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotification', 'CommentPeriod'];
 
 /**
- * EVERY parameter `/search/counts` reads, and the whole gate — not a widening of the `/search` set.
- *
- * Filters are per record type and this endpoint counts every type at once, so there is no filter it
- * could honour. `and[type]=Letter`, `dataset`, `pageSize`, `sortBy` and the rest are REFUSED here
- * rather than accepted and dropped: a badge answered under a filter the caller believes was
- * applied is a wrong number with nothing to say so.
+ * EVERY parameter `/search/counts` reads. It counts every type at once, so any filter is REFUSED:
+ * a badge under a filter the caller thinks applied is a silently wrong number.
  */
 const COUNTS_PARAMS = new Set(['keywords', 'q', 'prefix', 'datasets']);
 
 /**
- * How long one caller's badge row is reused. The page asks on a debounced keystroke, and one count per
- * type per pause against a 1-SU service is the cost this exists to bound. Short enough
- * that a newly published record shows up within a page view.
+ * How long one caller's badge row is reused: bounds a count per type per keystroke pause on a 1-SU
+ * service, short enough that a newly published record shows within a page view.
  */
 const COUNTS_TTL_MS = 45 * 1000;
 
@@ -2026,12 +1820,8 @@ const countsCache = new Map();
 exports.resetCountsCache = () => countsCache.clear();
 
 /**
- * What makes two callers' counts the same counts.
- *
- * Every input `filterFor` and `updatesRepo.inEagleIdSpace` read, so two callers sharing a
- * fingerprint provably share every ACL clause below. Deliberately over-specific — a field that
- * turns out not to affect the filter costs a cache miss, while a missing one would serve one
- * caller's counts to another. Anonymous callers all produce the same string and share one entry.
+ * Every input `filterFor` and `updatesRepo.inEagleIdSpace` read. Over-specific on purpose: an extra
+ * field costs a cache miss, a missing one serves one caller's counts to another.
  */
 function accessFingerprint(access) {
   return JSON.stringify({
@@ -2046,11 +1836,8 @@ function accessFingerprint(access) {
 }
 
 /**
- * One count per record type. A leg answers `{count}` — `null` where it could not MEASURE one, which
- * is not the same fact as 0 and is published as "unknown" rather than as an empty tab.
- *
- * `degraded: true` marks a count the INDEX did not answer: the Cosmos fallback matches on CONTAINS,
- * so its number is a different question's answer and the caller is told so.
+ * One count per record type: `null` where it could not MEASURE one, never 0. `degraded: true` marks
+ * a count from the Cosmos CONTAINS fallback, not the index.
  */
 const COUNT_LEGS = {
   async Project({ access, keywords, prefix }) {
@@ -2176,14 +1963,8 @@ async function computeCounts(access, keywords, prefix) {
 }
 
 /**
- * `GET /api/search/counts?keywords=&prefix=&datasets=…` — the record-type badges on one request.
- *
- * EVERY type is computed whatever `datasets` names, and the cache key says nothing about them: the
- * page asks for all of them on every pause, so a narrower request is served from the same entry rather
- * than splitting the cache into subsets that each pay full price. `datasets` slices the answer.
- *
- * No `Cache-Control`, which is what `/search` sends: these counts are ACL-scoped, and a shared cache
- * in front of them would serve one caller's totals to another.
+ * `GET /api/search/counts`: EVERY type is computed and cached, `datasets` only slices the answer.
+ * No `Cache-Control`: the counts are ACL-scoped, and a shared cache would leak them across callers.
  */
 exports.counts = async (req, res) => {
   try {
@@ -2252,11 +2033,8 @@ exports.counts = async (req, res) => {
 };
 
 /**
- * `GET /api/search/summary?keywords=…` — step 5 of the pipeline. See wiki ADR-006 and
+ * `GET /api/search/summary`, PRIVILEGED ONLY (behind `authMiddleware`). See wiki ADR-006 and
  * Search-Query-Construction#the-summary-endpoints-gates.
- *
- * PRIVILEGED ONLY: mounted on `authMiddleware`, so anonymous callers get a 401 and never reach here.
- * Retrieval is the SAME BM25 call the results columns already made; this adds a step after it.
  */
 exports.summarize = async (req, res) => {
   const keywords = req.query.keywords || req.query.q || '';
@@ -2288,13 +2066,8 @@ exports.summarize = async (req, res) => {
       return res.json({ summary: null, citations: [], reason: 'no_results' });
     }
 
-    // The second and third of THREE load-bearing gates: `getById` re-applies the ACL at the
-    // database, and the parent-document read is the same gate the chunk search path applies — a
-    // chunk's own `read[]` is an ingest-time snapshot and can outlive its parent's visibility. See
-    // wiki Search-Query-Construction#the-summary-endpoints-gates.
-    //
-    // `listByIds` is the read the citations were already hydrated from, moved ahead of the model
-    // call and widened, so this costs no latency.
+    // Gates two and three: `getById` re-applies the ACL, and the parent-document read catches a stale
+    // chunk `read[]`. See wiki Search-Query-Construction#the-summary-endpoints-gates.
     const [fetched, parentDocs] = await Promise.all([
       Promise.all(items.map(c => chunksRepo.getById(access, String(c.chunkId), String(c.documentId)))),
       documentsRepo.listByIds(access, items.map(c => c.documentId), items.map(c => c.projectId))
@@ -2303,11 +2076,8 @@ exports.summarize = async (req, res) => {
     const docById = new Map(redactAllForAccess('documents', parentDocs, access)
       .map(d => [String(d.id), d]));
 
-    // The chunk rows are redacted too, and every METADATA field the response carries reads off the
-    // redacted row below, not off `items` (the raw AI Search hit, never gated by the chunk catalog).
-    // `content` is maxVis 0 and does not survive that — deliberately: it is never a response field,
-    // so it is read off the raw `fetched` row, the model call below being its only consumer, gated
-    // by the parent document above.
+    // Response metadata reads off the redacted row. `content` (maxVis 0) is read off the raw
+    // `fetched` row: the model call is its only consumer, gated by the parent document above.
     const rows = redactAllForAccess('chunks', fetched, access);
 
     const chunks = rows
@@ -2321,9 +2091,8 @@ exports.summarize = async (req, res) => {
         content: text
       }));
 
-    // Logged like the chunk-SEARCH path: a withheld count here is the visible symptom of a stale
-    // chunk ACL. An empty `row.content` lands in the same count, so a non-zero withheld is not
-    // proof of an ACL problem on its own.
+    // A withheld count is the symptom of a stale chunk ACL, but empty `content` counts too, so it is
+    // not proof on its own.
     if (chunks.length !== items.length) {
       logger.warn('[search/summary] withheld chunks whose parent document is not visible or whose text is empty', {
         withheld: items.length - chunks.length, returned: chunks.length
@@ -2333,9 +2102,8 @@ exports.summarize = async (req, res) => {
     const { summary, citations, reason, usage, estimatedCostCad } =
       await summarizer.summarize(keywords, chunks);
 
-    // Hydrate ONLY the chunks the model actually cited, under the CALLER's access and never
-    // systemAccess(). One read, not two: the documents are already in `docById`, which also makes
-    // the 'Untitled Document' fallback below unreachable on this path.
+    // Hydrate ONLY the cited chunks, under the CALLER's access, never systemAccess(). Documents are
+    // already in `docById`, so the 'Untitled Document' fallback below cannot fire here.
     const cited = citations.map(i => chunks[i]);
     const citedProjects = cited.length > 0
       ? await projectsRepo.listByIds(access, cited.map(c => c.projectId))
