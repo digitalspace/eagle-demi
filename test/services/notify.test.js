@@ -12,6 +12,7 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 const notify = require('../../src/services/notify');
+const { finishes } = require('../helpers/finishes');
 
 const ITEM = {
   id: '5cf00c03a266b7e1877504db',
@@ -127,6 +128,26 @@ test('notify.updatePublished', async (t) => {
     assert.strictEqual(notify.summaryOf(html), 'Site C Report draft');
     const rtl = '<p>\u05e9\u05dc\u05d5\u05dd\u200f (EAO)\tnext\nline</p>';
     assert.strictEqual(notify.excerptOf(rtl), '\u05e9\u05dc\u05d5\u05dd\u200f (EAO) next line');
+  });
+
+  await t.test('headline, short headline and summary are sent without bidi or control characters', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+    const hidden = 'Site\u202e C\u2066 Re\u0001port';
+
+    await notify.updatePublished({ ...ITEM, headline: hidden, shortHeadline: hidden, summary: hidden }, null);
+    await notify.updateCancelled({ ...ITEM, headline: hidden });
+
+    const [published, cancelled] = calls.map(call => JSON.parse(call.opts.body));
+    assert.strictEqual(published.title, 'Site C Report');
+    assert.strictEqual(published.shortHeadline, 'Site C Report');
+    assert.strictEqual(published.summary, 'Site C Report');
+    assert.strictEqual(cancelled.title, 'Site C Report');
+  });
+
+  await t.test('excerpt and summary stay linear on a long run of tags that never close', () => {
+    const module = require.resolve('../../src/services/notify');
+    assert.ok(finishes(module, "m.excerptOf('<'.repeat(400000))"));
   });
 
   await t.test('the fallback summary never carries a tag, split, escaped or unclosed', () => {

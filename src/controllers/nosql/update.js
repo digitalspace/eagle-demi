@@ -14,7 +14,7 @@ const { logger } = require('../../utils/logger');
 const notify = require('../../services/notify');
 const documents = require('../../repositories/documents');
 const { toIsoOrNull } = require('../../seed/transform');
-const { plainTextOf } = require('../../helpers/html-entities');
+const { plainTextOf, withoutControls } = require('../../helpers/html-entities');
 const { refId, upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
 
 const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
@@ -145,7 +145,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     id: eagleId,
     eagleId,
     projectId: doc.project ? String(doc.project) : null,
-    headline: doc.headline ?? null,
+    headline: withoutControls(doc.headline ?? null),
     content: doc.content,
     type: doc.type ?? null,
     // Always a boolean: the pinned sort and the C&E filter drop or mismatch a row lacking the field.
@@ -164,8 +164,8 @@ function mirrorItem(eagleId, doc, read, existing) {
     // the reader's, so an edit to `headline` or `content` never leaves a stale copy here.
     category: doc.category || null,
     subject: doc.subject || null,
-    shortHeadline: doc.shortHeadline || null,
-    summary: doc.summary || null,
+    shortHeadline: withoutControls(doc.shortHeadline || null),
+    summary: withoutControls(doc.summary || null),
     featuredImage: doc.featuredImage && doc.featuredImage.document ? imageOf(doc.featuredImage) : null,
     images: imagesOf(doc.images),
     attachments: Array.isArray(doc.attachments) ? doc.attachments.map(refId).filter(Boolean) : [],

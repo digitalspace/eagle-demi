@@ -7,7 +7,7 @@
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
-const { decodeEntities, plainTextOf, withoutControls } = require('../helpers/html-entities');
+const { decodeEntities, plainTextOf, replaceTags, withoutControls } = require('../helpers/html-entities');
 
 const TIMEOUT_MS = 10000;
 const ATTEMPTS = 2;
@@ -26,7 +26,7 @@ function configured() {
 
 /** Markup to plain text. Tags go first, so `&lt;b&gt;` written as text survives as `<b>`. */
 function plainText(html) {
-  return withoutControls(decodeEntities(String(html || '').replace(/<[^>]*>/g, ' ')))
+  return withoutControls(decodeEntities(replaceTags(String(html || ''), /<[^>]*>/g, ' ')))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -52,7 +52,7 @@ function eventFor(item) {
   return {
     kind: 'project-updated',
     serviceName: item.projectId ? `project:${item.projectId}` : 'eao:updates',
-    title: item.headline,
+    title: withoutControls(item.headline),
     idempotencyKey: item.id
   };
 }
@@ -122,9 +122,9 @@ async function updatePublished(item, projectName, featuredImage = null) {
     projectName: projectName || null,
     excerpt: excerptOf(item.content),
     // Only an editor-written one: the headline cut to 70 would stop mid-word.
-    ...(item.shortHeadline ? { shortHeadline: item.shortHeadline } : {}),
+    ...(item.shortHeadline ? { shortHeadline: withoutControls(item.shortHeadline) } : {}),
     // Email readers cannot apply the contract fallback, so it is applied here.
-    summary: item.summary || summaryOf(item.content),
+    summary: withoutControls(item.summary) || summaryOf(item.content),
     ...(image ? { featuredImageUrl: imageUrlFor(image.document), featuredImageAlt: image.alt } : {})
   });
 }

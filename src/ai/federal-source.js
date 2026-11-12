@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { logger } = require('../utils/logger');
-const { decodeEntities, withoutControls } = require('../helpers/html-entities');
+const { decodeEntities, replaceTags, withoutControls } = require('../helpers/html-entities');
 
 /** The registry's origin. Every href on a document page is relative to it. */
 const REGISTRY_ORIGIN = 'https://iaac-aeic.gc.ca';
@@ -37,7 +37,7 @@ const PROJ_LINK = /\/proj\/(\d+)/;
 
 /** Markup to the words in it, on one line. Titles carry `<br />` and `<em>`. */
 function textOf(html) {
-  return withoutControls(decodeEntities(String(html).replace(/<[^>]*>/g, ' '))).replace(/\s+/g, ' ').trim();
+  return withoutControls(decodeEntities(replaceTags(String(html), /<[^>]*>/g, ' '))).replace(/\s+/g, ' ').trim();
 }
 
 /** The first capture of `re` in `html`, as text, or `null`. */
@@ -261,7 +261,7 @@ function pdfToPages(buffer) {
         // page in the middle keeps its number.
         const parts = text.split('\f');
         if (parts.length > 1 && parts[parts.length - 1].trim() === '') parts.pop();
-        resolve(parts.map((page, i) => ({ page: i + 1, text: page.replace(/\r\n/g, '\n') })));
+        resolve(parts.map((page, i) => ({ page: i + 1, text: withoutControls(page.replace(/\r\n/g, '\n')) })));
       });
     child.on('error', () => { /* handled in the callback */ });
     child.stdin.on('error', () => { /* the binary is missing; the callback answers */ });

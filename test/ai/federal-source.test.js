@@ -395,6 +395,20 @@ test('pdfToPages', async (t) => {
     }
   });
 
+  await t.test('drops bidi and control characters from page text, keeping pages and line breaks', async () => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-poppler-'));
+    fs.writeFileSync(path.join(bin, 'pdftotext'),
+      "#!/bin/sh\nprintf 'One\\342\\200\\256 a\\001b\\r\\nline\\tend\\fTwo\\342\\201\\246\\f'\n", { mode: 0o755 });
+    const realPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${realPath}`;
+    try {
+      assert.deepStrictEqual(await pdfToPages(Buffer.from('%PDF')),
+        [{ page: 1, text: 'One ab\nline\tend' }, { page: 2, text: 'Two' }]);
+    } finally {
+      process.env.PATH = realPath;
+    }
+  });
+
   await t.test('answers `pdf_extract_failed` for something that is not a PDF',
     { skip: needsPoppler }, async () => {
       assert.deepStrictEqual(await pdfToPages(Buffer.from('not a pdf')),

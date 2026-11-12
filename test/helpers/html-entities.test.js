@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { decodeEntities, plainTextOf, withoutControls } = require('../../src/helpers/html-entities');
+const { finishes } = require('./finishes');
 
 test('decodeEntities', async (t) => {
   await t.test('a name only Object.prototype knows stays as written', () => {
@@ -37,6 +38,14 @@ test('withoutControls', async (t) => {
     assert.strictEqual(withoutControls(`a${controls}b`), 'ab');
   });
 
+  await t.test('drops tag characters, the word joiner, interlinear annotations and U+180E', () => {
+    assert.strictEqual(withoutControls('a\u{e0001}\u{e0041}\u{e007f}\u2060\ufff9\ufffa\ufffb\u180eb'), 'ab');
+  });
+
+  await t.test('keeps the zero-width space and soft hyphen that line breaking uses', () => {
+    assert.strictEqual(withoutControls('\u0e01\u200b\u0e02 hy\u00adphen'), '\u0e01\u200b\u0e02 hy\u00adphen');
+  });
+
   await t.test('keeps tab, line feed, carriage return, direction marks and joiners', () => {
     const kept = `a\tb\nc\rd ${RTL} \u200c\u200d`;
     assert.strictEqual(withoutControls(kept), kept);
@@ -56,4 +65,10 @@ test('plainTextOf', async (t) => {
   await t.test('tabs and line breaks still read as one space', () => {
     assert.strictEqual(plainTextOf('a\tb\r\nc &#9; d'), 'a b c d');
   });
+});
+
+test('plainTextOf is linear in a long run of tags that never close', () => {
+  const module = require.resolve('../../src/helpers/html-entities');
+  assert.ok(finishes(module, "m.plainTextOf('<'.repeat(400000))"));
+  assert.ok(finishes(module, "m.plainTextOf('<p'.repeat(200000))"));
 });
