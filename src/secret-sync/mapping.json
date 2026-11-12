@@ -71,13 +71,5 @@
   { "vaultSecret": "eagle-api-analytics-analytics-api-key", "namespace": "6cdc9e-test", "secretName": "eagle-api-analytics", "key": "ANALYTICS_API_KEY",
     "restart": [{ "kind": "Deployment", "name": "eagle-api" }] },
   { "vaultSecret": "eagle-api-appinsights-applicationinsights-connection-string", "namespace": "6cdc9e-test", "secretName": "eagle-api-appinsights", "key": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    "restart": [{ "kind": "Deployment", "name": "eagle-api" }] },
-  { "vaultSecret": "rproxy-basic-auth-password", "namespace": "6cdc9e-test", "secretName": "rproxy-basic-auth", "key": "password",
-    "restart": [{ "kind": "Deployment", "name": "rproxy" }] },
-  { "vaultSecret": "rproxy-basic-auth-public-password", "namespace": "6cdc9e-test", "secretName": "rproxy-basic-auth", "key": "public-password",
-    "restart": [{ "kind": "Deployment", "name": "rproxy" }] },
-  { "vaultSecret": "rproxy-basic-auth-public-username", "namespace": "6cdc9e-test", "secretName": "rproxy-basic-auth", "key": "public-username",
-    "restart": [{ "kind": "Deployment", "name": "rproxy" }] },
-  { "vaultSecret": "rproxy-basic-auth-username", "namespace": "6cdc9e-test", "secretName": "rproxy-basic-auth", "key": "username",
-    "restart": [{ "kind": "Deployment", "name": "rproxy" }] }
+    "restart": [{ "kind": "Deployment", "name": "eagle-api" }] }
 ]

@@ -105,8 +105,8 @@ param backupContainerName string = 'originals'
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
-// Empty until the rproxy egress address is measured per environment (one request through test,
-// then App Insights `callerIp`). Until then every eagle-public visitor shares one quota key.
+// Empty by default. Set it only for a proxy we run in front of APIM, using the address APIM
+// reports for it; otherwise the APIM-asserted address is the caller key.
 @description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
 param trustedProxyIps string = ''
 

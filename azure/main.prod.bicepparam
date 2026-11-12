@@ -112,12 +112,9 @@ param allowedClients = 'eagle-admin-console,eagle-agent-prod'
 // same as test), so every staff token carries demi-api in aud.
 param ssoAudience = 'demi-api'
 
-// The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
-// for a request made through projects.eao.gov.bc.ca/demi-search; measured 2026-09-07). With these
-// trusted, the anonymous bulk-download quota keys on the browser hop instead of putting every
-// eagle-public visitor on one shared key.
-// An address missing here only puts that proxy's visitors back on one shared key.
-param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
+// Egress addresses of proxies we run in front of APIM. None runs on prod, so the list is empty
+// and the APIM-asserted address is the caller.
+param trustedProxyIps = ''
 
 // eagle-edge stamps the vault's `edge-secret` (optionalSecretNames); the rotator below rotates both.
 
@@ -145,7 +142,7 @@ param rotatorProbeAnalyticsUrl = 'https://projects.eao.gov.bc.ca/analytics/event
 
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
-// same-origin through rproxy. The one entry is the DEMI admin console's Front Door endpoint on
+// same-origin through Front Door. The one entry is the DEMI admin console's Front Door endpoint on
 // eagle-edge-prod, read from eagle-edge's edgeEndpointHostNames output, never composed. main.bicep
 // also filters this list down to demi-admin hosts for the analytics allowlist.
 param frontendHostNames = [
@@ -186,9 +183,9 @@ param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882
 param apiFlexSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-demi-func-fc1-prod'
 
 // ── Monitoring ────────────────────────────────────────────────────────────────────────────────
-// THE PUBLIC PATH THROUGH rproxy, which is what eagle-public calls and the only address that fails
-// when the Front Door address moves — rproxy resolves it once at config load. Aiming this at
-// demi-api-fc-prod.azurewebsites.net instead would stay green through exactly that outage.
+// THE PUBLIC PATH eagle-public calls: Front Door route demi, then APIM, then the app. Aiming this
+// at demi-api-fc-prod.azurewebsites.net instead would stay green through an outage in Front Door
+// or APIM.
 //
 // `dataset=Document` is what forces the request through AI Search: `hasCriteria` is false for a
 // bare project list, and the Project branch then answers from Cosmos, so an AI Search outage would

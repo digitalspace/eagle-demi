@@ -1453,11 +1453,12 @@ false, so a prod infrastructure deploy creates no sync app.
 - `SYNC_NAMESPACES` on the app is what decides which namespaces it writes to, and the app can only
   reach what its token opens: it holds no prod token.
 
-**The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values: one entry
-per key, saying which vault secret feeds which key of which OpenShift Secret, and which Deployments
-and CronJobs to roll when it changes. It holds dev and test entries only. An OpenShift Secret with
-several keys — `eagle-api-mongodb` has five in dev, `rproxy-basic-auth` four in dev and test — is
-several entries merged into the one Secret object.
+**The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values, and dev
+and test entries only. Each entry names one key: which vault secret feeds which key of which
+OpenShift Secret, and which Deployments and CronJobs to roll when it changes.
+
+An OpenShift Secret with several keys is several entries merged into one Secret object.
+`eagle-api-mongodb` has five keys in dev and `rproxy-basic-auth` has four in dev.
 Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and serves both nonprod
 namespaces.
 
