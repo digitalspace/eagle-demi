@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * Inspection controller — the Eagle mirror for `Inspection`, `InspectionElement` and
- * `InspectionItem`, and the only writer of `inspections`.
- *
- * Each row is capped by its parent through `eagleReadUnder`: an inspection by its project, an
- * element by its inspection, an item by its element. Eagle's default `['sysadmin','inspector']`
- * lands at level 2. Eagle links only downward (`elements[]`, `items[]`), so a child finds its
- * parent by the stored parent that lists it. eagle-api pushes a new child and its re-listed parent
- * at the same moment; a child that arrives first gets a 503, which eagle-api's push client retries.
- *
- * A child is gated by its own stored `read[]`, so a parent whose level moved re-derives the rows
- * under it, as a comment period does for its comments.
+ * Eagle mirror for inspections, elements and items; each row is capped by its parent. A child that
+ * arrives before the parent listing it gets a 503, which eagle-api's push client retries.
  */
 
 const inspections = require('../../repositories/inspections');
