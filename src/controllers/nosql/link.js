@@ -24,9 +24,8 @@ const LINK_NOT_FOUND = Object.freeze({ error: 'Short link not found' });
 const RACED_ERROR = 'This short link changed while saving. Reload and try again.';
 
 /**
- * A 409 when any project holds `code`, else null. Ownership is judged on every project; the
- * `projectId` that lets the admin UI send the edit to the project route names the best holder
- * (`links.ownerRank`) whose row and code field the caller may read, so never a hidden one.
+ * A 409 when any project holds `code`, else null. Its `projectId` names the best holder
+ * (`links.ownerRank`) the caller may read, never a hidden one.
  */
 async function projectCodeConflict(req, res, code) {
   const owners = await projects.listShortCodeOwners(code);
