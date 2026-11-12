@@ -11,7 +11,7 @@ const MAIN = read('main.bicep');
 const API_MODULE = read('modules', 'api-function-flex.bicep');
 const APIM_MODULE = read('modules', 'apim.bicep');
 const OBSERVABILITY = read('modules', 'observability.bicep');
-const COSMOS_MODULE = read('modules', 'cosmos-nosql.bicep');
+const { COSMOS_MODULE, cosmosContainer } = require('../helpers/cosmos-bicep');
 const TEST_PARAMS = read('main.test.bicepparam');
 const PROD_PARAMS = read('main.prod.bicepparam');
 
@@ -89,12 +89,9 @@ test('demi-track-drift reads the counts the teams sync logs and is off by defaul
   assert.match(block, /windowSize: 'P2D'/);
 });
 
-const containerBlock = (name) => COSMOS_MODULE.split(/^resource /m)
-  .find(b => /^\w+ 'Microsoft\.DocumentDB\/databaseAccounts\/sqlDatabases\/containers@/.test(b) && b.includes(`\n  name: '${name}'\n`));
 const indexedPaths = (block) => [...block.matchAll(/path: '([^']+)'/g)].map(m => m[1]);
-const worksContainer = containerBlock('works');
+const worksContainer = cosmosContainer('works');
 
-// With /* excluded, a filter on an unlisted path is not served by the index.
 test('cosmos declares the works container, partitioned and indexed for per-project reads', () => {
   assert.ok(worksContainer, 'no works container in cosmos-nosql.bicep, so every works read and write 404s');
   assert.doesNotMatch(worksContainer.split('\n')[0], /= if \(/, 'every environment writes works once WORKS_WRITE is on');
@@ -109,10 +106,11 @@ test('cosmos declares the works container, partitioned and indexed for per-proje
 });
 
 test('cosmos indexes the project external id pair for the cross-project uniqueness query', () => {
-  const projects = containerBlock('projects');
+  const projects = cosmosContainer('projects');
   assert.ok(projects, 'no projects container in cosmos-nosql.bicep');
+  const paths = indexedPaths(projects);
   for (const p of ['/externalIds/[]/system/?', '/externalIds/[]/value/?']) {
-    assert.ok(indexedPaths(projects).includes(p), `${p} is not indexed, so the uniqueness check scans every project`);
+    assert.ok(paths.includes(p), `${p} is not indexed, so the uniqueness check scans every project`);
   }
 });
 
