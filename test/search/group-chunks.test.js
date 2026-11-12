@@ -19,11 +19,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(rows[0].matchCount, 2);
   });
 
-  // WHERE THE CHIPS COME FROM, and specifically that a neighbouring date cannot stand in.
-  // `dateUploaded` is a real, populated sibling on every document (`src/seed/transform.js:124`),
-  // so `row.datePosted || row.dateUploaded || null` would render a WRONG BUT PLAUSIBLE date on
-  // every card whose document has no posting date — nothing looks broken, which for a public
-  // registry is the worst shape a defect can take. That mutation used to survive the whole suite.
+  // `dateUploaded` is set on every document, so falling back to it would show a wrong but
+  // plausible date on every card that has no posting date.
   await t.test('datePosted comes from datePosted alone, never a neighbouring date', () => {
     const [row] = groupByDocument([{
       ...chunk('d1', 1, 'lead'),
@@ -53,9 +50,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(row.milestoneId, '5d0d212c7d50161b92a80eed');
   });
 
-  // The label gate. eagle-public reads "Page N" and links `#page=N` off this flag alone, so a row
-  // that loses it on the way through grouping silently downgrades a re-extracted document back to
-  // "Passage N" — and one that gains it sends a reader to a page the passage is not on.
+  // eagle-public shows "Page N" and links `#page=N` off this flag alone; losing it shows
+  // "Passage N", gaining it links to a page the passage is not on.
   await t.test('pageNumbered rides the row beside the page it qualifies', () => {
     const [numbered] = groupByDocument([{ ...chunk('d1', 12, 'lead'), pageNumbered: true }]);
     assert.strictEqual(numbered.pageNumber, 12);
@@ -66,8 +62,7 @@ test('groupByDocument', async (t) => {
       'the same number without the flag is the 12th passage, not page 12');
   });
 
-  // WHY THE LEAD PAIR IS NOT ENOUGH. A row carries up to MAX_SNIPPETS passages of one document and
-  // they are rarely on the same page, so a card that labels them all from the lead number prints
+  // A row's passages are rarely on one page, so labelling them all from the lead number prints
   // the first passage's page under the second passage's text.
   await t.test('each passage carries the page of the chunk that produced it', () => {
     const [row] = groupByDocument([
@@ -117,9 +112,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(rows[0].snippets.length, MAX_SNIPPETS);
   });
 
-  // DEMI's own frontend reads `snippet`, `pageNumber` and the chunk id off these rows
-  // (registry-state.service.ts:1160-1175). The grouped row carries BOTH shapes rather than
-  // replacing one with the other, so no frontend release is coupled to this change.
+  // DEMI's frontend reads `snippet`, `pageNumber` and the chunk id off these rows, so the
+  // grouped row keeps the singular shape beside the grouped one.
   await t.test('the lead chunk keeps its singular shape for DEMI', () => {
     const [row] = groupByDocument([chunk('d1', 4, 'lead'), chunk('d1', 9, 'second')]);
     assert.strictEqual(row.snippet, 'lead');
@@ -128,11 +122,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(row._id, 'd1', 'and _id is the DOCUMENT, which is what the card links to');
   });
 
-  // THE DEFECT THAT MADE THIS DIVERGE FROM THE ORIGINAL. eagle-search slices the grouped rows to
-  // `pageSize`; the caller pages by WINDOW, so a document grouped out of the window and then sliced
-  // off the end is skipped past on the next page and reachable from none. Measured on a
-  // 300-passage / 150-document corpus at pageSize=10: page 0 ended at d9, page 1 began at d50, and
-  // 30 of 150 documents were servable in total. Every document its window covered comes back.
+  // The caller pages by window, so slicing grouped rows to `pageSize` would skip documents
+  // that fall past the slice: the next page starts at the next window, not after the slice.
   await t.test('every document in the window is returned — no slice, nothing unreachable', () => {
     const rows = groupByDocument(
       [chunk('d1', 1, 'a'), chunk('d1', 2, 'b'), chunk('d2', 1, 'c'), chunk('d3', 1, 'd')]);
@@ -141,11 +132,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(rows[0].matchCount, 2, 'both d1 chunks counted, not just the first');
   });
 
-  // KNOWN AND NOT FIXED, pinned so nobody reads the module as covering it. Grouping happens per
-  // window with no carry-over, so a document whose passages straddle a window boundary comes back
-  // on both pages with a partial count on each. Statelessness is what buys that; a true per-document
-  // total needs a second aggregate query or a cursor. The test asserts the CURRENT behaviour — if
-  // it starts failing, someone made paging stateful and this comment is the thing to re-read.
+  // Known gap, pinned: grouping is per window with no carry-over, so a straddling document shows on
+  // both pages with a partial count. A true total needs a second aggregate query or a cursor.
   await t.test('a document straddling two windows is counted per window, not per corpus', () => {
     const windowOne = groupByDocument([chunk('d9', 99, 'first half')]);
     const windowTwo = groupByDocument([chunk('d9', 100, 'second half')]);
@@ -154,10 +142,8 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(windowOne[0]._id, windowTwo[0]._id);
   });
 
-  // Prod eagle-search renders a date chip on every chunk card and a milestone chip on a third of
-  // them; demi rendered neither, because these two never left the parent document. Values written
-  // out rather than read off the input, and named the way the Document dataset names them — a
-  // consumer must not have to special-case a chunk row.
+  // Named the way the Document dataset names them, so a consumer need not special-case a
+  // chunk row. Values written out, not read off the input.
   await t.test('the parent document date and milestone reach the grouped row', () => {
     const [row] = groupByDocument([{
       ...chunk('d1', 1, 'lead'),
@@ -182,8 +168,8 @@ test('groupByDocument', async (t) => {
   });
 });
 
-// Hardcoded, NOT computed from FANOUT: importing the constant under test makes the assertion true
-// by construction. Mutating FANOUT to 5 left this file green until these numbers were written out.
+// Hardcoded, not computed from FANOUT: computing from the constant under test makes the
+// assertion true by construction.
 test('windowFor — the fetch unit is a window of chunks', () => {
   assert.strictEqual(windowFor(10, 250), 100);
   assert.strictEqual(windowFor(1, 250), 10);
@@ -191,17 +177,15 @@ test('windowFor — the fetch unit is a window of chunks', () => {
   assert.strictEqual(FANOUT, 10, 'the numbers above are this one; change both or neither');
 });
 
-// No default ceiling, on purpose: a default would be a second copy of a constant that lives in
-// ai-search, silently wrong the day that one moves — which is the exact failure the clamp exists
-// to prevent. A caller that forgets it is told, not quietly given a guess.
+// No default ceiling on purpose: a default would copy a constant that lives in ai-search and
+// go stale when that one moves.
 test('windowFor refuses to guess the ceiling', () => {
   assert.throws(() => windowFor(10), /fetch ceiling/);
   assert.throws(() => windowFor(10, 0), /fetch ceiling/);
 });
 
-// The clamp is the FETCH ceiling, not Azure's `$top` limit. `runSearch` silently clamps a larger
-// `top` to MAX_PAGE_ROWS while `skip` still advances by the full window, so chunks past the clamp
-// are never requested and the documents in them are unreachable from any page.
+// The clamp is the fetch ceiling, not Azure's `$top` limit: `runSearch` clamps `top` to
+// MAX_PAGE_ROWS while `skip` advances by the full window, so chunks past it are never fetched.
 test('windowFor clamps to what the fetch layer will actually ask for', () => {
   assert.strictEqual(windowFor(100, 250), 250, 'not 1000 — runSearch would fetch far less');
   assert.strictEqual(windowFor(500, 250), 250);

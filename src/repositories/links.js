@@ -29,10 +29,8 @@ async function create(record) {
 }
 
 /**
- * `patch`, not `upsert` (see `repositories/api-keys.js:76-82`). patch has no 404 catch, so one is
- * added here: a missing code returns null so the controller 404s rather than 500s. `etag` makes it
- * land only on the revision the caller read; a mismatch throws 412. `claimedBy` stamps a project
- * adopting the record.
+ * `patch`, not `upsert` (see `api-keys.touchLastUsed`). A missing code returns null so the controller
+ * 404s; `etag` lands it only on the revision the caller read, else 412.
  */
 async function repoint(code, url, { etag, claimedBy } = {}) {
   const ops = [
@@ -54,9 +52,8 @@ async function remove(code, { etag } = {}) {
 }
 
 /**
- * Every link the caller may see, newest first: shared ones plus their own personal ones. A row
- * with no `personal` field predates the flag and is shared. Cross-partition; the container holds
- * one row per link, not per click.
+ * Shared links plus the caller's personal ones, newest first. A row with no `personal` field is
+ * shared.
  */
 async function list(me) {
   const { items } = await cosmos.query(CONTAINER, {
@@ -82,10 +79,8 @@ function shownCodes(row, access) {
 }
 
 /**
- * Which project holds each code, current or legacy, in one query over the projects container: the
- * list route tags every row with it, and a lookup per row would be one query per link. Bounded by
- * the project count. Several holders resolve by `ownerRank`. Only projects and codes the caller
- * may read count.
+ * Which project holds each code, in one query over projects rather than one per link. Several holders
+ * resolve by `ownerRank`; only projects and codes the caller may read count.
  *
  * @returns {Promise<Map<string, {projectId: string, projectRole: 'current'|'legacy'}>>}
  */

@@ -1,8 +1,7 @@
 'use strict';
 
-// `List` and `Organization` rows share one container, partitioned by `/kind`: a few thousand tiny
-// rows read a kind at a time. Neither is project data, so role ACL applies and project scope does not.
-// `PhaseCatalog` items sit here too but carry no `read[]`, so no caller-facing read returns them.
+// `List` and `Organization` rows, partitioned by `/kind`, get role ACL and no project scope.
+// `PhaseCatalog` items here carry no `read[]`, so no caller-facing read returns them.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');

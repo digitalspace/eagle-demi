@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * `and[_id]` on every Cosmos-backed `/search` dataset: one row back, nothing reported dropped.
- * Each corpus holds the target and a sibling, so a dataset that ignores the filter answers two.
- * The index datasets' half lives in test/search/eagle-query.test.js. Harness:
- * `test/helpers/search-reads.js`.
- */
+// Each corpus holds the target and a sibling, so a dataset that ignores `and[_id]` answers two.
+// The index datasets' half lives in test/search/eagle-query.test.js.
 
 process.env.NODE_ENV = 'test';
 

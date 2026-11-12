@@ -1,15 +1,7 @@
 'use strict';
 
-/**
- * The committed-vs-live schema gate.
- *
- * Two tests already hold the selects against the committed `azure/search/indexes/*.json`, and both
- * were green through the 2026-09-08 prod outage: no workflow applies an index definition, so the
- * app shipped a `fileSize` select to a live index that did not carry it and every document query
- * became a 502. What is asserted here is that this route asks the LIVE service the same question,
- * with the selects and the orders the app actually emits, and that a CI step can gate on its
- * status alone.
- */
+// No workflow applies index definitions, so the committed files can pass while the live index
+// lacks a field. This route asks the live service with the app's selects and orders.
 
 process.env.NODE_ENV = 'test';
 // Set before the controller reads it. Unconfigured is its own answer (asserted last), so without an
@@ -100,9 +92,8 @@ test('search schema health', async (t) => {
     ]), 'the schema names are the response keys; the live names come from the app settings');
   });
 
-  // `displayNameSort` is in NO select — it is the padded copy `SORT_KEYS` orders documents by, and
-  // it is the second field the plan records as null on the live prod index. A gate that probed
-  // selects only would pass a deploy whose every document page is a 400.
+  // `displayNameSort` is in no select, only in `SORT_KEYS` orders; probing selects alone would
+  // pass a deploy whose every document page is a 400.
   await t.test('it probes the orders the app emits, not only the selects', async (tt) => {
     const probes = stubProbe(tt);
 
@@ -261,9 +252,8 @@ test('search schema health', async (t) => {
     assert.strictEqual(probes.length, 0);
   });
 
-  // Not drift: a role, a wrong index name, a timeout. Reported as a failure, never as a missing
-  // field, and the service's own message stays in the log — this route is anonymous and that text
-  // carries the endpoint and the index name.
+  // Not drift (role, index name, timeout). The upstream text names the endpoint and index, and
+  // this route is anonymous, so it stays in the log.
   await t.test('a probe that fails for another reason is a 503 carrying no upstream text',
     async (tt) => {
       tt.mock.method(logger, 'error', () => {});
@@ -310,10 +300,8 @@ test('search schema health', async (t) => {
       [['name asc', 'decisionDate desc']]);
   });
 
-  // What `scripts/search-schema-probe.sh` posts: the tag's selects, and no order at all. The
-  // orders have to keep coming from `buildOrderBy` — a probe body built from the index files'
-  // `sortable` flags would order `documents` by `displayName`, which no query does, and a live
-  // index that made that one unsortable would block a release it cannot affect.
+  // `scripts/search-schema-probe.sh` posts selects only. Orders must come from `buildOrderBy`, not
+  // `sortable` flags, which would probe orders no query uses and block unrelated releases.
   await t.test('a select-only override leaves the orders derived from the query builder', async (tt) => {
     const probes = stubProbe(tt);
 
@@ -368,10 +356,8 @@ test('search schema health', async (t) => {
     assert.match(out.body.error, /chunks, projects, documents/);
   });
 
-  // The route is anonymous and the gateway has no per-caller throttle for an anonymous product
-  // (azure/modules/apim.bicep:473), so a posted list is a request multiplier against the shared
-  // search service: 32 orders per probe, three indexes, one curl. The bound is the only thing
-  // between a 10 MB body and tens of thousands of sequential live queries.
+  // Anonymous route, no per-caller gateway throttle: without this bound a posted list multiplies
+  // into thousands of live queries against the shared search service.
   await t.test('an oversized orderby is refused before a single probe is issued', async (tt) => {
     const probes = stubProbe(tt);
 
@@ -434,10 +420,8 @@ test('search schema health', async (t) => {
       'one select and one searchable-field probe per index, and no order to batch');
   });
 
-  // The widest index emits 14 orders, so the app's own probe costs one call per index plus its
-  // batches. The cap is what stops a body from turning the same route into an arbitrary number of
-  // them: the longest override a caller may send is 64 order entries, two batches, and one field
-  // list, for each index.
+  // The longest override a caller may send is 64 order entries (two batches) and one field list
+  // per index; the probe cap must hold for it.
   await t.test('the longest body a caller may send stays inside the probe cap', async (tt) => {
     const probes = stubProbe(tt);
     const fields = Array.from({ length: 64 }, (_, i) => `field${i}`);

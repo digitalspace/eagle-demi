@@ -8,14 +8,8 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const documentsRepo = require('../../src/repositories/documents');
 
-/**
- * What `listByIds` ASKS COSMOS FOR, which no controller test can see.
- *
- * Every test that exercises the chunk-search path mocks `listByIds` wholesale, so the projection
- * itself is invisible to all of them: narrowing the SELECT back to the four display columns leaves
- * the entire controller suite green while the milestone and date chips silently go blank on every
- * card. This file exists to close that hole and nothing else.
- */
+// Chunk-search controller tests mock `listByIds`, so only this file sees its projection; a
+// narrowed SELECT blanks the milestone and date chips on every chunk card.
 test('listByIds projects the columns the chunk card renders', async (t) => {
   await t.test('the SELECT names milestone, milestoneId and datePosted', async () => {
     let spec = null;
@@ -28,9 +22,8 @@ test('listByIds projects the columns the chunk card renders', async (t) => {
 
     assert.ok(spec, 'listByIds must reach Cosmos for a non-empty id set');
 
-    // The SELECT clause ALONE. Matching the whole query string would also see the ACL predicate the
-    // WHERE is built from, which names `c.read` — so a naive `doesNotMatch(spec.query, /c.read/)`
-    // fails against correct code and teaches whoever hits it to delete the assertion.
+    // Match the SELECT clause only: the WHERE's ACL predicate names `c.read`, so a whole-query
+    // `doesNotMatch(/c.read/)` fails against correct code.
     const select = /^SELECT\s+([\s\S]*?)\s+FROM\b/i.exec(spec.query);
     assert.ok(select, `could not read a SELECT clause out of: ${spec.query}`);
     const columns = select[1].split(',').map(c => c.trim());
@@ -49,10 +42,8 @@ test('listByIds projects the columns the chunk card renders', async (t) => {
   });
 
   await t.test('the ACL predicate survives the widened projection', async () => {
-    // Widening a SELECT is exactly the kind of edit that quietly loses a WHERE, and this projection
-    // feeds the chunk-search GATE — a caller who may not read the parent document must not get a
-    // parent row back, because a missing row is what withholds the chunk. Assert the visibility
-    // predicate and the caller's own role are both still in the query the widening produced.
+    // This read gates chunk search: a missing parent row is what withholds a chunk, so the
+    // visibility predicate and the caller's role must stay in the query.
     let spec = null;
     t.mock.method(cosmos, 'query', async (_container, querySpec) => { spec = querySpec; return { items: [] }; });
 

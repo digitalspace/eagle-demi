@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Uploads the document intake has not released (`scanStatus` `pending` or `rejected`) never reach a
- * reader; rows with `clean` or no `scanStatus` do. No Cosmos runs here, so the SQL sent and the
- * point-read answer are the observable surface.
- */
+// Uploads with `scanStatus` `pending` or `rejected` never reach a reader; `clean` or no
+// `scanStatus` do.
 
 process.env.NODE_ENV = 'test';
 

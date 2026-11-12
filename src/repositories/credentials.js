@@ -1,21 +1,8 @@
 'use strict';
 
 /**
- * Selected Credentials — Cosmos NoSQL.
- *
- * Container `credentials`, partitioned by `/party/id`. The read on the hot path is "what does this
- * party hold", so it runs in one partition; the operator listings and the bulk revokes are
- * cross-partition and rare.
- *
- * NO read ACL applies here, for the same reason `api-keys.js` has none: this container is never
- * exposed through the ACL-driven read paths. It is reached by `middleware/credentials.js` (by
- * party, internally) and by the `/credentials` routes, which are `requireWrite` +
- * `requireRole('sysadmin')`. Nobody should later "fix" the missing visibility predicate by wiring
- * this into a public read.
- *
- * A row is never deleted. A grant is revoked by stamping `revokedAt`, so the row stays as the
- * record of what was granted, to whom, by whom, and when it stopped. The one edit is `scope.ids`,
- * narrowed when a single project of a multi-project grant closes.
+ * Container `credentials`, partitioned by `/party/id`. No read ACL: only `middleware/credentials.js`
+ * and sysadmin `/credentials` routes reach it. Rows are never deleted; a revoke stamps `revokedAt`.
  */
 
 const crypto = require('crypto');
@@ -38,10 +25,8 @@ async function listForParty(partyId) {
 }
 
 /**
- * The four ways an operator names a set of grants, as a WHERE fragment.
- *
- * `projectId` matches project-scoped grants only: a document-scoped grant names document ids, and
- * resolving those to a project would need a second read per id.
+ * `projectId` matches project-scoped grants only: resolving a document-scoped grant's ids to a
+ * project would need a read per id.
  */
 function selectorClause(selector = {}) {
   if (selector.id) {
@@ -98,10 +83,8 @@ async function insert(record) {
 }
 
 /**
- * Revoke every live grant a selector names — `{ id | batchId | party | projectId }`.
- *
- * `patch`, never `upsert`: the row this process holds may be a cached copy, and an upsert would
- * write it whole (the failure `api-keys.touchLastUsed` documents).
+ * Revoke every live grant `{ id | batchId | party | projectId }` names. `patch`, never `upsert`: an
+ * upsert would write a cached copy whole, as `api-keys.touchLastUsed` explains.
  *
  * @returns {object[]} the rows revoked, as they were before the stamp
  */
@@ -117,17 +100,8 @@ async function revokeBy(selector, at = new Date().toISOString()) {
 }
 
 /**
- * Close out one project's grants because its state changed — it closed, or its work completed.
- *
- * A grant that names other projects as well keeps them: the closed id is dropped from
- * `scope.ids` and the row stays live. Only a grant left with no id is revoked.
- *
- * Document-scoped grants name document ids, not project ids, and nothing here resolves a document
- * to its project, so a project close leaves them alone.
- *
- * Called by `src/scripts/sync-track-teams.js` on the `syncTrackTeams` timer with
- * `cause: 'project-closed'`. Work-complete is not in Track's feed. Nothing announces an ordinary
- * expiry: the holder reads each `end` on GET /api/me, the grantor on GET /api/credentials.
+ * Drops the closed id from `scope.ids`; only a grant left with no id is revoked. Document-scoped
+ * grants are left alone, as nothing here maps a document to its project.
  *
  * @returns {object[]} the rows touched, narrowed or revoked, as they were before the write
  */

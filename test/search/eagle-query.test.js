@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The query translation eagle-public depends on.
- *
- * Every assertion here is written against a WIRE STRING eagle-public actually sends — the worked
- * examples in the contract, not an invented shape — because the whole class of bug this file exists
- * to prevent is a request that succeeds and answers the wrong rows.
+ * Query translation for eagle-public; assertions use wire strings it sends, since the bug class is
+ * a request that succeeds and answers the wrong rows.
  */
 
 process.env.NODE_ENV = 'test';
@@ -42,9 +39,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(!/ or /.test(filter), 'different keys are ANDed, never ORed');
   });
 
-  // The fail-closed path. `empty` means this caller may see NOTHING, and there is no OData filter
-  // that expresses that — a null or empty $filter is UNRESTRICTED. So the only safe answer is to
-  // refuse to build a request at all, loudly, rather than to emit one without the clause.
+  // Fail closed: no OData filter means "nothing" and an empty $filter is unrestricted, so
+  // `empty` must refuse to build a request.
   await t.test('a caller scoped to nothing cannot produce a filter at all', () => {
     assert.throws(
       () => eagleQuery.buildFilter({}, 'Document', { filter: null, empty: true }),
@@ -58,9 +54,8 @@ test('eagle-query filters', async (t) => {
       /requires the access filter/);
   });
 
-  // Express 5 parses `and[type]=x` as a literal key; `qs`/extended parses the same URL into a
-  // nested object. eagle-search recorded what reading only one shape costs: every filter dropped
-  // and 60,560 documents returned where a filtered handful was expected.
+  // Express 5 parses `and[type]=x` as a literal key, `qs`/extended as a nested object; reading
+  // only one shape drops every filter and returns the whole corpus.
   await t.test('both and[] wire shapes reach the filter', () => {
     const literal = eagleQuery.buildFilter({ 'and[projectId]': '207' }, 'Document', anonAcl());
     const nested = eagleQuery.buildFilter({ and: { projectId: '207' } }, 'Document', anonAcl());
@@ -75,13 +70,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("(projectId eq '207' or projectId eq '208')"));
   });
 
-  // A key the index cannot express is DROPPED, not passed through: an unknown field name is an
-  // OData 400, and eagle-public swallows a failed search into an empty table.
-  //
-  // REPLACED TWICE, for the same reason both times: the example has to be a name the index still
-  // lacks. `milestone` stopped being one when `milestoneId` landed, `documentSource` when 3.3 added
-  // it. `documentAuthor` is the free-text author eagle carries and demi does not — and it is a
-  // near-miss for `documentAuthorType`, which is the shape that makes drop-and-report matter.
+  // An unknown field is an OData 400 that eagle-public shows as an empty table. The example must
+  // be a name the index lacks; change it if the index gains `documentAuthor`.
   await t.test('a filter key the index does not carry is dropped and reported', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[documentAuthor]': 'Ministry of Mines' }, 'Document', anonAcl());
@@ -91,9 +81,8 @@ test('eagle-query filters', async (t) => {
     assert.strictEqual(filter, DOC_ANON_FILTER);
   });
 
-  // The four document facets eagle-public sends, all as List ObjectIds, all onto the id columns.
-  // Before the alias map they passed through onto the LABEL columns and matched nothing — a 200
-  // with an empty table, which reads as "no documents" rather than as a broken filter.
+  // eagle-public sends these as List ObjectIds; on the label columns they match nothing and
+  // the empty table reads as "no documents", not as a broken filter.
   await t.test('the four document facets map onto the id columns', () => {
     const { filter, dropped } = eagleQuery.buildFilter({
       'and[type]': '5cf00c03a266b7e1877504d9',
@@ -109,9 +98,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("documentAuthorTypeId eq '5cf00c03a266b7e1877504f6'"));
   });
 
-  // A date range is a RANGE on the base field, and the End edge is `lt <next day>` rather than
-  // `le <that day>`: the wire carries a calendar day and the field is an instant, so `le` would
-  // exclude everything posted after midnight on the day the user included.
+  // End is `lt <next day>`, not `le <that day>`: the wire sends a day and the field is an
+  // instant, so `le` would drop everything after midnight on the included day.
   await t.test('datePostedStart/End become a half-open range on datePosted', () => {
     const { filter, dropped } = eagleQuery.buildFilter({
       'and[datePostedStart]': '2024-01-15',
@@ -141,9 +129,8 @@ test('eagle-query filters', async (t) => {
     assert.deepStrictEqual(dropped, ['dateAddedStart']);
   });
 
-  // `read` is filterable in the index, so a caller naming a role they do not hold would otherwise
-  // emit a clause about their own ACL. It is `defaultVis: 0`, so the visibility gate drops the key
-  // outright and the filter is the bare ACL clause — nothing of the caller's survives.
+  // `read` is filterable, so without the visibility gate (`defaultVis: 0`) a caller could add a
+  // clause about their own ACL.
   await t.test('a caller cannot filter their way past the ACL clause', () => {
     const { filter, dropped } = eagleQuery.buildFilter({ 'and[read]': 'staff' }, 'Document',
       anonAcl(), anonymous());
@@ -174,9 +161,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes('searchVis eq 1'), filter);
   });
 
-  // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering
-  // the DEMI key with it would match nothing and render as an empty list.
-  // The index half of the per-dataset `_id` table; the Cosmos half is search.id-filter.test.js.
+  // `_id` on the wire is the Eagle ObjectId, held in `legacyEagleId` on a project. Cosmos half of
+  // this table: search.id-filter.test.js.
   await t.test('and[_id] lands on each index dataset\'s Eagle id field, never dropped', () => {
     for (const [dataset, field, scope] of [
       ['Project', 'legacyEagleId', 'id'],
@@ -195,10 +181,8 @@ test('eagle-query filters', async (t) => {
     assert.deepStrictEqual(dropped, ['project']);
   });
 
-  // Every project-list filter except `region` used to answer with the WHOLE corpus. Measured
-  // against the live test service before the fix: `and[eacDecision]=<id>` returned 393 of 393
-  // projects under a 200, and `and[currentPhaseName]=<id>` and `and[CEAAInvolvement]=<id>` did the
-  // same, because none of the three fields existed in the index and every one landed in `dropped`.
+  // eagle-public sends ids for these three; the index has them only on the `*Id` columns, so
+  // without the redirect each is dropped and the whole corpus comes back.
   await t.test('the three id-valued project facets redirect to their id columns', () => {
     const { filter, dropped } = eagleQuery.buildFilter({
       'and[eacDecision]': '5e27937a749c83437054f214',
@@ -212,10 +196,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("ceaaInvolvementId eq '5e27937a749c83437054f1ff'"));
   });
 
-  // DEMI stores Track's spelling for a Track-backed project and Eagle's for an Eagle-only one, so
-  // BOTH have to match or one origin becomes unreachable. The literals on both sides are written
-  // out rather than read from VALUE_ALIASES: a test that maps through the same table it is checking
-  // passes whatever the table says, including nothing.
+  // DEMI stores Track's spelling or Eagle's by origin, so both must match. Literals written out,
+  // not read from VALUE_ALIASES, so the test cannot pass by construction.
   await t.test('a project type matches both the wire spelling and the stored one', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[type]': 'Energy-Electricity,Tourist Destination Resorts' }, 'Project', anonAcl('id'));
@@ -237,9 +219,7 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("(type eq 'Energy - Electricity' or type eq 'Energy-Electricity')"), filter);
   });
 
-  // The lost-value report counts WIRE values, not spellings. Before the two-spelling change one
-  // value produced one term; now it can produce two, and a naive length comparison would report
-  // every mapped filter as partially dropped.
+  // The lost-value report counts wire values, not spellings; one value can expand to two terms.
   await t.test('expanding a type into two spellings is not reported as a lost value', () => {
     const { dropped } = eagleQuery.buildFilter(
       { 'and[type]': 'Energy-Electricity,Mines' }, 'Project', anonAcl('id'));
@@ -295,9 +275,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("projectSubType eq 'O''Brien'"), filter);
   });
 
-  // `and[type]=` with nothing after the `=` splits to zero values, same as the key being absent —
-  // it must add no clause AND must not be reported dropped, the same "no filter" reading the Cosmos
-  // path's `typeCriteria` gives `updates.js` `and[type]`. See `src/repositories/updates.js`.
+  // Empty `and[type]=` means no filter, the same reading `typeCriteria` gives it in
+  // `src/repositories/updates.js`.
   await t.test('an empty and[type]= adds no clause and is not reported dropped', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[type]': '' }, 'Project', anonAcl('id'));
@@ -328,9 +307,7 @@ test('eagle-query filters', async (t) => {
     assert.strictEqual(filter, ANON_FILTER);
   });
 
-  // The proponent facet sends an Organization ObjectId while `proponent` holds the NAME, so it used
-  // to be refused outright by UNMAPPED_KEYS — a 200 with the filter silently gone. `proponentId` is
-  // the column that value actually matches.
+  // The facet sends an Organization ObjectId; `proponent` holds the name, `proponentId` the id.
   await t.test('the proponent facet filters on proponentId, not on the name column', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[proponent]': '58850f69aaecd9001b8085cc' }, 'Project', anonAcl('id'));
@@ -352,10 +329,8 @@ test('eagle-query filters', async (t) => {
     filter);
   });
 
-  // The alias table is a FILTER redirect. Sorting the Phase column by an ObjectId would order the
-  // list by hex; `currentPhaseNameId` is `sortable: false` precisely so this falls back.
-  // Same trade as the phase column, and the reason `proponentId` is `sortable: false`: the alias is
-  // a FILTER redirect, and ordering a project list by hex ObjectId is not an order anyone asked for.
+  // The alias table redirects filters only; `proponentId` and `currentPhaseNameId` are
+  // `sortable: false` so sorting stays on the name, not hex ObjectIds.
   await t.test('sorting by proponent orders on the name, not on the id it filters by', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('-proponent', 'Project', false);
 
@@ -377,12 +352,8 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("region eq 'O''Brien'"));
   });
 
-  // THE GATE IS THE FIELD'S TYPE, NOT `filterable`. `projects.centroid` is an
-  // `Edm.GeographyPoint` and IS filterable — geography fields are — so a `filterable` gate let it
-  // fall to the quoted-string default and emitted `centroid eq 'x'`, which is not an operator OData
-  // defines on a geography field. The 400 that came back is not retried, and the controller used to
-  // answer it with the keywordless corpus listing: one `and[centroid]=x` from any anonymous caller
-  // turned every Project keyword search into an arbitrary page of the whole readable corpus.
+  // The gate is the field's type, not `filterable`: `centroid` is a filterable GeographyPoint,
+  // and `centroid eq 'x'` is an OData 400.
   await t.test('a filterable field whose TYPE has no term is dropped, not quoted', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[centroid]': 'x' }, 'Project', anonAcl('id'));
@@ -447,10 +418,8 @@ test('eagle-query nameContains', async (t) => {
     assert.ok(project.filter.includes("read/any(r: search.in(r, 'public', ','))"));
   });
 
-  // THE bug this field list exists for. `name` and `displayName` are analyzed with en.microsoft,
-  // which removes "mine" at index and at query time, so the clause over those fields alone asked
-  // for no term and answered 0 rows while 32 project names held the word. `nameTokens` and
-  // `fileNameTokens` are the same text under the `filename` analyzer, which keeps it.
+  // en.microsoft drops "mine" as a stopword from `name` and `displayName`; `nameTokens` and
+  // `fileNameTokens` hold the same text under the `filename` analyzer, which keeps it.
   await t.test('a name made only of stopwords still names a field that holds the word', () => {
     const project = eagleQuery.buildFilter(
       { 'and[nameContains]': 'mine' }, 'Project', anonAcl());
@@ -469,8 +438,7 @@ test('eagle-query nameContains', async (t) => {
       document.filter);
   });
 
-  // The mixed case: "mine report" used to answer the same rows as "report" alone, because the
-  // stopword arm of the conjunction could match nothing. Both words are still required.
+  // "mine report" must not answer the same rows as "report" alone: both words are required.
   await t.test('a stopword beside a real word is still required, not ignored', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'mine report' }, 'Document', anonAcl());
@@ -482,9 +450,8 @@ test('eagle-query nameContains', async (t) => {
       filter);
   });
 
-  // A row count over a hidden field answers what the value is, so the clause may name a field only
-  // if the caller can read EVERY field in it. `nameTokens` is public in the committed catalog, so
-  // it is hidden here for the length of the call and put back.
+  // A row count over a hidden field leaks its value, so every field in the clause must be
+  // readable. `nameTokens` is public in the catalog, so it is hidden here and put back.
   await t.test('one field hidden from this caller drops the whole key', () => {
     const catalog = catalogFor('index-projects');
     const restore = catalog.nameTokens.defaultVis;
@@ -515,18 +482,16 @@ test('eagle-query nameContains', async (t) => {
     }
   });
 
-  // Every word required, the prefix on each so a half-typed word still hits. A one-character word
-  // carries no `*`: the service truncates a one-letter term expansion instead of erroring, which
-  // answers from an arbitrary slice of the vocabulary.
+  // A one-character word gets no `*`: the service truncates a one-letter expansion instead of
+  // erroring, which answers from an arbitrary slice of the vocabulary.
   await t.test('words are ANDed and words of two or more characters match as a prefix', () => {
     const { filter } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'Site C dam' }, 'Project', anonAcl());
     assert.ok(filter.startsWith("search.ismatch('Site* AND C AND dam*', 'name,nameTokens', 'full', 'any')"),
       filter);
 
-    // The boundary itself: two characters is the shortest word that prefixes, and the swagger says
-    // so. Without a two-character word here, 'Site C dam' renders the same whether the floor is 2
-    // or 3.
+    // Two characters is the shortest word that prefixes, as the swagger says; 'Site C dam' alone
+    // cannot tell a floor of 2 from 3.
     const { filter: twoChar } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'BC Hydro' }, 'Project', anonAcl());
     assert.ok(twoChar.startsWith("search.ismatch('BC* AND Hydro*', 'name,nameTokens', 'full', 'any')"),
@@ -568,9 +533,8 @@ test('eagle-query nameContains', async (t) => {
     assert.ok(hyphen.startsWith("search.ismatch('Site* AND C', 'name,nameTokens', 'full', 'any')"), hyphen);
   });
 
-  // A comma is a word break here, not a multi-select. `valuesOf` would split this into two
-  // filters, and neither half is a name the corpus holds; carrying the comma into the term is the
-  // other failure, since `LNG,*` skips the analyzer and no index token holds the comma.
+  // A comma is a word break, not a multi-select: `valuesOf` would split the name in two, and
+  // `LNG,*` skips the analyzer so no index token matches.
   await t.test('a comma breaks words and is not a multi-select', () => {
     const { filter } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'Kitimat LNG, Phase 2' }, 'Project', anonAcl());
@@ -595,9 +559,8 @@ test('eagle-query nameContains', async (t) => {
     }
   });
 
-  // The index behind these two has no name column to match on, so the clause cannot be built. The
-  // endpoint answers 400; `buildFilter` on its own reports the key dropped rather than widening the
-  // request to the whole corpus.
+  // No name column on these indexes. The endpoint answers 400; `buildFilter` alone reports the
+  // key dropped rather than widening to the whole corpus.
   await t.test('a dataset with no name cell drops the key and renders no clause', () => {
     for (const dataset of ['DocumentChunk', 'RecentActivity']) {
       const { filter, dropped } = eagleQuery.buildFilter(
@@ -674,10 +637,7 @@ test('eagle-query sort', async (t) => {
     assert.strictEqual(orderby, 'name asc, id asc');
   });
 
-  // INVERTED 2026-08-22, deliberately. This asserted that `-datePosted` was dropped, which was true
-  // while `documents` had no date field at all. It now has one, `sortable: true`, and this is
-  // eagle-public's DEFAULT document sort (documents-tab.component.ts:56) — so the old assertion
-  // pinned the very gap the index change closed.
+  // `-datePosted` is eagle-public's default document sort (documents-tab.component.ts).
   await t.test('the default document sort the frontend sends is emitted, not dropped', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('-datePosted', 'Document', false);
     assert.deepStrictEqual(dropped, []);
@@ -690,18 +650,8 @@ test('eagle-query sort', async (t) => {
     assert.ok(!orderby.includes('popularity'), 'a name the index lacks is a 400 on every query');
   });
 
-  // The alias table redirects a FILTER key onto its id column, and sorting has to go the other way:
-  // `typeId` is `sortable: false` (an opaque ObjectId sorts to nothing a reader recognises), while
-  // the `type` LABEL beside it sorts. Without the fallback, sorting the Document type column would
-  // drop silently and the table would keep whatever order the service returned.
-  // A repeated field cannot change the order — the first occurrence already decided it — so the
-  // second is noise at best. eagle-public gets there on its own: it appends a secondary sort that
-  // can repeat the primary one.
-  //
-  // The second case is the one a clause CAP would have had to catch, and it is why there is no cap:
-  // 60 names the index does not carry are all dropped, so `parts` never grows. A cap could not fire
-  // on any demi index (`documents` has 17 fields in total against Azure's limit of 32), and the
-  // test that claimed to exercise one passed with the guard deleted.
+  // eagle-public's secondary sort can repeat the primary. No clause cap: unknown names are dropped,
+  // and no demi index reaches Azure's 32-clause $orderby limit.
   await t.test('a repeated sort field is emitted once', () => {
     const { orderby } = eagleQuery.buildOrderBy(
       ['-displayName', '+displayName'], 'Document', false);
@@ -713,10 +663,7 @@ test('eagle-query sort', async (t) => {
     assert.strictEqual(dropped.length, 60, 'a name the index lacks is dropped, never emitted');
   });
 
-  // The tiebreak used to be appended after the dedupe rather than through it, so sorting by the
-  // tiebreak field itself emitted it twice. `_id` arrives here as `id` via the alias table, and a
-  // keywordless `?dataset=Document&sortBy=id` now reaches the index where it used to take the
-  // Cosmos list path and be ignored.
+  // The tiebreak goes through the dedupe; `_id` arrives as `id` via the alias table.
   await t.test('sorting BY the tiebreak field does not emit it twice', () => {
     for (const sortBy of ['id', '_id']) {
       assert.strictEqual(eagleQuery.buildOrderBy(sortBy, 'Document', false).orderby, 'id asc',
@@ -735,17 +682,16 @@ test('eagle-query sort', async (t) => {
     assert.ok(!filter.includes('categorized'));
   });
 
+  // Aliases redirect filters onto `typeId`, which is `sortable: false`; the sort stays on the
+  // `type` label, or the type column would drop its sort silently.
   await t.test('a sort on an aliased key falls back to the caller name the index CAN sort', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('+type', 'Document', false);
     assert.deepStrictEqual(dropped, []);
     assert.strictEqual(orderby, 'type asc, id asc');
   });
 
-  // THE GATE IS THE FIELD'S TYPE, NOT `sortable` — the same defect S1 fixed for filters.
-  // `projects.centroid` is an `Edm.GeographyPoint` declared `sortable: true`, and AI Search orders a
-  // geography only through `geo.distance(...)`, so `centroid asc` is a 400. 400 is not retried,
-  // `request()` throws, and the controller answers 502 — to any anonymous `?dataset=Project&
-  // keywords=x&sortBy=centroid`.
+  // The gate is the field's type, not `sortable`: a GeographyPoint orders only through
+  // `geo.distance(...)`, so `centroid asc` is a 400 and the controller answers 502.
   await t.test('a sortable field whose TYPE cannot be ordered is dropped, not emitted', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('centroid', 'Project', false);
 
@@ -754,18 +700,16 @@ test('eagle-query sort', async (t) => {
     assert.strictEqual(orderby, 'name asc, id asc', 'the sort falls back to the stable default');
   });
 
-  // The control for the drop above: a scalar field the index CAN sort still sorts. Without this the
-  // assertion is satisfied by dropping every sort, which would measure nothing. `region` and not
-  // `proponent`, which now carries an alias and so tests the alias path instead of the plain one.
+  // Control for the drop above. `region`, not `proponent`, which has an alias and would test the
+  // alias path instead.
   await t.test('an ordinary sortable string field still orders', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('-region', 'Project', false);
     assert.deepStrictEqual(dropped, []);
     assert.strictEqual(orderby, 'region desc, id asc');
   });
 
-  // A sortable, orderable field the CALLER cannot read must not order their page either: the row
-  // order over a hidden value answers what the value is. `sector` is public in the committed
-  // catalog, so it is hidden here for the length of the call and put back.
+  // Row order over a hidden field leaks its value. `sector` is public in the catalog, so it is
+  // hidden here and put back.
   await t.test('a sort key hidden from this caller is dropped, not emitted', () => {
     const catalog = catalogFor('index-projects');
     const restore = catalog.sector.defaultVis;
@@ -828,9 +772,8 @@ test('eagle-query parameters', async (t) => {
     }), []);
   });
 
-  // `projects` has no project axis and neither has `lists` or `notifications`, so a project filter
-  // there must be REPORTED. `commentPeriods` and `updates` do, and they have no index at all, so
-  // the answer cannot come from the index definitions.
+  // `commentPeriods` and `updates` have a project axis but no index, so the answer cannot come
+  // from the index definitions.
   await t.test('the Cosmos datasets keyed by project can be scoped to one', () => {
     assert.strictEqual(eagleQuery.canScopeToProject('CommentPeriod'), true);
     assert.strictEqual(eagleQuery.canScopeToProject('RecentActivity'), true);
@@ -869,10 +812,8 @@ test('eagle-query parameters', async (t) => {
 });
 
 test('a boolean value OData cannot express is dropped, not coerced to false', () => {
-  // `v === 'true'` alone made every other value mean `eq false`, so `and[isPublished]=True`
-  // applied the OPPOSITE filter under a 200 with nothing reported lost.
-  // NOT the empty string: `valuesOf` filters blanks out, so `and[isPublished]=` carries no value
-  // to express and reports nothing — a different case from a value that cannot be expressed.
+  // Coercing would turn `True` into `eq false`. The empty string is not here: `valuesOf` drops
+  // blanks, so `and[isPublished]=` carries no value and reports nothing.
   for (const v of ['1', 'True', 'TRUE', 'yes', 'banana']) {
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
     assert.strictEqual(out.filter, "documentSource ne 'UPDATE'", `${v} builds only the Update-image default`);
@@ -888,11 +829,8 @@ test('a boolean value OData cannot express is dropped, not coerced to false', ()
 });
 
 test('every semantic configuration is named for its own index', () => {
-  // `semanticConfigurationFor(index)` derives `<index>-semantic` at request time, so the DEFINITION
-  // has to follow the same convention or the app asks a real index for a configuration it does not
-  // have. That is a hard 400, not a degrade: semantic is on by default for chunk search and 400 is
-  // not in RETRY_STATUSES. Nothing else couples the two — every other assertion pins the DERIVED
-  // string, so the definition file could drift with the whole suite green.
+  // The app derives `<index>-semantic` at request time; a definition that differs is a 400 on every
+  // semantic query. Only this test reads the definition files.
   const dir = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
   const defs = fs.readdirSync(dir)
     .filter(f => f.endsWith('.json'))
@@ -913,11 +851,8 @@ test('every semantic configuration is named for its own index', () => {
 });
 
 test('every DATASET_INDEX value names an index definition that is actually on disk', () => {
-  // The guard that makes the staged index rename safe. DATASET_INDEX is a SCHEMA lookup — it picks
-  // which `azure/search/indexes/*.json` to read field metadata from — while SEARCH_INDEX* name the
-  // live indexes. Getting this one wrong is invisible: `fieldsFor` falls back to an empty Map, so
-  // every filter and every sort is silently dropped and the caller gets a 200 over the WHOLE
-  // corpus, which is exactly what eagle-search measured (60,560 rows for a filtered question).
+  // DATASET_INDEX picks the schema file, SEARCH_INDEX* the live index. A wrong name gives an empty
+  // field map, so every filter and sort drops and the whole corpus comes back under a 200.
   const dir = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
   const onDisk = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
     .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).name);
@@ -927,7 +862,7 @@ test('every DATASET_INDEX value names an index definition that is actually on di
   }
 });
 
-// The catalog gates query keys as well as response fields (P2-3): a caller who cannot READ a field
+// The catalog gates query keys as well as response fields: a caller who cannot READ a field
 // cannot FILTER or SORT on it either, because a narrowed row count answers what the value is.
 const INDEX_CATALOG = eagleQuery.DATASET_CATALOG;
 
@@ -947,9 +882,8 @@ test('every ALIASES target is a defaultVis 4 index field', () => {
     }
   }
 
-  // DocumentChunk is the exception and it is deliberate. The chunks catalog classifies the STORED
-  // chunk — it carries `extractedAt`, which no index does — so it says nothing about index field
-  // names, DATASET_CATALOG has no entry for the dataset, and its aliases still resolve.
+  // DocumentChunk is a deliberate exception: the chunks catalog covers the stored chunk, not the
+  // index, so DATASET_CATALOG has no entry for it and its aliases still resolve.
   assert.ok(catalogFor('chunks').extractedAt, 'the chunks catalog is over the stored chunk');
   const { filter } = eagleQuery.buildFilter(
     { 'and[document]': 'abc' }, 'DocumentChunk', anonAcl(), anonymous());
@@ -969,10 +903,8 @@ test('DEFAULT_ORDER fields are defaultVis 4', () => {
 });
 
 /**
- * `displayNameSort` is the zero-padded copy of `displayName` (src/helpers/natural-sort.js): the
- * index orders strings by codepoint, so eagle-public's `sortBy=displayName` puts "Item 10" ahead of
- * "Item 2" without it. The mapping is SORT ONLY — a filter redirected onto the padded key would
- * match nothing under a 200.
+ * `displayNameSort` is the zero-padded `displayName`, so "Item 2" sorts before "Item 10".
+ * Sort only: a filter on the padded key matches nothing.
  */
 test('eagle-query natural-sort key', async (t) => {
   await t.test('sortBy=displayName orders on the padded key', () => {
@@ -996,10 +928,8 @@ test('eagle-query natural-sort key', async (t) => {
     assert.ok(!filter.includes('displayNameSort'), 'the filter must name the readable column');
   });
 
-  // Field metadata comes from the committed azure/search/indexes/*.json, always in step with the
-  // live index by the README's own rollout order (index PUT -> datasource PUT -> app deploy), so
-  // this can never see a live index mismatch. What it can see is a SORT_KEYS target the committed
-  // JSON does not define — sortFieldFor's actual guard.
+  // Field metadata comes from the committed index JSON, so the guard covers a SORT_KEYS target
+  // that JSON lacks, not a live index mismatch.
   await t.test('falls back to displayName when the committed index JSON lacks the target field', (t) => {
     const eagleQueryWithout = reloadWithoutField(t, 'documents', 'displayNameSort');
 
@@ -1021,10 +951,7 @@ test('eagle-query natural-sort key', async (t) => {
   });
 });
 
-/**
- * eagle-query reads index metadata ONCE at require time, so the only way to ask it what it does
- * against a committed JSON missing a field is to reload it against a narrower definition file.
- */
+/** eagle-query reads index metadata once at require time, so reload it against a narrower file. */
 function reloadWithoutField(t, index, field) {
   const MODULE = require.resolve('../../src/search/eagle-query');
   const cached = require.cache[MODULE];
@@ -1058,10 +985,8 @@ test('the document facets cannot drift between the two datasets or the write sid
       'means one thing on documents and another on passages');
   }
 
-  // The write side, so a facet added here without the chunk stamp fails rather than emitting a
-  // filter against a chunk field nothing ever fills. Held against the List refs, not
-  // CHUNK_PARENT_FIELDS: `projectId` is stamped on every chunk too, but it is scoped through
-  // `project`/`projectIdsFrom` rather than faceted, so it belongs to neither side of this pair.
+  // A facet with no chunk stamp would filter a field nothing fills. List refs, not
+  // CHUNK_PARENT_FIELDS: `projectId` is scoped through `projectIdsFrom`, not faceted.
   assert.deepStrictEqual(
     Object.values(DOCUMENT_FACETS).slice().sort(),
     chunksRepo.CHUNK_PARENT_LIST_REFS.slice().sort(),

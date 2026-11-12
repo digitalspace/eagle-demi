@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The search-definition queue trigger, registered against a recording `app` — same shape and same
- * reason as test/restamp-chunks-triggers.test.js.
- *
- * `%SEARCH_DEFINITIONS_QUEUE%` is resolved by the HOST at startup, and an unresolvable name is not
- * a disabled worker: it is a startup error that takes the HTTP functions down with it.
+ * The search-definition queue trigger. `%SEARCH_DEFINITIONS_QUEUE%` resolves at host startup, and
+ * an unresolvable name is a startup error that takes the HTTP functions down, not a disabled worker.
  */
 
 process.env.NODE_ENV = 'test';
