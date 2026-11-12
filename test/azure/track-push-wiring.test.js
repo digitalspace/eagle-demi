@@ -115,9 +115,9 @@ test('the API app carries WORKS_WRITE and WORKS_READ, default off', () => {
     'an undeclared app setting dies on the next whole-collection PUT');
 });
 
-test('test writes works but still reads the project row', () => {
-  assert.match(TEST_PARAMS, /^param worksWrite = true$/m, 'test fills the container the parity check reads');
-  assert.match(TEST_PARAMS, /^param worksRead = false$/m, 'reads switch only after the parity check passes');
+test('test writes works and reads phase and milestone fields from it', () => {
+  assert.match(TEST_PARAMS, /^param worksWrite = true$/m, 'reads from an unfilled works container come back empty');
+  assert.match(TEST_PARAMS, /^param worksRead = true$/m, 'test proves works reads before prod turns them on');
 });
 
 test('prod neither writes nor reads works', () => {

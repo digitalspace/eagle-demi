@@ -219,9 +219,9 @@ param trackApiBase = 'https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.
 param trackClientId = 'demi-track-reader'
 // On in test to prove the works[] mirror before prod turns it on.
 param trackWorksSync = true
-// Writes on to fill `works`; reads stay on the project row until the parity check passes.
+// Writes fill `works`; reads derive phase and milestone fields from it.
 param worksWrite = true
-param worksRead = false
+param worksRead = true
 // On in test to prove the assessment dating before prod turns it on.
 param assessmentPass = true
 param roleSyncClientId = 'demi-role-sync'
