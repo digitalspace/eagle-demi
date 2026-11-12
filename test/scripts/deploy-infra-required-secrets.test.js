@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * `scripts/deploy-infra.sh` refuses to deploy until `demi-kv-<env>` holds every secret NAME the app
- * will resolve, and until the one remaining template parameter — the devbox PUBLIC key — is present
- * and well formed. Both refusals exist because the deployment behind them is a whole-collection
- * appSettings PUT: a name the vault does not hold leaves `@Microsoft.KeyVault(SecretUri=...)`
- * unresolved, which reads as an empty credential at runtime and reports no error at deploy time.
- *
- * The message is the feature. A guard that aborts without naming what is missing sends the operator
- * back to the comments in the script.
- *
- * `az` and `oc` are both replaced by stubs on PATH, so these runs touch no network and no cloud: the
- * stub decides what the vault holds and whether the devbox exists. That is also what makes the happy
- * path assertable — with everything in place the script reaches the what-if and exits 0.
+ * appSettings is a whole-collection PUT: a name missing from the vault deploys as an empty credential
+ * with no error, so the script refuses first and each refusal names what is missing.
  */
 
 const test = require('node:test');
@@ -24,9 +14,8 @@ const path = require('node:path');
 
 const SCRIPT = path.resolve(__dirname, '..', '..', 'scripts', 'deploy-infra.sh');
 
-// Stands in for the Azure CLI. `STUB_VAULT_NAMES` is what `az keyvault secret list` returns from the
-// devbox, `STUB_DEVBOX_RG` is the VM's resource group — empty means the VM is not in the
-// subscription. Everything else succeeds silently, including the what-if.
+// `STUB_VAULT_NAMES` is what the vault lists from the devbox; an empty `STUB_DEVBOX_RG` means no VM.
+// Every other call, the what-if included, succeeds silently.
 const FAKE_AZ = `#!/usr/bin/env bash
 case "$1 $2" in
   'resource list') printf '%s\\n' "\${STUB_DEVBOX_RG-}" ;;
@@ -40,10 +29,8 @@ exit 0
 // an unreadable secret does. Exiting non-zero would exercise the `|| true` path instead of this one.
 const FAKE_OC = '#!/usr/bin/env bash\nexit 0\n';
 
-// Every name a `test` deploy resolves: `requiredSecretNames` in azure/modules/key-vault.bicep plus
-// `optionalSecretNames` in azure/main.test.bicepparam. Written out rather than parsed back out of
-// those files — a test that re-derives the list from the same source the script reads would agree
-// with the script about a list that is wrong. Add a name to either template and add it here.
+// key-vault.bicep `requiredSecretNames` plus main.test.bicepparam `optionalSecretNames`, written out:
+// a list parsed from the script's own source would agree with it when both are wrong.
 const VAULT_NAMES = [
   'admin-api-key',
   'track-client-secret',
@@ -122,9 +109,8 @@ test('deploy-infra.sh vault check', async (t) => {
   });
 
   await t.test('says the read failed, not that every secret is missing, on ForbiddenByConnection', async () => {
-    // The vault denies public network access. A caller with no line into the VNet gets this text
-    // back from the remote az call itself, not an empty list — reporting it as missing secrets
-    // would send the operator off to re-set every value that is actually still there.
+    // A caller outside the VNet gets this text, not an empty list; reporting it as missing secrets
+    // would send the operator to re-set every value that is still there.
     const r = run({
       vaultNames: ['ERROR: (ForbiddenByConnection) Client address is not authorized and caller is not a trusted service.'],
       env: { DEVBOX_SSH_PUBLIC_KEY: GOOD_KEY }
@@ -142,9 +128,8 @@ test('deploy-infra.sh vault check', async (t) => {
   });
 
   await t.test('says where the check has to run when the devbox is not there', async () => {
-    // The vault denies public network access, so a caller with no line into the VNet gets
-    // ForbiddenByConnection rather than an empty list. Reporting that as missing secrets would send
-    // the operator off to re-set every value.
+    // The vault denies public network access, so the check can only run from the devbox; without it
+    // the run must say so rather than report an empty vault.
     const r = run({ devboxRg: '', env: { DEVBOX_SSH_PUBLIC_KEY: GOOD_KEY } });
 
     assert.strictEqual(r.status, 3);
@@ -169,8 +154,7 @@ test('deploy-infra.sh devbox key check', async (t) => {
   });
 
   await t.test('reads a whitespace-only value as empty', async () => {
-    // A single space is the value that destroyed two live credentials on 2026-08-13 by passing a
-    // `[ -z ]` check and deploying.
+    // A single space passes a `[ -z ]` check and deploys, wiping live credentials.
     const r = run({ env: { DEVBOX_SSH_PUBLIC_KEY: ' ' } });
 
     assert.strictEqual(r.status, 3);

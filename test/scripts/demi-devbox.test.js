@@ -1,25 +1,8 @@
 'use strict';
 
 /**
- * What `scripts/demi-devbox.sh` sends where, and what it refuses to send.
- *
- * Every real run of this script grants a role on a live search service and then writes definitions
- * to it, so the things worth pinning are the ones that cannot be tried out: that `--env prod`
- * addresses the prod subscription and nothing else, that an `az` login which cannot read role
- * assignments stops the run BEFORE the grant instead of ending in an unexplained 403 on the
- * devbox, that the writing half never starts without a yes, and that an indexer already running is
- * never reset out from under itself.
- *
- * Each phase is one `az vm run-command invoke` carrying several steps, so the other thing pinned
- * here is that one clean step never speaks for a failing one — the payload and-s every step's code
- * into the one DEMI_EXIT line this script reads — and that an apply stays inside a handful of
- * calls. The indexer wait itself runs on the VM; its own decisions are covered by
- * `reset-and-run-indexers.test.js`, and the fake below only replays a transcript of them.
- *
- * `AZ` stands in for the `az` CLI, the same seam `with-search-admin.test.js` uses — and that script
- * runs for real here, because the grant/revoke round trip is part of what is being tested. The fake
- * logs every invocation and answers the run-command calls with output shaped like the devbox's, so
- * "what did it run on the VM" is read off the log rather than from this script's own reporting.
+ * Every real run grants a role on a live search service and writes to it, so these pin what cannot
+ * be tried out. with-search-admin.sh runs for real; "what ran on the VM" is read off the fake az log.
  */
 
 const test = require('node:test');
@@ -37,10 +20,8 @@ const ASSIGNMENT_ID = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Se
   'searchServices/svc/providers/Microsoft.Authorization/roleAssignments/fake-id';
 
 /**
- * Stands in for `az`. Logs its whole argv, resolves the environment table the way ARM would, and
- * replies to `vm run-command invoke` with what the devbox would have printed for the payload it was
- * handed — one `DEMI_STEP <name> <rc>` block per name in the payload's loop, then the single
- * `DEMI_EXIT=` line the real remote script appends, since run-command drops the remote exit code.
+ * Answers `vm run-command invoke` with one `DEMI_STEP <name> <rc>` block per step, then `DEMI_EXIT=`
+ * as the real remote script appends it, since run-command drops the remote exit code.
  */
 const FAKE_AZ = `#!/usr/bin/env bash
 # One log line per call: the run-command payloads are multi-line shell, and a raw echo would split
@@ -256,11 +237,8 @@ exit 0
 `;
 
 /**
- * Starts the script in its own process group and, for each `<marker>:<signal>` in $1, waits for the
- * fake az to touch that marker, then signals. INT goes to the whole group, the way a terminal's
- * Ctrl-C reaches every process in the job; anything else to the script alone, like `kill <pid>`.
- * Exits with the script's status. Its own exit, a spawnSync timeout included, takes the group down
- * with it, so no poll loop outlives the test's tmp dir.
+ * INT goes to the whole process group, as a terminal Ctrl-C does; other signals to the script alone.
+ * The driver's own exit, spawnSync timeout included, takes the group down so no poll outlives tmp.
  */
 const SIGNAL_DRIVER = `set -m
 signals="$1"; shift
@@ -465,9 +443,8 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('drift over several indexes fails when any one of them drifts', () => {
-    // Every name runs in one payload and every DEMI_EXIT line lands in the same output, so a
-    // verdict read off that text green-lights a release whenever one index happens to be clean.
-    // Both positions: whether the dirty index is checked first or last must not change the answer.
+    // All DEMI_EXIT lines land in one output, so one clean index must not green-light the run.
+    // Both positions: the dirty index checked first or last must give the same answer.
     for (const dirty of ['documents', 'projects']) {
       const clean = dirty === 'documents' ? 'projects' : 'documents';
       const r = run(['drift', '--only', 'documents,projects'], { env: { AZ_DRIFT: dirty } });
@@ -511,9 +488,8 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('apply stops before any write when one index fails its dry run', () => {
-    // "always dry-runs first" has to mean all of them: a --only list that dry-runs one index clean
-    // and one dirty must not PUT the clean one live. Both positions, for the same reason as the
-    // drift case — the failing index is as likely to be the first step as the last.
+    // "Always dry-runs first" means all of them: one dirty index must stop the clean one's live PUT.
+    // Both positions, as in the drift case.
     for (const failing of ['documents', 'projects']) {
       const r = run(['apply', '--only', 'documents,projects', '--yes'],
         { env: { AZ_DRY_FAIL: failing } });
@@ -531,13 +507,12 @@ test('demi-devbox.sh', async (t) => {
       { env: { AZ_DS_DIFFERS: '1' } });
     assert.strictEqual(r.status, 0, r.stderr);
 
-    // The order is the whole point: an index widened without the data source fills with nulls, and
-    // a reset before the PUT re-pulls the old column list. It is now the && inside one payload.
+    // An index widened without the data source fills with nulls, and a reset before the PUT
+    // re-pulls the old column list.
     assert.deepStrictEqual(order(r), ['dry', 'index', 'datasource', 'indexers'], order(r).join(','));
 
-    // ONLY the data source that differs is copied into DS_DIR. put-search-datasources.js writes
-    // every file in the directory it is given, so a wider copy would rewrite the chunks data
-    // source on a `--only documents` run.
+    // put-search-datasources.js writes every file in DS_DIR, so a wider copy would rewrite the
+    // chunks data source on a `--only documents` run.
     const ds = r.remote.find(c => c.includes('put-search-datasources.js'));
     assert.match(ds, /cp azure\/search\/datasources\/demi-documents-ds\.json \/tmp\/demi-ds\//);
     assert.ok(!ds.includes('demi-chunks-ds'), '--only documents must not touch the chunks data source');
@@ -586,9 +561,8 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('--datasources PUTs the named data sources before the dry run', () => {
-    // A new indexer's data source does not exist yet, so the dry run refuses on the missing name
-    // and the write phase that would have created it is never reached. The pre-create step is the
-    // only way in, and it has to land ahead of the dry run to be any use.
+    // A new indexer's data source does not exist yet, so the dry run would refuse on it and never
+    // reach the write phase; the pre-create has to land ahead of the dry run.
     const r = run(['apply', '--only', 'activities', '--datasources', 'demi-updates-ds,demi-notifications-ds', '--yes']);
     assert.strictEqual(r.status, 0, r.stderr);
 
@@ -604,18 +578,16 @@ test('demi-devbox.sh', async (t) => {
     const ds = r.remote.find(c => c.includes('put-search-datasources.js'));
     assert.match(ds, /cp azure\/search\/datasources\/demi-updates-ds\.json azure\/search\/datasources\/demi-notifications-ds\.json \/tmp\/demi-ds\//);
     assert.ok(!ds.includes('demi-chunks-ds'), 'only the named data sources are written');
-    // Without the pull, a data source added in this commit is not in the devbox checkout yet: the
-    // dry run used to be the step that refreshed it, and this one runs before the dry run.
+    // Without the pull, a data source added in this commit is missing from the devbox checkout,
+    // since this step runs before the dry run that would refresh it.
     assert.match(ds, /git pull --ff-only && \{ rm -rf \/tmp\/demi-ds/);
     assert.match(r.stdout, /pre-created data source\(s\): demi-updates-ds,demi-notifications-ds/);
     assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
   });
 
   await t.test('a data source named by --datasources is reset even when nothing DIFFERS', () => {
-    // The pre-create makes the live data source equal to the committed one, so the dry run has
-    // nothing left to report on it. Taking the reset list from DIFFERS alone would leave
-    // documents-indexer on its old high-water mark: every row it already holds keeps the new
-    // column null, and no step of the run fails.
+    // The pre-create leaves DIFFERS empty; a reset list from DIFFERS alone would leave the new
+    // column null on every row the indexer already holds, and no step would fail.
     const r = run(['apply', '--only', 'documents', '--datasources', 'demi-documents-ds', '--yes']);
     assert.strictEqual(r.status, 0, r.stderr);
     assert.ok(!r.stdout.includes('no data source differs'), r.stdout);
@@ -750,10 +722,8 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('every payload sent to the VM is valid bash at both quoting levels', () => {
-    // Nothing here parses these before the VM does. The command is built on this machine, quoted
-    // into `demi-run '...'`, quoted again into `--scripts "..."`, and it carries loops, braces and
-    // env assignments — a quoting bug arrives as a shell error 60 seconds later on a box with a
-    // live role grant open.
+    // Quoted into `demi-run '...'` and again into `--scripts "..."`: a quoting bug otherwise shows
+    // up as a shell error a minute later on a box with a live role grant open.
     const r = run(['apply', '--env', 'prod', '--only', 'documents', '--yes'],
       { env: { AZ_DS_DIFFERS: '1' } });
     assert.strictEqual(r.status, 0, r.stderr);
@@ -829,8 +799,8 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('the prod devbox shape passes once its agent is Ready', () => {
-    // Read from demi-devbox-prod on 2026-10-01: every extension succeeded, the ChangeTracking
-    // handler stuck at NotReady/1011.
+    // Shape read from demi-devbox-prod: every extension succeeded, the ChangeTracking handler
+    // stuck at NotReady/1011.
     const r = run(['drift', '--env', 'prod'], { env: { AZ_IV: PROD_IV, AZ_READY_AFTER: '99' } });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.strictEqual(checks(r), 1);
