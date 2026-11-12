@@ -1,23 +1,8 @@
 'use strict';
 
 /**
- * extract.js — the docling-serve client, and the PDF page-batching that makes it survive large
- * documents.
- *
- * NOT a worker. It used to be one: it queried MongoDB for unextracted Documents, downloaded each
- * file, sent it to docling-serve, and wrote DocumentChunk records back to Mongo. Every part of that
- * loop is gone, along with the `mongodb` dependency it was the last user of. What extraction
- * happens today happens on the external host, which POSTs markdown to
- * `POST /documents/:id/chunks` — see `README.md`.
- *
- * Kept, deliberately, because extraction-inside-Azure is deferred rather than cancelled
- * (the wiki's Extraction-Pipeline page has the pricing that deferred it) and these two functions are the part worth
- * keeping: the docling request shape, its timeout handling, and the batching that stops a 5,000-page
- * PDF from being sent as one request. Reviving extraction means writing a new driver around these,
- * against Cosmos NoSQL — never against Mongo, which no longer exists in this project.
- *
- * Supported file types: PDF (including scanned/OCR), DOCX, DOC, PPTX, XLSX — anything
- * docling-serve is configured to accept, server-side.
+ * No worker calls this: extraction runs on an external host that POSTs to `/documents/:id/chunks`.
+ * Kept for when extraction moves into Azure; see the Extraction-Pipeline wiki page.
  */
 
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
@@ -36,11 +21,6 @@ const SUPPORTED_EXTENSIONS = new Set([
   'pptx', 'PPTX', '.pptx', '.PPTX',
   'xlsx', 'XLSX', '.xlsx', '.XLSX',
 ]);
-
-// Object storage lives in src/storage/. It used to live here, and the HTTP controllers
-// imported this batch script purely to borrow its client — while this script read `s3Key`
-// without the environment key prefix, so every extraction in dev fetched a key that 404s.
-// Both problems were the same problem: no single owner of the storage path.
 
 // ── docling-serve helper ──────────────────────────────────────────────────────
 
@@ -86,10 +66,7 @@ async function extractWithDocling(buffer, filename) {
 }
 
 /**
- * Extract markdown from a file, pre-splitting large PDFs into BATCH_PAGES-page
- * batches sent to docling-serve one at a time so peak memory stays bounded
- * regardless of document size. Non-PDF inputs (and PDFs pdf-lib cannot parse)
- * are sent whole. Batch markdown is concatenated in page order.
+ * Sends large PDFs in BATCH_PAGES-page batches, one at a time, to bound peak memory.
  *
  * @param {Buffer} buffer
  * @param {string} filename
@@ -107,10 +84,8 @@ async function splitAndExtract(buffer, filename, opts = {}) {
   let pageCount;
   try {
     srcPdf = await PDFDocument.load(buffer, { ignoreEncryption: true });
-    // getPageCount() is INSIDE the try on purpose. A truncated PDF often loads and only fails when
-    // the page tree is walked, so leaving this outside meant that whole class threw out of here
-    // instead of degrading to a whole-file send — the opposite of what this fallback promises, and
-    // docling-serve can frequently read what pdf-lib cannot.
+    // Inside the try: a truncated PDF often loads and fails only on the page walk, and
+    // docling-serve can often read whole what pdf-lib cannot.
     pageCount = srcPdf.getPageCount();
   } catch (err) {
     // Unparseable PDF — fall back to whole-file send

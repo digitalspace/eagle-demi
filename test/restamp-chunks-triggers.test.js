@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The chunk re-stamp queue trigger, registered against a recording `app` — same shape and same
- * reason as test/bulk-download-triggers.test.js.
- *
- * The guard is the part worth testing. `%CHUNK_RESTAMP_QUEUE%` is resolved by the HOST at startup,
- * and an unresolvable name is not a disabled worker: it is a startup error that takes the HTTP
- * functions down with it, so an environment that never set the setting must register nothing.
+ * The host resolves `%CHUNK_RESTAMP_QUEUE%` at startup and an unresolvable name takes the HTTP
+ * functions down, so an environment without the setting must register nothing.
  */
 
 process.env.NODE_ENV = 'test';

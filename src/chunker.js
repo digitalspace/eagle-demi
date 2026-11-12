@@ -1,29 +1,8 @@
 'use strict';
 
 /**
- * chunker.js — Split text into overlapping chunks for AI Search indexing.
- *
- * Strategy: paragraph/section-aware with overlap.
- *  - Sections accumulate to TARGET_CHUNK_SIZE, then that block is emitted
- *  - A block over MAX_CHUNK_SIZE is split into pieces that overlap by OVERLAP_SIZE
- *  - Consecutive chunks also overlap by OVERLAP_SIZE ACROSS block boundaries — see `emit()`
- *  - A fragment under MIN_CHUNK_SIZE is folded into its neighbour rather than emitted
- *
- * A chunk may therefore run to MAX_CHUNK_SIZE + OVERLAP_SIZE: the ceiling bounds a block's own
- * text, and prepended overlap sits on top of it. Bounded, which is what the ceiling is for.
- *
- * Input: plain text string (markdown from docling-serve).
- * Output: array of { pageNumber, chunkIndex, content } objects.
- *
- * `pageNumber` MEANS ONE OF TWO THINGS and a chunk alone cannot say which, which is why both
- * ingest paths stamp `pageNumbered: true` on the document and its chunks when the markers were
- * there:
- *  - marker-free input, which is every extraction taken before page provenance: a sequence number.
- *    The host flattened the pages before posting, so nothing here can know where one ended, and
- *    the UI labels it "Passage" for that reason.
- *  - input carrying PAGE_MARKER between consecutive pages: the real 1-based PDF page the chunk's
- *    text starts on. A page with at least MIN_CHUNK_SIZE characters closes its block, so a chunk
- *    only spans pages when shorter ones merged into it (backward where a block is held).
+ * A chunk may reach MAX_CHUNK_SIZE + OVERLAP_SIZE: overlap sits on top of the block ceiling.
+ * `pageNumber` is the real 1-based PDF page with PAGE_MARKER input, else a block sequence number.
  */
 
 const {
@@ -36,10 +15,7 @@ const {
 const { stripPlaceholders, isSeparatorFurniture } = require('./text-quality');
 
 /**
- * The page separator the extraction host writes between consecutive pages, never at either end.
- *
- * U+000C, the form feed — the break pdftotext and docling have always emitted, and a character a
- * PDF text layer does not carry as content, so it cannot be confused with extracted text.
+ * Form feed, written between pages and never at either end; a PDF text layer never carries it.
  */
 const PAGE_MARKER = '\f';
 
@@ -49,11 +25,7 @@ function hasPageMarkers(text) {
 }
 
 /**
- * How many pages the markers describe, 0 when there are none.
- *
- * Counted rather than split: the whole-string path is handed up to 10 MB of markdown, and the
- * count is wanted for one field on one document row. An empty page counts — its marker is still
- * written — so this is markers + 1, which is what keeps the numbering aligned with the PDF.
+ * Counted, not split: input can be 10 MB. An empty page still has its marker, so markers + 1.
  */
 function pageCountOf(text) {
   if (!hasPageMarkers(text)) return 0;
@@ -102,34 +74,8 @@ function joinHeld(a, b) {
 }
 
 /**
- * Incremental chunker. Feed it one section at a time, call `end()` when there are no more.
- *
- * This exists so the streaming ingest path and the whole-string path share ONE set of chunk
- * boundary rules. A second copy would drift, and this repo has already paid for that once.
- * `chunkMarkdown` below is a thin
- * wrapper over this, which is what keeps `test/chunker.test.js` meaningful for both callers.
- *
- * Both methods RETURN the chunks they emitted, so a streaming caller can flush as it goes and
- * never hold the whole document. Sections accumulate until the buffer reaches TARGET_CHUNK_SIZE:
- * measured on real documents, chunks averaged 601 characters but cost ~1.1 KB of index RAM each,
- * so per-chunk overhead — not the text — dominated. Merging to ~2500 characters cuts the corpus
- * from ~3.1M chunks to ~740k for the same words.
- *
- * One completed block is always held back in `pending`, because the tail rule can retroactively
- * append to it: a short final section joins the previous block rather than becoming a stub. That
- * is only possible if the previous block has not been emitted yet.
- *
- * PAGE MODE IS THE CALLER'S TO DECLARE, never guessed here: a document is paged or it is not and
- * the whole document has to agree on which, so a decision made halfway through would number the
- * blocks before it differently from the ones after. `chunkMarkdown` reads it off the whole string;
- * the streaming ingest door holds blocks until the first page marker or end of stream, no fixed
- * probe window (`ingestChunksStreaming`). In page mode `pageNumber` is the real 1-based page the
- * chunk's text starts on, several chunks can share one, and a page of at least MIN_CHUNK_SIZE
- * characters closes the block it ends. A shorter page joins the block before it, so a divider or
- * plate page never shifts the next page's citation; it joins the next page's text only when there
- * is no block before it (document start) or joining would push that block past MAX_CHUNK_SIZE. A
- * chunk per sub-floor page turned a form-feed-dense file into ~38k chunks of ~50 bytes. Otherwise
- * `pageNumber` is the block sequence number it has always been.
+ * Shared by streaming ingest and `chunkMarkdown`, so both follow one set of boundary rules.
+ * Page mode is the caller's to declare: the whole document must agree on it.
  *
  * @param {{ pageMarkers?: boolean }} [options]
  */
@@ -152,13 +98,8 @@ function createChunkAccumulator(options = {}) {
       // `own` is this block's OWN contribution, before any overlap is prepended. Every size test
       // below measures it rather than the final content — see the MIN_CHUNK_SIZE note.
       const own = part.text.trim();
-      // Only a trailing sliver from splitText, or a document's whole text, can land here short,
-      // and an index entry of a few characters matches everything and means nothing. The first
-      // chunk is exempt so a document is never empty.
-      //
-      // Measured against `own`, NEVER against `own + carry`: 200 characters of overlap would
-      // otherwise lift every sliver over the floor, and the chunk that survived would be almost
-      // entirely text already indexed under its neighbour.
+      // A sliver matches everything and means nothing; the first chunk is exempt so a document is
+      // never empty. Measured without the carry, or the overlap would lift every sliver.
       if (!own || (chunkIndex > 0 && own.length < MIN_CHUNK_SIZE)) continue;
 
       // Furniture carries no words to find; damaged OCR text does, so only furniture is dropped.
@@ -168,20 +109,8 @@ function createChunkAccumulator(options = {}) {
       const ownStart = part.start + part.text.search(/\S/);
       const page = pageMarkers ? pageAt(block.pages, ownStart) : pageNumber;
 
-      // The overlap itself, and the bug this fixes. `splitText` already overlaps consecutive
-      // pieces of ONE oversized block (`step = MAX - OVERLAP`), but it returns any block under
-      // MAX unchanged — and blocks are emitted at TARGET (2500), well under MAX (4000). So on the
-      // common path it returned a single piece and consecutive chunks shared nothing at all.
-      // Only the first part needs this; later parts already carry splitText's own overlap.
-      //
-      // Joined with '\n\n' because that is exactly how the two blocks sat in the source: `push()`
-      // accumulates sections with the same separator. Reproducing it means a phrase that spanned
-      // the boundary now appears in this chunk the way it was written, which is the entire point —
-      // any other joiner would put a break through the middle of the phrase being rescued.
-      //
-      // In page mode the overlap must sit on the page the chunk is numbered with: page N's wording
-      // in a chunk that says N+1 sends a reader following the citation to the wrong page. The cost
-      // is a sentence running across a page break is indexed once, under the page it started on.
+      // Overlap across blocks: splitText only overlaps pieces of one oversized block. '\n\n' is the
+      // source separator. In page mode the carry joins only on the same page, so citations hold.
       const withCarry = part.start === 0 && carry && (!pageMarkers || carryPage === page);
       const content = withCarry ? `${carry}\n\n${own}` : own;
 
@@ -218,15 +147,10 @@ function createChunkAccumulator(options = {}) {
 
   /** One section into the buffer. The marker split runs before this, so it never sees a marker. */
   function accumulate(section, out) {
-    // Strip docling's `<!-- image -->` markup on the way in, so it never reaches a chunk, the
-    // index or a Deep Search snippet. A section that was nothing BUT placeholders strips to '' and
-    // is dropped by the emptiness check below, which is the case worth having: it carries no words
-    // and an index entry made from it matches nothing.
+    // Strips docling's `<!-- image -->` markup; a placeholder-only section strips to '' and drops.
     const trimmed = stripPlaceholders(section);
-    // Every non-empty section is kept. This deliberately does NOT drop sections shorter than
-    // MIN_CHUNK_SIZE: doing so silently deleted headings, table rows and short lines from the
-    // indexed text. MIN_CHUNK_SIZE means only "too small to be worth its own chunk", after
-    // merging.
+    // Short sections are kept on purpose: dropping them would lose headings and table rows.
+    // MIN_CHUNK_SIZE applies only after merging.
     if (!trimmed) return;
     pageChars += trimmed.length;
     buffer = joinHeld(buffer, { text: trimmed, pages: [{ at: 0, page: pageNumber }] });
@@ -238,9 +162,8 @@ function createChunkAccumulator(options = {}) {
   }
 
   /**
-   * Step to the next page. A page with enough text closes its block, so the next page starts a
-   * fresh one. A shorter page (an empty one included) joins the held block before it; with none, or
-   * no room under MAX_CHUNK_SIZE, its text stays to merge forward with the next page.
+   * A page with MIN_CHUNK_SIZE of text closes its block. A shorter one joins the held block before
+   * it, so a divider page never shifts the next citation; with no room, it merges forward.
    */
   function endPage(out) {
     if (pageChars >= MIN_CHUNK_SIZE) {
@@ -259,10 +182,8 @@ function createChunkAccumulator(options = {}) {
     push(section) {
       const out = [];
       if (pageMarkers && hasPageMarkers(section)) {
-        // SPLIT FIRST, so every page boundary is seen. Sections arrive split on blank lines and a
-        // page ends wherever it ends, as often mid-section as not. Two markers in a row are an
-        // EMPTY PAGE, which `split` yields as an empty part: it contributes no text and still
-        // consumes its number, which is what keeps the pages after it aligned with the PDF.
+        // Pages end mid-section as often as not. Two markers in a row are an empty page that
+        // still takes its number, keeping later pages aligned with the PDF.
         const pages = section.split(PAGE_MARKER);
         for (let i = 0; i < pages.length; i++) {
           if (i > 0) endPage(out);
