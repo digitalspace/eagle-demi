@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * GET /documents/recent-uploads — the five projects that most recently received a public upload.
- *
- * The ranking comes from an aggregate over projects, not from a window over the newest documents,
- * because one Eagle bulk push stamps hundreds of documents in ONE project with the same instant.
- * So what is asserted here is the shape that survives that: the aggregate carries the caller's read
- * predicate, a bulk-imported project takes one row rather than the whole panel, ties resolve the
- * same way twice, and a project whose row cannot be stated is skipped rather than emitted.
- */
+// Ranking is an aggregate over projects, not the newest documents: one Eagle bulk push stamps
+// hundreds of documents in one project with the same instant.
 
 process.env.NODE_ENV = 'test';
 
@@ -45,14 +38,8 @@ function project(id, read = PUBLIC_ACL, extra = {}) {
   return { id, read, name: `Project ${id}`, eagleId: `eagle-proj-${id}`, ...extra };
 }
 
-/**
- * Cosmos as this endpoint uses it: one aggregate over the documents container, then one
- * single-partition read per candidate project, then a point read of each project.
- *
- * `corpus` is the stored documents. The maxima the aggregate would return are DERIVED from it
- * rather than stated, so a test cannot accidentally describe a corpus the aggregate could never
- * produce — which is exactly the mistake that hid the bulk-import bug.
- */
+// Aggregate maxima are derived from `corpus`, so a test cannot describe a corpus the aggregate
+// could never produce.
 function stubCosmos(t, corpus, projectRows = {}) {
   const aggregates = [];
   const partitionReads = [];
@@ -76,9 +63,8 @@ function stubCosmos(t, corpus, projectRows = {}) {
 
     const projectId = spec.parameters.find(p => p.name === '@projectId').value;
     partitionReads.push({ projectId, query: spec.query, partitionKey: options.partitionKey });
-    // `TOP 5 ... ORDER BY c.dateUploaded DESC`, served the way Cosmos serves it: the sort key is
-    // honoured, the order among rows SHARING one instant is not. Highest id first inside a tie, so
-    // the deterministic `id ASC` tie-break is actually load-bearing here.
+    // Cosmos keeps no order among rows sharing one instant; highest id first inside a tie proves
+    // the `id ASC` tie-break runs.
     return {
       items: corpus
         .filter(row => String(row.projectId) === String(projectId) && row.dateUploaded)
@@ -97,11 +83,8 @@ function stubCosmos(t, corpus, projectRows = {}) {
   return { aggregates, partitionReads, reads };
 }
 
-/**
- * A clock the handler's memo reads through `Date.now`, moved by the test rather than by waiting.
- * The memo itself is emptied per test — module state must not make one test's result depend on
- * whether another ran first.
- */
+// The handler's memo reads this clock through `Date.now`; the memo is emptied per test so module
+// state cannot couple tests.
 let clock = Date.parse('2026-09-11T00:00:00.000Z');
 
 function setup(t) {
@@ -219,9 +202,8 @@ test('GET /documents/recent-uploads', async (t) => {
       assert.deepStrictEqual(body.items.map(i => i.projectId),
         ['101', '202', '303', '404', '505', '606'],
         'all six projects rank; the 300-document import is one of them');
-      // WHICH five of the 300 come back is Cosmos's choice — every row carries the same sort key,
-      // so `TOP 5` may return any of them. What this endpoint owns is the order they are listed in,
-      // and the stub hands them over highest id first to prove the tie-break runs.
+      // All 300 share one sort key, so which five `TOP 5` returns is Cosmos's choice; only their
+      // order is ours.
       const bulkIds = body.items[0].documents.map(d => d.id);
       assert.strictEqual(bulkIds.length, 5, 'at most five documents per project row');
       assert.ok(bulkIds.every(id => id.startsWith('bulk-')), 'all five come from the import');

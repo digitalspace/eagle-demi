@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * A chunk carries a copy of its document's filter metadata, and the two write halves of that are
- * asserted here: the ingest paths stamp it on every new chunk, and a document write that moves a
- * value re-stamps the chunks that already exist.
- *
- * Both are silent when they break — the request still answers 200, the Cosmos row is still correct,
- * and the only symptom is a chunk search filter that matches fewer rows than it should.
- */
+// Both halves fail silently: the request answers 200 and the document row is right, but a chunk
+// search filter matches fewer rows than it should.
 
 process.env.NODE_ENV = 'test';
 
@@ -111,9 +105,8 @@ test('chunk ingest stamps the parent fields on every chunk', async (t) => {
   });
 
   await t.test('a new chunk is born with the stamp that says how new its values are', async () => {
-    // A chunk with no `parentStampedAt` is older than every walk, so a re-stamp that set out
-    // before this ingest — carrying the values this document has just moved away from — overwrites
-    // the fresh copy and the chunks answer the old filter again with nothing left flagged.
+    // Without `parentStampedAt` a re-stamp that started before this ingest would overwrite the
+    // fresh copy with old values and leave nothing flagged.
     const doc = storedDocument();
     t.mock.method(documents, 'getById', async () => doc);
     t.mock.method(documents, 'patchExtraction', async () => ({}));
@@ -195,16 +188,11 @@ test('chunk ingest stamps the parent fields on every chunk', async (t) => {
 test('a document write re-stamps its chunks only when a parent field moved', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // WHICH writes move the copy, not where the walk runs. With no queue name and no opt-in the
-  // write skips the re-stamp altogether and there is nothing here to observe, so these cases ask
-  // for the inline path; test/controllers/nosql/restamp-dispatch.test.js owns the choice itself.
+  // Inline path so the re-stamp is observable; with no queue and no opt-in it is skipped.
+  // restamp-dispatch.test.js owns the choice of path.
   useConfig(t, { chunkRestampInline: true });
 
-  /**
-   * Records every parent-field patch the handler under test issues. The flag write goes with it:
-   * a landed inline walk clears the flag the write raised, and unmocked that is a Cosmos call.
-   * `test/controllers/nosql/restamp-dispatch.test.js` owns what the flag does.
-   */
+  // The flag write is mocked too: a landed inline walk clears the flag, which is a Cosmos call.
   function watchChunks() {
     const calls = [];
     t.mock.method(chunks, 'setParentFieldsForDocument', async (access, id, document) => {
@@ -234,10 +222,8 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   });
 
   await t.test('a document MOVED to another project has its chunks re-stamped', async () => {
-    // `projectId` is a parent field too, and not only for filtering: every chunk read scopes access
-    // on it (`access-sql.visibilityFor`). A move that stopped at the document row left the chunks
-    // answering the OLD project's roles, and no other write ever touches them — chunks are
-    // partitioned by documentId, so they do not move with the row.
+    // Chunk reads scope access on `projectId`, and chunks are partitioned by documentId, so a move
+    // that stops at the document row leaves them on the old project's roles.
     t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProject(), id: '208' }));
     t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
@@ -257,9 +243,8 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   });
 
   await t.test('a pending flag survives a push that has nothing to do with it', async () => {
-    // A Cosmos upsert REPLACES the row and the push builds it from Eagle's record, so DEMI's own
-    // "these chunks never got their new values" flag would be cleared by the next unrelated push —
-    // and the repair would never find the document again.
+    // The push rebuilds the row from Eagle's record and upsert replaces it, so an unrelated push
+    // must not clear DEMI's own pending flag.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'readForWrite', async () =>
       storedDocument({ parentFieldsPending: true, parentFieldsPendingAt: '2026-09-01T00:00:00Z' }));
@@ -309,9 +294,8 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   });
 
   await t.test('a failed patch is not allowed to fail the document write', async () => {
-    // The Cosmos document write is authoritative and has already landed. A stale copy makes a
-    // filter MISS chunks; it never shows text to a caller who may not see it, so this is not the
-    // ACL patch and must not 500 a write that succeeded.
+    // The document write already landed; a stale copy only makes a filter miss chunks, never
+    // shows text, so unlike the ACL patch it must not 500.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
@@ -349,10 +333,8 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   });
 
   await t.test('a non-string parent field is refused, not stored beside a coerced copy', async () => {
-    // `chunks.parentFieldsOf` String-coerces (`Edm.String` is what the index declares, and an
-    // unstringified ObjectId indexes as null) while this route stores the raw body value. Accept
-    // `{typeId: 12}` and the document row holds the number while every chunk holds "12" — so
-    // `parentFieldsChanged` sees no further movement and the two ends disagree for good.
+    // `chunks.parentFieldsOf` string-coerces for the `Edm.String` index, so a numeric `typeId` on
+    // the row would never match its chunks' "12" and `parentFieldsChanged` would not notice.
     t.mock.method(documents, 'getById', async () => storedDocument());
     let upserted = 0;
     t.mock.method(documents, 'upsert', async (item) => { upserted += 1; return item; });
@@ -404,9 +386,8 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   });
 
   await t.test('the opt-in walk runs on the request and says nothing about it', async () => {
-    // `func start` with no storage account. It has to stay working, and it must not warn: the
-    // warning is reserved for the environment that asked for neither target, where the chunks are
-    // left stale and somebody has to run the backfill.
+    // `func start` with no storage account must work without a warning; the warning is for an
+    // environment that asked for neither target and needs the backfill.
     t.mock.method(documents, 'getById', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     t.mock.method(aiSearch, 'writeAcls', async () => 0);
@@ -500,9 +481,8 @@ test('with a queue configured the write enqueues instead of walking the chunks',
   });
 
   await t.test('a queue that refuses the message does not fail the document write', async () => {
-    // Same rule the inline patch had: the Cosmos write is authoritative and has already landed,
-    // and a stale chunk copy makes a filter MISS rows rather than showing text to anyone.
-    // `scripts/backfill-chunk-parent-fields.js --project` is the repair.
+    // The document write already landed and a stale copy only misses rows; the repair is
+    // `scripts/backfill-chunk-parent-fields.js --project`.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
