@@ -190,6 +190,13 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/eacDecisionSort/?'
           }
+          // A (system, value) pair is unique across projects, checked by a cross-partition query.
+          {
+            path: '/externalIds/[]/system/?'
+          }
+          {
+            path: '/externalIds/[]/value/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -642,8 +649,8 @@ resource groupsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
-// One document per Track work, with its phases and milestones. Listed per project, so /projectId
-// is the partition. No /read/[]/?: works carry no read gate of their own, the project row's applies.
+// One document per work (Track, sheet or DEMI), listed per project, so /projectId is the partition.
+// No /read/[]/?: works carry no read gate of their own, the project row's applies.
 resource worksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'works'
@@ -668,6 +675,36 @@ resource worksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           }
           {
             path: '/deleted/?'
+          }
+          {
+            path: '/kind/?'
+          }
+          {
+            path: '/source/?'
+          }
+          {
+            path: '/owner/?'
+          }
+          {
+            path: '/sourceKey/?'
+          }
+          {
+            path: '/actYear/?'
+          }
+          {
+            path: '/workTypeCode/?'
+          }
+          {
+            path: '/workState/?'
+          }
+          {
+            path: '/startDate/?'
+          }
+          {
+            path: '/decisionDate/?'
+          }
+          {
+            path: '/summary/*'
           }
         ]
         excludedPaths: noIndex
