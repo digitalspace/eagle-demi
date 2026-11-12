@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * `Organization` rows (`kind: 'Organization'` in the `lists` container): reads on the contract in
- * helpers/native-query.js, writes through domain/organizations.js. The staff-side fields sit at
- * level 2 in catalog/lists.js, so the shared redactor withholds them.
+ * `Organization` rows in the `lists` container. Staff-side fields sit at level 2 in catalog/lists.js,
+ * so the shared redactor withholds them.
  */
 
 const lists = require('../../repositories/lists');

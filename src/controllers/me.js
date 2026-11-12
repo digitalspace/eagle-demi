@@ -9,21 +9,18 @@ const { resolveAccess, isPrivileged, isAuthenticatedRole } = require('../helpers
 
 exports.getMe = (req, res) => {
   const access = resolveAccess(req);
-  // `privileged` is answered here rather than derived from `tier` by the caller: a key minted with
-  // a `projectScope` resolves to tier `scoped` whatever its roles, and a client re-deriving
-  // privilege from the tier string would call that caller unauthorized. It is false for `staff`.
+  // Not derivable from `tier`: a `projectScope` key is tier `scoped` whatever its roles. False for
+  // `staff`.
   res.json({
     roles: access.roles,
     level: access.level,
     tier: access.tier,
     privileged: isPrivileged(access.roles),
-    // The frontend's staff gate. `level`/`tier` cannot answer it: a `staff` caller is level 2 and
-    // tier `public`, exactly like a `compliance` one. This is the same predicate authMiddleware
-    // 403s on, so the UI shows what the API will actually serve.
+    // The frontend's staff gate: `staff` and `compliance` share level and tier. Same predicate
+    // authMiddleware 403s on, so the UI matches what the API serves.
     staffUi: isAuthenticatedRole(access.roles),
-    // How the holder sees its own expiry: `end` is nowhere else in the API for them, and the
-    // grantor's own view of it is GET /api/credentials. Already window-filtered by
-    // middleware/credentials.js, so a revoked or expired grant is simply absent.
+    // The holder's only view of its own `end`. Already window-filtered by middleware/credentials.js,
+    // so revoked or expired grants are absent.
     credentials: access.credentials.map(c => ({
       id: c.id, scope: c.scope, levels: c.levels, end: c.end
     }))

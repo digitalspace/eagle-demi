@@ -8,14 +8,8 @@ const { serverError } = require('../helpers/response');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 
-// The keys the stored document is allowed to supply. Anything else in the container is ignored,
-// so adding a field to the document does not publish it — this list is the only gate on a public,
-// unauthenticated payload.
-//
-// Absent on purpose:
-//   API_LOCATION / API_PATH  the frontend bootstraps from these, so a stored value would fight
-//                            the one baked into env.js at deploy time.
-//   BUILD_ID                 must keep coming from the deploy package; see below.
+// The only gate on what the stored document may publish. API_LOCATION, API_PATH and BUILD_ID are
+// absent on purpose: the first two come from env.js at deploy time, BUILD_ID from the package.
 const OVERRIDABLE_KEYS = [
   'ENVIRONMENT',
   'KEYCLOAK_CLIENT_ID',
@@ -26,17 +20,8 @@ const OVERRIDABLE_KEYS = [
   'USE_MOCK_DATA'
 ];
 
-// The keys GET /config/public may serve to the PUBLIC site. Its own list, not a slice of
-// OVERRIDABLE_KEYS: the two documents answer different frontends, and a key added for the DEMI
-// admin console must not become public because the lists were shared.
-//
-// This is eagle-api's PUBLIC_KEYS (api/controllers/config.js) minus KEYCLOAK_* and CENTRE_API_URL
-// (admin only; the public site does not log in) and minus ANALYTICS_API_URL, a constant shim for an
-// Angular version this endpoint has no reason to carry. EXTENDED_PROJECT_PAGES only arrives once
-// eagle-api's list and Config model carry it too: both the push and the seeder read its payload.
-//
-// Adding a key here publishes it to anonymous callers the moment the document carries it, so the
-// same rule as above applies: nothing that is not already public information.
+// Served to anonymous callers: add only public values. Kept apart from OVERRIDABLE_KEYS so an admin
+// console key never turns public; eagle-api's PUBLIC_KEYS minus KEYCLOAK_*, CENTRE_API_URL, ANALYTICS_API_URL.
 const PUBLIC_KEYS = [
   'ENVIRONMENT',
   'BANNER_COLOUR',
@@ -72,16 +57,8 @@ function isExtendedProjectPages(value) {
     EXTENDED_PAGE_PROJECT_ID.test(id) && typeof contentKey === 'string' && CONTENT_KEY.test(contentKey));
 }
 
-// Which build is actually answering, read ONCE at load from a file stamped into the deploy package
-// by scripts/package-api.py.
-//
-// Deliberately not an app setting. App Service keeps the previous container serving for about two
-// minutes after a deploy, and that container picks up a new app setting on restart and reports it
-// correctly — so an env-var build id proves a restart happened, not that new code is running. That
-// is the exact failure this exists to catch, and it is how two deploys were believed effective
-// while the old code kept answering.
-//
-// Absent locally (`yarn start`, tests), where the fallback is the env var and then 'unknown'.
+// From a file scripts/package-api.py stamps into the package, not an app setting: the old container
+// keeps serving after a deploy and would report a new setting, hiding that old code still answers.
 const BUILD_ID = (() => {
   const candidates = [
     path.join(__dirname, '../../build-id.txt'),
@@ -99,10 +76,7 @@ const BUILD_ID = (() => {
   return process.env.BUILD_ID || 'unknown';
 })();
 
-/**
- * What the app settings say, on their own. This is the whole payload when the `config` container
- * is empty or unreachable, and it is exactly what this endpoint returned before it read Cosmos.
- */
+/** The app-settings payload; served alone when the `config` container is empty or unreachable. */
 function fromEnvironment() {
   return {
     // A short git sha plus a deploy timestamp. Public information; this endpoint is
@@ -124,23 +98,8 @@ function fromEnvironment() {
 }
 
 /**
- * Returns dynamic runtime configuration to the frontend.
- *
- * This endpoint is UNAUTHENTICATED — everything returned here is public. Never add
- * secrets, API keys, or connection strings. The frontend reaches the search backend only
- * through GET /api/search, so no search endpoint or key belongs in this payload.
- *
- * Values come from the `config` container, overlaid on the app settings. Two consequences worth
- * knowing:
- *
- *   - This used to be a fast non-DB route and no longer
- *     is. A Cosmos failure must NOT take the frontend down, so a failed read logs and serves the
- *     app-settings payload — the same answer this endpoint gave before the container existed.
- *
- *   - Stored values are real JSON, so `KEYCLOAK_ENABLED: false` arrives as a boolean rather than
- *     through a string comparison. That closes the `string(bool)` trap where Bicep emits 'True'
- *     and the comparison is against 'true' — the bug that had the summariser silently switched
- *     off. Only accept a boolean from the document; anything else falls through to the env var.
+ * UNAUTHENTICATED: never add a secret. A failed Cosmos read serves app settings so the frontend stays up;
+ * a boolean key takes only a stored boolean, dodging Bicep's string(bool) 'True' trap.
  */
 exports.getConfig = async (req, res) => {
   const payload = fromEnvironment();
@@ -165,11 +124,8 @@ exports.getConfig = async (req, res) => {
 };
 
 /**
- * `source` narrowed to PUBLIC_KEYS — the one filter behind the served payload, the accepted push
- * and the seeded document, so none of the three can drift from the allowlist or from each other.
- *
- * Only absence is skipped. A `false` — ACCESS_GATE above all — is a real answer and must survive
- * as a boolean; treating it as missing is how the curtain opens.
+ * `source` narrowed to PUBLIC_KEYS. Only absence is skipped: a `false` ACCESS_GATE is a real
+ * answer, and dropping it opens the curtain.
  */
 function pickPublicKeys(source) {
   const picked = {};
@@ -187,20 +143,8 @@ function pickPublicKeys(source) {
 }
 
 /**
- * Returns the PUBLIC site's runtime configuration, straight from the `public` document.
- *
- * UNAUTHENTICATED, like /config above, and the same rule holds: everything here is public, so
- * never add a secret. What is served is exactly the `PUBLIC_KEYS` the document carries — no app
- * settings overlay and no defaults, because this container is not where those values come from.
- * eagle-api's Mongo `Config` is the source of truth; this document is a live mirror of it, kept
- * fresh by PUT /eagle/config/public and bootstrapped by src/scripts/seed-public-config.js.
- *
- * A missing or unreadable document answers 503, where /config degrades to app settings. The
- * difference is deliberate and it is the whole reason this is a separate route: a defaulted
- * payload would serve `ACCESS_GATE: false` and open the access curtain on a site that is meant to
- * be gated. Refusing to answer is safe — eagle-public falls back to eagle-api's /api/config —
- * while answering with a guess is not. `no-store` so no cache can hold the refusal, or serve it
- * on after the document is seeded.
+ * UNAUTHENTICATED, no defaults. Missing document answers 503 `no-store`, never a guess: a default
+ * would serve `ACCESS_GATE: false`. eagle-public then falls back to eagle-api's /api/config.
  */
 exports.getPublicConfig = async (req, res) => {
   let stored;
@@ -224,13 +168,8 @@ exports.getPublicConfig = async (req, res) => {
 };
 
 /**
- * Why a push must not be trusted to be a config payload.
- *
- * The stored document is what an anonymous site boots on, and the caller here is a machine. An
- * rproxy that fell through to a SPA answers 200 with something that is not eagle-api's config, and
- * the seeder already refuses that case for the same reason. These two keys are the ones whose
- * absence is dangerous rather than merely wrong: ENVIRONMENT names which environment the payload
- * describes, and an ACCESS_GATE that is missing or a string leaves the curtain undecided.
+ * Refuses a push that is not a config payload, such as a SPA page; a missing ENVIRONMENT or a
+ * non-boolean ACCESS_GATE is dangerous, not just wrong.
  *
  * @returns {string|null} the message to answer 400 with, or null when the body may be stored.
  */
@@ -248,26 +187,15 @@ function publicConfigRejection(body) {
 }
 
 /**
- * PUT /eagle/config/public — eagle-api pushing its live public config into the `public` document.
- *
- * The Eagle mirror for configuration, and the reason the stored document is a live copy rather
- * than the snapshot the seeder leaves behind: eagle-api pushes on every Config write, so a hand
- * edit in Mongo no longer waits for somebody to re-run the script. The seeder stays the bootstrap
- * and the manual override.
- *
- * Unlike the record mirrors the body is the payload itself, not `{ doc }`: there is one config
- * document and no Eagle `_id` to key it by. Only PUBLIC_KEYS are stored — the same allowlist the
- * GET serves through — so eagle-api may push its whole /api/config and the KEYCLOAK_* block and
- * BUILD_ID stay out of a document an anonymous site reads. Idempotent: the same body stores the
- * same document.
+ * PUT /eagle/config/public: eagle-api pushes on every Config write. Body is the payload, not `{ doc }`,
+ * and only PUBLIC_KEYS are stored, so eagle-api may send its whole /api/config.
  */
 exports.upsertPublicFromEagle = async (req, res) => {
   const rejection = publicConfigRejection(req.body);
   if (rejection) return res.status(400).json({ error: rejection });
 
   try {
-    // Read before write only to name the changed keys in the log line. One point read in the same
-    // partition, on a route that fires when a staff member edits Config — not a hot path.
+    // Read before write only to name the changed keys; Config edits are rare, not a hot path.
     const previous = await configRepository.getPublic();
     const document = pickPublicKeys(req.body);
     const saved = await configRepository.upsertPublic(document);
@@ -292,11 +220,8 @@ exports.upsertPublicFromEagle = async (req, res) => {
 };
 
 /**
- * Which allowlisted keys the push moved — the audit detail, and the log line.
- *
- * Compared as JSON so a boolean and the string that looks like it are not the same value, and
- * because absent and null are: the served payload skips both, so neither is a change the reader of
- * a trail would recognise.
+ * Which allowlisted keys the push moved. Compared as JSON so `true` and `'true'` differ, while
+ * absent and null match: the served payload skips both.
  */
 function changedKeys(previous, document) {
   return PUBLIC_KEYS.filter(key =>

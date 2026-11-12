@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * `POST /intake/uploads`: start one document upload through the intake account. Creates the
- * document row as `pending` with an empty `read[]`, and answers a 15-minute write-only link for
- * `incoming/<documentId>`. Defender scans the upload and src/intake/handler.js releases or rejects it.
- * `GET /intake/uploads/:id`: that upload's scan status.
+ * `POST /intake/uploads`: `pending` row with empty `read[]` plus a write-only link; Defender scans,
+ * src/intake/handler.js releases or rejects. `GET /intake/uploads/:id`: that upload's scan status.
  */
 
 const crypto = require('crypto');
