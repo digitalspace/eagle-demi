@@ -94,7 +94,7 @@ async function getDbStats(req, res) {
         documentsExtracted,
         documentsExtractionErrors
       },
-      ...(indexProgress ? { indexProgress } : {})
+      indexProgress
     });
   } catch (err) {
     return serverError(res, err, 'db stats failed');
