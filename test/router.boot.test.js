@@ -25,8 +25,8 @@ test('a request reaches a real handler', async () => {
 });
 
 test('the root mount answers the same route', async () => {
-  // rproxy serves this API at both `/api` and `/`, which the old app got from mounting one router
-  // twice. Now it is one leading-`/api` strip, so the two forms can only diverge by accident.
+  // APIM forwards to this API under `/api`; direct Function-host callers use the bare path.
+  // One leading-`/api` strip serves both, so the two forms can only diverge by accident.
   await withServer(async (call) => {
     for (const p of ['/health', '/api/health']) {
       const res = await call(p);

@@ -127,7 +127,7 @@ test('seed-public-config', async (t) => {
   });
 
   await t.test('refuses a response that is not an eagle-api config payload', async () => {
-    // An rproxy that falls through to the SPA answers 200; a JSON error envelope parses fine and
+    // A proxy that falls through to the SPA answers 200; a JSON error envelope parses fine and
     // would otherwise be filtered down to an empty document the controller then serves.
     const repository = stubRepository();
 

@@ -387,7 +387,7 @@ async function dispatch(request, context) {
   const headers = {};
   for (const [name, value] of request.headers.entries()) headers[name.toLowerCase()] = value;
 
-  // Reuse an upstream trace id (rproxy, eagle-api) so one request is one id end to end.
+  // Reuse a caller's trace id (eagle-api or any caller sending x-request-id): one request, one id.
   const ownId = crypto.randomUUID().slice(0, 8);
   const requestId = headers['x-request-id'] || headers['x-correlation-id'] || ownId;
 
