@@ -1,57 +1,19 @@
 'use strict';
 
 /**
- * Collapse chunk hits into one result per DOCUMENT.
- *
- * A chunk is a passage of a PDF, so a long report produces dozens of hits for one query. The reader
- * is looking for documents, not passages, and a page where one report crowds out nine others is
- * worse than a shorter list.
- *
- * WHY HERE AND NOT IN THE QUERY. Azure AI Search has no result collapsing and no group-by.
- * Microsoft's own guidance for a chunk-per-row index is to carry a parent `documentId` and group in
- * application code at query time, which is this file.
- *
- * PORTED FROM `eagle-search/service/group.js:38-86`, deliberately: eagle-public's content-search
- * card binds the shape that file produces — `snippets[]` (`content-result.component.html:20,24`),
- * `matchCount` (`content-result.component.ts:44`) and a download URL built from `_id`
- * (`:36-39`, which expects a DOCUMENT id). Against the ungrouped shape every card renders
- * "0 matches" with no snippet body and a download link pointing at a chunk id.
- *
- * WHAT IT DOES NOT DO: change the ranking. The first chunk of a document sets that document's
- * position, so BM25 order is preserved.
- *
- * DEMI'S OWN FRONTEND READS THE SAME ROW: `documentId`, `documentName` and `passages[]`
- * (`passageRowFrom` in `frontend/src/search/search-api.ts`). The lead chunk's `snippet` and
- * `pageNumber` stay on the row too, and `chunkId` carries the id `_id` used to hold. One row, both
- * consumers — the same asymmetry the project-name join already keeps.
+ * Collapse chunk hits into one row per document, keeping BM25 order. AI Search has no group-by;
+ * the row shape is the one eagle-public's content-result card and DEMI's frontend both bind.
  */
 
-/**
- * Chunks fetched per page of documents.
- *
- * 10 per document is generous — eagle-search measured the worst case near 3 — but the cost is
- * asymmetric: too small and a page silently returns four documents, too large and we read extra
- * rows from an index that is already fast.
- */
+// Chunks fetched per document on a page; too small and a page silently returns fewer documents.
 const FANOUT = 10;
 
 /** Snippets shown per document. The request asks for one fragment per chunk. */
 const MAX_SNIPPETS = 2;
 
 /**
- * Chunks to fetch for a requested page.
- *
- * THE CEILING IS REQUIRED AND IS THE CALLER'S, deliberately — no default. It has to be a number
- * that already exists somewhere else (`ai-search.SERVICE_MAX_TOP`), and a default here would be a
- * second copy of it, silently wrong the day that one moves. That is the failure this whole function
- * exists to prevent: the window was clamped to Azure's `$top` limit of 1000 while `runSearch`
- * clamps `top` to its own ceiling, so chunks past the clamp were never requested while `skip` still
- * advanced by the full window — the documents in them were reachable from no page at all.
- *
- * `SERVICE_MAX_TOP`, not `MAX_PAGE_ROWS`: one page must cost ONE service request. A chunk search
- * runs on every debounced keystroke against a Basic 1-SU service, and `runSearch`'s fill loop turns
- * a larger window into two requests per keystroke — the multiplier `ai-search.js` explicitly says
- * `pageSize` must not become.
+ * Chunks to fetch for a page. The ceiling has no default: callers pass `SERVICE_MAX_TOP`, so a
+ * page stays one service request and no second copy of the limit can drift.
  */
 function windowFor(pageSize, ceiling) {
   if (!Number.isFinite(ceiling) || ceiling < 1) {
@@ -61,12 +23,8 @@ function windowFor(pageSize, ceiling) {
 }
 
 /**
- * One passage of the row: the snippet text with the page of the chunk it came from.
- *
- * `pageNumber` is null whenever `pageNumbered` is false, which the lead pair does not do — it is
- * passed through raw for readers that already check the flag themselves. An entry here is rendered
- * as a label per snippet, and the number on an un-numbered document is a passage sequence, so
- * carrying it would print a page the passage is not on.
+ * One passage: snippet text plus its page. `pageNumber` is nulled when `pageNumbered` is false,
+ * because then it is a passage sequence, not a PDF page.
  */
 function passageFrom(row) {
   const pageNumbered = row.pageNumbered === true;
@@ -78,36 +36,8 @@ function passageFrom(row) {
 }
 
 /**
- * Group mapped chunk rows into document rows, preserving order.
- *
- * NO PAGE-SIZE TRUNCATION, and this is the one deliberate divergence from the eagle-search original
- * (`service/group.js:86`, which slices to `pageSize`). Slicing loses documents outright: the caller
- * pages by WINDOW — `skip` advances a whole window per page — so any document grouped out of the
- * window and then sliced off the end is skipped past on the next page and reachable from none.
- * Measured on a 300-passage / 150-document corpus at pageSize=10: page 0 ended at d9 and page 1
- * began at d50, so 40 documents fell in the gap, and 30 of 150 documents were servable in total.
- *
- * So the WINDOW is the page. A page carries every document its window covered — between 1 and
- * `window` rows, more than `pageSize` whenever the matches are spread thin — and consecutive pages
- * cover consecutive, non-overlapping chunk ranges, which is what makes every match reachable.
- *
- * `pageNumber` IS A PDF PAGE ONLY WHEN `pageNumbered` IS TRUE. Without it the number is a passage
- * sequence — the chunker increments it per emitted block — and rendering "jump to page N" from one
- * would send the reader to a page the passage is not on. Both fields ride the row so the caller can
- * tell the two apart; the flag is the whole gate on that label.
- *
- * THE LEAD PAIR ANSWERS FOR THE LEAD SNIPPET ONLY, which is why `passages` sits beside `snippets`:
- * one entry per snippet, same order, each with the page of the chunk that produced it. The passages
- * of one row are rarely on one page, so labelling them all from the lead number puts the first
- * passage's page under the second passage's text. `snippets` is unchanged beside it.
- *
- * `matchCount` is the count of that document's passages IN THIS WINDOW, which is the honest count
- * of what this page found — not necessarily of what the corpus holds. A document whose passages
- * straddle a window boundary is returned on BOTH pages, each carrying its own partial count;
- * measured on a 200-passage corpus with a document at chunks 99 and 100, pages 0 and 1 each showed
- * it with matchCount 1. Grouping per window with no carry-over is what makes paging stateless, and
- * a true per-document total would need either a second aggregate query or a cursor. Say the count
- * is per page rather than pretending otherwise.
+ * Group chunk rows into document rows. No `pageSize` slice: the window is the page, and slicing
+ * would skip documents for good. `matchCount` counts this window only.
  */
 function groupByDocument(rows) {
   const byDocument = new Map();
@@ -131,30 +61,13 @@ function groupByDocument(rows) {
         projectName: row.projectName,
         documentName: row.documentName,
         documentType: row.documentType,
-        // The date and milestone chips. Both are the PARENT document's — a chunk row has neither —
-        // so they arrive from the same parent lookup that supplied `documentName`.
-        //
-        // `milestone` IS THE LABEL HERE, NOT THE ID, and a chunk row is the one place that is true.
-        // The Document dataset emits the ObjectId under this name because every component that
-        // renders a Document row resolves it through `idToList()`. The chunk card does not:
-        // `eagle-public/src/app/search/content-result/content-result.component.html:13` binds
-        // `{{result().milestone}}` raw, and ContentResultComponent has no `lists` input and no
-        // `idToList` method — the three components that do are all Document tables. So an id under
-        // this key would render `5cf00c03a266b7e1877504ca` in the chip.
-        //
-        // Prod is the tiebreak and it emits BOTH: a chunk row there carries
-        // `milestone: 'Other'` alongside `milestoneId: '5d0d212c7d50161b92a80eed'`. Matching that
-        // shape costs one column and removes the choice.
-        //
-        // `|| null` for the same reason the Document mappers do it: the key is always present, so
-        // an absent value reads as "this document has none" rather than as a missing field.
+        // A label, not an id: the eagle-public chunk card binds `milestone` raw, with no `idToList`.
+        // Prod emits both, so `milestoneId` rides beside it.
         milestone: row.milestone || null,
         milestoneId: row.milestoneId || null,
         datePosted: row.datePosted || null,
         pageNumber: row.pageNumber,
-        // The lead chunk's, like every other field on this row. It is a property of the DOCUMENT's
-        // extraction rather than of the passage — every chunk of one document agrees on it — so the
-        // lead chunk answers for all of them.
+        // Every chunk of one document agrees on it, so the lead chunk answers for all.
         pageNumbered: row.pageNumbered,
         content: '',
         snippet: row.snippet || '',

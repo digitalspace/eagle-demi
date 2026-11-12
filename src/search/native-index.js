@@ -1,22 +1,8 @@
 'use strict';
 
 /**
- * Native lists over Azure AI Search, in two modes. In both the index answers WHICH ROWS MATCH and
- * nothing else; the rows are read back from Cosmos with `id IN (...)`, which applies each record's
- * own field dials, so a value one record hides cannot be read through the index.
- *
- * Ranked mode (projects, activities, notifications): a `q=` list reads at most `ID_PAGE` ranked
- * ids and pages them in memory, so its total is capped there. A list with no `q` stays on Cosmos.
- * These indexes carry dials only as an unfilterable string, so a filter or sort on a field one
- * record hides is re-checked in Cosmos on the whole id set.
- *
- * Paged mode (documents): the index pages and counts itself (`skip`, `top`, `@odata.count`), in one
- * request for list and count, so totals are not capped. It serves every list except the few the map
- * sends to Cosmos (`cosmosServes`), cross-project lists without `q` included. With no sort, a `q`
- * list ranks by relevance and any other takes the map's default order, each then by `id`. Its
- * `searchVis` column is the lowest dial over the searched fields, so a keyword cannot count a row
- * whose searched field the caller may not see. Filter and sort fields carry no dial in the index; Cosmos re-checks
- * them on the page only, which is latent while no route writes document dials.
+ * Native lists over AI Search: the index picks the matching ids, then Cosmos re-reads the rows so
+ * each record's field dials still apply. See wiki Native-List-Reads.
  */
 
 const aiSearch = require('./ai-search');
@@ -49,9 +35,8 @@ function badRequest(message) {
 }
 
 /**
- * The `activities` index filter for this caller, for the native list and `controllers/search.js`:
- * role ACL and project scope in the Eagle id space the index holds, the parent gate, and the
- * publish gate `updates.liveCriteria` applies to the container.
+ * The `activities` index filter: role ACL and project scope in the Eagle id space the index holds,
+ * the parent gate, and the publish gate `updates.liveCriteria` applies to the container.
  */
 async function updatesIndexAcl(access) {
   const acl = filterFor(await updates.inEagleIdSpace(access), 'projectId');
@@ -70,13 +55,8 @@ async function updatesIndexAcl(access) {
 }
 
 /**
- * Per index: how its search runs, which column carries project identity for the ACL (or an `acl`
- * that builds it), and the native filter field -> filterable index column. A filter with no column
- * here still narrows in Cosmos; mapping it only spends the id page on rows that can match.
- * `collections` is the same for an `anyOf` filter, onto a Collection(Edm.String) column.
- *
- * `searched` is every native field the keyword matches against. A row is a keyword hit only when
- * the caller may see all of them, because which field matched is not reported back.
+ * Per index: its search, the ACL column, and native filter field -> filterable column. A keyword hit
+ * needs every `searched` field visible to the caller, since the matched field is not reported.
  */
 const INDEX_MAPS = Object.freeze({
   projects: {
@@ -154,9 +134,8 @@ const INDEX_MAPS = Object.freeze({
     // Most rows hold sortOrder 0, so the staff order falls back to newest first, then by name.
     tiebreaks: { sortOrder: 'datePosted desc, displayNameSort asc' },
     defaultOrderby: 'datePosted desc',
-    // Cosmos indexes no `datePosted` or `displayName` and cannot compare typed values the query
-    // carries as strings, so it serves only one project's plain list and an `ids=` read. A name
-    // match goes to the index too, which matches word prefixes where Cosmos would match a substring.
+    // Cosmos indexes no `datePosted` or `displayName` and cannot compare typed values held as
+    // strings, so it serves only one project's plain list and an `ids=` read.
     cosmosServes: parsed => !parsed.q && !parsed.sort && !typedFilter(INDEX_MAPS.documents, parsed) &&
       !Object.keys(parsed.contains || {}).length &&
       Boolean(parsed.ids || (parsed.filters && parsed.filters.projectId)),
@@ -201,10 +180,8 @@ function typedLiterals(map, parsed) {
 }
 
 /**
- * The twin of `andClauses` (helpers/access-sql.js) for OData: absent clauses are dropped and every
- * one kept is parenthesised, so a clause holding `or` cannot bind across its neighbours. No clause
- * at all is null, which `runSearch` reads as unrestricted. OData has no `false`; a caller that can
- * match nothing must never reach here (see `indexFilter`).
+ * OData twin of `andClauses`: each clause parenthesised so an `or` cannot bind across. Null means
+ * unrestricted; OData has no `false`, so a caller that matches nothing must never reach here.
  */
 function andOData(...clauses) {
   const parts = clauses.filter(Boolean);
@@ -212,11 +189,8 @@ function andOData(...clauses) {
 }
 
 /**
- * The index `$filter` for this caller and parsed query: the ACL, the map's fixed clauses, `searchVis`
- * when there is a keyword, then the mapped filters, any-of filters, ranges, presence tests and `ids=`. `{ filter: null, empty: true }`
- * means the caller can match nothing and no request may be sent; `filter: null` with `empty: false`
- * is unrestricted. Throws a 400 for a typed value its column refuses, and in paged mode for a filter,
- * any-of filter or presence test with no column or any flag, before any clause is built.
+ * The index `$filter`. `empty: true` means match nothing and send no request; `filter: null` alone
+ * is unrestricted. Throws 400 before building for a refused value or, paged, an unmapped field.
  */
 function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionField)) {
   const typed = typedLiterals(map, parsed);
@@ -283,11 +257,8 @@ function searchedVisible(map, access) {
 }
 
 /**
- * A kind spec repository (`controllers/nosql/mirror-reads.js`) that answers `q=` lists from the
- * index and everything else from `cosmosKind` over the same container.
- *
- * `store` replaces `cosmosKind` for a container whose reads carry gates of their own (updates):
- * the kind's native repository plus `readAll(access, {criteria, orderBy})`, the unpaged read-back.
+ * Kind spec repository answering indexed lists from the index, the rest from `cosmosKind`. `store`
+ * replaces it for gated containers (updates) and must add `readAll(access, {criteria, orderBy})`.
  */
 function indexedKind({ index, container, entity, partitionField, defaultOrder, store: given, baseCriteria = [] }) {
   const map = INDEX_MAPS[index];
@@ -320,9 +291,8 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
   }
 
   /**
-   * Paged mode: one index request pages and counts. The page's ids are re-read with their string
-   * filters and dials; a typed filter or range re-checks only its dial, because the index matched
-   * the value and the query holds it as a string. No ORDER BY: rows take the index's order.
+   * Paged mode: one index request pages and counts. A typed filter re-checks only its dial, because
+   * the query holds it as a string. No ORDER BY: rows take the index's order.
    */
   async function readPage(access, parsed) {
     if (parsed.pageSize > aiSearch.MAX_PAGE_ROWS) {
