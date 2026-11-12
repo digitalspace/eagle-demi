@@ -682,6 +682,40 @@ resource groupsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
+// One document per Track work, with its phases and milestones. Listed per project, so /projectId
+// is the partition. No /read/[]/?: works carry no read gate of their own, the project row's applies.
+resource worksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'works'
+  properties: {
+    resource: {
+      id: 'works'
+      partitionKey: {
+        paths: [
+          '/projectId'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/workTypeId/?'
+          }
+          {
+            path: '/deleted/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
 // Eagle `Inspection`, `InspectionElement` and `InspectionItem` in one container, discriminated by
 // `kind`. /inspection keeps one inspection and everything under it in one logical partition.
 resource inspectionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {

@@ -263,6 +263,9 @@ param contactEmails = [
 param trackApiBase = 'https://epictrack-api-c8b80a-prod.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
 param trackWorksSync = true
+// Both off until test has proven the `works` container.
+param worksWrite = false
+param worksRead = false
 param assessmentPass = true
 param roleSyncClientId = 'demi-role-sync'
 

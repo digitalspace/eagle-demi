@@ -328,6 +328,12 @@ param trackClientId string = ''
 @description('Mirror every public Track work type and its milestones (`works[]`) in the nightly sync. Off until the public read ships.')
 param trackWorksSync bool = false
 
+@description('Write every Track work into the `works` container in the nightly sync, beside the project row arrays. Off until test has proven it.')
+param worksWrite bool = false
+
+@description('Compose project works from the `works` container instead of the project row. Off until the parity check passes.')
+param worksRead bool = false
+
 @description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
 param assessmentPass bool = false
 
@@ -404,6 +410,13 @@ param engageApiBase string = ''
 // Empty refuses every writer, so blanking it closes the ENGAGE ingest. Never share a principal with eagleMirrorPrincipals.
 @description('Comma-separated registry row ids permitted on PUT /engage/*.')
 param engagePrincipals string = 'apim:engage'
+
+// Same rules as engagePrincipals. Never share a principal with that list or eagleMirrorPrincipals.
+@description('Comma-separated registry row ids permitted on PUT and DELETE under /track/*.')
+param trackPrincipals string = 'apim:track'
+
+@description('Deploy the log alert that fires when the nightly Track teams sync still finds project drift. Off until Track pushes its writes, because until then the nightly is the only writer and fires every night.')
+param deployTrackDriftAlert bool = false
 
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
@@ -792,6 +805,7 @@ module observability './modules/observability.bicep' = if (deployFoundation) {
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
     deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
+    deployTrackDriftAlert: deployTrackDriftAlert
     chunkRestampQueue: chunkRestampQueue
     syncOutQueue: syncOutQueue
     // Same values the API timers get, so a timer that never runs has no alert expecting it.
@@ -868,6 +882,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trackApiBase: trackApiBase
     trackClientId: trackClientId
     trackWorksSync: trackWorksSync
+    worksWrite: worksWrite
+    worksRead: worksRead
     assessmentPass: assessmentPass
     trackClientSecretUri: trackClientSecretUri
     roleSyncClientId: roleSyncClientId
@@ -898,6 +914,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     reconcileEngageSchedule: reconcileEngageSchedule
     engageApiBase: engageApiBase
     engagePrincipals: engagePrincipals
+    trackPrincipals: trackPrincipals
     // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
     // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
     dataSourceIdentityId: deploySearch ? identityId : existingSearchIndexerIdentityId
