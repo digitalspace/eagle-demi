@@ -45,24 +45,17 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(script.parseArgs(['--live']).live, true);
     assert.strictEqual(script.parseArgs(['--only', 'chunks']).only, 'chunks');
     assert.throws(() => script.parseArgs(['--only']), /needs a value/);
-    // The EMPTY case is separate from the missing one: `--only "$IDX"` with IDX unset satisfies the
-    // value() guard, and select() would then short-circuit its must-match check and apply all six
-    // objects instead of the one asked for.
+    // `--only "$IDX"` with IDX unset passes value() and would otherwise apply everything.
     assert.throws(() => script.parseArgs(['--only', '']), /empty value/);
     assert.throws(() => script.parseArgs(['--only', '   ']), /empty value/);
     assert.throws(() => script.parseArgs(['--oops']), /unknown flag/);
   });
 
-  // These drive run() with a stubbed transport, the way copy-blobs.test.js drives copyOne. Asserting
-  // the definitions-vs-live property from the files alone says nothing about whether the code still
-  // CHECKS it — deleting the guard from run() left the whole suite green until these existed.
+  // Drive run() with a stubbed transport: the files alone cannot prove the guard still runs.
   const stub = (t2, handler) => {
     const calls = [];
     const original = global.fetch;
-    // MOCK THE TOKEN, not just the transport. getToken() goes to DefaultAzureCredential, which on a
-    // developer box quietly succeeds off an existing az login and in CI spends ~15s probing IMDS
-    // before failing — so without this the suite passes locally and fails in CI, which is how the
-    // gap was found. Mocking it also keeps these tests from depending on any ambient credential.
+    // Mock the token too: a real getToken() succeeds off a local az login but fails in CI after ~15s.
     const aiSearch = require('../../src/search/ai-search');
     t2.mock.method(aiSearch, 'getToken', async () => 'test-token');
     global.fetch = async (url, init) => {
@@ -103,9 +96,8 @@ test('apply-search-definitions', async (t) => {
     );
   });
 
-  // THE SILENT FAILURE. This script never writes a data source, so a field added to an index and
-  // to the committed data source is applied, reported green, and then never populated — the live
-  // indexer keeps projecting the old SELECT and every new field stays null.
+  // A field added to an index and the committed data source reports green, but the live SELECT
+  // keeps the new field null.
   await t.test('a live data source whose query differs from the committed copy is called out', async (tt) => {
     const lines = [];
     const log = console.log;
@@ -115,9 +107,7 @@ test('apply-search-definitions', async (t) => {
     stub(tt, (url, init) => {
       const ds = /\/datasources\/([^?]+)/.exec(url)?.[1];
       if (ds) {
-        // Only the documents data source is stale, and with the pre-widening SELECT: no typeId,
-        // no datePosted. The other two match, so the tally has to be 1 — a guard that warned on
-        // every data source would pass this assertion just as well.
+        // Only the documents data source is stale, so the tally must be 1, not one per data source.
         const body = ds === 'demi-documents-ds'
           ? { name: ds, container: { name: 'documents', query: 'SELECT c.id, c.displayName FROM c' } }
           : script.readCommittedDataSource(ds);
@@ -158,11 +148,8 @@ test('apply-search-definitions', async (t) => {
   };
 
   /**
-   * Serve `live` for GET /indexes/projects, and behave like `ok` for everything else.
-   *
-   * The `@odata.*` pair is what a REAL GET returns and no committed file carries. It is stamped on
-   * here rather than left out: without it the fixture agreed with a bug that refused every live
-   * index over two server-assigned keys, which is how that bug reached the service.
+   * Serve `live` for GET /indexes/projects, `ok` for everything else. The `@odata.*` pair is what a
+   * real GET returns and no committed file carries, so the fixture keeps it.
    */
   const servingProjects = (live) => (url, init) =>
     (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
@@ -176,10 +163,7 @@ test('apply-search-definitions', async (t) => {
       }
       : ok(url, init);
 
-  // ADDING a field to a live index is supported in place and is what `azure/search/README.md`
-  // "Adding a field" documents as routine. The guard refused every live index, so once the
-  // 2026-08-22 rename made the committed names the live ones, step 1 of that procedure could not be
-  // run through this script at all — `projects` IS what the app serves.
+  // Adding a field to a live index is supported in place (azure/search/README.md "Adding a field").
   await t.test('run() writes a live index when the change only ADDS fields', async (tt) => {
     const calls = stub(tt, servingProjects(projectsMinus(7)));
     await script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] });
@@ -188,9 +172,7 @@ test('apply-search-definitions', async (t) => {
       'an additive widening of the serving index must be applied');
   });
 
-  // A field that exists live and not in the committed copy is a DROP, which is a rebuild. Same for
-  // a retype or a flipped flag: the shape below renames nothing, it redefines `region` as a
-  // collection, which would invalidate every stored value.
+  // A drop, retype or flipped flag is a rebuild; here `region` is redefined as a collection.
   await t.test('run() still refuses a live index when a field is redefined', async (tt) => {
     const live = projectsMinus(7);
     live.fields = live.fields.map(f => f.name === 'region' ? { ...f, type: 'Collection(Edm.String)' } : f);
@@ -227,9 +209,7 @@ test('apply-search-definitions', async (t) => {
     );
   });
 
-  // A live index this cannot READ is not a live index it may overwrite. With the old blanket
-  // refusal any GET failure was moot; now the verdict depends on the response, so a non-200 has to
-  // stop the run rather than fall through to a PUT.
+  // A serving index that cannot be read back must stop the run, not fall through to a PUT.
   await t.test('run() refuses when the serving index cannot be read back', async (tt) => {
     const calls = stub(tt, (url, init) =>
       (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
@@ -243,8 +223,7 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0);
   });
 
-  // A fresh service (prod, 2026-08-26): the app already points at the plain names, but nothing
-  // exists yet. Absent is not "cannot see" — nothing serves from it, so creating it is additive.
+  // A fresh service: the app points at the names but nothing exists yet, so creating is additive.
   await t.test('run() creates a serving-named index that is absent (greenfield service)', async (tt) => {
     const calls = stub(tt, (url, init) =>
       (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
@@ -306,10 +285,7 @@ test('apply-search-definitions', async (t) => {
   }
 
   await t.test('a DRY RUN is never refused, even when the names are the live ones', async (tt) => {
-    // The guard used to run before the dry-run split, so once the rename made the committed names
-    // the live ones, the first command an operator reaches for during an incident exited 1 without
-    // printing anything. A dry run touches nothing — it must work in every state, and say which
-    // indexes are serving.
+    // A dry run must work in every state and say which indexes are serving.
     // The live names exist on the service (a 404 would be a fresh service, which is not "serving").
     const calls = stub(tt, (url, init) =>
       (init.method === 'GET' && /\/indexes\/[a-z]+\?/.test(url))
@@ -356,10 +332,8 @@ test('apply-search-definitions', async (t) => {
   });
 
   await t.test('a 403 names the right cause — network and RBAC are told apart by the body', () => {
-    // Both faults arrive as 403 and the status cannot separate them. Getting this backwards sends
-    // someone to request a role grant that changes nothing, or to debug networking when the grant
-    // is what is missing. The network body below is the verbatim shape Azure returned from a
-    // workstation against demi-search-test on 2026-08-22.
+    // Both faults arrive as 403; only the body separates them. The network body is the verbatim
+    // shape the service returns off the VNet.
     const networkBody = JSON.stringify({ error: { code: '', message:
       "Request is denied as the source is not allowed by applicable rules. The service is set 'publicNetworkAccess: Disabled'." } });
     assert.throws(
@@ -437,20 +411,8 @@ test('apply-search-definitions', async (t) => {
   });
 
   await t.test('after the cutover the definitions ARE the live indexes, and the guard is what protects them', () => {
-    // THIS TEST USED TO ASSERT THE OPPOSITE, and it was right to until 2026-08-22. Before the
-    // cutover the committed definitions were renamed AHEAD of the service, so the two sets were
-    // disjoint and that disjointness was the safety property. The cutover pointed SEARCH_INDEX* at
-    // the plain names, so they now coincide BY DESIGN — the old assertion would fail, and "fixing"
-    // it by renaming a definition would be undoing the cutover.
-    //
-    // What still protects a live schema is the runtime guard in run(), covered by
-    // 'run() refuses to write an index the app is serving from' above and mutation-proven there.
-    // That guard now REFUSES a plain re-run of this script, which is correct: with the names
-    // coincident, applying the definitions again would rewrite indexes serving traffic.
-    // The two keyword indexes have NO code default — absent means Cosmos — so the app "serves"
-    // them only where a param file names one. Asked with the switch on, which is the state this
-    // script is ever run against; with it off those indexes serve nothing and the guard has
-    // nothing to protect.
+    // Committed and served names coincide by design; never rename a definition to split them.
+    // The keyword indexes have no code default, so this asks with their switch on.
     const cfg = configWith(SWITCHED_ON);
     const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex,
       cfg.activitiesIndex, cfg.notificationsIndex].filter(Boolean));

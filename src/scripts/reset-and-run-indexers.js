@@ -1,24 +1,19 @@
-// Reset, run and wait for search indexers, all in one process on the devbox.
-//
-// Every `az vm run-command invoke` is a 20-45 s ARM long poll, so a poll loop driven from a
-// workstation spends more time in round trips than the indexer spends indexing. Holding the wait
-// here turns an apply's poll-per-tick into one call. Background: docs/runbook-search-outage.md.
+// Reset, run and wait for search indexers in one process on the devbox: each run-command call is a
+// 20-45 s ARM long poll, so a workstation poll loop is mostly round trips.
 'use strict';
 
 const API = '2024-07-01';
-// An execution that was already in flight when the reset landed writes its old high-water mark
-// back when it finishes and silently undoes the clear (hit 2026-09-07). Wait for it to drain.
+// An execution in flight when the reset lands writes its old high-water mark back on finish and
+// undoes the clear. Wait for it to drain.
 const SETTLE_MS = 60000;
 // How many drain polls to take before giving up, so a zero poll sleep cannot spin.
 const MAX_DRAIN_POLLS = 20;
-// A reset is applied asynchronously, so a run posted right behind it can still consume the old
-// high-water mark (hit 2026-09-17). One wait per attempt: wait, run, and if the execution still
-// carried a tracking state, reset again and wait longer. Length = the attempt cap.
+// A reset applies asynchronously, so a run right behind it can still use the old mark. One wait per
+// attempt, retried with a reset while the run carried a tracking state; length = attempt cap.
 const RUN_WAIT_MS = [5000, 20000, 40000];
 
-// The service stamps its own clock on the reset, half a second off the client's resetAt on test
-// (2026-09-17) and either side of it. A run inside that window still counts, if it is newer than
-// the reset entry.
+// The service stamps the reset with its own clock, which can sit either side of the client's resetAt.
+// A run inside this window still counts if it is newer than the reset entry.
 const RESET_SKEW_MS = 2000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -43,17 +38,12 @@ const resetStampOf = (list) => list
 const afterReset = (e, resetAt, stamp) => {
   const t = startedAt(e);
   if (t >= resetAt) return true;
-  // The skew window only means anything against the reset entry's own stamp. With no reset entry
-  // in the history there is nothing to be newer than, so a run that started before resetAt is a
-  // pre-reset execution, not the one that was asked for.
+  // The skew window needs the reset entry's stamp; without one, a run before resetAt is pre-reset.
   return Number.isFinite(stamp) && t >= resetAt - RESET_SKEW_MS && t > stamp;
 };
 
-// The run that was asked for is the FIRST execution to start after the reset. A scheduled tick can
-// start on top of it between two polls, so executionHistory[0] is not it: that tick carries a
-// tracking state and would report a reset that worked as DEMI_RESET_NOT_APPLIED.
-// executionHistory is newest first, so the earliest match is the last one. Watch mode resets
-// nothing and asks about the newest execution.
+// The asked-for run is the first to start after the reset, not executionHistory[0]: a scheduled tick
+// on top of it carries a tracking state. History is newest first, so take the last match.
 function pickRun(list, resetAt, pinnedStart) {
   const runs = runsOnly(list);
   if (!resetAt) return runs[0] || {};
@@ -106,9 +96,8 @@ async function resetAndRun(opts) {
   // minutes however many indexers it carries. The retries below share it.
   const deadline = now() + timeoutMs;
 
-  // `initialTrackingState` is a JSON string on a real execution (`highWaterMark` -1 from a cleared
-  // mark, the container's `_ts` otherwise); null belongs to the reset entry, never a run. A state
-  // we cannot read is not a verdict: another reset cannot make it readable, so the run is taken.
+  // A JSON string on a real run (`highWaterMark` -1 when cleared); null only on the reset entry.
+  // An unreadable state is taken as is: another reset cannot make it readable.
   const trackingOf = (e) => {
     const raw = e.initialTrackingState;
     if (raw === undefined) return 'absent';
@@ -125,8 +114,6 @@ async function resetAndRun(opts) {
     return Number(state.highWaterMark) === -1 ? 'cleared' : 'set';
   };
 
-  // An execution that was already in flight when the reset landed writes its old high-water mark
-  // back when it finishes and silently undoes the clear. Wait for it to drain.
   async function drained(name, resetAt) {
     for (let i = 0; ; i += 1) {
       const e = await status(name);
@@ -153,8 +140,7 @@ async function resetAndRun(opts) {
       last = runsOnly(list)[0] || {};
       const e = pickRun(list, resetAt, pinnedStart);
       if (pinnedStart === null && resetAt && afterReset(e, resetAt, stamp)) pinnedStart = startedAt(e);
-      // run-command truncates at 4 KB, and a several-hour wait would fill that with poll lines
-      // long before the result.
+      // run-command output truncates at 4 KB, so poll lines are thinned.
       if (tick % pollEvery === 0) {
         log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
       }
@@ -172,8 +158,7 @@ async function resetAndRun(opts) {
       return 1;
     }
 
-    // In watch mode there is no reset to compare against, so the newest execution is the one asked
-    // about.
+    // Watch mode has no reset, so the newest execution is the one asked about.
     let resetAt = 0;
     let done = null;
     let last = {};
