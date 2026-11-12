@@ -365,6 +365,16 @@ test('queryPage drains one iterator until the page is full', async (t) => {
     warn.mock.restore();
   });
 
+  await t.test('under `whole` a cut drain answers null, not a short page', async () => {
+    const warn = t.mock.method(logger, 'warn', () => {});
+    pages.push({ resources: [{ id: 'a' }] });
+    for (let i = 0; i < db.LOOKUP_MAX_PAGES + 5; i++) pages.push({ resources: [] });
+
+    assert.strictEqual(await db.queryPage('commentPeriods', spec, { size: 3, whole: true }), null);
+    pages.length = 0;
+    warn.mock.restore();
+  });
+
   await t.test('a missing or non-positive size is refused', async () => {
     await assert.rejects(() => db.queryPage('commentPeriods', spec, {}), /positive size/);
     await assert.rejects(() => db.queryPage('commentPeriods', spec, { size: 0 }), /positive size/);

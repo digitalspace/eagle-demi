@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * `GET /search` for what eagle-api's search serves a staff or sysadmin caller: the User, Group and
- * inspection datasets, `dataset=Item`, the staff project fields, `x-total-count` and Eagle's
- * comment `eaoStatus` filter.
- *
- * The stub runs in `strict` mode: it applies the role arm of the read predicate the request
- * emitted, so a dataset that reads without the caller's ACL serves a sysadmin-only row to an
- * anonymous caller and fails here. Harness: `test/helpers/search-reads.js`.
- */
+// `GET /search` as eagle-api serves staff: User, Group, inspections, Item, staff project fields, `eaoStatus`.
+// The `strict` stub applies the read's role arm, so a read without the caller's ACL fails here.
 
 process.env.NODE_ENV = 'test';
 
@@ -259,7 +252,8 @@ test('dataset=Project keyword search: an anonymous caller gets no staff field an
   }));
   const row = resultsOf(await get('/api/search?dataset=Project&keywords=wind'))[0];
   assert.strictEqual(row.CELead, undefined);
-  assert.deepStrictEqual(specsFor(seen, 'projects'), []);
+  // The dial-hidden id read is the only projects read; no row is fetched for staff fields.
+  assert.deepStrictEqual(specsFor(seen, 'projects').filter(s => !s.query.startsWith('SELECT VALUE c.id FROM c ')), []);
 });
 
 test('x-total-count carries the measured total, not the page length', async (t) => {

@@ -256,16 +256,10 @@ async function drain(iterator, want, maxFetches) {
 }
 
 /**
- * Up to `size` rows of one query, drained like `queryFirst` because a single cross-partition
- * `fetchNext()` can come back short or empty while rows remain. Bounded at LOOKUP_MAX_PAGES fetches
- * plus one per `size` rows of `skip`: the SDK's OFFSET stage (OffsetLimitEndpointComponent) discards
- * skipped rows per inner fetch, so a deep page first sees about skip/size empty fetches. A drain cut
- * short is logged and answers the rows it has.
- *
- * @param {object} options  `size` rows wanted (required), `skip` the query's OFFSET
- * @returns {Promise<object[]>}
+ * Up to `size` rows from one drained iterator, bounded at LOOKUP_MAX_PAGES fetches plus one per `size` of `skip`
+ * (the SDK's OFFSET stage empties skipped fetches). A cut drain answers short, or null under `whole`.
  */
-async function queryPage(containerName, spec, { size, skip = 0 } = {}) {
+async function queryPage(containerName, spec, { size, skip = 0, whole = false } = {}) {
   assertQuerySpec(spec, containerName);
   if (!(Number.isInteger(size) && size > 0)) throw new Error('[Cosmos] queryPage needs a positive size');
 
@@ -278,6 +272,7 @@ async function queryPage(containerName, spec, { size, skip = 0 } = {}) {
     logger.warn('[Cosmos] page drain hit its fetch bound; answering a short page.', {
       container: containerName, pages: maxFetches, rows: rows.length, size, skip
     });
+    if (whole) return null;
   }
   return rows.slice(0, size);
 }
