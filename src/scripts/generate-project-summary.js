@@ -1,48 +1,8 @@
 'use strict';
 
 /**
- * Generate one project's stored AI summary.
- *
- *   node src/scripts/generate-project-summary.js --project 272 [--live] [--section conditions]
- *                                               [--out record.json]
- *   node src/scripts/generate-project-summary.js --project 272 --store record.json
- *
- * Dry run by default: it prints the record and what it cost and writes NOTHING to the API. `--live`
- * and `--store` are the only things that store. That split matters because the record IS the page —
- * a bad generation that lands is visible to anyone who opens the project.
- *
- * `--section` regenerates ONE section and merges it into the stored record, leaving the others as
- * they are. That is what makes prompt tuning affordable: re-running conditions against Site C is
- * one section, not the whole record. `--out` writes the dry-run record to a file so two runs can
- * be diffed.
- *
- * `--store` uploads a record `--out` already wrote, BYTE FOR BYTE: no generation, no merge, no
- * edit of any kind, and it refuses a file whose project is not `--project`. It exists because a
- * generation takes minutes while the staff token it was read with lasts five, so a good record can
- * be produced and then fail to land. Storing it is a retry of the upload, not a second chance to
- * change what is in it.
- *
- * NOTHING HERE EDITS A RECORD BY HAND. Every stored claim has to have come out of the generator,
- * over that project's own chunks, past the citation and number gates — a hand-edited record would
- * carry the same "AI-generated, cited" badge with none of that behind it. Tuning happens in
- * `project-summary-prompts.js` and in the code. The server checks the record's shape, its
- * `sourceAccess` and that every citation number is in range — nothing more: the grounding gate runs
- * in the generator only, so an edited record's prose is checked against its sources nowhere.
- *
- * Reads and writes through the DEMI API (src/ai/project-summary-sources.js), because Cosmos and AI
- * Search are private-endpoint only and this runs from a workstation. Environment:
- *
- *   DEMI_API_URL              the API base that `/projects` and `/documents` hang off
- *   DEMI_TOKEN                a staff bearer token (or DEMI_API_KEY for the X-Api-Key header)
- *   SUMMARY_ENABLED=true      the same flag the query-time summariser reads
- *   PROJECT_SUMMARY_PROVIDER  `foundry` (default) or `ollama`
- *   FEDERAL_SOURCE            `iaac` (default) reads a federal decision DEMI does not hold from
- *                             the public IAAC registry; `off` is the kill switch. `iaac` needs
- *                             `pdftotext` (poppler-utils) on PATH and outbound access to
- *                             iaac-aeic.gc.ca.
- *
- * Cost is ALWAYS reported at the Foundry rates, whichever provider ran — see `pricedAs` on the
- * record. A local run is free in cash; the figure is what the same work would cost deployed.
+ * One project's stored summary. Dry run unless `--live`; `--section` merges one section; `--store`
+ * uploads an `--out` file unchanged. Never hand-edit a record: only the generator runs the gates.
  */
 
 const fs = require('fs');
@@ -80,22 +40,14 @@ function parseArgs(argv) {
 }
 
 /**
- * A one-section run folded into the record already stored.
- *
- * Only the named section, the reason it is empty and the citations it introduced move. `facts`
- * come from the fresh run because they are computed from the current document index and cost
- * nothing; `usage` and the cost describe THIS run, not the sum of every run the record has seen,
- * so the number stays readable.
- *
- * Citations are RENUMBERED, not appended: the fresh section's numbers index its own list, and
- * concatenating the two lists would leave every untouched section pointing at the wrong source.
+ * Fold a one-section run into the stored record. Citations are renumbered, not appended, so kept
+ * sections still point at their own sources; `facts`, `usage` and cost describe this run.
  */
 function mergeSection(stored, fresh, section) {
   if (!stored) return fresh;
 
-  // The sections that are NOT being regenerated keep the stored record's sources. A record that
-  // does not assert the same source access was built from a wider set of documents, and merging
-  // one fresh section into it would relabel the rest as public.
+  // Kept sections keep the stored sources. A record with another `sourceAccess` was built from a
+  // wider document set, and merging into it would relabel the rest as public.
   if (stored.sourceAccess !== fresh.sourceAccess) {
     throw new Error(`[project-summary] stored record sourceAccess ` +
       `"${stored.sourceAccess}" is not this run's "${fresh.sourceAccess}"; ` +
@@ -135,10 +87,8 @@ function mergeSection(stored, fresh, section) {
   const sections = {};
   for (const [name, value] of Object.entries(kept)) sections[name] = renumber(name, value);
 
-  // The reason a section is null, and the document it is waiting on, move with the section they
-  // explain. Keeping the stored entries for everything else and taking this run's for the named one
-  // is what makes the verdict line true after a one-section run: a fresh failure gets its reason,
-  // and a section that came back loses the reason from the run before.
+  // A section's null reason and pending document move with it, so the verdict line stays true after
+  // a one-section run.
   const carry = (storedMap, freshMap) => {
     const out = { ...storedMap };
     const value = (freshMap || {})[section];
@@ -166,30 +116,21 @@ function mergeSection(stored, fresh, section) {
 }
 
 /**
- * The one line a run is judged on: what was produced, what it cost, and whether it was stored.
- *
- * Section names rather than a count, because "5 sections" and "the conditions section is null" are
- * different answers and only the second one says the generation went wrong. `failed` names sections
- * that errored for a real reason (`not_json`, `truncated`, `no_list`, `no_chunks`, ...); `absent`
- * names ones that produced nothing for a `QUIET_REASONS` entry (`no_document`, `no_source`,
- * `no_text`, `empty`) — the registry simply has nothing there, which a missing name alone does not
- * say: a project with no Schedule B has no conditions section either, but that is not a failure to
- * investigate.
+ * The verdict line. Sections are named, not counted; `failed` has real errors, `absent` only
+ * `QUIET_REASONS` (the registry has nothing there, not a failure to investigate).
  */
 function summaryLine(record, live) {
   const filled = Object.entries(record.sections)
     .filter(([, v]) => v !== null && (!Array.isArray(v) || v.length > 0))
     .map(([k]) => k);
   const errors = Object.entries(record.sectionErrors || {});
-  // The amendments reason joins one entry per failing document ("no_text: a, b; not_json: c"), so
-  // a reason is quiet only when EVERY part of it is: reading the first part alone filed a real
-  // parse failure under `absent`.
+  // Amendments join one reason per document ("no_text: a, b; not_json: c"): quiet only when every
+  // part is, else a real parse failure lands under `absent`.
   const isQuiet = (reason) => String(reason).split(';')
     .every(part => QUIET_REASONS.includes((part.match(/[a-z_]+/) || [''])[0]));
   const failed = errors.filter(([, reason]) => !isQuiet(reason)).map(([k]) => k);
-  // A section that produced something is not absent, whatever else its reason names. Amendments
-  // record `no_text` per unextracted document while the ones with text still render, and listing
-  // the section under both `sections=` and `absent=` says it is there and missing at once.
+  // A section that rendered is not absent, even when amendments record `no_text` for some of its
+  // documents.
   const absent = errors
     .filter(([name, reason]) => isQuiet(reason) && !filled.includes(name))
     .map(([k]) => k);
@@ -202,12 +143,8 @@ function summaryLine(record, live) {
 }
 
 /**
- * Upload a record from disk exactly as it is.
- *
- * The id check is the whole guard: `save` addresses the record by its own `id`, so a file from
- * another project would be written to that project through this run's ACL check, under a `--project`
- * that says otherwise. Nothing else is inspected — the server's contract check is what judges the
- * record, and a second opinion here that disagreed with it would only be a way to be wrong twice.
+ * Upload a record unchanged. The id check is the guard: `save` writes by the record's own `id`, so a
+ * file from another project would land there under this `--project`'s ACL check.
  */
 async function storeRecord(adapter, project, file) {
   const record = JSON.parse(fs.readFileSync(file, 'utf8'));

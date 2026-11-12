@@ -1,28 +1,8 @@
 'use strict';
 
 /**
- * One-way copy: MinIO -> Azure Blob.
- *
- * **The source is never written to.** This script imports only read operations from the MinIO
- * backend and never touches `putFile`. The instruction it exists to honour is "we do not want to
- * accidentally delete prod documents", so it has no code path that can modify or remove a source
- * object, and it will refuse to start against a source bucket it was not explicitly pointed at.
- *
- * Resumable and idempotent: a key already present in the destination with a matching size is
- * skipped, so an interrupted run is restarted by re-running it. 60,661 documents at a mean
- * 3.26 MB is ~200 GB, which will not complete in one uninterrupted pass.
- *
- * Usage:
- *   node src/scripts/copy-blobs-to-azure.js --keys-file keys.txt [--live] [--concurrency 8]
- *
- *   --keys-file    newline-delimited object keys (the `s3Key` values), required
- *   --live         actually copy; WITHOUT THIS NOTHING IS WRITTEN
- *   --concurrency  parallel transfers (default 8)
- *   --limit        stop after N keys, for a costed trial run
- *
- * Requires MINIO_* for the source and AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_CONTAINER plus a
- * logged-in identity for the destination. STORAGE_BACKEND is irrelevant here — both backends
- * are addressed directly, because the point is to move between them.
+ * One-way MinIO -> Azure Blob copy, dry run unless `--live`. The source is only read, never written;
+ * keys already present at equal size are skipped, so a rerun resumes.
  */
 
 const fs = require('fs');
@@ -58,11 +38,8 @@ function loadKeys(keysFile, limit) {
 }
 
 /**
- * A destination container client.
- *
- * Built here rather than reused from azureBlob.js because this needs `exists()` and
- * `getProperties()` on the container, which the four-operation storage interface deliberately
- * does not expose.
+ * Not reused from azureBlob.js: this needs container `exists()` and `getProperties()`, which the
+ * storage interface does not expose.
  */
 function getContainerClient() {
   return new BlobServiceClient(
@@ -72,10 +49,8 @@ function getContainerClient() {
 }
 
 /**
- * Copy one key. Returns `{status: 'copied'|'skipped', bytes}`.
- *
- * The size comparison is what makes a resumed run safe: a blob truncated by an interrupted
- * upload has a different length and is recopied rather than accepted.
+ * Returns `{status: 'copied'|'skipped', bytes}`. The size check makes resume safe: a blob truncated
+ * by an interrupted upload is recopied.
  */
 async function copyOne(containerClient, key, live) {
   const blobClient = containerClient.getBlockBlobClient(key);

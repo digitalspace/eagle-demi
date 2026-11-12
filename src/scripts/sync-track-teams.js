@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Track team feed -> `project:<id>` realm roles, then the project mirror, the closed-project
- * credential sweep and the assessment dating pass. Owns only `project:` roles for ids Track
- * lists; `project:eagle-abc` stays.
+ * Track team feed -> `project:<id>` realm roles, then mirror, credential sweep and dating pass. Owns
+ * only `project:` roles for ids Track lists; `project:eagle-abc` stays.
  */
 
 const config = require('../config');

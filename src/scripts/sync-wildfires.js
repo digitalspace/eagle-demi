@@ -129,10 +129,8 @@ async function syncWildfiresData() {
       }
     }
 
-    // A PATCH of one path, not a whole-item upsert. listWithCentroid projects three fields, so
-    // writing the item back would erase the project — but even with a full row it would be
-    // wrong: a replace from this sync silently discards whatever the Track sync
-    // wrote in between.
+    // Patch one path: listWithCentroid projects three fields, and a whole-item replace would also
+    // drop what the Track sync wrote in between.
     await projectsRepo.patchWildfireStats(proj.id, {
       activeCountWithin50km,
       nearestDistanceKm: minDistance === Infinity ? null : parseFloat(minDistance.toFixed(1)),
