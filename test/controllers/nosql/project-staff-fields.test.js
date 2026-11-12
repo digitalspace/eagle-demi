@@ -4,6 +4,11 @@
 // append-and-close rule the PUT holds them to.
 
 process.env.NODE_ENV = 'test';
+// Before src/config is first required: the audit writer is inert without them, and a batch of 1
+// flushes through the stub transport before the PUT returns.
+process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
+process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -175,25 +180,156 @@ test('PUT /projects/:id staff history', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('PUT refuses an edit or removal of any entry, and a client-set source or sheetKey', async (t) => {
-    const refusals = {
-      'an edited name': { staffAssignments: [{ ...ASSIGNMENT, name: 'Someone Else' }] },
-      'a moved effectiveFrom': { capitalInvestments: [{ ...INVESTMENT, effectiveFrom: '2020-01-01' }] },
-      'an edited note': { staffNotes: [{ ...NOTE, text: 'Rewritten' }] },
-      'a removed entry': { staffNotes: [] },
-      'a reordered pair': { staffNotes: [{ text: 'Second' }, NOTE] },
-      'a client-set source': { staffNotes: [NOTE, { text: 'New', source: 'sheet' }] },
-      'a client-set sheetKey': { staffAssignments: [ASSIGNMENT, { role: 'lead', name: 'Robin Example', sheetKey: 'k9' }] },
-      'a client-set id': { staffNotes: [NOTE, { text: 'New', id: 'mine' }] },
-      'a reopened close': { capitalInvestments: [{ ...INVESTMENT, effectiveTo: null }] },
-      'a cleared field': { staffNotes: null }
-    };
     const closed = { ...ROW, capitalInvestments: [{ ...INVESTMENT, effectiveTo: '2025-01-01' }] };
-    for (const [label, body] of Object.entries(refusals)) {
+    const refusals = [
+      ['an edited name', { staffAssignments: [{ ...ASSIGNMENT, name: 'Someone Else' }] }, 'staffAssignments[0]:'],
+      ['a moved effectiveFrom', { capitalInvestments: [{ ...INVESTMENT, effectiveFrom: '2020-01-01' }] }, 'capitalInvestments[0]:'],
+      ['an edited note', { staffNotes: [{ ...NOTE, text: 'Rewritten' }] }, 'staffNotes[0]:'],
+      ['a removed entry', { staffNotes: [] }, 'staffNotes[0]:'],
+      ['a reordered pair', { staffNotes: [{ text: 'Second' }, NOTE] }, 'staffNotes[0]:'],
+      ['a client-set source', { staffNotes: [NOTE, { text: 'New', source: 'sheet' }] }, 'staffNotes[1]: source is set by the server'],
+      ['a client-set sheetKey', { staffAssignments: [ASSIGNMENT, { role: 'lead', name: 'Robin Example', sheetKey: 'k9' }] },
+        'staffAssignments[1]: sheetKey is set by the server'],
+      ['a client-set id', { staffNotes: [NOTE, { text: 'New', id: 'mine' }] }, 'staffNotes[1]: id is set by the server'],
+      ['a reopened close', { capitalInvestments: [{ ...INVESTMENT, effectiveTo: null }] }, 'capitalInvestments[0]:', closed],
+      ['a closed note', { staffNotes: [{ ...NOTE, effectiveTo: '2026-01-01' }] }, 'staffNotes[0]:'],
+      ['a closed external id', { externalIds: [{ ...STAFF_HISTORY.externalIds[0], effectiveTo: '2026-01-01' }] }, 'externalIds[0]:'],
+      ['a new entry closed before effectiveFrom', { capitalInvestments: [{ amountCad: 5, effectiveFrom: '2026-01-02', effectiveTo: '2026-01-01' }] },
+        'capitalInvestments[0]: effectiveTo must not be before effectiveFrom', { ...ROW, capitalInvestments: [] }],
+      ['a stored close before effectiveFrom', { staffAssignments: [{ ...ASSIGNMENT, effectiveFrom: '2026-03-01', effectiveTo: '2026-02-01' }] },
+        'staffAssignments[0]: effectiveTo must not be before effectiveFrom', { ...ROW, staffAssignments: [{ ...ASSIGNMENT, effectiveFrom: '2026-03-01' }] }],
+      ['a cleared field', { staffNotes: null }, 'staffNotes:']
+    ];
+    for (const [label, body, prefix, stored = ROW] of refusals) {
       t.mock.restoreAll();
-      const { res, saved } = await put(t, body, { stored: label === 'a reopened close' ? closed : ROW });
+      const { res, saved } = await put(t, body, { stored });
       assert.strictEqual(res.statusCode, 400, label);
+      assert.ok(res.body.error.startsWith(prefix), `${label}: ${res.body.error}`);
       assert.strictEqual(saved, undefined, label);
     }
+  });
+
+  await t.test('PUT answers 409 for a list appended to an older copy, and 400 for a removal', async (t) => {
+    const second = { ...NOTE, id: 'n2', text: 'Second note' };
+    const stored = { ...ROW, staffNotes: [NOTE, second] };
+    for (const body of [{ staffNotes: [NOTE, { text: 'Typed on the old copy' }] }, { staffNotes: [{ text: 'Typed on an empty copy' }] }]) {
+      t.mock.restoreAll();
+      const { res, saved } = await put(t, body, { stored });
+      assert.strictEqual(res.statusCode, 409, JSON.stringify(body));
+      assert.match(res.body.error, /^staffNotes\[\d\]: the stored list gained entries/);
+      assert.strictEqual(saved, undefined);
+    }
+    t.mock.restoreAll();
+    const { res } = await put(t, { staffNotes: [NOTE] }, { stored });
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /^staffNotes\[1\]: a stored entry cannot be removed/);
+  });
+
+  await t.test('PUT answers 409 and writes nothing when the reread after a lost race holds one more entry', async (t) => {
+    const grown = { ...ROW, staffNotes: [NOTE, { ...NOTE, id: 'n2', text: 'Written meanwhile' }], _etag: '"0x2"' };
+    const reads = [structuredClone(ROW), structuredClone(grown)];
+    t.mock.method(projects, 'getById', async () => reads.shift());
+    const writes = [];
+    t.mock.method(projects, 'upsert', async (doc, options) => {
+      writes.push(options.etag);
+      throw Object.assign(new Error('Precondition Failed'), { code: 412 });
+    });
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: ROW.id }, query: {}, user: STAFF, body: { staffNotes: [NOTE, { text: 'Proponent replied' }] }
+    }, res);
+    assert.strictEqual(res.statusCode, 409);
+    assert.match(res.body.error, /^staffNotes\[1\]: the stored list gained entries/);
+    assert.deepStrictEqual(writes, ['"0x1"'], 'only the first try reached a write, and it lost');
+    assert.strictEqual(reads.length, 0, 'the row was read again');
+  });
+
+  await t.test('PUT refuses a stored list or entry it cannot read', async (t) => {
+    for (const [stored, body, prefix] of [
+      [{ ...ROW, staffNotes: 'not a list' }, { staffNotes: [{ text: 'New' }] }, 'staffNotes: the stored value is unreadable'],
+      [{ ...ROW, staffNotes: [null] }, { staffNotes: [null, { text: 'New' }] }, 'staffNotes[0]: the stored entry is unreadable']
+    ]) {
+      t.mock.restoreAll();
+      const { res, saved } = await put(t, body, { stored });
+      assert.strictEqual(res.statusCode, 400);
+      assert.ok(res.body.error.startsWith(prefix), res.body.error);
+      assert.strictEqual(saved, undefined);
+    }
+  });
+
+  await t.test('PUT takes only calendar days, and no close after today in Pacific time', async (t) => {
+    const stored = { ...ROW, capitalInvestments: [] };
+    for (const [body, message] of [
+      [{ staffAssignments: [{ ...ASSIGNMENT, effectiveTo: '2026-01-01T00:00:00Z' }] }, 'effectiveTo must be a date (YYYY-MM-DD)'],
+      [{ staffAssignments: [{ ...ASSIGNMENT, effectiveTo: '2999-01-01' }] }, 'effectiveTo must not be in the future'],
+      [{ capitalInvestments: [{ amountCad: 5, effectiveFrom: '2026-01-01T08:00:00Z' }] }, 'effectiveFrom must be a date (YYYY-MM-DD)'],
+      [{ capitalInvestments: [{ amountCad: 5, effectiveTo: '2999-01-01' }] }, 'effectiveTo must not be in the future']
+    ]) {
+      t.mock.restoreAll();
+      const { res, saved } = await put(t, body, { stored });
+      assert.strictEqual(res.statusCode, 400);
+      assert.match(res.body.error, new RegExp(`^\\w+\\[0\\]: ${message.replace(/[()]/g, '\\$&')}$`));
+      assert.strictEqual(saved, undefined);
+    }
+  });
+
+  await t.test('PUT refuses control, bidi, zero-width and separator characters in a name or a note', async (t) => {
+    for (const code of [0x0007, 0x202e, 0x2067, 0x200b, 0x200d, 0xfeff, 0x2028, 0x2029]) {
+      const hidden = String.fromCharCode(code);
+      for (const body of [
+        { staffAssignments: [ASSIGNMENT, { role: 'lead', name: `Robin${hidden}Example` }] },
+        { staffNotes: [NOTE, { text: `Called${hidden}back` }] }
+      ]) {
+        t.mock.restoreAll();
+        const { res, saved } = await put(t, body);
+        assert.strictEqual(res.statusCode, 400, code.toString(16));
+        assert.match(res.body.error, /\[1\]: (name|text) must not hold control or invisible characters$/);
+        assert.strictEqual(saved, undefined);
+      }
+    }
+  });
+
+  await t.test('PUT trims a name and a note before storing them', async (t) => {
+    const { res, saved } = await put(t, {
+      staffAssignments: [ASSIGNMENT, { role: 'lead', name: '  Drew Placeholder ' }],
+      staffNotes: [NOTE, { text: ' Proponent replied  ' }]
+    });
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.staffAssignments[1].name, 'Drew Placeholder');
+    assert.strictEqual(saved.staffNotes[1].text, 'Proponent replied');
+  });
+
+  await t.test('PUT stamps observedAt with the Pacific day, not the UTC one', async (t) => {
+    // 17:30 on 12 November in Vancouver is already 13 November in UTC.
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-13T01:30:00Z') });
+    const { res, saved } = await put(t, { staffNotes: [NOTE, { text: 'Late call' }] });
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.staffNotes[1].observedAt, '2026-11-12');
+    assert.strictEqual(saved.staffNotes[1].recordedAt, '2026-11-13T01:30:00.000Z');
+  });
+
+  await t.test('PUT refuses staff lists over 256 KB together, counted in UTF-8 bytes', async (t) => {
+    const notesOf = (char) => Array.from({ length: 32 }, (_, n) => ({ ...NOTE, id: `n${n}`, text: char.repeat(4000) }));
+    const multiByte = String.fromCharCode(0xe9);
+    const big = notesOf(multiByte);
+    const { res, saved } = await put(t, { staffNotes: [...big, { text: multiByte.repeat(4000) }] }, { stored: { ...ROW, staffNotes: big } });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.error, 'staff history: the four lists together may hold at most 256 KB');
+    assert.strictEqual(saved, undefined);
+
+    t.mock.restoreAll();
+    const small = notesOf('e');
+    const ascii = await put(t, { staffNotes: [...small, { text: 'e'.repeat(4000) }] }, { stored: { ...ROW, staffNotes: small } });
+    assert.strictEqual(ascii.res.statusCode, 200, 'the same count of one-byte characters fits');
+  });
+
+  await t.test('the audit names a staff list only when the PUT changed it', async (t) => {
+    const rows = [];
+    audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+    t.after(() => audit._setTransport(async () => {}));
+    await put(t, { name: 'Example Gold Mine Two', staffNotes: [NOTE], staffAssignments: [{ ...ASSIGNMENT, effectiveTo: '2026-11-10' }] });
+    assert.strictEqual(rows.length, 1);
+    assert.deepStrictEqual(rows[0].Detail.fields, ['name', 'staffAssignments']);
   });
 
   await t.test('PUT accepts an appended entry and a close', async (t) => {
@@ -209,7 +345,7 @@ test('PUT /projects/:id staff history', async (t) => {
       id: 'x', role: 'epd', name: 'Drew Placeholder', effectiveFrom: '2026-11-10', effectiveTo: null,
       observedAt: 'x', source: 'demi', sheetKey: null, recordedAt: 'x'
     });
-    assert.strictEqual(added.observedAt, added.recordedAt.slice(0, 10));
+    assert.match(added.observedAt, /^\d{4}-\d{2}-\d{2}$/);
     assert.deepStrictEqual(saved.staffNotes[0], NOTE);
     assert.strictEqual(saved.staffNotes[1].source, 'demi');
     assert.deepStrictEqual(saved.capitalInvestments, [INVESTMENT], 'a field not sent is left as stored');
@@ -261,7 +397,8 @@ test('PUT /projects/:id staff history', async (t) => {
       { staffNotes: [NOTE, { text: SENTINEL.repeat(500) }] },
       { capitalInvestments: [INVESTMENT, { amountCad: SENTINEL }] },
       { staffAssignments: [{ ...ASSIGNMENT, name: SENTINEL }] },
-      { capitalInvestments: [INVESTMENT, { amountCad: 5, effectiveFrom: '2026-01-02', effectiveTo: '2026-01-01', workId: SENTINEL }] }
+      { capitalInvestments: [INVESTMENT, { amountCad: 5, effectiveFrom: '2026-01-02', effectiveTo: '2026-01-01', workId: SENTINEL }] },
+      { staffNotes: [NOTE, { text: 'Called back', [SENTINEL]: true }] }
     ];
     for (const body of bodies) {
       t.mock.restoreAll();

@@ -100,8 +100,8 @@ const catalog = {
   substantially: { defaultVis: 4, maxVis: 4 },
   substantiallyDate: { defaultVis: 4, maxVis: 4 },
 
-  // The business keeps staff names and contact lines to IDIR logins. Capped at 3, so no dial can
-  // publish them; the staff contact history `staffAssignments` sits at the same level.
+  // The lead, EPD and EAO member contacts and the contact history `staffAssignments`: level 3 (any
+  // IDIR login) and capped there, so no dial can publish them.
   projectLead: { defaultVis: 3, maxVis: 3 },
   responsibleEPD: { defaultVis: 3, maxVis: 3 },
   eaoMember: { defaultVis: 3, maxVis: 3 },

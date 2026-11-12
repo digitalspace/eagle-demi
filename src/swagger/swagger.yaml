@@ -1384,8 +1384,9 @@ paths:
             pin list would turn public while it holds an unpublished organization: publishing the
             list checks every pin, adding to a published list checks the added ones. Or the body
             changes `eagleId` on a project mirrored from Eagle or taken over from it. Or a staff
-            list in the body no longer fits the stored one because another write changed it while
-            this request ran. Nothing is written.
+            list in the body appends to an older copy of the stored list, which has gained entries
+            since the caller read it, or another write changed it while this request ran; read the
+            project again. Nothing is written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
@@ -10244,10 +10245,13 @@ components:
             The four staff lists follow one rule. Send the stored list back in stored order, with
             new entries appended. A stored entry cannot be edited, removed or moved; the only
             change allowed is setting `effectiveTo` on an open entry, which closes it. A correction
-            is a new entry plus a close. The server sets `id`, `source` (`demi`), `sheetKey`,
-            `observedAt` and `recordedAt` on each new entry and refuses a body that sets them. No
-            string may hold a control character. A change to these lists alone does not set
-            `dateUpdated` or queue the project for Eagle. External ids are `{system, value}`:
+            is a new entry plus a close. `effectiveFrom` and `effectiveTo` are `YYYY-MM-DD` dates,
+            and a close may not be after today in Pacific time. The server sets `id`, `source`
+            (`demi`), `sheetKey`, `observedAt` (today in Pacific time) and `recordedAt` on each
+            new entry and refuses a body that sets them. `name`, `text` and `value` are trimmed;
+            no string may hold a control, bidi, zero-width or line separator character. The four
+            lists together may hold at most 256 KB of JSON. A change to these lists alone does
+            not set `dateUpdated` or queue the project for Eagle. External ids are `{system, value}`:
             `system` is `eao-register` (digits, no leading zero) or `orcs`. A new external id is
             refused (400) until it can be checked against other projects.
           items:

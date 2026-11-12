@@ -28,7 +28,7 @@ const {
 } = require('../../merge/project');
 const {
   LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
-  STAFF_EDITED_AT, STAFF_HELD_FIELDS
+  STAFF_EDITED_AT, STAFF_HELD_FIELDS, STAFF_ROLE_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS } = require('../../merge/assessments');
 const { composeWorks, derivedFor, deriveInputs } = require('./project-compose');
@@ -51,7 +51,7 @@ const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
-const { STAFF_ROLE_FIELDS, unwritableStaffFields, staffFieldChanges } = require('../../domain/project-staff-fields');
+const { unwritableStaffFields, staffFieldChanges } = require('../../domain/project-staff-fields');
 const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
@@ -230,7 +230,9 @@ function cleanChanges(changes, existing, id) {
     changes.legislationYear = year.value;
   }
   trimLabels(changes);
-  return staffFieldChanges(existing, changes, new Date().toISOString(), { id }).error || null;
+  // A list appended to an older copy is no body error: the guarded write answers it 409.
+  const staff = staffFieldChanges(existing, changes, new Date().toISOString(), { id });
+  return staff.stale ? null : staff.error || null;
 }
 
 /**
@@ -657,7 +659,7 @@ exports.updateProject = async (req, res) => {
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
-        // It passed against `existing`, so a refusal here means the history moved under this request.
+        // Past the body check, a refusal here means the history moved under this request.
         const staff = staffFieldChanges(current, changes, now, { id: req.params.id, attempt });
         if (staff.error) return { status: 'refused', error: staff.error };
         const eagleEdit = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key));
@@ -718,7 +720,8 @@ exports.updateProject = async (req, res) => {
       projectId: existing.id,
       detail: {
         fields: [...Object.keys(changes)
-          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)), ...pinFields],
+          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags))
+          .filter(key => !STAFF_ROLE_FIELDS.includes(key) || !isDeepStrictEqual(replaced[key], saved[key])), ...pinFields],
         isPublishedFrom: replaced.isPublished,
         isPublishedTo: saved.isPublished
       }

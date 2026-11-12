@@ -343,19 +343,21 @@ Each item below overrides the corresponding section of the source document.
    The completeness test diffs the catalog against the emitters, so the list above is enforced,
    not maintained by hand. Catalog keys may be dotted one level (`sources.wildfire`) and the
    redactor descends only for listed dotted keys.
-3. **Defaults keep the public output of `eagle-public`.** Every field `eagle-public` renders
-   anonymously has `defaultVis: 4`, including `projectLead`, `projectLeadEmail`, `responsibleEPD`,
-   `responsibleEPDEmail`, `eaoMember`, `projectCAC` and `projectCACPublished`
-   (`eagle-public/src/app/services/api.ts`). The field `cacEmail` is `defaultVis: 2, maxVis: 4,
-   when: 'cacPublished'` (item 7), not a flat 4.
+3. **Defaults keep the public output of `eagle-public`, except the contacts.** Fields
+   `eagle-public` renders anonymously have `defaultVis: 4`, including `projectCAC` and
+   `projectCACPublished` (`eagle-public/src/app/services/api.ts`). The field `cacEmail` is
+   `defaultVis: 2, maxVis: 4, when: 'cacPublished'` (item 7), not a flat 4.
 
    The source catalog gave `name`, `description`, `centroid`, `proponentName`, `region` and
    `projectState` `defaultVis: 2`, which would leave an anonymous project response with five
    identifier fields. Fields `eagle-public` does not request, `complianceLead` and
    `execProjectDirector`, start at `defaultVis: 2`.
 
-   Lead and EPD names and emails, and the records-management identifiers `orcsClassification` and
-   `edrmsRecordNumber`, stay at 4: public by policy (§3 question 2).
+   The contact fields `projectLead`, `responsibleEPD`, `eaoMember`, `projectLeadEmail`,
+   `responsibleEPDEmail`, `projectLeadPhone` and `responsibleEPDPhone` are `defaultVis: 3,
+   maxVis: 3`. Any IDIR login reads them, and no dial can publish them. The records-management
+   identifiers `orcsClassification` and `edrmsRecordNumber` stay at 4: public by policy (§3
+   question 2).
 4. **Level 0 runs the same loop.** There is no `if (level === 0) return record`, and
    `catalogFor(entity)` runs first so an unknown entity throws for every caller. Predicates widen
    rather than gate (Section 1), and only `systemAccess()` carries level 0 (§5 item 1), so

@@ -4,7 +4,6 @@
 // (test/ownership/ownership.test.js); the merge rules that apply these lists are in src/merge/project.js.
 
 const { SYNC_STATE_FIELDS } = require('./sync-out');
-const { STAFF_ROLE_FIELDS } = require('../domain/project-staff-fields');
 
 /**
  * `[targetField, trackField, eagleField]`; eagleField null means Eagle has no equivalent.
@@ -114,6 +113,9 @@ const CAC_FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail
  */
 const DEMI_OWNED_AT = 'demiOwnedAt';
 
+/** Staff-only history lists on a project row; src/domain/project-staff-fields.js holds their rules. */
+const STAFF_ROLE_FIELDS = Object.freeze(['externalIds', 'staffAssignments', 'capitalInvestments', 'staffNotes']);
+
 /**
  * Only DEMI writes these (PUT, `/level`, the extension and CAC routes, the dating pass, sync-out),
  * so no re-merge can rebuild them.
@@ -193,6 +195,7 @@ module.exports = {
   EXTENSION_LIST_FIELDS,
   CAC_FIELDS,
   DEMI_OWNED_AT,
+  STAFF_ROLE_FIELDS,
   DEMI_ONLY_FIELDS,
   TWIN_CARRY_FIELDS,
   EAGLE_REFERENCE_FIELDS,
