@@ -100,7 +100,7 @@ test('grouping keeps one OpenShift Secret per name and only the asked-for namesp
   const groups = groupBySecret(loadMapping(), '6cdc9e-test');
   assert.strictEqual(groups.get('eagle-api-mongodb').length, 4,
     'the test namespace has four mongo keys — dev has a fifth, MONGODB_USERNAME');
-  assert.strictEqual(groups.get('rproxy-basic-auth').length, 4);
+  assert.strictEqual(groups.has('rproxy-basic-auth'), false, 'dev holds the only rproxy');
   for (const entries of groups.values()) {
     for (const entry of entries) assert.strictEqual(entry.namespace, '6cdc9e-test');
   }
