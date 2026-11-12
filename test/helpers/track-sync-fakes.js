@@ -181,7 +181,8 @@ function fakeWorks(rows = []) {
     docs, calls, saved,
     listByProject: async (projectId, { includeDeleted = false, owner } = {}) => {
       calls.push('listByProject');
-      return [...docs.values()].filter(doc => doc.projectId === projectId && (includeDeleted || doc.deleted !== true) &&
+      return [...docs.values()].filter(doc => doc.projectId === projectId && doc.kind === undefined &&
+        (includeDeleted || doc.deleted !== true) &&
         (owner === undefined || worksRepository().ownerOf(doc) === owner)).map(doc => structuredClone(doc));
     },
     get: async (_projectId, id) => { calls.push('get'); return structuredClone(docs.get(id) || null); },

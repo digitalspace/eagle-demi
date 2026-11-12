@@ -38,6 +38,9 @@ function whereOf({ query, parameters }) {
   const named = new Set(query.match(/@\w+/g) || []);
   const unknown = [...named].filter(name => !(name in values)).concat(Object.keys(values).filter(name => !named.has(name)));
   if (unknown.length) throw new Error(`mirror-store: parameter ${unknown.join(', ')} not both named and bound`);
+  // Cosmos makes `c.x = @p` undefined on a missing field, which NOT keeps undefined; two-valued logic would flip it.
+  const negated = query.match(/NOT \(\s*c\.\w+ = @\w+\s*\)/);
+  if (negated) throw new Error(`mirror-store: unguarded ${negated[0]} cannot be judged without Cosmos' undefined`);
   const expression = query.replace(/^SELECT \* FROM c WHERE /, '')
     .replace(/IS_DEFINED\(c\.(\w+)\)/g, '(row.$1 !== undefined)')
     .replace(/IS_BOOL\(c\.(\w+)\)/g, "(typeof row.$1 === 'boolean')")
