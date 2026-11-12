@@ -459,6 +459,47 @@ resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobService
   name: 'devbox-run-output'
 }
 
+// Encrypted works spreadsheet extracts for the devbox import. Ciphertext only, so the account's
+// shared-key access is accepted; the app identity reads through blobDataOwner, operators by hand.
+resource worksImportContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'works-import'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// The account's only lifecycle policy. The trailing slash keeps the delete rule off every other
+// container, including any whose name starts with works-import.
+resource storageLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: apiStorage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'works-import-expiry'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: ['${worksImportContainer.name}/']
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
 // only one of the features still needs the service.
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue) || !empty(syncOutQueue)) {
