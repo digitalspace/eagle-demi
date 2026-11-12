@@ -183,7 +183,7 @@ function auditEvent(req, event) {
 }
 
 /**
- * Record a usage event. Deliberately carries no durable identity — see anonId above.
+ * Record a usage event. Anonymous rows carry only anonId; signed-in rows add ActorId and ActorName.
  *
  * @param {object} req    Express request.
  * @param {object} event  { eventName, projectId, documentId, searchTerm, resultCount, detail }
