@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * `projects.listDecisions`, the home feed's project decision read, run against an in-memory
- * container that evaluates the SQL the repository sends: drop the date bound, the dial check, the
- * ORDER BY or the page size and the matching test goes red.
- */
+// `projects.listDecisions` (home feed) runs against an in-memory container that evaluates the
+// SQL sent, so the date bound, dial check, ORDER BY and page size are each asserted.
 
 process.env.NODE_ENV = 'test';
 

@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * Bulk download controller — submit a job, poll it.
- *
- * The zip is built by a queue worker, so this side only validates, caps, records the job and
- * enqueues it. The job id is the capability: an anonymous job is pure bearer, an authenticated one
- * is bound to its requester and a mismatch answers 404 rather than 403.
- *
- * `estimatedPartCount` in the 202 is an ESTIMATE and says so in its name: it is packed from the
- * `fileSize` on each row, which plenty of documents do not carry. The worker packs against the
- * bytes it writes, and the real `partCount` appears on the status body once the job is ready.
- * Wiki [[Bulk-Download]] §Part splitting.
+ * Bulk download: submit a job, poll it; a queue worker builds the zip. The job id is the
+ * capability, and an authenticated job is bound to its requester. Wiki [[Bulk-Download]].
  */
 
 const crypto = require('crypto');
@@ -109,16 +101,14 @@ exports.createBulkDownload = async (req, res) => {
       return res.status(400).json({ error: 'documentIds must name at least one document.' });
     }
 
-    // Drive's rule: exactly one file is a plain download, never a zip and never a job. The presign,
-    // the ACL check and the download audit row come from the /documents/:id/download handler's own
-    // helper, so there is one implementation; `single` only tags the answer.
+    // One file is a plain download, never a job. It reuses the /documents/:id/download helper for
+    // presign, ACL check and audit; `single` only tags the answer.
     if (ids.length === 1) {
       const single = await resolveDownload(req, ids[0]);
       if (single.status !== 200) return res.status(single.status).json(single.body);
 
-      // Counted as a bulk request because that is what the caller made, and only once it was
-      // answered — the job path counts an accepted job, not an attempt. resolveDownload has
-      // already recorded the document.download event and, for a restricted document, the audit row.
+      // Counted once answered, as the job path counts an accepted job. resolveDownload already
+      // recorded the document.download event and any audit row.
       analyticsEvent(req, { eventName: 'bulk.request', resultCount: 1 });
       return res.json({ ...single.body, single: true });
     }
@@ -157,9 +147,8 @@ exports.createBulkDownload = async (req, res) => {
       visible.push(...rows);
     }
 
-    // Back into the order asked for — a cross-partition read returns rows in whatever order the
-    // partitions answered, and the parts a caller polls against are packed in sequence. A row with
-    // no stored file cannot be zipped, so it is not part of the count either.
+    // Back into the asked order: cross-partition rows arrive in any order and parts pack in
+    // sequence. A row with no stored file cannot be zipped and is not counted.
     const found = new Map(visible.map(row => [String(row.id), row]));
     const docs = ids.map(id => found.get(id)).filter(doc => doc && doc.s3Key);
     if (docs.length === 0) {
@@ -179,10 +168,8 @@ exports.createBulkDownload = async (req, res) => {
       id,
       status: 'queued',
       documentIds: ids,
-      // The caller's roles AS THEY WERE AT SUBMIT TIME, JSON round-tripped so only plain data
-      // reaches Cosmos. It is a snapshot, not a credential: the worker re-runs the visibility read
-      // with it, so a document unpublished in the meantime is dropped from the zip, and it refuses
-      // a job older than `bulkMaxJobAgeMs` rather than act on roles nobody has re-checked since.
+      // A plain-data snapshot of the caller's roles at submit, not a credential: the worker re-runs
+      // the visibility read with it and refuses a job older than `bulkMaxJobAgeMs`.
       access: JSON.parse(JSON.stringify(access)),
       requesterKey: requester.key,
       requesterId: requester.id,
@@ -212,9 +199,8 @@ exports.createBulkDownload = async (req, res) => {
       logger.error(`[bulk] could not enqueue ${id}: ${err.message}`, {
         error: err.message, stack: err.stack
       });
-      // The row would otherwise sit `queued` for its whole TTL with nothing coming to build it.
-      // `slotReleasedAt` because the refusal below gives this job's slot back: a later cancel
-      // reads that stamp to know the counter has already moved.
+      // Else the row sits `queued` for its TTL. `slotReleasedAt` tells a later cancel that the
+      // refusal below already gave the slot back.
       const at = new Date().toISOString();
       await bulkDownloads.patch(id, {
         status: 'failed', error: 'enqueue failed', finishedAt: at, slotReleasedAt: at
@@ -262,11 +248,8 @@ exports.createBulkDownload = async (req, res) => {
 const NOT_FOUND = { error: 'Bulk download not found' };
 
 /**
- * The job this caller may act on, or null.
- *
- * 404, never 403: an id that is not a job id, a job that never existed and a job belonging to
- * somebody else must not be distinguishable. An anonymous job carries no owner — holding the id is
- * the whole claim.
+ * The job this caller may act on, or null, so a bad id, a missing job and someone else's job all
+ * answer 404. An anonymous job has no owner: holding the id is the whole claim.
  */
 async function ownJob(req) {
   const id = String(req.params.id || '');
@@ -303,7 +286,7 @@ exports.getBulkDownload = async (req, res) => {
     };
 
     if (status === 'ready') {
-      // What the worker named the job's content, if it ran since jobs started carrying a label.
+      // The worker's name for the job's content; a job may carry none.
       const label = String(job.label || '').trim();
       const base = label ? `EPIC documents - ${label}` : 'EPIC documents';
       const partCount = job.partCount || parts.length;
@@ -328,10 +311,8 @@ exports.getBulkDownload = async (req, res) => {
         };
       }));
 
-      // This is the hand-out, so this is the download — the POST only recorded a request that
-      // might never have been collected. Same split as /documents/:id/download: a job that carried
-      // a restricted document is an access to restricted material and audited; every job is a
-      // usage statistic.
+      // The hand-out is the download. As with /documents/:id/download, a job holding a restricted
+      // document is audited and every job is a usage statistic.
       analyticsEvent(req, { eventName: 'bulk.download', resultCount: job.includedCount || 0 });
       if (job.restricted) {
         auditEvent(req, {
@@ -350,12 +331,8 @@ exports.getBulkDownload = async (req, res) => {
 };
 
 /**
- * Cancel a job. Idempotent: a job that already reached a terminal status answers 204 unchanged.
- *
- * The worker may be building it right now, so both writes below are conditional — the status flip
- * against the row's status, the release against the `slotReleasedAt` stamp every releaser claims.
- * `failed` is live here: the queue redelivers one and the worker re-runs it on purpose.
- * Wiki [[Bulk-Download]] §Cancelling.
+ * Cancel a job; idempotent. Both writes are conditional since the worker may be running it, and
+ * `failed` stays cancellable because the queue redelivers it. Wiki [[Bulk-Download]] §Cancelling.
  */
 exports.cancelBulkDownload = async (req, res) => {
   try {

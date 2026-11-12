@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Selected Credentials administration (docs/rbac-architecture.md §1).
- *
- * Every route here is `authMiddleware, requireWrite, requireRole('sysadmin')`: a grant hands one
- * named party sight of records nobody widened, so it is access policy rather than data, and it is
- * the same gate the classify endpoint carries. Nothing here re-checks that.
- *
- * There is deliberately no update endpoint. A grant is minted and revoked; changing its scope,
- * levels or window means a new row, so what was in force at any past moment stays readable.
+ * Selected Credentials administration (docs/rbac-architecture.md §1), sysadmin only. No update
+ * endpoint: a changed grant is a new row, so the grant in force at any past moment stays readable.
  */
 
 const crypto = require('crypto');

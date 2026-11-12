@@ -8,15 +8,8 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const bulkDownloads = require('../../src/repositories/bulk-downloads');
 
-/**
- * The quota counter, which is the abuse boundary for an anonymous, unauthenticated route.
- *
- * What matters here is that the CHECK and the INCREMENT are one server-side operation: a read
- * followed by a write lets two requests arriving together both see "2 in flight" and both proceed.
- * These assertions read the condition the repository sends, because that string is the whole
- * mechanism — a patch that dropped it would hand out slots forever and every response would still
- * look correct.
- */
+// The quota counter guards an anonymous route. Check and increment are one server-side condition,
+// else two requests at once both pass; that condition string is what these tests assert.
 
 function refuse(code) {
   return async () => { throw Object.assign(new Error('cosmos said no'), { code }); };
@@ -188,9 +181,8 @@ test('a terminal status write', async (t) => {
   });
 
   await t.test('accepts the terminal statuses a search-definition job reaches', async () => {
-    // `succeeded` and `warned` are what src/jobs/search-definitions.js finishes a run as. While
-    // they were missing from the allow-list, a conditional patch naming one threw instead of
-    // running, so a claim or a cancel against a finished apply could not be expressed at all.
+    // src/jobs/search-definitions.js finishes runs as `succeeded` or `warned`; a status missing
+    // from the allow-list makes the conditional patch throw.
     let condition = null;
     t.mock.method(cosmos, 'patch', async (container, id, pk, operations, cond) => {
       condition = cond;
@@ -229,10 +221,8 @@ test('listExpired', async (t) => {
     // Without maxItemCount cosmos.query takes the SDK's fetchAll and drains every matching row
     // into one timer invocation.
     assert.strictEqual(options.maxItemCount, 50);
-    // The sweep needs the parts to delete, the finish time for what is left of the row TTL, and
-    // the requester whose slot goes back.
-    // createdAt because a 'running' row has no finishedAt, and the sweep dates the row's
-    // remaining ttl from one of them; slotReleasedAt so it does not release a slot twice.
+    // A 'running' row has no finishedAt, so the sweep dates its remaining ttl from createdAt;
+    // slotReleasedAt stops a slot being released twice.
     assert.match(spec.query,
       /SELECT c\.id, c\.status, c\.parts, c\.finishedAt, c\.createdAt, c\.requesterKey, c\.slotReleasedAt/);
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
@@ -265,9 +255,8 @@ test('listActiveSearchDefinitionJobs', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('selects search-definition rows by id prefix and the two live statuses', async () => {
-    // This is what refuses a second apply. Dropping the prefix would count a zip job as an apply
-    // in flight and refuse every run; dropping the status clause would count finished ones and
-    // refuse every run after the first.
+    // This refuses a second apply. Without the prefix a zip job counts as an apply in flight;
+    // without the status clause a finished apply blocks every later run.
     let spec = null;
     let options = null;
     t.mock.method(cosmos, 'query', async (container, querySpec, queryOptions) => {

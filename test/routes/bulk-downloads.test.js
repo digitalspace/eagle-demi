@@ -28,9 +28,8 @@ config.bulkDownloadsQueue = QUEUE;
 // `quota:<requester>` rows no request may reach.
 const JOB = '6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40';
 
-// The router's own response object, not a `{ status, json }` double: it serialises the body and
-// refuses a second send, so a handler that answered twice or handed back a non-JSON value fails
-// here instead of passing against a stub that is more forgiving than production.
+// The router's own response object serialises the body and refuses a second send, so a double
+// answer or non-JSON value fails here instead of passing against a lenient stub.
 function res() {
   return makeRes('test-request');
 }
@@ -429,8 +428,7 @@ test('DELETE /bulk-downloads/:id', async (t) => {
   });
 
   await t.test('a job waiting on a queue retry is cancelled too', async (t2) => {
-    // `failed` is not terminal while deliveries remain: the queue redelivers and the worker
-    // re-runs a failed job on purpose, so a cancel that skipped this status would answer 204 and
+    // `failed` is not terminal while queue deliveries remain, so skipping it would answer 204 and
     // let the zip build resume up to an hour later.
     const { patches, released } = cancelling(t2, queued({ status: 'failed' }));
 

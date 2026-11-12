@@ -1,19 +1,11 @@
 'use strict';
 
-/**
- * The ladder move routes — `PUT /api/{projects,documents}/:id/level`.
- *
- * Widening is an ACT (docs/rbac-architecture.md §1): these are the only handlers that raise a
- * record's level, level 4 costs a confirmation and a reason, a document may not pass its project,
- * and pulling a record back off level 4 is sysadmin-only incident response. Every assertion below
- * is one of those rules; the audit row is asserted to exist BEFORE the response, because a
- * visibility change nobody can attribute is the failure this endpoint exists to prevent.
- */
+// Widening rules live in docs/rbac-architecture.md §1. The audit row must exist before the
+// response, since an unattributed visibility change is what this endpoint exists to prevent.
 
 process.env.NODE_ENV = 'test';
-// Before src/config is first required: the audit writer is inert without the DCR pair, and a batch
-// size of 1 makes enqueue flush synchronously, which is what lets the ordering case below read the
-// buffer from inside res.json.
+// Before src/config is first required: the audit writer is inert without the DCR pair, and a
+// batch of 1 flushes synchronously so the ordering case can read the buffer inside res.json.
 process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
 process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 process.env.AUDIT_MAX_BATCH = '1';

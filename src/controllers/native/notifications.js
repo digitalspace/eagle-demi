@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Native project notification reads: `GET /notifications` and `GET /notifications/:id`, on the list
- * contract in `helpers/native-query.js`. A notification has no project axis
- * (`repositories/notifications.js`), so role ACL alone decides which rows a caller sees.
+ * `GET /notifications` and `/notifications/:id`. A notification has no project axis, so role ACL
+ * alone decides which rows a caller sees.
  */
 
 const notifications = require('../../repositories/notifications');

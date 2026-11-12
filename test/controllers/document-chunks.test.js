@@ -95,9 +95,8 @@ test('GET /documents/:id/chunks', async (t) => {
   });
 
   await t.test('is declared once, and the handler it names exists', () => {
-    // A second entry for the same method and path is dead: `match` takes the first hit, so a
-    // duplicate naming a handler that was never written raises nothing — not at load, not at
-    // dispatch — until somebody deletes the entry above it and every request becomes a 500.
+    // `match` takes the first hit, so a duplicate entry naming a missing handler stays silent
+    // until the first entry is deleted and every request becomes a 500.
     const declared = routes.filter(r => r.method === 'get' && r.path === '/documents/:id/chunks');
 
     assert.strictEqual(declared.length, 1, 'one entry, so the table cannot hide a dead handler');

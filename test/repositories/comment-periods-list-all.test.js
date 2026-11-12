@@ -134,7 +134,7 @@ test("the reconcile's partition count has its listing's predicate, deleted perio
   assert.doesNotMatch(count, /isDeleted/);
 });
 
-// Dates every tz revision agrees on: tz 2026c keeps America/Vancouver on UTC-7 after 2026-11-01.
+// Cases avoid dates where tz releases disagree: newer ones keep Vancouver on daylight time all year.
 test('startOfPacificDay is the Pacific midnight of the Pacific date, across DST', () => {
   const cases = [
     ['2026-09-22T18:00:00Z', '2026-09-22T07:00:00.000Z'], // PDT

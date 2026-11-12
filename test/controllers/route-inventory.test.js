@@ -1,13 +1,15 @@
 'use strict';
 
-// The route inventory in docs/eagle-api-port.md (Audit): every non-GET route has an audit action
-// or an exempt reason. One file per object under route-inventory/, each exporting
-// `{ 'METHOD /path': entry }`. An entry holds `action` (string or list) or `exempt` (reason), and:
-// `in`, the module under src/ holding the action when the handler delegates; `expr`, the source
-// that builds an action the handler does not spell out; `roles`, a ported route's eagle-api
-// x-security-scopes, copied as written, plus `sysadmin` and `staff` where eagle-api's auth admits
-// them on every route (api/helpers/auth.js:35-43), so a route whose scope list names another role
-// lists all three. The list must equal its `requireRole(...)` names.
+/**
+ * Every non-GET route has an audit action or an exempt reason (docs/eagle-api-port.md, Audit).
+ * Each file under route-inventory/ exports `{ 'METHOD /path': entry }`.
+ * @typedef {object} InventoryEntry
+ * @property {string|string[]} [action] audit action; exactly one of `action` and `exempt`
+ * @property {string} [exempt] why the route writes no audit row
+ * @property {string} [in] module under src/ holding the action when the handler delegates
+ * @property {string} [expr] source that builds an action the handler does not spell out
+ * @property {string[]} [roles] eagle-api x-security-scopes plus sysadmin and staff; equals requireRole(...)
+ */
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: loading the handlers loads the audit writer.

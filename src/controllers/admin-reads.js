@@ -14,9 +14,8 @@ const { SOURCE_APP } = require('../utils/audit');
 const AUDIT_WINDOWS = { 24: 'PT24H', 168: 'P7D', 720: 'P30D' };
 const ANALYTICS_WINDOWS = { 7: 'P7D', 30: 'P30D' };
 
-// Everything else IS interpolated into KQL, so it is matched against a whitelist first and
-// rejected outright otherwise. Neither pattern admits a quote, so the single quotes below cannot
-// be closed early; there is no escaping step to get wrong because nothing needing one gets through.
+// These ARE interpolated into KQL: neither pattern admits a quote, so the single quotes below
+// cannot be closed early and no escaping step is needed.
 const ACTION_RE = /^[a-z][a-zA-Z.]{0,40}$/;
 const ACTOR_RE = /^[\w.@-]{1,80}$/;
 
@@ -53,17 +52,8 @@ function auditFilter({ action, actor }) {
 }
 
 /**
- * The workspace to query and the table expression to query there, spanning the repoint.
- *
- * Rows written since it go to EagleAudit_CL in `analytics-logs-<env>`, which holds every EPIC app's
- * audit rows — so the SourceApp filter sits INSIDE that leg. Outside it, the column DemiAudit_CL
- * does not have would arrive null on those rows and the union would drop all of them.
- *
- * Either workspace alone is a working configuration: an environment deployed before eagle-analytics
- * has only the archive, and one built after the DemiAudit_CL rows age out has only the live table.
- *
- * Nothing user-supplied is interpolated: the workspace GUID is an app setting, the same kind of
- * value queryLogs already puts in its URL.
+ * Workspace and table expression over the DemiAudit_CL archive and the shared EagleAudit_CL table.
+ * SourceApp filter sits inside the EagleAudit_CL leg: outside it, DemiAudit_CL rows lack the column and drop.
  */
 function auditSource() {
   const { auditWorkspaceCustomerId: archive, analyticsWorkspaceCustomerId: live } = config;

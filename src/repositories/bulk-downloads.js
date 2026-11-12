@@ -1,26 +1,8 @@
 'use strict';
 
 /**
- * Bulk download jobs — Cosmos NoSQL.
- *
- * Container `bulkDownloads`, partitioned by `/id` where the id IS the job id, so every status poll
- * is a point read in a single partition.
- *
- * NO visibility predicate applies to the JOB rows, and unlike `api-keys.js` that is not because
- * the container is admin-gated — it is because a job row is not application data at all. The job
- * id is the capability (an unguessable UUID) and the controller binds an authenticated job to its
- * requester before answering, so a foreign or unknown id is a 404 either way. Deliberately stated
- * so nobody later "fixes" the missing predicate by wiring this container into an ACL-driven read:
- * a row names the document ids its owner asked for, and the ACL that matters is applied to the
- * DOCUMENTS, by `documents.listByIdsUnscoped` here and again in the worker.
- *
- * The container also holds one QUOTA row per requester, id `quota:<requesterKey>`. It shares the
- * container because the quota is only ever read by id, so it costs a point read and no second
- * container — and because a UUID job id can never collide with a prefixed one.
- *
- * Search-definition jobs (`searchdef:<uuid>`, src/jobs/search-definitions.js) share it on the same
- * terms: point reads by id, a prefix no UUID can collide with, and their own controller. Only
- * `listExpired` sees more than one row at a time, and it names the fields that tell them apart.
+ * Container `bulkDownloads`, partitioned by `/id`. No row ACL: the job UUID is the capability, and the
+ * document ACL gates the ids a job names. `quota:` and `searchdef:` rows share it, read by id only.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -28,14 +10,11 @@ const documents = require('./documents');
 
 const CONTAINER = 'bulkDownloads';
 
-// Job ids are UUIDs a controller minted. Anything else is not a job that ever existed — and the
-// container also holds `quota:<requester>` and `searchdef:<uuid>` rows, which no request may reach
-// by bare id. Shared by both controllers so one id shape is enforced in one place.
+// Only controller-minted UUIDs: no request may reach a `quota:` or `searchdef:` row by bare id.
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The id prefix and the `kind` field that tell a search-definition row from a zip row. They live
-// here, with the container, because both workers and both controllers have to agree on them and a
-// second copy of either string is a way for the two kinds to start reaching each other's rows.
+// Tell a search-definition row from a zip row. One copy only: a second lets the two kinds start
+// reaching each other's rows.
 const SEARCH_DEF_PREFIX = 'searchdef:';
 const SEARCH_DEF_KIND = 'searchDefinitions';
 
@@ -43,10 +22,8 @@ const SEARCH_DEF_KIND = 'searchDefinitions';
 // apply must not start. Every other status in STATUSES is terminal for that kind.
 const ACTIVE_STATUSES = ['queued', 'running'];
 
-// Every status a job row in this container may carry — a zip job's (`ready`, `cancelled`) and a
-// search-definition job's (`succeeded`, `warned`) alike, because both kinds are patched through
-// `patchIfStatus`. A patch condition takes no parameters, so `patchIfStatus` interpolates; this
-// list is what keeps the interpolated values off the callers' hands.
+// Every status of both job kinds. A patch condition takes no parameters, so `patchIfStatus`
+// interpolates, and this list keeps callers' values out of it.
 const STATUSES = [
   'queued', 'running', 'ready', 'succeeded', 'warned', 'failed', 'expired', 'cancelled'
 ];
@@ -76,15 +53,8 @@ async function patch(id, fields) {
 }
 
 /**
- * Jobs whose zips are past retention: the parts to delete, when the job finished or was created
- * (what is left of its row TTL — a row still `running` has no finish time) and whose slot to give
- * back, if the worker never did.
- *
- * Selected only while it still names parts, because the sweep empties them: a `cancelled` row
- * keeps its status, so without that clause the sweep pages over the same rows forever.
- *
- * `limit` is a page, not a filter: the read takes one page and stops, so a backlog is swept over
- * several nights rather than draining an unbounded result set into one timer invocation.
+ * Only rows still naming parts: a `cancelled` row keeps its status, so the sweep would page over it
+ * forever. `limit` is one page, so a backlog clears over several nights.
  */
 async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 500 } = {}) {
   const names = statuses.map((_, i) => `@status${i}`);
@@ -93,10 +63,8 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
       `c.slotReleasedAt FROM c ` +
       `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff ` +
       `AND ARRAY_LENGTH(c.parts) > 0) ` +
-      // IS_DEFINED(c.documentIds) because the container also holds the search-definition job rows
-      // (`searchdef:` ids, src/jobs/search-definitions.js), and one of those still 'running' past
-      // the cutoff is not a dead zip: the sweep would stamp it `expired` and take its status away.
-      // The first clause needs no such guard — those rows carry no `parts`.
+      // Keeps out search-definition rows: a `running` one past the cutoff is not a dead zip. The
+      // first clause needs no guard, as those rows carry no `parts`.
       "OR (c.status = 'running' AND c.startedAt < @cutoff AND IS_DEFINED(c.documentIds))",
     parameters: [
       ...names.map((name, i) => ({ name, value: String(statuses[i]) })),
@@ -107,15 +75,8 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
 }
 
 /**
- * The search-definition jobs that are still going.
- *
- * A prefix match on the id, which is also the partition key, so this reads the container's own
- * index rather than scanning rows. Drained, not paged: a cross-partition page can come back short
- * or empty while rows remain, and the caller drops stale rows, so a live one may sit past page one.
- *
- * `startedAt` comes back with the row because `running` alone does not say a run is in flight: a
- * worker the host killed leaves that status behind for the rest of the row's TTL. The caller dates
- * the row against the worker's own wait ceiling (src/jobs/search-definitions.js).
+ * Drained, not paged: a cross-partition page can come back short while rows remain. `startedAt`
+ * comes back because a killed worker leaves `running` behind; the caller dates the row.
  */
 async function listActiveSearchDefinitionJobs() {
   const names = ACTIVE_STATUSES.map((_, i) => `@status${i}`);
@@ -169,12 +130,8 @@ async function patchIfStatus(id, fields, statuses) {
 }
 
 /**
- * Take one of this requester's job slots, or refuse.
- *
- * Test-and-set inside Cosmos, not a count followed by a write: two requests arriving together each
- * read the same count and both pass, which is how a "maximum 3 in flight" rule hands out five. The
- * caps are interpolated into the condition because a patch condition takes no parameters — they are
- * whole numbers from config.js, which throws at load on anything else.
+ * Test-and-set inside Cosmos: a count then a write lets concurrent requests pass a cap together.
+ * The caps are interpolated, safe as config.js throws at load on anything but whole numbers.
  *
  * @returns {Promise<boolean>} false means at a cap; the caller answers 429 and takes no slot.
  */
@@ -231,10 +188,8 @@ async function claimSlotRelease(id, at) {
 }
 
 /**
- * Give the slot back — the job finished, failed, or was never queued.
- *
- * The floor is in the condition rather than applied after a read, so a release that arrives twice
- * (a retried queue message) cannot drive the counter negative and hand out a free slot.
+ * The floor is in the condition, so a release that arrives twice cannot drive the counter negative
+ * and hand out a free slot.
  */
 async function releaseSlot(requesterKey) {
   const outcome = await conditionalPatch(

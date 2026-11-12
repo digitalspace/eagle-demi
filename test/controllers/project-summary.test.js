@@ -29,9 +29,8 @@ test('GET /projects/:id/summary', async (t) => {
   t.afterEach(() => { config.summaryEnabled = originalEnabled; });
 
   await t.test('404s when the caller cannot read the project', async () => {
-    // The record carries no ACL of its own. The project read under the CALLER's access is the whole
-    // gate, so a caller who 404s on `GET /projects/:id` must 404 here — otherwise a private
-    // project's summary is readable by anyone with a staff token.
+    // The record carries no ACL of its own, so the project read under the caller's access is the
+    // whole gate.
     config.summaryEnabled = true;
     t.mock.method(projectsRepo, 'getById', async () => null);
     let summaryReads = 0;
@@ -80,9 +79,8 @@ test('GET /projects/:id/summary', async (t) => {
   });
 
   await t.test('withholds a record that does not assert public sources', async () => {
-    // Records written before the generator filtered its sources are already in the container. The
-    // write gate cannot reach them, and the project gate alone would serve prose about a document
-    // this caller may not read, so the read side checks the same claim.
+    // Stored records the write gate never checked exist, so the read side checks the same
+    // public-sources claim.
     config.summaryEnabled = true;
     t.mock.method(projectsRepo, 'getById', async () => ({ id: '272', name: 'Site C' }));
     const { sourceAccess, ...stale } = RECORD;
@@ -137,9 +135,8 @@ test('PUT /projects/:id/summary', async (t) => {
   });
 
   await t.test('400s a record that does not assert public sources', async () => {
-    // The record is read back under the PROJECT's ACL alone. A record that does not say every
-    // document it cites was public has no gate of its own, so it is refused rather than stored and
-    // served to a caller who cannot read those documents.
+    // The record is read back under the project's ACL alone, so one not asserting every cited
+    // document is public is refused.
     t.mock.method(projectsRepo, 'getById', async () => ({ id: '272' }));
     let writes = 0;
     t.mock.method(summariesRepo, 'upsert', async (r) => { writes++; return r; });
@@ -165,9 +162,8 @@ test('PUT /projects/:id/summary', async (t) => {
   });
 
   await t.test('400s a body citing a source its own citation list does not hold', async () => {
-    // A section citing source 2 of a one-entry list renders as a footnote link to nothing, and it
-    // is what a half-finished or stale generator run writes. Both sides of the check are in the
-    // body, which is why this one belongs here and the grounding checks do not.
+    // A citation past the end of the list renders as a dead footnote. Both sides are in the body,
+    // so this check belongs here and the grounding checks do not.
     t.mock.method(projectsRepo, 'getById', async () => ({ id: '272' }));
     let writes = 0;
     t.mock.method(summariesRepo, 'upsert', async (r) => { writes++; return r; });
