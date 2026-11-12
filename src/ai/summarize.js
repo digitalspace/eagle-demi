@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * Step 5 of the search pipeline, and the only step that touches a model. See wiki ADR-006.
- *
- * Steps 1-4 — tokenize, BM25 + the OData ACL filter, top-N, fetch chunk text from Cosmos — happen
- * in the caller and are unchanged by this module. The model never selects documents, never
- * re-ranks, never rewrites the query, and never sees anything outside the chunks it is handed.
- * Delete the deployment and search still works; only the panel disappears.
- *
- * Everything provider-specific lives here. The controller knows about chunks and access contexts;
- * it does not know which model answers, and swapping the deployment is configuration.
- */
+// Search step 5 and the only step that touches a model (wiki ADR-006). The model sees only the
+// chunks it is handed; it never selects, re-ranks or rewrites the query.
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
@@ -19,13 +10,8 @@ let credential = null;
 let tokenCache = null;
 
 /**
- * Bearer token for the Foundry data plane.
- *
- * Keyless by construction — the same user-assigned identity the search and Cosmos clients use.
- * There is no API key in config to leak, which matters because this repo is public.
- *
- * `@azure/identity` is required lazily, matching `search/ai-search.js` and `db/cosmos-nosql.js`:
- * importing this module must not drag the credential chain into test runs that never authenticate.
+ * Bearer token for the Foundry data plane, from the shared user-assigned identity; no API key.
+ * The credential loads lazily so test runs that never authenticate skip the credential chain.
  */
 async function getToken() {
   if (tokenCache && tokenCache.expiresOn - Date.now() > 5 * 60 * 1000) {
@@ -41,15 +27,8 @@ async function getToken() {
 }
 
 /**
- * The grounding contract.
- *
- * "Say so when the sources do not answer it" is the load-bearing line, and it is the one the
- * nonsense-term probe checks. A summariser that answers from model knowledge when handed nothing is
- * indistinguishable from a working one on every ordinary query and wrong on exactly the queries
- * where a user would trust it most.
- *
- * The citation format is `[n]`, one-based, indexing the numbered sources below — not chunk ids. The
- * model never sees a chunk id, so it cannot invent one that looks real.
+ * The grounding contract; the nonsense-term probe checks the "say so" line. Citations are one-based
+ * `[n]` source numbers, never chunk ids, so the model cannot invent a real-looking id.
  */
 const SYSTEM_PROMPT = [
   'You summarise search results for a document registry.',
@@ -62,18 +41,8 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 /**
- * What this query cost, in CAD, from the token counts the deployment reported.
- *
- * CAD because the subscription is billed in CAD and every other cost figure in this repo is too —
- * see the rates in config. A per-query number in a second currency is one someone has to convert
- * before it can be set against the budget it draws down.
- *
- * AN ESTIMATE, and every surface that shows it must say so. Azure bills on its own meter with its
- * own rounding, the list rates live in config and drift from reality the moment Microsoft changes
- * them, and any committed-use or negotiated discount is invisible here. Useful for spotting the
- * query that cost fifty times the others; useless for reconciling an invoice.
- *
- * Returns null rather than 0 when usage is absent — "not measured" and "free" are different facts.
+ * Estimated query cost in CAD, the billing currency, from list rates in config. Every surface must
+ * call it an estimate. Null, not 0, when usage is absent: "not measured" is not "free".
  */
 function estimateCostCad(usage) {
   if (!usage) return null;
@@ -85,13 +54,7 @@ function estimateCostCad(usage) {
   );
 }
 
-/**
- * Chat-completions URL for the configured deployment.
- *
- * Exported because `ai/project-summary.js` calls the same deployment with a different prompt: two
- * copies of this string is two places to update when the API version moves, and a wrong one fails
- * as a 404 that reads like a missing deployment.
- */
+/** Chat-completions URL for the configured deployment, shared with `ai/project-summary.js`. */
 function foundryChatUrl() {
   return `${config.foundryEndpoint.replace(/\/$/, '')}/openai/deployments/` +
     `${encodeURIComponent(config.foundryDeployment)}/chat/completions` +
@@ -116,9 +79,7 @@ function foundryChat(url, token, { system, user, maxTokens, signal, jsonObject }
 }
 
 /**
- * Trim a chunk to the configured ceiling.
- *
- * Cost is bounded here, before the request, rather than discovered on the bill. Cutting on a word
+ * Trim a chunk to the configured ceiling, which bounds cost before the request. Cutting on a word
  * boundary avoids handing the model a severed token it may try to complete.
  */
 function truncate(text, maxChars) {
@@ -129,12 +90,7 @@ function truncate(text, maxChars) {
   return (lastSpace > maxChars * 0.8 ? cut.slice(0, lastSpace) : cut) + '…';
 }
 
-/**
- * Render the chunks as numbered sources.
- *
- * Exported for tests: this is the only place the prompt's shape is decided, and the token ceiling
- * the cost probe asserts against is a property of this function.
- */
+/** Render the chunks as numbered sources. The cost probe's token ceiling depends on this shape. */
 function buildPrompt(keywords, chunks, maxChars) {
   const sources = chunks
     .map((c, i) => `[${i + 1}] ${truncate(c.content, maxChars)}`)
@@ -144,11 +100,8 @@ function buildPrompt(keywords, chunks, maxChars) {
 }
 
 /**
- * Source numbers actually cited, as zero-based indices into the chunk array.
- *
- * The frontend links citations back to documents, so a `[9]` against eight sources must not become
- * a link to nothing. Out-of-range and duplicate numbers are dropped here rather than defended
- * against in the template.
+ * Cited source numbers as zero-based chunk indices. Out-of-range and duplicate numbers are dropped
+ * so the frontend never links a citation to nothing.
  */
 function parseCitations(text, sourceCount) {
   const seen = new Set();
@@ -160,21 +113,16 @@ function parseCitations(text, sourceCount) {
 }
 
 /**
- * Summarise chunks that the caller has ALREADY retrieved and ALREADY ACL-filtered.
- *
- * This function does no access control of its own and must never be handed a chunk the caller
- * cannot read — both gates (the OData filter on the search leg, `chunks.getById` on the Cosmos
- * fetch) live in the controller, upstream of here.
+ * Summarise chunks the caller has ALREADY retrieved and ACL-filtered. No access control here:
+ * both gates live in the controller.
  *
  * @param {string} keywords    the user's query, verbatim
  * @param {Array}  chunks      [{ chunkId, documentId, projectId, pageNumber, content }]
  * @returns {Promise<{summary: string|null, citations: number[], usage: object|null, reason?: string}>}
  */
 async function summarize(keywords, chunks) {
-  // Chunk `content` is all this reads: no project or document row ever reaches the model.
-  // Nothing retrieved means nothing to summarise. Returning early is not an optimisation — it is
-  // the grounding guarantee, and it is what the nonsense-term probe measures. A model asked to
-  // summarise an empty list will happily answer from its own knowledge.
+  // Only chunk `content` reaches the model. The early return is the grounding guarantee: handed
+  // an empty list, a model answers from its own knowledge.
   if (!Array.isArray(chunks) || chunks.length === 0) {
     return { summary: null, citations: [], usage: null, reason: 'no_results' };
   }

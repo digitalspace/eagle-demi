@@ -1,26 +1,11 @@
 'use strict';
 
-/**
- * Every prompt the project-summary generator sends, in one file.
- *
- * Tuning a section means editing a string HERE, then re-running that one section against Site C
- * (`--section conditions --out /tmp/x.json`). Prompts scattered through the generator make that a
- * hunt, and make "what changed between two records" unanswerable.
- *
- * `PROMPT_VERSION` lives beside them because it is the answer to that question: it is stored on
- * every record, so a record generated before a prompt change is identifiable after one. BUMP IT
- * when any string in this file changes.
- */
-
+// PROMPT_VERSION is stored on every record, so records made before a prompt change can be told
+// apart. Bump it when any string in this file changes.
 const PROMPT_VERSION = 4;
 
-/**
- * The shared half of every prompt.
- *
- * "Use NO prior knowledge" is not boilerplate. These are public documents about named projects, and
- * a general model has read about them — without this line the plausible sentence it produces may be
- * recalled rather than read, and it will still carry a citation.
- */
+// "Use NO prior knowledge" matters: the model has read about these named projects, and a recalled
+// sentence would still carry a citation.
 function systemPrompt(projectName, instruction, shape) {
   return [
     `You extract facts from the public registry documents of the project "${projectName}".`,
@@ -64,13 +49,8 @@ const INSTRUCTIONS = {
   federal:
     'List the conditions this federal decision document imposes, in the same shape.',
 
-  // NAMES ONLY, and the prompt says so three ways. Address and website come from the Organization
-  // row in code; a hallucinated postal address for a First Nation on a government page is a
-  // different class of error from a wrong summary sentence.
-  //
-  // The sources reach here by keyword search across the whole project, so some of them are
-  // province-wide: a 2011 workshop roster names every nation in British Columbia, and read plainly
-  // it made K'omoks a nation consulted on Site C.
+  // NAMES ONLY: address and website come from the Organization row in code. Keyword search also
+  // finds province-wide rosters, so the source must tie each nation to this project.
   nations: [
     'List ONLY the First Nations identified as consulted on, or affected by, THIS project. Do not',
     'list the attendees of a workshop or meeting, and do not list names from a province-wide or',
@@ -97,13 +77,8 @@ const INSTRUCTIONS = {
     'Write ONE sentence stating what this amendment changed.'
 };
 
-/**
- * Appended to a section's instruction on the one retry after an unparseable reply.
- *
- * The two ways a constrained reply still fails to parse are a stray wrapper around the object and a
- * list long enough to be cut off mid-item, so this addresses both — shorter is a valid answer,
- * unfinished is not.
- */
+// Appended on the one retry after an unparseable reply. It targets the two ways a JSON-constrained
+// reply still fails: a stray wrapper, and a list cut off mid-item.
 const RETRY_INSTRUCTION = [
   'Your previous reply could not be parsed as JSON. Reply with the JSON object ONLY: no prose',
   'before or after it, no code fence, no explanation. Finish the object. If the full list would be',
