@@ -83,11 +83,16 @@ function projects(workbook) {
   put(ws, 5, { A: '045', B: { formula: '"evaluated"', result: PROJECT_NAMES[0] }, D: 'Active', F: 'n/a', H: FILL,
     J: investment, K: notes, L: epd, M: lead, N: NEVER_READ_VALUES[2], Q: 'Pre-EAO', R: day('1995-06-30'),
     U: FILL, AA: 'EA Certificate Granted', AB: day('1999-03-01'), AC: 'No', AD: { formula: 'AB5-R5', result: 1340 } });
-  put(ws, 6, { A: 7, B: PROJECT_NAMES[1], R: day('2001-01-10'), AB: day('2000-05-05'),
-    AE: 'Substantially Started', AF: day('2004-02-02'), AG: 'Yes', AI: day('2009-01-01'), AL: day('2030-01-01') });
-  put(ws, 7, { A: 120, B: PROJECT_NAMES[2], R: day('2003-04-04'), U: FILL });
+  put(ws, 6, { A: 7, B: { richText: [{ text: 'Birch Point ' }, { font: { bold: true }, text: 'Terminal' }] },
+    R: day('2001-01-10'), AB: day('2000-05-05'), AE: 'Substantially Started', AF: day('2004-02-02'), AG: 'Yes',
+    AH: { formula: 'TODAY()+30', result: day('2026-12-01') }, AI: day('2009-01-01'), AL: day('2030-01-01') });
+  put(ws, 7, { A: 120, B: PROJECT_NAMES[2], C: { error: '#N/A' }, G: { formula: '1/0', result: { error: '#DIV/0!' } },
+    R: day('2003-04-04'), U: FILL, AB: 1e10 });
+  ws.getCell('AB7').numFmt = 'yyyy-mm-dd';
   put(ws, 8, { A: 'x12', B: 'Unnumbered Project' });
-  prefill(ws, 9);
+  put(ws, 9, { A: 46, D: 'Active' });
+  put(ws, 10, { A: 7, B: 'Birch Point Terminal' });
+  prefill(ws, 11);
   junk(workbook, 'Lookups', 'For BI');
 }
 
@@ -175,6 +180,9 @@ async function buildWorkbooks(dir) {
   await save(dir, '01 - Project Assessment BI Sheet 5.xlsx', assessmentBi);
   await save(dir, '02 - Project Amendment Data 1.xlsx', amendments);
   await save(dir, '02 - Project Amendment BI Sheet.xlsx', wb => junk(wb, 'EA Process Data'));
+  for (const decoy of ['Copy of 02 - Project Amendment Data 1.xlsx', '02 - Project Amendment Data 1 old.xlsx']) {
+    await save(dir, decoy, wb => junk(wb, 'Amendments'));
+  }
   await save(dir, '03 - Project Suspension Data.xlsx', wb => interruptions(wb, 'Suspensions', 'Suspension', {
     A: 45, B: PROJECT_NAMES[0], F: 'Suspension', G: 'Application Review', H: day('1998-01-01'),
     I: { formula: 'NOW()', result: day('2026-11-01') }, L: 'Suspension', M: 'Pre-Application',

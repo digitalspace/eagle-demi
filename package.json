@@ -23,7 +23,7 @@
     "works:load": "NODE_PATH=node_modules node -r dotenv/config src/scripts/load-business-works.js",
     "works:rollback": "NODE_PATH=node_modules node -r dotenv/config src/scripts/rollback-business-works.js",
     "works:parity": "NODE_PATH=node_modules node -r dotenv/config src/scripts/check-business-works-parity.js",
-    "ai:project-summary":"NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
+    "ai:project-summary": "NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint . && node scripts/eslint-size-freeze.cjs --check api",
     "lint:fix": "eslint . --fix",

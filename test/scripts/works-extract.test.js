@@ -6,7 +6,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { run, readFolder } = require('../../scripts/works-import/extract');
+const ExcelJS = require('exceljs');
+const { run } = require('../../scripts/works-import/extract');
+const { readFolder } = require('../../scripts/works-import/cells');
 const {
   fingerprintOf, openEnvelope, openExtract, sealEnvelope, sign, sha256Hex
 } = require('../../src/utils/import-envelope');
@@ -25,6 +27,12 @@ const fresh = (name) => {
   fs.mkdirSync(dir);
   return dir;
 };
+const copyOfSheets = () => {
+  const dir = fresh('sheets');
+  fs.cpSync(sheetsDir, dir, { recursive: true });
+  return dir;
+};
+const modeOf = file => fs.statSync(file).mode & 0o777;
 
 // A stand-in for `secret-tool lookup service <s> account <ref>`: the account is the fifth argument.
 function fakeKeyring() {
@@ -37,7 +45,7 @@ function fakeKeyring() {
 const env = fakeKeyring();
 
 function devboxKeys() {
-  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
   const ed = crypto.generateKeyPairSync('ed25519');
   const pemFile = path.join(fresh('devbox'), 'devbox.pub.pem');
   fs.writeFileSync(pemFile, [rsa.publicKey, ed.publicKey].map(k => k.export({ type: 'spki', format: 'pem' })).join(''));
@@ -45,14 +53,13 @@ function devboxKeys() {
 }
 const devbox = devboxKeys();
 
-async function cli(argv) {
+async function cli(argv, cliEnv = env) {
   const lines = [];
-  await run(argv, { env, write: line => lines.push(line) });
+  await run(argv, { env: cliEnv, write: line => lines.push(line) });
   return lines;
 }
 
-async function extractTo(args, keys = devbox) {
-  const out = path.join(fresh('out'), 'extract.json');
+async function extractTo(args, keys = devbox, out = path.join(fresh('out'), 'extract.sealed.json')) {
   const lines = await cli(['extract', '--in', sheetsDir, '--recipient-key', keys.pemFile,
     '--expect-fingerprint', keys.fingerprint, '--out', out, ...args]);
   const sealed = fs.readFileSync(out);
@@ -60,7 +67,8 @@ async function extractTo(args, keys = devbox) {
   return { out, lines, sealed, ...opened };
 }
 
-const surrogateArgs = file => ['--surrogates', file, '--surrogate-passphrase-ref', 'surrogate'];
+const newMap = () => path.join(fresh('map'), 'surrogates.enc.json');
+const surrogateArgs = (file, ...extra) => ['--surrogates', file, '--surrogate-passphrase-ref', 'surrogate', ...extra];
 
 test.before(async () => {
   fs.mkdirSync(sheetsDir);
@@ -77,7 +85,12 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   assert.equal(first.intakeDate, '1995-06-30');
   assert.equal(first.status, 'Active');
   assert.deepEqual(first.ref, { file: '01 - Project Business Intelligence Data 4.xlsx', sheet: 'Projects', row: 5 });
-  assert.equal(records.projects.find(r => r.id === 7).substantialStartDate, '2004-02-02');
+  const second = records.projects.find(r => r.id === 7);
+  assert.equal(second.name, PROJECT_NAMES[1], 'rich text joined');
+  assert.equal(second.substantialStartDate, '2004-02-02');
+  assert.equal(second.expiryDate, '2026-12-01', 'a longer volatile formula keeps its cached value');
+  const third = records.projects.find(r => r.id === 120);
+  assert.deepEqual([third.proponent, third.subsector, third.decisionDate], [null, null, null]);
   assert.equal(records.amendments.find(r => r.id === 45 && r.ref.slot === 2).endDate, null);
   assert.deepEqual(records.suspensions.map(r => [r.ref.slot, r.appliedTo, r.endDate]),
     [[1, 'Application Review', null], [2, 'Pre-Application', '1998-04-01']]);
@@ -87,9 +100,15 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   const kinds = flags.map(f => `${f.sheet}:${f.row}:${f.slot || 0}:${f.field}:${f.kind}`).sort();
   assert.deepEqual(kinds, [
     'Amendments:5:1:endDate:endBeforeStart',
+    'Projects:10:0:id:duplicateId',
     'Projects:5:0:intakeDate:sentinel',
     'Projects:6:0:decisionDate:endBeforeStart',
+    'Projects:6:0:expiryDate:volatileFormula',
+    'Projects:7:0:decisionDate:badDate',
+    'Projects:7:0:proponent:errorCell',
+    'Projects:7:0:subsector:errorCell',
     'Projects:8:0:id:badId',
+    'Projects:9:0:name:unnamedRow',
     'Suspensions:5:1:endDate:nowFormula'
   ]);
   assert.deepEqual(counts, {
@@ -99,15 +118,29 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
 });
 
 test('a block whose band label moved is refused before any row is read', async () => {
-  const dir = fresh('moved');
-  await buildWorkbooks(dir);
-  const ExcelJS = require('exceljs');
+  const dir = copyOfSheets();
   const file = path.join(dir, '03 - Project Suspension Data.xlsx');
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(file);
   workbook.getWorksheet('Suspensions').getCell('E3').value = 'Suspension 02';
   await workbook.xlsx.writeFile(file);
   await assert.rejects(readFolder(dir), /column E is not "Suspension 01" \/ "No\."/);
+});
+
+test('two workbooks matching one name, a symbolic link and an oversized file are refused', async () => {
+  const twice = copyOfSheets();
+  fs.copyFileSync(path.join(twice, '06 - Project PCP Data 1.xlsx'), path.join(twice, '06 - Project PCP Data 2.xlsx'));
+  await assert.rejects(readFolder(twice), /commentPeriods: expected one workbook, found 2/);
+
+  const projects = '01 - Project Business Intelligence Data 4.xlsx';
+  const linked = copyOfSheets();
+  fs.renameSync(path.join(linked, projects), path.join(linked, 'elsewhere.bin'));
+  fs.symlinkSync(path.join(linked, 'elsewhere.bin'), path.join(linked, projects));
+  await assert.rejects(readFolder(linked), /is a symbolic link/);
+
+  const large = copyOfSheets();
+  fs.truncateSync(path.join(large, projects), 50 * 1024 * 1024 + 1);
+  await assert.rejects(readFolder(large), /is over 52428800 bytes/);
 });
 
 test('real-folder counts', { skip: !process.env.WORKS_REAL_DIR && 'set WORKS_REAL_DIR on the laptop' }, async () => {
@@ -119,7 +152,7 @@ test('real-folder counts', { skip: !process.env.WORKS_REAL_DIR && 'set WORKS_REA
 });
 
 test('test extract holds no staff column, no investment and no real number without sign-off refs', async () => {
-  const plain = await extractTo(['--env', 'test', ...surrogateArgs(path.join(fresh('map'), 'surrogates.json'))]);
+  const plain = await extractTo(['--env', 'test', ...surrogateArgs(newMap(), '--new-surrogates')]);
   const text = plain.plaintext.toString('utf8');
   assert.equal(plain.staffIncluded, false);
   assert.equal(plain.numbersReal, false);
@@ -133,20 +166,39 @@ test('test extract holds no staff column, no investment and no real number witho
   const kept = await extractTo(['--env', 'test', '--keep-staff-on-test', 'SIGNOFF-1', '--keep-numbers-on-test', 'SIGNOFF-2']);
   assert.deepEqual(kept.signoffRefs, { keepStaff: 'SIGNOFF-1', keepNumbers: 'SIGNOFF-2' });
   assert.equal(kept.extract.records.projects.find(r => r.id === 45).epd, STAFF_VALUES[0]);
+  await assert.rejects(extractTo(['--env', 'prod', '--keep-staff-on-test', 'SIGNOFF-1']), /--env test only/);
 });
 
 test('surrogates are stable across two operator keys', async () => {
-  const map = path.join(fresh('map'), 'surrogates.json');
-  const first = await extractTo(['--env', 'test', ...surrogateArgs(map)]);
+  const map = newMap();
+  const first = await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
   const second = await extractTo(['--env', 'test', ...surrogateArgs(map)], devboxKeys());
   const idsByName = ({ extract }) => Object.fromEntries(extract.records.projects.map(r => [r.name, r.id]));
   assert.deepEqual(idsByName(second), idsByName(first));
   assert.equal(new Set(Object.values(idsByName(first))).size, 3);
 });
 
+test('a missing surrogate map needs --new-surrogates, which refuses an existing map', async () => {
+  const map = newMap();
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /not found; pass --new-surrogates/);
+  assert.equal(fs.existsSync(map), false);
+  await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
+  const before = fs.readFileSync(map);
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]), /exists; drop --new-surrogates/);
+  assert.deepEqual(fs.readFileSync(map), before);
+});
+
+test('a second run refuses while another holds the surrogate map lock', async () => {
+  const map = newMap();
+  await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
+  assert.equal(fs.existsSync(`${map}.lock`), false);
+  fs.writeFileSync(`${map}.lock`, '1');
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /lock exists: another run holds/);
+});
+
 test('surrogate passphrase is read from the keyring, not a file', async () => {
-  const map = path.join(fresh('map'), 'surrogates.json');
-  await extractTo(['--env', 'test', ...surrogateArgs(map)]);
+  const map = newMap();
+  await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
   const wrong = ['--env', 'test', '--surrogates', map, '--surrogate-passphrase-ref'];
   await assert.rejects(extractTo([...wrong, 'other']), /surrogate map .* could not be opened/);
 
@@ -154,6 +206,12 @@ test('surrogate passphrase is read from the keyring, not a file', async () => {
   fs.writeFileSync(fileRef, secrets.surrogate);
   await assert.rejects(extractTo([...wrong, fileRef]), /no keyring entry/);
   await assert.rejects(extractTo(['--env', 'test', '--surrogates', map, '--surrogate-passphrase-file', fileRef]), /Unknown option/);
+});
+
+test('a missing keyring tool is named, not reported as a missing entry', async () => {
+  const noTools = { ...process.env, PATH: fresh('empty-bin') };
+  await assert.rejects(cli(['keygen', '--env', 'test', '--out-dir', fresh('keys'), '--passphrase-ref', 'operator'], noTools),
+    /(secret-tool|security) is not installed/);
 });
 
 test('transition read holds no EPD or Notes value', async () => {
@@ -167,7 +225,7 @@ test('transition read holds no EPD or Notes value', async () => {
 test('extract writes no plaintext file', async () => {
   const before = fs.readdirSync(sheetsDir).sort();
   const { out, sealed, lines } = await extractTo(['--env', 'prod']);
-  assert.deepEqual(fs.readdirSync(path.dirname(out)), ['extract.json']);
+  assert.deepEqual(fs.readdirSync(path.dirname(out)), ['extract.sealed.json']);
   assert.deepEqual(fs.readdirSync(sheetsDir).sort(), before);
   for (const value of [...PROJECT_NAMES, ...STAFF_VALUES]) assert.equal(sealed.includes(String(value)), false);
   assert.match(lines.at(-1), /^plaintextSha256=[0-9a-f]{64}$/);
@@ -189,11 +247,11 @@ async function operator() {
   const dir = fresh('operator');
   await cli(['keygen', '--env', 'test', '--out-dir', dir, '--passphrase-ref', 'operator']);
   const publicKey = fs.readFileSync(path.join(dir, 'operator-test.pub.pem'), 'utf8');
-  return { keyFile: path.join(dir, 'operator-test.key.pem'), publicKey, fingerprint: fingerprintOf({ rsa: publicKey }) };
+  return { dir, keyFile: path.join(dir, 'operator-test.key.pem'), publicKey, fingerprint: fingerprintOf({ rsa: publicKey }) };
 }
 
 function devboxSends(op, body, statement) {
-  const file = path.join(fresh('blob'), 'crosswalk.sealed');
+  const file = path.join(fresh('blob'), 'crosswalk.sealed.json');
   fs.writeFileSync(file, sealEnvelope(Buffer.from(body), {
     purpose: 'crosswalk', env: 'test', keyFingerprint: op.fingerprint, recipientKey: op.publicKey,
     signature: sign(devbox.ed.privateKey, statement)
@@ -201,34 +259,79 @@ function devboxSends(op, body, statement) {
   return file;
 }
 
+const openArgs = (op, file, out, expect) => ['open', '--env', 'test', '--purpose', 'crosswalk', '--in', file,
+  '--out', out, '--key', op.keyFile, '--passphrase-ref', 'operator', '--devbox-key', devbox.pemFile,
+  '--devbox-fingerprint', devbox.fingerprint, '--expect-sha256', expect];
+
 test('open refuses a bad signature or hash', async () => {
   const op = await operator();
   const body = 'row,state\n1,exact\n';
   const sha256 = sha256Hex(body);
-  const openArgs = (file, out, expect) => ['open', '--env', 'test', '--purpose', 'crosswalk', '--in', file, '--out', out,
-    '--key', op.keyFile, '--passphrase-ref', 'operator', '--devbox-key', devbox.pemFile,
-    '--devbox-fingerprint', devbox.fingerprint, '--expect-sha256', expect];
-
   const good = devboxSends(op, body, { purpose: 'crosswalk', env: 'test', sha256 });
   const out = path.join(fresh('review'), 'crosswalk.csv');
-  await assert.rejects(cli(openArgs(good, out, sha256Hex('other'))), /does not match --expect-sha256/);
+  await assert.rejects(cli(openArgs(op, good, out, sha256Hex('other'))), /does not match --expect-sha256/);
   const forged = devboxSends(op, body, { purpose: 'report', env: 'test', sha256 });
-  await assert.rejects(cli(openArgs(forged, out, sha256)), /devbox signature does not verify/);
+  await assert.rejects(cli(openArgs(op, forged, out, sha256)), /devbox signature does not verify/);
   assert.equal(fs.existsSync(out), false);
 
-  assert.deepEqual(await cli(openArgs(good, out, sha256)), [`crosswalkSha256=${sha256}`]);
+  assert.deepEqual(await cli(openArgs(op, good, out, sha256)), [`crosswalkSha256=${sha256}`]);
   assert.equal(fs.readFileSync(out, 'utf8'), body);
 });
+
+test('every output is mode 0600 and never overwritten', async () => {
+  const op = await operator();
+  assert.equal(modeOf(op.keyFile), 0o600);
+  await assert.rejects(cli(['keygen', '--env', 'test', '--out-dir', op.dir, '--passphrase-ref', 'operator']), /already exists/);
+  const onlyPub = fresh('keys');
+  fs.writeFileSync(path.join(onlyPub, 'operator-test.pub.pem'), 'placeholder');
+  await assert.rejects(cli(['keygen', '--env', 'test', '--out-dir', onlyPub, '--passphrase-ref', 'operator']), /already exists/);
+  assert.deepEqual(fs.readdirSync(onlyPub), ['operator-test.pub.pem']);
+
+  const map = newMap();
+  const { out } = await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
+  assert.deepEqual([modeOf(out), modeOf(map)], [0o600, 0o600]);
+  await assert.rejects(extractTo(['--env', 'prod'], devbox, out), /already exists/);
+  await assert.rejects(extractTo(['--env', 'prod'], devbox, path.join(fresh('out'), 'extract.json')), /must end with \.sealed\.json/);
+
+  const body = 'row\n';
+  const blob = devboxSends(op, body, { purpose: 'crosswalk', env: 'test', sha256: sha256Hex(body) });
+  const review = path.join(fresh('review'), 'crosswalk.csv');
+  await cli(openArgs(op, blob, review, sha256Hex(body)));
+  assert.deepEqual([modeOf(review), modeOf(`${review}.sig`)], [0o600, 0o600]);
+  const sigOnly = path.join(fresh('review'), 'crosswalk.csv');
+  fs.writeFileSync(`${sigOnly}.sig`, 'old');
+  await assert.rejects(cli(openArgs(op, blob, sigOnly, sha256Hex(body))), /already exists/);
+  assert.equal(fs.existsSync(sigOnly), false);
+});
+
+function sealArgs(purpose, file, out, ...extra) {
+  return ['seal', '--env', 'test', '--purpose', purpose, '--in', file, '--out', out,
+    '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint, ...extra];
+}
 
 test('seal prints the manual-match SHA-256', async () => {
   const file = path.join(fresh('manual'), 'manual-match.csv');
   fs.writeFileSync(file, 'sheetId,trackId\n1,2\n');
-  const out = path.join(path.dirname(file), 'manual-match.sealed');
-  const lines = await cli(['seal', '--env', 'test', '--purpose', 'manual-match', '--in', file, '--out', out,
-    '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint]);
+  const out = path.join(path.dirname(file), 'manual-match.sealed.json');
+  const lines = await cli(sealArgs('manual-match', file, out));
   assert.deepEqual(lines, [`manualMatchSha256=${sha256Hex(fs.readFileSync(file))}`]);
+  assert.equal(modeOf(out), 0o600);
   const opened = openEnvelope(fs.readFileSync(out), {
     purpose: 'manual-match', env: 'test', keyFingerprint: devbox.fingerprint, privateKey: devbox.rsa.privateKey
   });
   assert.equal(opened.plaintext.toString('utf8'), fs.readFileSync(file, 'utf8'));
+});
+
+test('seal refuses a crosswalk whose devbox signature does not verify', async () => {
+  const dir = fresh('crosswalk');
+  const file = path.join(dir, 'crosswalk.csv');
+  fs.writeFileSync(file, 'row,state\n1,exact\n');
+  const sha256 = sha256Hex(fs.readFileSync(file));
+  fs.writeFileSync(path.join(dir, 'bad.sig'), sign(devbox.ed.privateKey, { purpose: 'report', env: 'test', sha256 }));
+  fs.writeFileSync(path.join(dir, 'good.sig'), sign(devbox.ed.privateKey, { purpose: 'crosswalk', env: 'test', sha256 }));
+  const out = path.join(dir, 'crosswalk.sealed.json');
+  await assert.rejects(cli(sealArgs('crosswalk', file, out, '--signature', path.join(dir, 'bad.sig'))), /does not verify/);
+  assert.equal(fs.existsSync(out), false);
+  assert.deepEqual(await cli(sealArgs('crosswalk', file, out, '--signature', path.join(dir, 'good.sig'))),
+    [`crosswalkSha256=${sha256}`]);
 });

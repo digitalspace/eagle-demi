@@ -3,9 +3,12 @@
 const crypto = require('crypto');
 
 const ENVELOPE_VERSION = 1;
+const MIN_RSA_BITS = 3072;
 const STAFF_FIELDS = Object.freeze(['epd', 'lead', 'notes', 'investment']);
 const PEM_BLOCK = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/g;
+const OAEP = { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' };
 
+// Unlike `canonical` in src/domain/extensions.js, this drops keys whose value is undefined.
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -35,13 +38,16 @@ function fingerprintOf({ rsa, ed25519 }) {
   return sha256Hex(Buffer.concat(parts));
 }
 
-/** Reads a PEM file holding one RSA and at most one Ed25519 public key. */
+/** Reads a PEM file holding one RSA key of at least 3072 bits and at most one Ed25519 public key. */
 function publicKeysFromPem(text) {
   const keys = {};
   for (const block of String(text).match(PEM_BLOCK) || []) {
     const key = crypto.createPublicKey(block);
     const kind = key.asymmetricKeyType;
     if ((kind !== 'rsa' && kind !== 'ed25519') || keys[kind]) throw new Error(`unexpected ${kind} key in PEM`);
+    if (kind === 'rsa' && key.asymmetricKeyDetails.modulusLength < MIN_RSA_BITS) {
+      throw new Error(`RSA key is under ${MIN_RSA_BITS} bits`);
+    }
     keys[kind] = key;
   }
   if (!keys.rsa) throw new Error('PEM holds no RSA public key');
@@ -51,7 +57,7 @@ function publicKeysFromPem(text) {
 function aadOf({ purpose, env, keyFingerprint, staffIncluded, numbersReal, signoffRefs }) {
   if (!purpose || !env || !keyFingerprint) throw new Error('purpose, env and keyFingerprint are required');
   return Buffer.from(canonicalJson({
-    purpose, env, keyFingerprint,
+    v: ENVELOPE_VERSION, purpose, env, keyFingerprint,
     staffIncluded: staffIncluded ?? null,
     numbersReal: numbersReal ?? null,
     signoffRefs: signoffRefs ?? null
@@ -59,8 +65,8 @@ function aadOf({ purpose, env, keyFingerprint, staffIncluded, numbersReal, signo
 }
 
 /**
- * AES-256-GCM with the key wrapped by RSA-OAEP (SHA-256). `env` and `keyFingerprint` sit in the
- * header for people only; openEnvelope rebuilds them from the reader's own values.
+ * AES-256-GCM, key wrapped by RSA-OAEP (SHA-256). `env` and `keyFingerprint` in the header are for
+ * people only; openEnvelope rebuilds them from the reader's own values.
  */
 function sealEnvelope(plaintext, { purpose, env, keyFingerprint, recipientKey, staffIncluded, numbersReal, signoffRefs, signature }) {
   const header = {
@@ -70,11 +76,10 @@ function sealEnvelope(plaintext, { purpose, env, keyFingerprint, recipientKey, s
   if (signature) header.signature = signature;
   const key = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   cipher.setAAD(aadOf(header));
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const wrappedKey = crypto.publicEncrypt(
-    { key: asPublicKey(recipientKey), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, key);
+  const wrappedKey = crypto.publicEncrypt({ key: asPublicKey(recipientKey), ...OAEP }, key);
   return Buffer.from(JSON.stringify({
     header,
     wrappedKey: wrappedKey.toString('base64'),
@@ -84,18 +89,22 @@ function sealEnvelope(plaintext, { purpose, env, keyFingerprint, recipientKey, s
   }));
 }
 
+const refused = (purpose, env) => new Error(`envelope refused for purpose ${purpose}, env ${env}`);
+
 function openEnvelope(sealed, { purpose, env, keyFingerprint, privateKey }) {
-  const aadInput = { purpose, env, keyFingerprint };
   try {
     const box = JSON.parse(Buffer.isBuffer(sealed) ? sealed.toString('utf8') : sealed);
     const { header } = box;
-    if (!header || header.v !== ENVELOPE_VERSION) throw new Error('version');
-    const key = crypto.privateDecrypt(
-      { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
-      Buffer.from(box.wrappedKey, 'base64'));
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(box.iv, 'base64'));
-    decipher.setAAD(aadOf({ ...aadInput, staffIncluded: header.staffIncluded, numbersReal: header.numbersReal, signoffRefs: header.signoffRefs }));
-    decipher.setAuthTag(Buffer.from(box.tag, 'base64'));
+    const iv = Buffer.from(box.iv, 'base64');
+    const tag = Buffer.from(box.tag, 'base64');
+    if (!header || header.v !== ENVELOPE_VERSION || iv.length !== 12 || tag.length !== 16) throw new Error('shape');
+    const key = crypto.privateDecrypt({ key: privateKey, ...OAEP }, Buffer.from(box.wrappedKey, 'base64'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    decipher.setAAD(aadOf({
+      purpose, env, keyFingerprint,
+      staffIncluded: header.staffIncluded, numbersReal: header.numbersReal, signoffRefs: header.signoffRefs
+    }));
+    decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([decipher.update(Buffer.from(box.ciphertext, 'base64')), decipher.final()]);
     return {
       plaintext,
@@ -106,7 +115,7 @@ function openEnvelope(sealed, { purpose, env, keyFingerprint, privateKey }) {
     };
   } catch {
     // One message for every cause, so a caller cannot probe which check failed.
-    throw new Error(`envelope refused for purpose ${purpose}, env ${env}`);
+    throw refused(purpose, env);
   }
 }
 
@@ -115,13 +124,21 @@ function hasStaffField(extract) {
     rows.some(row => STAFF_FIELDS.some(f => Object.prototype.hasOwnProperty.call(row, f))));
 }
 
-/** Opens an extract and refuses it when its staff columns disagree with the signed header. */
+/** Opens an extract and refuses a body whose env, flags or staff columns disagree with the signed header. */
 function openExtract(sealed, opts) {
   const opened = openEnvelope(sealed, { ...opts, purpose: 'extract' });
-  const extract = JSON.parse(opened.plaintext.toString('utf8'));
-  if (hasStaffField(extract) !== (opened.staffIncluded === true)) {
-    throw new Error('extract staff columns disagree with staffIncluded');
+  let extract;
+  try {
+    extract = JSON.parse(opened.plaintext.toString('utf8'));
+  } catch {
+    throw refused('extract', opts.env);
   }
+  const agrees = extract.env === opts.env
+    && extract.staffIncluded === opened.staffIncluded
+    && extract.numbersReal === opened.numbersReal
+    && canonicalJson(extract.signoffRefs ?? null) === canonicalJson(opened.signoffRefs ?? null)
+    && hasStaffField(extract) === (opened.staffIncluded === true);
+  if (!agrees) throw refused('extract', opts.env);
   return { ...opened, extract };
 }
 
@@ -130,14 +147,21 @@ function statementOf({ purpose, env, sha256 }) {
   return Buffer.from(canonicalJson({ purpose, env, sha256 }));
 }
 
+function ed25519(key, make) {
+  const keyObject = key instanceof crypto.KeyObject ? key : make(key);
+  if (keyObject.asymmetricKeyType !== 'ed25519') throw new Error('signing needs an Ed25519 key');
+  return keyObject;
+}
+
 /** Ed25519 over canonical {purpose, env, sha256}, so a signature for one purpose fails for another. */
 function sign(privateKey, statement) {
-  return crypto.sign(null, statementOf(statement), privateKey).toString('base64');
+  return crypto.sign(null, statementOf(statement), ed25519(privateKey, crypto.createPrivateKey)).toString('base64');
 }
 
 function verify(publicKey, statement, signature) {
+  const key = ed25519(publicKey, crypto.createPublicKey);
   try {
-    return crypto.verify(null, statementOf(statement), asPublicKey(publicKey), Buffer.from(String(signature), 'base64'));
+    return crypto.verify(null, statementOf(statement), key, Buffer.from(String(signature), 'base64'));
   } catch {
     return false;
   }
@@ -145,7 +169,6 @@ function verify(publicKey, statement, signature) {
 
 module.exports = {
   STAFF_FIELDS,
-  canonicalJson,
   sha256Hex,
   fingerprintOf,
   publicKeysFromPem,

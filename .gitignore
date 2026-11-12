@@ -69,3 +69,9 @@ __pycache__/
 # Impeccable design-hook config (local tooling)
 .impeccable/
 azure/main.json
+
+# Business works import (scripts/works-import/extract.js): operator keys, sealed envelopes, surrogate map
+operator-*.key.pem
+*.sealed.json
+works-surrogates.enc.json
+works-surrogates.enc.json.lock
