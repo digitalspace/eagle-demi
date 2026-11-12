@@ -8,7 +8,7 @@ questions only the EAO can answer. Section 4 records claims in the source docume
 at `aea2a0c`, so nobody re-verifies them. Section 5 records what the EAO sharing model changes in
 sections 1-3.
 
-Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalog format, registered entities, `/api/me`).
+Reference pages: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalog format, registered entities) and `eagle-demi.wiki/Access-Checks-and-Credentials.md` (`/api/me`, access simulation, credentials).
 
 ## 1. Model
 
