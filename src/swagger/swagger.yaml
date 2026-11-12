@@ -1288,7 +1288,13 @@ paths:
             true when staff set that target. All four appear together or not at all. `pins` is
             the pinned organizations as `{_id, name, province}` in stored order, without the ones
             the caller cannot read; an anonymous caller gets it only when the list is published.
-            Staff also get `pinsPublished`.
+            Staff also get `pinsPublished`. The contact fields `projectLead`, `responsibleEPD`,
+            `eaoMember`, `projectLeadEmail`, `responsibleEPDEmail`, `projectLeadPhone` and
+            `responsibleEPDPhone`, and `staffAssignments`, go only to level 3 and above (any IDIR
+            login, staff and service keys), at the top level and in each `legislation_<year>`
+            block; no field visibility setting can publish them. `externalIds`,
+            `capitalInvestments` and `staffNotes` go only to level 2 and above (staff and service
+            keys). The project list follows the same rules.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
@@ -1357,7 +1363,10 @@ paths:
             on `ProjectInput.tags`, or `tags` when the other row of a Track/`eagle-<eagleId>` pair
             does not let the caller see its tags. Nothing is written to either row. Also a `pins`
             id that is not an organization, or a malformed `pins` or `pinsPublished`; `fields.pins`
-            names the unknown ids.
+            names the unknown ids. Also `externalIds`, `staffAssignments`, `capitalInvestments`
+            or `staffNotes` from a caller without `sysadmin`, `staff` or `demi-admin` (a service
+            key is refused), or a staff list that breaks the rules on `ProjectInput`: the error
+            names the field and the entry index, never a value.
         '401':
           description: Unauthorized.
         '403':
@@ -1374,8 +1383,10 @@ paths:
             including when the project moved under that Act after this request read it. Or the
             pin list would turn public while it holds an unpublished organization: publishing the
             list checks every pin, adding to a published list checks the added ones. Or the body
-            changes `eagleId` on a project mirrored from Eagle or taken over from it. Nothing is
-            written.
+            changes `eagleId` on a project mirrored from Eagle or taken over from it. Or a staff
+            list in the body appends to an older copy of the stored list, which has gained entries
+            since the caller read it, or another write changed it while this request ran; read the
+            project again. Nothing is written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
@@ -10227,6 +10238,96 @@ components:
           type: boolean
           description: >-
             Set by `PUT` only. Publishes or unpublishes the whole pin list.
+        externalIds:
+          type: array
+          maxItems: 200
+          description: >-
+            Staff history, written by `PUT` only and only by `sysadmin`, `staff` or `demi-admin`.
+            The four staff lists follow one rule. Send the stored list back in stored order, with
+            new entries appended. A stored entry cannot be edited, removed or moved; the only
+            change allowed is setting `effectiveTo` on an open entry, which closes it. A correction
+            is a new entry plus a close. `effectiveFrom` and `effectiveTo` are `YYYY-MM-DD` dates,
+            and a close may not be after today in Pacific time. The server sets `id`, `source`
+            (`demi`), `sheetKey`, `observedAt` (today in Pacific time) and `recordedAt` on each
+            new entry and refuses a body that sets them. `name`, `text` and `value` are trimmed;
+            no string may hold a control, bidi, zero-width or line separator character. The four
+            lists together may hold at most 256 KB of JSON. A change to these lists alone does
+            not set `dateUpdated` or queue the project for Eagle. External ids are `{system, value}`:
+            `system` is `eao-register` (digits, no leading zero) or `orcs`. A new external id is
+            refused (400) until it can be checked against other projects.
+          items:
+            type: object
+            properties:
+              system:
+                type: string
+                enum: [eao-register, orcs]
+              value:
+                type: string
+                maxLength: 60
+        staffAssignments:
+          type: array
+          maxItems: 200
+          description: >-
+            The lead and EPD history, under the rule on `externalIds`. `name` is at most 200
+            characters; `effectiveTo` must not be before `effectiveFrom`.
+          items:
+            type: object
+            required: [role, name]
+            properties:
+              role:
+                type: string
+                enum: [epd, lead]
+              name:
+                type: string
+                maxLength: 200
+              effectiveFrom:
+                type: string
+                format: date
+                nullable: true
+              effectiveTo:
+                type: string
+                format: date
+                nullable: true
+        capitalInvestments:
+          type: array
+          maxItems: 200
+          description: >-
+            Capital investment history in whole Canadian dollars, under the rule on `externalIds`.
+            `effectiveTo` must not be before `effectiveFrom`.
+          items:
+            type: object
+            required: [amountCad]
+            properties:
+              amountCad:
+                type: integer
+                minimum: 0
+              effectiveFrom:
+                type: string
+                format: date
+                nullable: true
+              effectiveTo:
+                type: string
+                format: date
+                nullable: true
+              workId:
+                type: string
+                maxLength: 100
+                nullable: true
+        staffNotes:
+          type: array
+          maxItems: 200
+          description: Staff notes, under the rule on `externalIds`. A note cannot be closed.
+          items:
+            type: object
+            required: [text]
+            properties:
+              text:
+                type: string
+                maxLength: 4000
+              workId:
+                type: string
+                maxLength: 100
+                nullable: true
 
     DocumentInput:
       type: object

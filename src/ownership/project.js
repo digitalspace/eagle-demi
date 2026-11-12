@@ -113,13 +113,16 @@ const CAC_FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail
  */
 const DEMI_OWNED_AT = 'demiOwnedAt';
 
+/** Staff-only history lists on a project row; src/domain/project-staff-fields.js holds their rules. */
+const STAFF_ROLE_FIELDS = Object.freeze(['externalIds', 'staffAssignments', 'capitalInvestments', 'staffNotes']);
+
 /**
  * Only DEMI writes these (PUT, `/level`, the extension and CAC routes, the dating pass, sync-out),
  * so no re-merge can rebuild them.
  */
 const DEMI_ONLY_FIELDS = [
   'tags', 'levelHeldAt', DEMI_OWNED_AT, STAFF_EDITED_AT, 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
-  ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
+  ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS, ...STAFF_ROLE_FIELDS
 ];
 
 /** What a Track row takes from its `eagle-<id>` twin: not the sync-out state, as the Track row was never sent. */
@@ -192,6 +195,7 @@ module.exports = {
   EXTENSION_LIST_FIELDS,
   CAC_FIELDS,
   DEMI_OWNED_AT,
+  STAFF_ROLE_FIELDS,
   DEMI_ONLY_FIELDS,
   TWIN_CARRY_FIELDS,
   EAGLE_REFERENCE_FIELDS,

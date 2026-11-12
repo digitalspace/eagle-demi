@@ -28,7 +28,7 @@ const {
 } = require('../../merge/project');
 const {
   LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
-  STAFF_EDITED_AT, STAFF_HELD_FIELDS
+  STAFF_EDITED_AT, STAFF_HELD_FIELDS, STAFF_ROLE_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS } = require('../../merge/assessments');
 const { composeWorks, derivedFor, deriveInputs } = require('./project-compose');
@@ -51,6 +51,7 @@ const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
+const { unwritableStaffFields, staffFieldChanges } = require('../../domain/project-staff-fields');
 const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
@@ -162,6 +163,9 @@ async function labelled(access, body) {
   return body;
 }
 
+/** A sent key whose change is a content edit sync-out sends; DEMI's own fields count only on a native row. */
+const contentKey = (key, native) => !STAFF_ROLE_FIELDS.includes(key) && (native || !DEMI_ONLY_FIELDS.includes(key));
+
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
 const MAX_CLASSIFY_FIELDS = 10;
@@ -213,8 +217,8 @@ function normalizeLegislationYear(value) {
     : { error: 'legislationYear must be a year, such as 2002 or 2018' };
 }
 
-/** A PUT body's tags, labels and year, cleaned in place; the message to 400 with, or null. */
-function cleanChanges(changes) {
+/** A PUT body's tags, labels and year, cleaned in place, and its staff history checked; the message to 400 with, or null. */
+function cleanChanges(changes, existing, id) {
   if (changes.tags !== undefined) {
     const normalized = normalizeTags(changes.tags);
     if (normalized.error) return normalized.error;
@@ -226,7 +230,9 @@ function cleanChanges(changes) {
     changes.legislationYear = year.value;
   }
   trimLabels(changes);
-  return null;
+  // A list appended to an older copy is no body error: the guarded write answers it 409.
+  const staff = staffFieldChanges(existing, changes, new Date().toISOString(), { id });
+  return staff.stale ? null : staff.error || null;
 }
 
 /**
@@ -617,13 +623,14 @@ exports.updateProject = async (req, res) => {
     } : {};
     const unrefused = Object.fromEntries(Object.entries(copied).filter(([key]) => !refused.includes(key)));
     if (Object.keys(unrefused).length) refused.push(...await partnerRefuses(existing, access, unrefused));
+    refused.push(...unwritableStaffFields(access, changes).filter(key => !refused.includes(key)));
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`
       });
     }
 
-    const invalid = cleanChanges(changes);
+    const invalid = cleanChanges(changes, existing, req.params.id);
     if (invalid) return res.status(400).json({ error: invalid });
 
     // Guarded and rebuilt per try, the same as the push path: a whole-item write from this
@@ -646,12 +653,15 @@ exports.updateProject = async (req, res) => {
           logger.warn('[Project Controller] project update refused: locked Act', {
             id: req.params.id, attempt, legislationYear: changes.legislationYear, legislation: changes.legislation
           });
-          return { status: 'locked', error: locked };
+          return { status: 'refused', error: locked };
         }
         // Per try too: the publish check depends on the pins the reread row holds.
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
+        // Past the body check, a refusal here means the history moved under this request.
+        const staff = staffFieldChanges(current, changes, now, { id: req.params.id, attempt });
+        if (staff.error) return { status: 'refused', error: staff.error };
         const eagleEdit = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key));
         // A deleted row's staff read is no level to send: restore decides whether DEMI owns it.
         const deleted = current.isDeleted === true;
@@ -664,10 +674,11 @@ exports.updateProject = async (req, res) => {
         const native = isNativeProject(current);
         const edited = syncsOut({ ...current, ...owner }) &&
           ((native && Object.keys(pinned.changes).length > 0) ||
-            Object.keys(changes).some(key => (native || !DEMI_ONLY_FIELDS.includes(key)) && moved(key)));
+            Object.keys(changes).some(key => contentKey(key, native) && moved(key)));
         const row = {
           ...current,
           ...changes,
+          ...staff.values,
           ...pinned.changes,
           ...owner,
           ...staffStamps(current, staffMoved(current, changes), now),
@@ -692,7 +703,7 @@ exports.updateProject = async (req, res) => {
 
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
-    if (written.status === 'locked') return res.status(409).json({ error: written.error });
+    if (written.status === 'refused') return res.status(409).json({ error: written.error });
     if (written.status === 'repoint') {
       return res.status(409).json({ error: 'eagleId cannot be changed through PUT on this row' });
     }
@@ -709,7 +720,8 @@ exports.updateProject = async (req, res) => {
       projectId: existing.id,
       detail: {
         fields: [...Object.keys(changes)
-          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)), ...pinFields],
+          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags))
+          .filter(key => !STAFF_ROLE_FIELDS.includes(key) || !isDeepStrictEqual(replaced[key], saved[key])), ...pinFields],
         isPublishedFrom: replaced.isPublished,
         isPublishedTo: saved.isPublished
       }

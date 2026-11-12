@@ -49,13 +49,7 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 // No List lookup here, so an unresolved ObjectId comes back empty and is dropped, never searched.
 const refName = (ref: ListRef | undefined): string | undefined => resolveListLabel(ref, null).text || undefined;
 
-/**
- * The description as the record carries it, never invented.
- *
- * Angular substituted generated marketing prose here when a project had none. That text described
- * real assessment projects in words nobody wrote, so it is dropped rather than ported; an empty
- * description renders as empty.
- */
+/** The description as the record carries it, never invented: an empty one renders empty. */
 function describe(p: RawProject, meta: RawMetadata): string {
   const description = p.description || text(meta.trackAttributes?.['description']);
   return PLACEHOLDER_DESCRIPTION.test(description) ? '' : description;
@@ -80,7 +74,8 @@ export function mapProject(p: RawProject): Project {
     eagleAttributes: {
       _id: p._id,
       name: p.name,
-      responsibleEPD: p.responsibleEPD || 'Project Assessment Director',
+      // Level 3: an anonymous read never carries it, so it gets eagle-public's team label.
+      responsibleEPD: p.responsibleEPD || 'Project assessment team',
       locationDescription: p.region || 'British Columbia',
       centroid: p.centroid,
     },
