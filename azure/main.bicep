@@ -63,7 +63,7 @@ param privateEndpointSubnetId string = ''
 param readerPrincipalId string = ''
 
 // An array because a cutover has two hosts: list both, or the new origin is CORS-blocked. Empty
-// fails closed: CORS_ORIGIN is unset and src/app.js allows only http://localhost:4200.
+// fails closed: CORS_ORIGIN is unset and src/http/router.js allows only http://localhost:4200.
 @description('Frontend hostnames (no scheme) allowed as browser origins against the API. Filled in after the AFD deployment in eagle-search — the hostname carries a deploy-time hash and cannot be guessed.')
 param frontendHostNames array = []
 
