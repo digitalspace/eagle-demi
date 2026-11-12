@@ -187,6 +187,16 @@ test('DELETE /projects/:id', async (t) => {
     assert.deepStrictEqual(seen.writes[0].opts, { etag: 'rev-1' });
   });
 
+  await t.test('writes no owed-cascade marker: only the Track route does', async () => {
+    const seen = stage(t, storedEagleProject());
+
+    const res = await del();
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!('cascadePendingAt' in seen.written));
+    assert.deepStrictEqual(seen.pending, []);
+  });
+
   await t.test('staff see the flag in the body; an anonymous view never carries it', async () => {
     const seen = stage(t, storedEagleProject());
 

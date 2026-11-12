@@ -10,8 +10,11 @@ const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
 const { dialAllows } = require('../helpers/dial');
 const { levelOf } = require('../vis/level');
+const { isDeepStrictEqual } = require('node:util');
 const { deriveAssessments } = require('../merge/assessments');
-const { raced } = require('../helpers/etag-write');
+const { legislationTransitions } = require('../merge/track-derived');
+const { raced, writeGuarded } = require('../helpers/etag-write');
+const { SORTABLE, sortFieldFills } = require('../helpers/project-fills');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable, readPage, EAGLE_SYNC_PENDING
@@ -336,48 +339,6 @@ async function countWithEagleId(access) {
 }
 
 /**
- * Native list sort keys. Cosmos drops a row lacking the ORDER BY field, so `upsert` writes each (`sortFieldFills`);
- * `eacDecisionSort` stands in for `eacDecision.name`, since filling `eacDecision` would render as a decision.
- */
-const SORTABLE = [
-  'name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name', 'eacDecisionSort'
-];
-
-const NULL_WHEN_ABSENT = ['proponentName', 'projectType', 'sector', 'region'];
-
-/** `dateAdded` (stored as a Date.toString() string) as ISO with Z, or null when absent or unparseable. */
-function isoOrNull(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-/** `currentPhaseName` as a ref that holds `name`, or undefined when it already does. A bare id is kept as `_id`. */
-function phaseRef(phase) {
-  if (phase !== null && typeof phase === 'object') {
-    return phase.name === undefined ? { ...phase, _id: phase._id ?? null, name: null } : undefined;
-  }
-  return { _id: phase ?? null, name: null };
-}
-
-/**
- * Writes giving a row every SORTABLE field, leaving held ones alone except `currentPhaseName` (must be a ref with
- * `name`) and a stale `eacDecisionSort`. `dateUpdated` falls back to `dateAdded`, never `_ts`.
- */
-function sortFieldFills(row) {
-  const fills = {};
-  if (row.dateUpdated === undefined) fills.dateUpdated = isoOrNull(row.dateAdded);
-  for (const field of NULL_WHEN_ABSENT) {
-    if (row[field] === undefined) fills[field] = null;
-  }
-  const phase = phaseRef(row.currentPhaseName);
-  if (phase) fills.currentPhaseName = phase;
-  const decision = row.eacDecision && typeof row.eacDecision.name === 'string' ? row.eacDecision.name : null;
-  if (row.eacDecisionSort !== decision) fills.eacDecisionSort = decision;
-  return fills;
-}
-
-/**
  * Whole-item write, guarded by `etag` (412 when the row moved) or `create` (409 when created behind the caller):
  * otherwise two pushes 34 ms apart can leave a published project private. Safe only while no embedded array is folded in.
  */
@@ -415,7 +376,7 @@ async function patchBoundaries(id, { regionalDistrict, municipality, electoralDi
 }
 
 /** Set visibility dials (`null` removes one) and re-derive the fields built from the anonymous view; null when the row is gone. */
-async function patchVis(id, vis) {
+async function patchVis(id, vis, { inputsFor } = {}) {
   // Never upsert. One whole-map `/vis` set is safe only under the etag; a set per dial plus the
   // derived fields would pass patch's op cap.
   const key = String(id);
@@ -432,7 +393,8 @@ async function patchVis(id, vis) {
       if (level === null) delete nextVis[field];
       else nextVis[field] = level;
     }
-    const derived = deriveAssessments({ ...row, vis: nextVis }, { previous: row.assessments });
+    const inputs = inputsFor ? await inputsFor(row) : {};
+    const derived = deriveAssessments({ ...row, vis: nextVis }, { previous: row.assessments, ...inputs });
     return cosmos.patch(CONTAINER, key, key, [
       { op: 'set', path: '/vis', value: nextVis },
       { op: 'set', path: '/assessments', value: derived.assessments },
@@ -448,6 +410,40 @@ async function patchVis(id, vis) {
     logger.warn('[projects] visibility patch lost its etag race, rebuilding once', { id: key });
     return write(await cosmos.readItem(CONTAINER, key, key));
   }
+}
+
+const DERIVED_FIELDS = ['legislationTransitions', 'assessments', 'phaseIds', 'activeWork'];
+
+// In mergeTrackProject's order: transitions first, since assessments read their dates. JSON form, as Cosmos stores it.
+function derivedOf(row, { worksForDerive, catalog } = {}) {
+  const works = worksForDerive ?? row.works;
+  const transitions = Array.isArray(works)
+    ? legislationTransitions(row.legislationYearList, works) : row.legislationTransitions;
+  const next = { ...row, legislationTransitions: transitions };
+  return JSON.parse(JSON.stringify({ legislationTransitions: transitions,
+    ...deriveAssessments(next, { previous: row.assessments, worksForDerive, catalog }) }));
+}
+
+/**
+ * Re-derive the Track-built fields and patch only those that moved, under the row etag; inputs reload on each try.
+ * Resolves `{status}`: `patched`, `unchanged` (no write), `missing` (no row) or `conflict` (every try lost).
+ */
+async function patchDerived(id, { inputsFor } = {}) {
+  const key = String(id);
+  const read = () => cosmos.readItem(CONTAINER, key, key);
+  return writeGuarded({
+    existing: await read(),
+    reread: read,
+    attempt: async (row) => {
+      if (!row) return { status: 'missing' };
+      const derived = derivedOf(row, inputsFor ? await inputsFor(row) : {});
+      const ops = DERIVED_FIELDS.filter(field => !isDeepStrictEqual(derived[field], row[field]))
+        .map(field => ({ op: 'set', path: `/${field}`, value: derived[field] }));
+      if (!ops.length) return { status: 'unchanged' };
+      await cosmos.patch(CONTAINER, key, key, ops, undefined, row._etag);
+      return { status: 'patched' };
+    }
+  });
 }
 
 /**
@@ -514,6 +510,7 @@ module.exports = {
   patchWildfireStats,
   patchBoundaries,
   patchVis,
+  patchDerived,
   listShortCodeOwners,
   patchShortLink,
   deleteById

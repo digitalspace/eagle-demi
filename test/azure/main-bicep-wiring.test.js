@@ -846,7 +846,7 @@ for (const { name, param, lineOf, fatal, span, why } of [
       const info = t.mock.method(logger, 'info', () => {});
       const error = t.mock.method(logger, 'error', () => {});
       const kc = { clientToken: async () => { throw new Error('token refused'); } };
-      await require('../../src/scripts/sync-track-projects').run({ live: true, deps: { kc } });
+      await require('../../src/scripts/sync-track-run').run({ live: true, deps: { kc } });
       return { line: info.mock.calls.at(-1).arguments[0], fatalLine: error.mock.calls[0].arguments[0] };
     },
     fatal: 'run failed',

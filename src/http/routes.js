@@ -268,6 +268,8 @@ const routes = [
   // (src/sync-out). Pinned to DEMI_ENGAGE_PRINCIPALS on the same terms as the Eagle mirror.
   { method: 'put', path: '/engage/engagements/:engagementId', guards: [authMiddleware, requireWrite, requireEngageWriter], load: () => engageCommentPeriodController().upsertFromEngage },
 
+  ...require('./routes-track'),
+
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
   // public tier rather than getting a 401.
@@ -410,8 +412,6 @@ const routes = [
   { method: 'post', path: '/projects/:id/extensions', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').createExtension },
   { method: 'put', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').updateExtension },
   { method: 'delete', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').deleteExtension },
-
-  // port: project-legislation
 
   // port: sitemap
   { method: 'get', path: '/sitemap.xml', guards: [], load: () => require('../controllers/sitemap').getSitemap },

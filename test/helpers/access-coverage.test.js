@@ -73,7 +73,12 @@ const UNGATED = {
     'The partition key IS the access rule: every function takes the owner as its first argument ' +
     'and the controller only ever passes the caller\'s own token username, so a row of another ' +
     'user is unreachable rather than filtered out. Rows carry no read[] and no tier can see part ' +
-    'of one, so there is nothing for visibilityFor or canRead to compose.'
+    'of one, so there is nothing for visibilityFor or canRead to compose.',
+  'works.js':
+    'Never a response source. Rows are read only to build or derive a project field after the ' +
+    'caller holds that project\'s row: a canRead-gated read on the response path, or a ' +
+    'read-for-write or systemAccess read on writer paths that answer no row. The composed field ' +
+    'and every derived field pass the projects field catalog. No route serves a work document.'
 };
 
 /**
@@ -255,7 +260,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 59,
+    assert.strictEqual(emissions.length, 57,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [

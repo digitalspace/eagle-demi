@@ -10,7 +10,7 @@ const { parseKeepIds } = require('../utils/keep-ids');
 
 const COUNTED = [
   'projects', 'documents', 'chunks', 'updates', 'commentPeriods', 'comments',
-  'notifications', 'lists', 'boundaries', 'projectSummaries', 'links'
+  'notifications', 'lists', 'boundaries', 'projectSummaries', 'links', 'works'
 ];
 const INDEXED = ['chunks', 'documents', 'projects'];
 // Keeps the line well under 4 KB when a whole SDK error body comes back.

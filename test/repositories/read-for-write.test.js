@@ -203,6 +203,10 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
     'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
+    // The twin restore: it must find the `eagle-<id>` copy a DEMI delete narrowed, whatever its level.
+    'controllers/nosql/project-rows.js',
+    // A Track delete must find a row hidden from the machine principal, as the Eagle push does.
+    'controllers/nosql/track-push.js',
     'controllers/nosql/update.js',
     'controllers/nosql/user.js',
     // A taken-over group's parent, read to derive the group's read: a filtered read would miss a sealed one.
@@ -229,6 +233,11 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // Repair clears `syncOut.<target>.sentVersion` on the row so the worker resends it, sealed or not.
     'scripts/reconcile-engage.js',
     'scripts/seed-public-reads.js',
+    // The Track push matches a row by its Eagle id and its `eagle-<id>` twin, as the run's full list does.
+    'scripts/sync-track-projects.js',
+    // Track's work, phase and event writes, and the nightly works pass: each must find a hidden project row.
+    'scripts/sync-works.js',
+    'scripts/track-record-write.js',
     // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
     'sync-out/index.js',
     // Each kind's repository as the sync-out worker reads it.

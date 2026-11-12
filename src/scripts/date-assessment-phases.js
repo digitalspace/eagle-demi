@@ -7,6 +7,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
 const { DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments } = require('../merge/assessments');
 const { redactForAccess } = require('../vis/redact');
+const { deriveInputs } = require('../domain/works-derive');
 const projectsRepository = require('../repositories/projects');
 const documentsRepository = require('../repositories/documents');
 const periodsRepository = require('../repositories/comment-periods');
@@ -57,15 +58,15 @@ async function run({ live = false, deps = {} } = {}) {
         ]);
         const publicDocs = publicViews('documents', docs);
         const publicPeriods = publicViews('commentPeriods', cps);
-        // Act blocks come from the row being written, so a reread after a lost race re-files them.
-        const derive = (row) => {
+        // Act blocks and works come from the row being written, so a reread after a lost race re-files them.
+        const derive = async (row) => {
           const documentPhases = datePhasesFromDocuments(publicDocs, publicPeriods, phaseRows, actBlocks(row));
           const next = { ...row, documentPhases };
-          return { ...next, ...deriveAssessments(next, { lists: listRows }) };
+          return { ...next, ...deriveAssessments(next, { lists: listRows, ...(await deriveInputs(row)) }) };
         };
 
         if (!live) {
-          if (derivedJson(derive(project)) === derivedJson(project)) summary.unchanged++;
+          if (derivedJson(await derive(project)) === derivedJson(project)) summary.unchanged++;
           else summary.written++;
           continue;
         }
@@ -75,7 +76,7 @@ async function run({ live = false, deps = {} } = {}) {
           reread: () => projects.getById(access, id),
           attempt: async (current) => {
             if (!current) return { status: 'missing' };
-            const next = derive(current);
+            const next = await derive(current);
             if (derivedJson(next) === derivedJson(current)) return { status: 'unchanged' };
             await projects.upsert(next, { etag: current._etag });
             return { status: 'saved' };

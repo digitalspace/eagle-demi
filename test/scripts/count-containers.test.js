@@ -52,7 +52,7 @@ test('prints one JSON line with every container count', async () => {
   const out = JSON.parse(lines[0]);
   assert.deepStrictEqual(Object.keys(out.counts), [
     'projects', 'documents', 'chunks', 'updates', 'commentPeriods', 'comments',
-    'notifications', 'lists', 'boundaries', 'projectSummaries', 'links'
+    'notifications', 'lists', 'boundaries', 'projectSummaries', 'links', 'works'
   ]);
   assert.strictEqual(out.counts.chunks, 12);
   assert.deepStrictEqual(out.projectsBySourceSystem, { track: 381, eagle: 1 });

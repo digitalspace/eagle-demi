@@ -524,7 +524,7 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
 }
 
 // The Track -> DEMI project poll stalled or failed, from the `[track-projects-poll] mode=live …
-// failures=N` line src/scripts/sync-track-projects.js writes every run. Unlike reconcileDriftAlert it
+// failures=N` line src/scripts/sync-track-run.js writes every run. Unlike reconcileDriftAlert it
 // also fires on silence: no line means the timer, the app or its logging is down.
 // `absent` and `failing` each return a row or none; `summarize` without `by` yields one row on empty
 // input, which is how `absent` sees zero. `missing` and `failed` are KQL keywords, hence the names.
@@ -536,7 +536,7 @@ resource trackProjectsPollAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track project poll stalled or failing'
-    description: 'In the last 20 minutes the Track project poll wrote no `[track-projects-poll] mode=live` line, or a line with failures above 0, or `run failed`. Track project edits are not reaching DEMI. Check the demi-api function app, then run src/scripts/sync-track-projects.js by hand for the error.'
+    description: 'In the last 20 minutes the Track project poll wrote no `[track-projects-poll] mode=live` line, or a line with failures above 0, or `run failed`. Track project edits are not reaching DEMI. Check the demi-api function app, then run src/scripts/sync-track-run.js by hand for the error.'
     // Warning, like reconcileDriftAlert: DEMI keeps serving, its Track mirror falls behind.
     severity: 2
     enabled: true

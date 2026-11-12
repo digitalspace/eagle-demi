@@ -268,7 +268,7 @@ async function syncTrackTeams() {
 async function syncTrackProjects() {
   const { logger } = require('../src/utils/logger');
   try {
-    await require('../src/scripts/sync-track-projects').run({ live: true });
+    await require('../src/scripts/sync-track-run').run({ live: true });
   } catch (err) {
     logger.error('[track-projects-poll] run failed', { error: err.message, stack: err.stack });
   }

@@ -11,6 +11,10 @@ const documentsRepository = require('../../src/repositories/documents');
 const periodsRepository = require('../../src/repositories/comment-periods');
 const listsRepository = require('../../src/repositories/lists');
 const { logger } = require('../../src/utils/logger');
+const config = require('../../src/config');
+const phaseCatalog = require('../../src/domain/phase-catalog');
+const { workDocOf } = require('../../src/seed/track-mappers');
+const { fakeWorks, useWorks } = require('../helpers/track-sync-fakes');
 const fx = require('../fixtures/act-assessments');
 
 const posted = (phase, datePosted, extra = {}) =>
@@ -135,6 +139,21 @@ test('date-assessment-phases run', async (t) => {
     await run({ deps: fakeDeps({ ...fx.only2002(), _etag: 'e1' }, []).deps });
 
     assert.match(info.mock.calls[0].arguments[0], /projects=1 written=1 unchanged=0 failures=0$/);
+  });
+
+  await t.test('with WORKS_READ on, the active work is read from the works container', async (t) => {
+    const held = config.worksRead;
+    config.worksRead = true;
+    t.after(() => { config.worksRead = held; });
+    const row = { ...fx.only2002(), _etag: 'e1' };
+    const work = require('../fixtures/track-records/new_work_two_phases.json').work;
+    useWorks(t, fakeWorks([workDocOf(work, { projectId: row.id })]));
+    t.mock.method(phaseCatalog, 'load', async () => ({}));
+    const store = fakeDeps(row, []);
+
+    await run({ live: true, deps: store.deps });
+
+    assert.strictEqual(store.upserts[0].next.activeWork.trackWorkId, 2001);
   });
 });
 
