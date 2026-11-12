@@ -25,7 +25,11 @@ paths:
         number — see `and[status]`; it is absent everywhere else rather than zero. An unknown
         dataset, or any query parameter not listed here, is a 400. Document reads and counts leave
         out images uploaded through the Update form (`documentSource` `UPDATE`) unless the request
-        filters on `and[documentSource]`.
+        filters on `and[documentSource]`. A project is left out when the request sorts, filters or
+        searches on a field the caller may not see for that project, and `count` drops with it; a
+        Document keyword search does not match documents through such a project's name. When the
+        hidden projects cannot all be read, or there are too many to leave out safely, the search
+        answers 502.
       parameters:
         - name: dataset
           in: query

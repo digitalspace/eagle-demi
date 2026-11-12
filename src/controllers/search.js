@@ -14,7 +14,8 @@ const { filterFor, inClause } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
 const { sortEntries } = require('../search/sort-entries');
-const { updatesIndexAcl } = require('../search/native-index');
+const { updatesIndexAcl, andOData } = require('../search/native-index');
+const { dialExclusion } = require('../search/project-dials');
 const { documentsAcl } = require('../search/document-query');
 const chunkQuery = require('../search/chunk-query');
 const groupChunks = require('../search/group-chunks');
@@ -372,6 +373,12 @@ async function staffFieldsByProjectId(access, ids) {
   return new Map(rows.map(row => [String(row.id), staffProjectFields(row)]));
 }
 
+/** `filter` less the projects whose own dial hides from this caller a column the read sorts, filters or searches on. */
+async function withoutDialHidden(access, filter, fields, keywords, searchedColumns) {
+  const hidden = await dialExclusion(access, fields, keywords ? searchedColumns : undefined);
+  return hidden ? andOData(filter, hidden) : filter;
+}
+
 /**
  * One `projects` INDEX hit, redacted for this caller. The catalog is keyed on INDEX field names
  * because the data source renames columns (docs/rbac-architecture.md §2 item 9).
@@ -643,11 +650,20 @@ async function projectDecisionRows(access, limit, now) {
   const acl = filterFor(access, 'id');
   if (acl.empty) return [];
   // Through the same builders as a `dataset=Project` URL, so the ACL and the field gates are theirs.
-  const { filter } = eagleQuery.buildFilter(
+  const { filter, fields } = eagleQuery.buildFilter(
     { 'and[decisionDateEnd]': now.toISOString() }, 'Project', acl, access);
-  const { orderby } = eagleQuery.buildOrderBy('-decisionDate', 'Project', false, access);
+  const { orderby, fields: sorted } = eagleQuery.buildOrderBy('-decisionDate', 'Project', false, access);
+  let scoped;
+  try {
+    scoped = await withoutDialHidden(access, filter, [...fields, ...sorted]);
+  } catch (err) {
+    // Only this half drops, so news and notification decisions still serve; any other failure is a 502.
+    if (err.code !== projectsRepo.DIAL_HIDDEN_OVER_CAP) throw err;
+    logger.error('[search] home feed served without project decisions', { error: err.message, stack: err.stack });
+    return [];
+  }
   const { items } = await aiSearch.searchProjects({
-    filter, orderby, skip: 0, keywords: '', matchAll: true, top: limit
+    filter: scoped, orderby, skip: 0, keywords: '', matchAll: true, top: limit
   });
   return items
     .map(hit => redactIndexProject(hit, access))
@@ -1347,13 +1363,8 @@ exports.search = async (req, res) => {
       droppedKeys[kind].push(...keys);
     };
 
-    // A FIELD THE LIVE INDEX COULD NOT ANSWER, told to the caller the same way `dropped` is. The
-    // search layer drops such a field and retries once rather than failing the whole page (see
-    // `send` in ai-search), which keeps the tab up — but a page quietly missing a column reads
-    // exactly like a page whose column is empty, and on 2026-09-08 that column was the only clue.
-    // ACCUMULATED, not replaced: one page can be degraded twice over — a column the live index
-    // could not answer AND a filter applied over half-stamped rows — and the second call to say so
-    // would otherwise erase the first.
+    // A field the live index could not answer (ai-search `send` drops it and retries), told like `dropped`.
+    // Accumulated, not replaced: one page can be degraded twice, and the second note must not erase the first.
     let degraded = null;
     const noteDegraded = (meta) => {
       if (!meta || !meta.degraded) return;
@@ -1438,19 +1449,20 @@ exports.search = async (req, res) => {
           if (!acl.empty) {
             // The caller's `and[...]` filters COMPOSED WITH the ACL clause, never instead of it —
             // buildFilter takes the whole `filterFor` result and refuses to run without it.
-            const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
+            const { filter, dropped, fields } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
             noteDropped('filter', dropped);
 
             // `Boolean(keywords)`, not `true`: with no keywords there is no relevance to order by,
             // and DEFAULT_ORDER is what keeps `$skip` paging from repeating and omitting rows.
-            const { orderby, dropped: sortDropped } =
+            const { orderby, dropped: sortDropped, fields: sorted } =
               eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access);
             noteDropped('sort', sortDropped);
 
             // `count` is the index-wide total, not the page — eagle-public pages against it and the
             // column header shows it.
             const { items, count, meta } = await aiSearch.searchProjects({
-              filter,
+              filter: await withoutDialHidden(
+                access, filter, [...fields, ...sorted], keywords, aiSearch.PROJECT_SEARCH_FIELDS),
               orderby,
               skip,
               keywords,
@@ -1538,12 +1550,8 @@ exports.search = async (req, res) => {
 
       // Bare list: a read, in the repository's own order.
       try {
-        // An offset page read through `readPage`, which follows continuation tokens past the
-        // 1,000 rows one fetch carries. `pageSize` is clamped to 1,000, and a page past
-        // MAX_PAGE_DEPTH rows is refused with 400 below.
-        //
-        // Only `project` can still be dropped here — anything else is criteria and went to the
-        // index — and it is genuinely inexpressible: `projects` has no project axis.
+        // `readPage` follows continuation tokens; `pageSize` is clamped and a page past MAX_PAGE_DEPTH is a 400.
+        // Only `project` can still drop here: other criteria went to the index, and `projects` has no project axis.
         noteDropped('filter', eagleQuery.filterKeysIn(req.query));
 
         const projects = await projectsRepo.listPage(access, { pageNum, pageSize });
@@ -1636,10 +1644,8 @@ exports.search = async (req, res) => {
           const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
           noteDropped('filter', dropped);
 
-          // `?docIds=a|b|c` — eagle-public's multi-id document fetch (api.ts getDocumentsByMultiId),
-          // pipe-joined because `buildValues` joins on `|`. ANDed onto the filter as one clause
-          // through the same `inClause` the ACL uses; `search.js:137` builds a similar scope over
-          // the CHUNKS index `documentId`, and this one is the DOCUMENTS index key `id`.
+          // `?docIds=a|b|c`, eagle-public's multi-id fetch (pipe-joined by `buildValues`), ANDed on as one
+          // `inClause` over the documents index key `id`.
           const docScope = documentIdScope(req.query.docIds);
           const scopedDocFilter = docScope
             ? (filter ? `(${filter}) and ${docScope}` : docScope)
@@ -1659,7 +1665,8 @@ exports.search = async (req, res) => {
             skip,
             // Passed so the project-name leg runs under the caller's project visibility. Undefined
             // would disable that leg; null legitimately means "unrestricted".
-            projectFilter: projectScope.empty ? undefined : projectScope.filter,
+            projectFilter: projectScope.empty ? undefined
+              : await withoutDialHidden(access, projectScope.filter, [], keywords, aiSearch.LEG_TWO_SEARCH_FIELDS),
             keywords,
             // See the Project branch: no keywords means every row the filter admits.
             matchAll: !keywords,
@@ -1765,19 +1772,8 @@ exports.search = async (req, res) => {
           ? (filter ? `(${filter}) and ${scope}` : scope)
           : filter;
 
-        // THE SECOND DEGRADED STATE, and it is now the state with NOWHERE LEFT TO GO. A facet
-        // withheld because this scope is mid-backfill is answered through the documents index
-        // instead, which is correct and complete up to the scope cap — nothing to mark. Only when
-        // that recovery is over the cap as well does the caller get a short answer, and only then
-        // is there something to say. The REASON only, never the count: this route answers
-        // anonymously.
-        //
-        // THREE REASONS, because three different things clear them: the backfill finishing, the
-        // service answering again, and an operator applying the index definition. Any of them can
-        // be true at once. Without the third, a short page in a deploy window carried no reason at
-        // all, which on the wire is an ordinary over-cap drop — the one shape that tells the caller
-        // nothing is coming.
-        // See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
+        // Short only when the documents-index recovery is over the scope cap too; reasons only, never a count
+        // (anonymous route). Each clears differently: wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
         if (capped) {
           const reasons = chunkQuery.facetReasons(liveFacets);
           if (reasons.length) noteDegraded({ degraded: { reasons } });
@@ -2064,7 +2060,8 @@ const COUNT_LEGS = {
     if (acl.empty) return { count: 0 };
     return {
       count: await aiSearch.countProjects({
-        filter: acl.filter, keywords, matchAll: !keywords, fuzzy: true, prefix
+        filter: await withoutDialHidden(access, acl.filter, [], keywords, aiSearch.PROJECT_SEARCH_FIELDS),
+        keywords, matchAll: !keywords, fuzzy: true, prefix
       })
     };
   },
@@ -2080,7 +2077,8 @@ const COUNT_LEGS = {
       countOnly: true,
       // Through buildFilter so the tab counts the rows the Document list returns.
       filter: eagleQuery.buildFilter({}, 'Document', acl, access).filter,
-      projectFilter: projectScope.empty ? undefined : projectScope.filter,
+      projectFilter: projectScope.empty ? undefined
+        : await withoutDialHidden(access, projectScope.filter, [], keywords, aiSearch.LEG_TWO_SEARCH_FIELDS),
       keywords,
       matchAll: !keywords,
       fuzzy: true,

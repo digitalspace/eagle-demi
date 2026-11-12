@@ -2,16 +2,8 @@
 
 const indexProjects = require('./index-projects');
 
-/**
- * Stored project field -> the index column(s) it becomes. `PATCH /projects/:id/visibility` stores
- * dial keys in the COSMOS vocabulary, but a search hit arrives in the INDEX one because the data
- * source renames columns (`azure/search/datasources/demi-projects-ds.json`), so a dial must be
- * translated before it is applied to a hit. Values are arrays: one stored object fans out to a
- * label column and an id column. Held from both directions: test/vis/search-drift.test.js checks
- * the entries that exist against the catalogs, and test/azure/search-datasource-columns.test.js
- * checks that every alias the data source introduces has an entry here — a rename with none is a
- * dial that resolves to no field on a hit and is dropped without an error.
- */
+// Stored project field -> index column(s): dials are stored in Cosmos names, hits arrive renamed by the data
+// source. A rename missing here drops its dial silently; search-datasource-columns.test.js guards that.
 const PROJECT_TO_INDEX = {
   // `name` reaches the index twice: itself, and again as `nameTokens` under the `filename` analyzer.
   name: ['name', 'nameTokens'],
@@ -31,11 +23,8 @@ const PROJECT_TO_INDEX = {
   activeWork: ['activeWorkId', 'activeWorkAct', 'activeWorkType', 'activeWorkPhase']
 };
 
-/**
- * The same dials restated on index field names. A key that does not rename passes through; a key
- * with no index counterpart is dropped, because there is nothing on a hit for it to restrict.
- * Object.hasOwn: the dials are parsed from an index column, so `constructor` must not resolve.
- */
+// Dials restated on index field names; a key with no index counterpart is dropped, as a hit has nothing
+// for it to restrict. Object.hasOwn: the dials are parsed from an index column, so `constructor` must not resolve.
 function dialsForIndex(dials) {
   // A stored `vis` of JSON `null` parses without throwing; treat anything but an object as no dials.
   if (!dials || typeof dials !== 'object' || Array.isArray(dials)) return {};
@@ -48,4 +37,15 @@ function dialsForIndex(dials) {
   return out;
 }
 
-module.exports = { PROJECT_TO_INDEX, dialsForIndex };
+// A column that names the same fact as another stored field, so that field's dial governs it too:
+// the proponent id names the proponent, and native `/projects` filters the proponent on its name.
+const ALSO_DIALLED_BY = { proponentId: ['proponentName'] };
+
+/** The stored project fields whose dials govern a projects index column; a column that does not rename is its own. */
+function storedFieldsOf(column) {
+  const sources = Object.keys(PROJECT_TO_INDEX).filter(field => PROJECT_TO_INDEX[field].includes(column));
+  const also = Object.hasOwn(ALSO_DIALLED_BY, column) ? ALSO_DIALLED_BY[column] : [];
+  return [...(sources.length ? sources : [column]), ...also];
+}
+
+module.exports = { PROJECT_TO_INDEX, dialsForIndex, storedFieldsOf };
