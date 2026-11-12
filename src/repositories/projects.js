@@ -210,7 +210,7 @@ async function listIdsByName(access, text) {
   return ids.slice(0, NAME_MATCH_MAX_IDS).map(String);
 }
 
-/** The most ids `listDialHiddenIds` answers. Past it the read throws: a cut list lets the rest through. */
+/** The most ids `listDialHiddenIds` answers. Past it, or on a drain cut short, the read throws: a cut list lets the rest through. */
 const DIAL_HIDDEN_MAX_IDS = 500;
 const DIAL_HIDDEN_OVER_CAP = 'DIAL_HIDDEN_OVER_CAP';
 
@@ -225,10 +225,10 @@ async function listDialHiddenIds(access, storedFields) {
     criteria: [{ clause: `NOT (${allowed})`, params: [] }],
     select: 'VALUE c.id'
   });
-  const ids = await cosmos.queryPage(CONTAINER, spec, { size: DIAL_HIDDEN_MAX_IDS + 1 });
-  if (ids.length > DIAL_HIDDEN_MAX_IDS) {
-    logger.error('[projects] dial-hidden ids past their cap', { fields, cap: DIAL_HIDDEN_MAX_IDS });
-    throw Object.assign(new Error('[projects] dial-hidden ids past their cap'), { code: DIAL_HIDDEN_OVER_CAP });
+  const ids = await cosmos.queryPage(CONTAINER, spec, { size: DIAL_HIDDEN_MAX_IDS + 1, whole: true });
+  if (!ids || ids.length > DIAL_HIDDEN_MAX_IDS) {
+    logger.error('[projects] dial-hidden ids past their cap or cut short', { fields, cap: DIAL_HIDDEN_MAX_IDS, cut: !ids });
+    throw Object.assign(new Error('[projects] dial-hidden ids past their cap or cut short'), { code: DIAL_HIDDEN_OVER_CAP });
   }
   return ids.map(String);
 }

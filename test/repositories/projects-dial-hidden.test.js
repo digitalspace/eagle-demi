@@ -51,7 +51,16 @@ test('projects.listDialHiddenIds', async (t) => {
 
     await assert.rejects(() => projects.listDialHiddenIds(anonymous(), ['name']),
       err => err.code === projects.DIAL_HIDDEN_OVER_CAP);
-    assert.deepStrictEqual(pages[0].options, { size: projects.DIAL_HIDDEN_MAX_IDS + 1 });
+    assert.deepStrictEqual(pages[0].options, { size: projects.DIAL_HIDDEN_MAX_IDS + 1, whole: true });
+    assert.strictEqual(error.mock.callCount(), 1);
+  });
+
+  await t.test('a read cut short throws as over the cap, not a partial list', async () => {
+    hiddenStore(t, [row('a', { name: 1 }), row('b', { name: 1 })], anonymous(), { cut: true });
+    const error = t.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(() => projects.listDialHiddenIds(anonymous(), ['name']),
+      err => err.code === projects.DIAL_HIDDEN_OVER_CAP);
     assert.strictEqual(error.mock.callCount(), 1);
   });
 
