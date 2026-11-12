@@ -66,6 +66,12 @@ const CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u180e\u20
  */
 const withoutControls = text => (typeof text === 'string' ? text.replace(CONTROLS, '') : text);
 
+/** `withoutControls`, or null when controls were all the text held. */
+function withoutControlsOrNull(text) {
+  const kept = withoutControls(text);
+  return kept === '' && text !== '' ? null : kept;
+}
+
 /** Tags that end a block of text: `<li>One</li><li>Two</li>` reads "One Two", not "OneTwo". */
 const BLOCK_TAG = /<\/?(?:br|p|div|li|ul|ol|h[1-6]|blockquote|tr|td|th|table|section|article)\b[^>]*>/gi;
 
@@ -98,4 +104,4 @@ function plainTextOf(html) {
     .trim();
 }
 
-module.exports = { decodeEntities, plainTextOf, replaceTags, withoutControls };
+module.exports = { decodeEntities, plainTextOf, replaceTags, withoutControls, withoutControlsOrNull };

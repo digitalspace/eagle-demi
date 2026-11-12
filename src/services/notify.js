@@ -125,7 +125,7 @@ async function updatePublished(item, projectName, featuredImage = null) {
     ...(item.shortHeadline ? { shortHeadline: withoutControls(item.shortHeadline) } : {}),
     // Email readers cannot apply the contract fallback, so it is applied here.
     summary: withoutControls(item.summary) || summaryOf(item.content),
-    ...(image ? { featuredImageUrl: imageUrlFor(image.document), featuredImageAlt: image.alt } : {})
+    ...(image ? { featuredImageUrl: imageUrlFor(image.document), featuredImageAlt: plainTextOf(image.alt) } : {})
   });
 }
 

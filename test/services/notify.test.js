@@ -145,6 +145,15 @@ test('notify.updatePublished', async (t) => {
     assert.strictEqual(cancelled.title, 'Site C Report');
   });
 
+  await t.test('the image alt text is sent as plain text without bidi characters', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+
+    await notify.updatePublished(ITEM, null, { document: '5cf00c03a266b7e187750002', alt: '<b>\u202egnp.exe</b>' });
+
+    assert.strictEqual(JSON.parse(calls[0].opts.body).featuredImageAlt, 'gnp.exe');
+  });
+
   await t.test('excerpt and summary stay linear on a long run of tags that never close', () => {
     const module = require.resolve('../../src/services/notify');
     assert.ok(finishes(module, "m.excerptOf('<'.repeat(400000))"));

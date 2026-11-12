@@ -217,6 +217,23 @@ test('update domain', async (t) => {
     assert.strictEqual(store.written.length, 0);
   });
 
+  await t.test('text fields and image text are stored without bidi or control characters', async (t) => {
+    const store = fakeStore(t, null);
+    const hidden = 'Site\u202e C\u2066 Re\u0001port';
+    const image = { document: PUBLIC_DOC, alt: hidden, caption: hidden, credit: '\u0001\u202e' };
+    const result = await update.create(STAFF, createBody({
+      headline: hidden, shortHeadline: '\u0001\u2066', summary: hidden, featuredImage: image, images: [image]
+    }));
+    assert.strictEqual(result.status, 'ok');
+    const row = store.written[0];
+    assert.strictEqual(row.headline, 'Site C Report');
+    assert.strictEqual(row.shortHeadline, null, 'nothing but controls is stored as no value');
+    assert.strictEqual(row.summary, 'Site C Report');
+    for (const stored of [row.featuredImage, row.images[0]]) {
+      assert.deepStrictEqual(stored, { document: PUBLIC_DOC, alt: 'Site C Report', caption: 'Site C Report', credit: null });
+    }
+  });
+
   await t.test('a draft may show a private document', async (t) => {
     const store = fakeStore(t, null);
     const result = await update.create(STAFF, createBody({ attachments: [PRIVATE_DOC] }));

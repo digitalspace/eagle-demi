@@ -29,4 +29,22 @@ test('PUT /eagle/updates/:eagleId stores the Updates text fields', async (t) => 
     assert.strictEqual(written.shortHeadline, 'Site C Report');
     assert.strictEqual(written.summary, 'Site C Report');
   });
+
+  await t.test('as null when nothing but controls is left', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+    const controls = '\u0001\u202e';
+
+    await controller.upsertFromEagle({
+      params: { eagleId: UPDATE_EAGLE_ID },
+      query: {},
+      body: { doc: eagleUpdate({ headline: controls, shortHeadline: controls, summary: controls }) },
+      user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.headline, null);
+    assert.strictEqual(written.shortHeadline, null);
+    assert.strictEqual(written.summary, null);
+  });
 });
