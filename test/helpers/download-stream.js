@@ -65,9 +65,9 @@ async function get(headers = {}, path = PATH) {
 }
 
 /** The handler called directly, stream left open: it holds a slot until destroyed. */
-async function holdOpen() {
+async function holdOpen(request = {}) {
   const out = res();
-  await controller.downloadDocument(req({ query: { inline: '1' } }), out);
+  await controller.downloadDocument(req({ query: { inline: '1' }, ...request }), out);
   assert.equal(out.statusCode, 200);
   return out.body;
 }
