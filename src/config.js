@@ -142,8 +142,8 @@ const config = {
   // Object opens kept ahead of the archive append. Bounded by the sockets and buffers an instance
   // can hold, not by how slow the object store is.
   bulkFetchAhead:       intFromEnv('BULK_FETCH_AHEAD', 3),
-  // Transfers at once. At 1 the worker is bound by one connection's throughput (about 6.4 MB/s
-  // from Azure); fetch-ahead then overlaps only the round trip.
+  // Transfers at once. At 1 the worker is bound by one connection's throughput (about 6 MB/s,
+  // docs/bulk-download-performance.md); fetch-ahead then overlaps only the round trip.
   bulkFetchConcurrency: intFromEnv('BULK_FETCH_CONCURRENCY', 1),
   // Memory ceiling for those transfers, split evenly. An instance also holds one 64 MiB multipart
   // upload buffer (src/storage/minio.js).
