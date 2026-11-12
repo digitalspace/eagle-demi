@@ -1572,24 +1572,8 @@ async function searchDocuments(opts = {}) {
   // happens to ask first, and one page is one answer however many requests built it.
   const legs = [direct];
 
-  // Leg two runs on EVERY page, not only when there is room for its rows. It owns part of the
-  // total — `byProject.count` is index-wide — and eagle-public divides that total by `pageSize` to
-  // decide how many pages exist. Skipping the leg on a full page made the total jump from 771 to
-  // ~3,000 the moment the caller reached the last page of direct hits; reporting the PAGE LENGTH,
-  // which this used to do (`Math.max(direct.count, items.length)`), was worse still: a probe with
-  // 3 direct matches, one matching project and 500 documents under it reported 10 against a true
-  // ~503, so the pager said one page and every later page was unreachable. Where the leg cannot
-  // contribute rows its request is trimmed to one row — the count is what it is for.
-  // `!opts.matchAll` IS THE DELIBERATE ANSWER TO "what does leg two mean with no keywords". Leg two
-  // recovers documents whose PROJECT's NAME matches the query, and a keywordless search has no name
-  // to match — running it under `matchAll` would search the projects index for `*`, pull in every
-  // project the caller can read, and widen the document filter by `projectId` to the whole corpus.
-  // That is the unfiltered-list answer this route exists to stop.
-  //
-  // Skipped rather than left to come back empty. Keywordless leg two happens to short-circuit
-  // inside `runSearch` today — `tokenize('')` yields no terms — but that is an accident of the
-  // tokenizer, not a decision, and it stops being true the moment `matchAll` is threaded through
-  // `opts`, which is exactly what the keywordless filter path now does.
+  // Leg two runs on every page, since eagle-public pages by a total that counts its rows. Never with
+  // no keyword: matching every project name would widen the document filter to the whole corpus.
   if (opts.projectFilter !== undefined && !opts.matchAll) {
     const projects = await runSearch(config().projectsIndex, {
       keywords: opts.keywords,

@@ -27,10 +27,7 @@ const CRITERIA_FIELDS = {
   electoralDistrict: '@ed'
 };
 
-/**
- * Criteria shared by list and count, so a count cannot leak the size of a set the caller cannot read. A hidden
- * field is rejected, not dropped: a narrowed count would reveal the hidden value.
- */
+/** Shared by list and count, so a count cannot size a set the caller cannot read; a hidden field throws, never drops. */
 function buildCriteria(opts, access) {
   return Object.entries(CRITERIA_FIELDS)
     .filter(([field]) => opts[field])
@@ -74,28 +71,19 @@ async function countVisible(access, opts = {}) {
   return value || 0;
 }
 
-/**
- * Point read by Track id (the partition key, so 1 RU). Gated with canRead(): a point read skips the query
- * predicate, so without it a by-id fetch would return what a list would not.
- */
+/** Point read by Track id, gated with canRead(): a point read skips the query predicate a list applies. */
 async function getById(access, id) {
   const doc = await cosmos.readItem(CONTAINER, String(id), String(id));
   if (!doc) return null;
   return canRead(doc, access, PARTITION_FIELD) ? doc : null;
 }
 
-/**
- * An Eagle ObjectId. DEMI project ids are Track integers, `eagle-<ObjectId>` or UUIDs (DEMI-created),
- * so an id in this shape is unambiguously Eagle's and the spaces cannot collide.
- */
+/** An Eagle ObjectId: DEMI ids are Track integers, `eagle-<ObjectId>` or UUIDs, so this shape is only Eagle's. */
 const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 const lowerId = (a, b) => (String(b.id) < String(a.id) ? b : a);
 
-/**
- * The one row an Eagle id names among every row carrying it: a non-twin over the `eagle-<id>` twin, among
- * non-twins the one with a Track source, then the lowest id. Null when there is none.
- */
+/** The row an Eagle id names: a non-twin over the `eagle-<id>` twin, then a Track source, then the lowest id. */
 function pickByEagleId(rows, eagleId) {
   const twinId = eagleOnlyProjectId(String(eagleId));
   const found = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object');
@@ -131,10 +119,7 @@ async function readByEagleId(eagleId) {
   return pickByEagleId(await allByEagleId(eagleIdSpec(eagleId)), eagleId);
 }
 
-/**
- * The stored row for an Eagle id, unfiltered, write side only. A Track row beside its `eagle-<id>` twin wins (the
- * relink keeps the twin); any other pair throws with `code === DUPLICATE_ID`.
- */
+/** Stored row for an Eagle id, unfiltered, write side; a Track row beats its twin, any other pair throws DUPLICATE_ID. */
 async function readForWriteByEagleId(eagleId) {
   const items = await allByEagleId(eagleIdSpec(eagleId));
   if (items.length <= 1) return items[0] || null;
@@ -161,10 +146,7 @@ async function listNative() {
 // `demiOwnedAt` is an ISO string or absent, so the string test matches the JS `hasValue`.
 const DEMI_OWNED_EAGLE_PROJECT = 'IS_STRING(c.demiOwnedAt) AND c.demiOwnedAt != \'\' AND IS_STRING(c.eagleId) AND c.eagleId != \'\'';
 
-/**
- * Native and DEMI-owned Eagle rows whose `syncVersion` the Eagle sync-out has not sent, across partitions.
- * For `src/sync-out/pending.js` only.
- */
+/** Native and DEMI-owned Eagle rows whose `syncVersion` the sync-out has not sent; for `src/sync-out/pending.js`. */
 async function listSyncPending() {
   return fetchAll(CONTAINER, {
     query: `SELECT * FROM c WHERE ((${NATIVE_PROJECT}) OR (${DEMI_OWNED_EAGLE_PROJECT})) AND ${EAGLE_SYNC_PENDING}`,
@@ -172,10 +154,7 @@ async function listSyncPending() {
   });
 }
 
-/**
- * Names and Eagle ids for a bounded id set, to label search hits; only the label is projected, not the record.
- * `eagleId` is what the response puts in `project._id`, the id eagle-api's routes accept.
- */
+/** Names and Eagle ids for an id set, to label search hits; `eagleId` is the `project._id` eagle-api accepts. */
 async function listByIds(access, ids) {
   const unique = Array.from(new Set((ids || []).map(String)));
   if (unique.length === 0) return [];
@@ -231,10 +210,7 @@ async function listIdsByName(access, text) {
   return ids.slice(0, NAME_MATCH_MAX_IDS).map(String);
 }
 
-/**
- * `listByIds` by EAGLE id (`updates.projectId` holds one), in one `IN` rather than a read per row. Adds
- * `address` (an update hit's `project.location`) and `vis`, so a per-row dial still hides it.
- */
+/** `listByIds` by Eagle id in one `IN`, plus `address` and `vis`, so a per-row dial still hides it. */
 async function listByEagleIds(access, eagleIds) {
   const unique = Array.from(new Set((eagleIds || []).map(String)));
   if (unique.length === 0) return [];
@@ -250,10 +226,7 @@ async function listByEagleIds(access, eagleIds) {
   return items;
 }
 
-/**
- * Projects with a decision dated no later than `now`, newest first: the home feed's decision rows. A row whose
- * dial hides `decisionDate` from this caller is left out, so the order cannot reveal it.
- */
+/** Decisions dated no later than `now`, newest first, for the home feed; a dial hiding `decisionDate` drops the row. */
 async function listDecisions(access, { limit, now }) {
   const spec = selectWhere({
     access,
