@@ -26,6 +26,14 @@ const isExtension = ext => EXTENSION.test(ext) && /[A-Za-z]/.test(ext);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 
+// Old zip tools map `．＼` to `.\` when extracting, so a look-alike of a character the rules below
+// strip becomes that character first. Other compatibility forms (`¹`, `ﬁ`) stay as written.
+const STRIPPED = '/\\<>:"|?*.';
+const foldLookAlikes = value => value.replace(/[\u0080-\uffff]/g, char => {
+  const folded = char.normalize('NFKC');
+  return folded.length === 1 && STRIPPED.includes(folded) ? folded : char;
+});
+
 /** Strip dots and whitespace from both ends: Windows drops a trailing one when it extracts. */
 const trimEnds = value => value.replace(/^[\s.]+|[\s.]+$/g, '');
 
@@ -41,10 +49,9 @@ function fitName(value, max) {
  * at either end. A lone surrogate becomes U+FFFD, so a Content-Disposition can URI-encode the name.
  */
 function clean(value) {
-  return trimEnds(String(value == null ? '' : value)
-    .toWellFormed()
+  return trimEnds(foldLookAlikes(String(value == null ? '' : value).toWellFormed())
     .replace(CONTROL, '')
-    .replace(/[/\\<>:"|?*]/g, '')
+    .replace(/[/\\<>:"|?*\u2215\u2044]/g, '')
     .replace(INVISIBLE, ''));
 }
 

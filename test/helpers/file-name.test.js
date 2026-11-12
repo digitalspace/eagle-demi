@@ -101,3 +101,23 @@ test('clean keeps the joiners real scripts and emoji are written with', () => {
   assert.equal(clean(persian), persian);
   assert.equal(clean('\u{1F469}\u200d\u{1F4BB} notes'), '\u{1F469}\u200d\u{1F4BB} notes');
 });
+
+test('clean folds look-alikes of separators, dots and refused characters', async (t) => {
+  await t.test('fullwidth dots and backslashes leave no path and no leading dots', () => {
+    assert.strictEqual(clean('\uff0e\uff0e\uff3c\uff0e\uff0e\uff3cx.bat'), 'x.bat');
+    assert.strictEqual(clean('\uff0e\uff0e\uff0fx.bat'), 'x.bat');
+  });
+
+  await t.test('drops the fullwidth forms of the characters Windows refuses', () => {
+    assert.strictEqual(clean('a\uff1c\uff1e\uff1a\uff02\uff5c\uff1f\uff0ab'), 'ab');
+  });
+
+  await t.test('drops the division and fraction slashes, which NFKC keeps', () => {
+    assert.strictEqual(clean('a\u2215b'), 'ab');
+    assert.strictEqual(clean('a\u2044b'), 'ab');
+  });
+
+  await t.test('leaves other compatibility characters as written', () => {
+    assert.strictEqual(clean('\ufb01nal m\u00b2 \u00bd \uff21.pdf'), '\ufb01nal m\u00b2 \u00bd \uff21.pdf');
+  });
+});
