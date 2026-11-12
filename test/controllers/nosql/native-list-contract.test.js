@@ -112,6 +112,18 @@ test('native list contract', async (t) => {
     assert.strictEqual(specs.length, 0);
   });
 
+  await t.test('a parameter named after an Object property is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const ctor = await call(list, 'constructor=x');
+    const str = await call(list, 'toString=x');
+    const proto = await call(list, '__proto__=x');
+    assert.deepStrictEqual([ctor.status, str.status, proto.status], [400, 400, 400]);
+    assert.match(ctor.body.error, /unknown parameter: constructor/);
+    assert.match(str.body.error, /unknown parameter: toString/);
+    assert.match(proto.body.error, /unknown parameter: __proto__/);
+    assert.strictEqual(specs.length, 0);
+  });
+
   await t.test('a repeated control parameter is refused', async (t) => {
     fakeCosmos(t);
     const res = await call(list, 'page=1&page=2');

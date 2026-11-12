@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * Re-derive a project's Updates' ACLs when its visibility changes, by the push's own rule
- * (`update-parent:updateRead`, which drops compliance) off `sources.eagle`, or `sources.demi` on a DEMI row. Not `acl-cascade.cascadeAcl`: that derives
- * through `constrainToProject`, whose ladder-token rewrite would widen an Update, and patches one partition while
- * `updates` partitions on `/id`.
- */
+// A project's Updates' ACLs by the push's own rule (`update-parent:updateRead`). Not `cascadeAcl`:
+// its ladder-token rewrite would widen an Update, and it patches one partition; `updates` is on `/id`.
 
 const cosmos = require('../db/cosmos-nosql');
 const updates = require('../repositories/updates');
@@ -30,9 +26,8 @@ async function setAclForProject(projectEagleId, projectRead) {
   // The parent gate's cached rows hold this project's old read.
   updates.forgetParents();
 
-  // A notification wins an id a Track project also carries (`parent-admit:pickParent`), so those
-  // Updates hang off the notification and this project's visibility is not theirs to follow.
-  // Unfiltered: a sealed notification still holds its id.
+  // A notification wins an id a Track project shares (`parent-admit:pickParent`); its Updates do
+  // not follow the project. Unfiltered: a sealed notification still holds its id.
   if (await notifications.readForWrite(String(projectEagleId))) return NOTHING;
 
   const { items } = await cosmos.query(updates.CONTAINER, {
@@ -79,9 +74,8 @@ async function setAclForProject(projectEagleId, projectRead) {
 }
 
 /**
- * A DEMI update the cascade left public shows its own uploads, as publishing it would have
- * (domain/update-images.js). The reverse needs nothing here: `documents.setAclForProject` caps them.
- * Never throws: the visibility change already stands.
+ * A DEMI update the cascade left public shows its uploads, as publishing would; never throws.
+ * The reverse needs nothing here: `documents.setAclForProject` caps them.
  */
 async function publishOpenedImages(projectEagleId, items, derived, result) {
   const unpatched = new Set([...(result.failedIds || []), ...(result.skippedIds || [])].map(String));
@@ -89,14 +83,21 @@ async function publishOpenedImages(projectEagleId, items, derived, result) {
   const opened = items.filter(item => item.sourceSystem === 'demi' && readOf.has(String(item.id)) &&
     images.imageIds(item).length > 0);
   if (opened.length === 0) return;
+  let parent;
   try {
-    const parent = await updateParent.readParent(String(projectEagleId));
-    for (const item of opened) {
-      await images.publishFor({ req: null }, { ...item, id: String(item.id), read: readOf.get(String(item.id)) },
-        parent && parent.id);
-    }
+    parent = await updateParent.readParent(String(projectEagleId));
   } catch (err) {
     logger.error('[update-acl] images of an opened update not published', { projectEagleId, error: err.message, stack: err.stack });
+    return;
+  }
+  for (const item of opened) {
+    const id = String(item.id);
+    try {
+      await images.publishFor({ req: null }, { ...item, id, read: readOf.get(id) }, parent && parent.id);
+    } catch (err) {
+      // publishFor already logged the stack.
+      logger.error('[update-acl] images of an opened update not published', { projectEagleId, id, error: err.message });
+    }
   }
 }
 

@@ -157,8 +157,8 @@ function parseNativeQuery(spec, query, access) {
   const multi = spec.multiValueFilters || [];
 
   for (const [key, value] of Object.entries(query || {})) {
-    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !(spec.ranges || {})[key] &&
-        !(spec.contains || {})[key] && !(spec.presence || {})[key] && !(spec.flags || {})[key]) {
+    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !Object.hasOwn(spec.ranges || {}, key) &&
+        !Object.hasOwn(spec.contains || {}, key) && !Object.hasOwn(spec.presence || {}, key) && !Object.hasOwn(spec.flags || {}, key)) {
       return { error: `unknown parameter: ${key}` };
     }
     if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
