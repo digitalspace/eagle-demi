@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * The parent-document metadata a chunk carries a copy of, so a chunk query can filter on it without
- * resolving the documents first.
- *
- * What is asserted here is what is silent when it breaks: a missing key leaves the PREVIOUS value
- * on the chunk (a PATCH sets only what it names), so a document whose milestone was cleared would
- * keep answering the old milestone filter, under a 200 and a green indexer run.
- */
+// A PATCH sets only the keys it names, so a missing parent field silently leaves the old value
+// on the chunk and chunk filters keep matching it.
 
 process.env.NODE_ENV = 'test';
 
@@ -50,13 +44,8 @@ function stubPatch(t, ids) {
 
 const STAMPED_AT = '2026-09-10T12:00:00.000Z';
 
-/**
- * Captures the bulk request a GUARDED walk sends, and answers it through the REAL `bulkVerified`
- * over a faked transport: how a per-operation status becomes `succeeded`, `failedIds` or
- * `skippedIds` is the data layer's rule, and a double that restated it here would agree with a
- * broken one. `answers` maps a chunk id to the status Cosmos gives that operation — 412 is "a newer
- * walk already stamped this chunk".
- */
+// Answers through the real `bulkVerified` so status mapping stays the data layer's rule.
+// `answers` maps chunk id to its Cosmos status; 412 = a newer walk already stamped the chunk.
 function stubGuardedPatch(t, ids, answers = {}) {
   const sent = [];
   const bulkVerified = cosmos.bulkVerified;
@@ -96,9 +85,7 @@ test('chunks.parentFieldsOf', async (t) => {
   });
 
   await t.test('a field the document does not have is null, never absent', () => {
-    // Absent is the dangerous one: `setFieldsForDocument` emits one `set` per KEY, so a key left
-    // out leaves whatever the chunk already held. A document that lost its milestone would keep
-    // matching the old milestone filter.
+    // `setFieldsForDocument` emits one `set` per key, so an absent key keeps the chunk's old value.
     const fields = chunks.parentFieldsOf({ id: 'docA', projectId: '207', typeId: 'abc' });
 
     assert.deepStrictEqual(fields, {
@@ -129,14 +116,8 @@ test('chunks.parentFieldsOf', async (t) => {
   });
 });
 
-/**
- * The stamp that orders two walks over one document.
- *
- * Without it the last patch to land wins whatever it was serving: a walk that started before an
- * edit finishes after the walk serving that edit, puts the superseded values back on the chunks,
- * and the pending flag is already down — so the filter answers from stale metadata and nothing in
- * the corpus says so.
- */
+// The stamp orders two walks over one document. Without it a slow older walk can land last and
+// write superseded values back after the pending flag is down.
 test('chunks.parentStampFieldsOf', async (t) => {
   await t.test('is the parent fields plus the walk the chunk was born in', () => {
     assert.deepStrictEqual(chunks.parentStampFieldsOf(DOCUMENT, STAMPED_AT), {
@@ -372,13 +353,8 @@ test('a guarded re-stamp only overwrites chunks older than itself', async (t) =>
   });
 });
 
-/**
- * `reStampAfterWrite` — the one copy of the loop the seed and both backfills used to keep three of.
- *
- * The counters are the point: a document that THREW and a chunk operation Cosmos REJECTED went into
- * the same number, and one document is ~19 chunk operations, so the figure the operator used to
- * decide whether to run the repair could be out by an order of magnitude either way.
- */
+// Documents that threw and chunk operations Cosmos rejected are counted apart: one document is
+// about 19 chunk operations, so one mixed count misleads the operator deciding on a repair.
 test('chunks.reStampAfterWrite', async (t) => {
   const ok = (chunks_) => ({ succeeded: chunks_, failed: 0, statusCounts: { 200: chunks_ },
     requestCharge: chunks_, chunks: chunks_ });
@@ -411,9 +387,8 @@ test('chunks.reStampAfterWrite', async (t) => {
   });
 
   await t.test('names the documents behind the counts, so the flag can be cleared per document', async () => {
-    // Counts cannot say WHICH document lost a chunk, and the caller has to clear the pending flag
-    // on the ones that landed while leaving it raised on the ones that did not. Clearing on the
-    // count alone takes a still-stale document off the reconcile line.
+    // The caller clears the pending flag per document; clearing on counts alone would drop a
+    // still-stale document from reconcile.
     const { stamp } = fakeStamp({
       d2: { succeeded: 15, failed: 4, statusCounts: { 429: 4 }, requestCharge: 19 },
       d3: new Error('cosmos unavailable')
@@ -496,9 +471,8 @@ test('chunks.reStampAfterWrite', async (t) => {
   });
 
   await t.test('hands every document the walk it is serving', async () => {
-    // The token has to reach the chunk patches or the guard is not there at all — and the walk is
-    // one instant, not one per document, so a document that arrives late in a long batch is still
-    // ordered against the walk that read it.
+    // One stamp per walk, not per document, so a late document in a long batch is still ordered
+    // against the walk that read it.
     const seen = [];
     const stamp = async (access, id, doc, options) => {
       seen.push(options && options.stampedAt);
@@ -512,9 +486,8 @@ test('chunks.reStampAfterWrite', async (t) => {
   });
 
   await t.test('chunks a newer walk already stamped do not fail their document', async () => {
-    // The whole point of the guard: this walk is stale for those chunks, and the document is
-    // current because a newer walk wrote it. Counting that as a failure leaves the pending flag
-    // raised and sends the repair after a document nothing is wrong with.
+    // A newer walk wrote these chunks, so the document is current; counting them as failures
+    // would keep the pending flag raised for nothing.
     const stamp = async (access, id) => (id === 'd2'
       ? { succeeded: 0, failed: 0, skippedNewer: 19, statusCounts: { 412: 19 }, requestCharge: 0 }
       : { ...ok(19), skippedNewer: 4 });
@@ -528,9 +501,7 @@ test('chunks.reStampAfterWrite', async (t) => {
   });
 
   await t.test('patches through setParentFieldsForDocument when no seam is given', async (t2) => {
-    // The seam is for the scripts' repository doubles. Production passes none, so the default is
-    // the only thing that reaches Cosmos, and a broken default would be invisible in every other
-    // test here.
+    // Production passes no seam, so only this test covers the default path to Cosmos.
     const sent = stubPatch(t2, ['docA::p1::c0']);
 
     const result = await chunks.reStampAfterWrite(systemAccess(), [DOCUMENT]);
