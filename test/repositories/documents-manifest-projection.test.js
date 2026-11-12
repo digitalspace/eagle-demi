@@ -10,14 +10,8 @@ const documentsRepo = require('../../src/repositories/documents');
 const worker = require('../../src/jobs/bulk-download');
 const controller = require('../../src/controllers/nosql/bulk-download');
 
-/**
- * The projection allowlist of `listByIdsUnscoped`, and the two callers that must fit inside it.
- *
- * Both bulk-download suites mock this read wholesale, so a caller asking for a field the allowlist
- * forbids is invisible to them: the worker shipped asking for `vis`, threw before touching Cosmos,
- * and every multi-document job poisoned while 1,797 tests stayed green. This file is the contract
- * between the constants the callers hold and the list the repository enforces.
- */
+// Contract between the `listByIdsUnscoped` projection allowlist and its two callers. The
+// bulk-download suites mock this read, so only this file catches a caller asking a forbidden field.
 
 const access = { authenticated: false, roles: ['public'], credentials: [], teams: [] };
 

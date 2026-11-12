@@ -8,16 +8,8 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const documents = require('../../src/repositories/documents');
 
-/**
- * The "this document's chunks are stale" flag, on the rows where losing it costs most.
- *
- * The container holds three kinds of partition key and they are not interchangeable: a project id,
- * `''` for a document linked to no project, and JSON `null`. Only the last two carry documents
- * nobody browses by project, so a flag write that misses them fails where nothing else would
- * notice. These assertions read the partition key that reaches the data layer, because a key that
- * is the right SHAPE but the wrong VALUE — `'null'` for `null` — answers 404 and the flag is simply
- * never written.
- */
+// Partition keys are a project id, `''` (no project) or JSON `null`, and are not interchangeable:
+// `'null'` for `null` answers 404 and the stale-chunks flag is silently never written.
 
 const DOC_ID = '5d0d212c7d50161b92a80eed';
 
@@ -70,9 +62,8 @@ test('setParentFieldsPending addresses the partition the document actually lives
   });
 
   await t.test('the null partition is pinned directly, with no lookup', async () => {
-    // JSON null is a partition Cosmos addresses like any other (`[null]` on the wire). Only an
-    // UNKNOWN project needs the cross-partition lookup, and folding null into that spent a drain of
-    // up to 50 pages on every flag write for a document nobody browses by project.
+    // Cosmos addresses JSON null like any partition (`[null]` on the wire); only an unknown
+    // project needs the cross-partition lookup, which can drain up to 50 pages.
     let queried = false;
     t.mock.method(cosmos, 'queryFirst', async () => { queried = true; return null; });
     const reads = [];
@@ -131,14 +122,8 @@ test('setParentFieldsPending addresses the partition the document actually lives
   });
 });
 
-/**
- * The token form of the guard.
- *
- * An etag says "this row has not been written since I read it", which an extraction patch or a
- * display-name push from Eagle also answers no to — so the clear 412'd on writes that had nothing
- * to do with the flag, and the flag stayed raised for good. The token says "the flag is still the
- * one I was raised for", which is the only question a clear needs answered.
- */
+// The clear is guarded by the pending token, not the etag: unrelated writes (extraction patch,
+// Eagle name push) change the etag and would make the clear fail and leave the flag up.
 test('setParentFieldsPending clears against the pending token', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const TOKEN = '2026-09-10T17:04:05.123Z';
@@ -204,15 +189,8 @@ test('setParentFieldsPending clears against the pending token', async (t) => {
   });
 });
 
-/**
- * Two raisers on one row.
- *
- * `freshPendingAt` mints from the value the raiser READ, so two raisers that read the same row mint
- * the same token. Written unconditionally, both raises land the same value — and then the first
- * one's clear, guarded on that token, takes the second one's flag down and the drift it recorded is
- * never re-stamped. The raise has to be a test-and-set: write this token only while nothing that
- * already beats it is stored.
- */
+// Two raisers reading one row mint the same token, so one clear could drop the other's flag.
+// The raise is a test-and-set: write the token only while nothing newer is stored.
 test('setParentFieldsPending raises conditionally', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const TOKEN = '2026-09-10T17:04:05.123Z';
@@ -230,9 +208,8 @@ test('setParentFieldsPending raises conditionally', async (t) => {
   });
 
   await t.test('a cleared row, whose token is JSON null, still raises', async () => {
-    // The clear writes `parentFieldsPendingAt: null` rather than removing the path, and in Cosmos
-    // SQL `null < "2026-…"` is undefined, not true. An IS_DEFINED-only condition would therefore
-    // 412 every raise after the first clear — that is, every raise the system ever makes.
+    // The clear stores `parentFieldsPendingAt: null`, and Cosmos SQL `null < "<iso>"` is undefined,
+    // so an IS_DEFINED-only condition would 412 every raise after a clear.
     stubRow(t, { id: DOC_ID, projectId: '207', parentFieldsPending: false, parentFieldsPendingAt: null });
     const calls = recordPatches(t);
 
@@ -287,12 +264,8 @@ test('setParentFieldsPending raises conditionally', async (t) => {
   });
 });
 
-/**
- * The same raise for a writer that sets the flag INLINE on a row it is already upserting.
- *
- * An upsert replaces the whole item, so it cannot carry the patch condition above. The etag is the
- * only guard left, which is why `documents.upsert` takes one.
- */
+// An upsert that raises the flag inline cannot carry a patch condition, so it is guarded by
+// the etag `documents.upsert` takes.
 test('pendingRaiseOps is the raise an upsert writer inlines', async (t) => {
   await t.test('it mints the same token setParentFieldsPending would', async () => {
     const stored = '2026-09-10T17:04:05.123Z';
@@ -390,9 +363,8 @@ test('getById reads the partition it was given, empty string included', async (t
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test("'' is a point read, not a cross-partition query", async () => {
-    // A truthiness test sent `''` down the cross-partition branch, whose single page can come back
-    // empty on a container this size — and the re-stamp reads that as "document no longer exists"
-    // and drops the message.
+    // `''` is falsy but a real partition; a cross-partition page can be empty, which the re-stamp
+    // reads as a deleted document and drops the message.
     let queried = false;
     t.mock.method(cosmos, 'queryFirst', async () => { queried = true; return null; });
     const reads = [];
@@ -421,9 +393,8 @@ test('getById reads the partition it was given, empty string included', async (t
   });
 
   await t.test('the cross-partition read drains pages rather than sampling one', async () => {
-    // The bug this pins is silent: one page of a cross-partition lookup can come back empty while
-    // the row exists, so a single fetchNext reports a live document as deleted. The draining is
-    // `queryFirst`'s (test/db/cosmos-nosql.test.js); what matters here is that the lookup uses it.
+    // A cross-partition page can be empty while the row exists; `queryFirst` drains pages
+    // (tested in test/db/cosmos-nosql.test.js), so the lookup must use it.
     let paged = false;
     t.mock.method(cosmos, 'query', async () => { paged = true; return { items: [] }; });
     t.mock.method(cosmos, 'queryFirst', async () =>
