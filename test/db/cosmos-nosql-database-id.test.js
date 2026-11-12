@@ -5,12 +5,8 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-// The Mongo-API client is gone, but COSMOS_DATABASE=epic remains set on the deployed app until
-// the app settings are cleaned up with the account. The NoSQL client must keep ignoring it.
-//
-// Why this test outlives the layer it was written for: setting COSMOS_DATABASE=demi for the
-// NoSQL client once silently repointed the LIVE legacy app at the new, empty database, and every
-// endpoint answered [] with HTTP 200. The lesson is that this client owns its OWN variable.
+// COSMOS_DATABASE=epic stays set on the deployed app; this client must own its own variable and
+// ignore that one.
 
 const load = (env) => {
   const key = require.resolve('../../src/db/cosmos-nosql');

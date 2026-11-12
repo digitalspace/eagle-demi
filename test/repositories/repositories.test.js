@@ -16,12 +16,8 @@ const ADMIN = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectSco
 const SCOPED = { tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'] };
 const COMPLIANCE = { tier: TIER.PUBLIC, roles: ['public', 'compliance'], projectScope: null };
 
-/**
- * Capture the spec and options a repository hands to the data layer.
- *
- * Both entry points are mocked: queryValue() calls the module-internal query() reference
- * rather than the export, so mocking query() alone would miss every count.
- */
+// Mocks both entry points: queryValue() calls the module-internal query(), not the export, so
+// mocking query() alone would miss every count.
 function captureQuery(t) {
   const calls = [];
   const record = (container, spec, options = {}) => {
@@ -65,9 +61,8 @@ test('projects repository', async (t) => {
   });
 
   await t.test('listVisible projects through selectFor', async () => {
-    // The projection is level-driven: a sysadmin reads the whole row, and every other caller gets
-    // the catalog's ceiling for their level. Asserted on the SPEC because the narrowing happens in
-    // Cosmos, where no response assertion can see it.
+    // A sysadmin reads the whole row, everyone else the catalog ceiling for their level. Asserted on
+    // the SPEC: the narrowing happens in Cosmos, where no response assertion can see it.
     const calls = captureQuery(t);
     await projects.listVisible({ ...PUBLIC, level: 4 }, {});
     await projects.listVisible(systemAccess(), {});
@@ -142,9 +137,8 @@ test('projects repository', async (t) => {
     await projects.listWithCentroid(PUBLIC);
     await projects.countWithCentroid(PUBLIC);
 
-    // The TRAILING criterion, not `split(' WHERE ')[1]`: the ACL predicate nests its own
-    // `EXISTS(... WHERE ...)`, so a split truncates both sides to the same constant and the
-    // comparison holds even with no criterion at all.
+    // The TRAILING criterion: the ACL predicate nests its own `EXISTS(... WHERE ...)`, so a split on
+    // ' WHERE ' truncates both sides alike and passes even with no criterion.
     const trailing = q => q.slice(q.lastIndexOf(' AND '));
     assert.strictEqual(trailing(calls[1].spec.query), trailing(calls[0].spec.query));
     // `centroid.type` and not `centroid`: only the scalar leaf is in the container indexing
@@ -187,11 +181,8 @@ test('documents repository', async (t) => {
     assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
   });
 
-  // The search controller pages this list by re-running it and slicing. WITHOUT an ORDER BY the
-  // SQL API guarantees no order at all, so two requests can return the same row twice and never
-  // return another — the same failure DEFAULT_ORDER prevents on the AI Search side. `c.id` because
-  // it is the one path always present and always indexed: a single-property ORDER BY DROPS rows
-  // that lack the property, so sorting on a display field would hide untitled documents.
+  // Search pages this list by re-running it, and without ORDER BY rows repeat or vanish. `c.id`
+  // because an ORDER BY drops rows lacking the property, and every row has an id.
   await t.test('the list has a deterministic order, or paging repeats and omits rows', async () => {
     const calls = captureQuery(t);
     await documents.listVisible(PUBLIC, {});
@@ -233,9 +224,8 @@ test('documents repository', async (t) => {
   });
 
   await t.test("projectId '' selects the unlinked partition here too", async () => {
-    // Nothing passes `''` to documents
-    // today; this test is what keeps a falsy check from creeping back before something does, at
-    // which point "the unlinked partition" would silently mean "every document".
+    // No caller passes `''` yet; a falsy check would make "the unlinked partition" mean
+    // "every document".
     const calls = captureQuery(t);
     await documents.listVisible(ADMIN, { projectId: '' });
 
@@ -293,9 +283,8 @@ test('documents repository', async (t) => {
       'an unreadable document must never reach this process');
   });
 
-  // `listSealed` is mocked at its only call site, so the SQL it emits is invisible to every
-  // controller test: without this, dropping its criterion turns GET /api/sealed into a projected
-  // list of every document the caller can see, with the whole suite green.
+  // Controller tests mock `listSealed`, so only this catches a dropped criterion turning
+  // GET /api/sealed into every document the caller can see.
   await t.test('listSealed narrows to level 0 ON TOP OF the visibility predicate', async () => {
     const calls = captureQuery(t);
     await documents.listSealed({ ...COMPLIANCE, compartment: true }, {});
@@ -347,10 +336,8 @@ test('chunks repository', async (t) => {
     assert.ok(!/EXISTS/.test(calls[0].spec.query), 'the role predicate is still lifted');
   });
 
-  // THE regression test for this repository. `chunks` is the only container whose partition key
-  // is not the project, and visibilityFor() uses its argument for BOTH the partition key and the
-  // project-scope field. Scoping on 'documentId' would compare PROJECT ids against DOCUMENT ids
-  // and silently match nothing — invisible today because only systemAccess() reads chunks.
+  // `chunks` is the one container partitioned off the project; visibilityFor() uses its argument as
+  // the scope field, so 'documentId' would compare project ids to document ids and match nothing.
   await t.test('scoped callers are restricted on projectId, NEVER on documentId', async () => {
     const calls = captureQuery(t);
     await chunks.listVisible(SCOPED, {});
@@ -468,16 +455,14 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.strictEqual(calls[0].options.continuationToken, undefined);
     assert.strictEqual(calls[1].options.continuationToken, 'page2',
       'the second request must carry the token the first returned');
-    // maxItemCount must stay ABSENT: setting it makes cosmos.query page by hand, and the SDK
-    // drops `x-ms-continuation` on a cross-partition query, which is how the 2026-08-25 run read
-    // 1,000 of 60,578 documents and computed the rest as surplus.
+    // maxItemCount must stay ABSENT: hand paging loses the continuation token on a cross-partition
+    // query, and the unread rest would count as surplus.
     assert.ok(calls.every(c => c.options.maxItemCount === undefined));
   });
 
   await t.test('parentFieldRowsWithNoProject reads the rows no partition key addresses', async () => {
-    // The complement of `listDistinctProjectIds`, which cannot enumerate a JSON-null projectId at
-    // all. Without this read those documents' chunks stay unstamped forever, and the unscoped
-    // stale-chunk count the facets are gated on never reaches zero.
+    // `listDistinctProjectIds` cannot enumerate a JSON-null projectId; without this read those
+    // chunks stay unstamped and the stale-chunk count gating the facets never reaches zero.
     const calls = paged(t, [{ items: [{ id: 'd6' }], continuationToken: undefined }]);
 
     const rows = await documents.parentFieldRowsWithNoProject(SYSTEM);
@@ -507,12 +492,8 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.strictEqual(options.partitionKey, '207',
       'a cross-partition drain per project would scan the whole container');
     assert.match(spec.query, /c\.projectId = @projectId/);
-    // Exactly id + _etag + the DEMI-owned fields + the four parent fields + the pending pair:
-    // a wider projection reads 60k whole documents back. The parent fields ride along because the
-    // seeder has to know whether a re-seed MOVED one, which is what decides if the document's
-    // chunks need re-stamping; the pending pair rides along because a re-seed has to carry a
-    // raised flag forward rather than clear a re-stamp nothing has done; `_etag` rides along so a
-    // caller clearing that flag can do it conditionally.
+    // Exactly these fields, or the seed reads whole documents back. Parent fields show a re-seed
+    // moved one, the pending pair carries a raised flag forward, `_etag` clears it conditionally.
     assert.strictEqual(spec.query.split(' FROM ')[0].replace('SELECT ', ''),
       ['c.id', 'c._etag', ...[...documents.DEMI_OWNED_FIELDS, ...chunks.CHUNK_PARENT_FIELDS,
         ...documents.PARENT_PENDING_FIELDS, 'read', 'ownRead'].map(f => `c.${f}`)].join(', '));
@@ -564,10 +545,8 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
   });
 
   await t.test('listWithEagleId spans every source system, not just eagle', async () => {
-    // WIDER than listEagleOnlyIds on purpose: the merge writes `eagleId` onto Track-sourced rows
-    // too, so a membership test over the Eagle-sourced rows alone reports every matched project
-    // as missing from DEMI. `sourceSystem` is projected because only the Eagle-sourced rows are
-    // the push's to answer for.
+    // WIDER than listEagleOnlyIds: the merge writes `eagleId` onto Track rows too. `sourceSystem`
+    // is projected because the push answers only for Eagle-sourced rows.
     const calls = paged(t, [{ items: [], continuationToken: undefined }]);
     await projects.listWithEagleId(SYSTEM);
 
@@ -659,15 +638,8 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
   });
 });
 
-/**
- * Every lookup that expects at most one row and cannot pin a partition.
- *
- * `query(..., { maxItemCount: 1 })` then `items[0]` reads ONE page, and a page of a cross-partition
- * query legitimately comes back empty while the row exists — Cosmos answers with whatever the
- * partitions it reached within the page budget held. Each of these reported an existing row as
- * absent, and the callers act on that: the seeder writes a duplicate project, `/boundaries/<name>`
- * 404s a boundary that is there.
- */
+// Single-row lookups that cannot pin a partition. One cross-partition page can be empty while the
+// row exists, and callers act on "absent": duplicate projects, 404s for boundaries that exist.
 test('single-row cross-partition lookups drain rather than sample', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -799,14 +771,8 @@ test('projects by Eagle id answer one row', async (t) => {
   });
 });
 
-/**
- * `partitionKeyFor` and the JSON-null partition.
- *
- * Cosmos serialises a null partition key as `[null]` and addresses it like any other value
- * (@azure/cosmos 4.10.0, dist/commonjs/documents/PartitionKeyInternal.js:19-25). Folding it into
- * "unknown" sent every read of those documents cross-partition — a scan, on the one bucket whose
- * rows nothing else reaches.
- */
+// Cosmos addresses a null partition key (`[null]`) like any other value. Treating it as "unknown"
+// would send every read of those documents cross-partition.
 test('a null projectId is a partition, not an absent one', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

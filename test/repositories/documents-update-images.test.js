@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Images uploaded through the Update form are Documents with `documentSource: 'UPDATE'`. They show
- * on their Update only, so the Cosmos document lists leave them out. No Cosmos runs here, so the
- * SQL sent is the observable surface.
- */
+// Update-form images are Documents with `documentSource: 'UPDATE'`; they show on their Update
+// only, so document lists leave them out.
 
 process.env.NODE_ENV = 'test';
 
