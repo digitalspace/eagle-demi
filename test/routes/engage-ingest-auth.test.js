@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * Who may call the ENGAGE ingest, PUT /engage/engagements/:engagementId, end to end through the
- * dispatcher. The handler writes any project through systemAccess(), so only ENGAGE, as the APIM
- * principal `apim:engage`, gets through; eagle-api's own principal is refused here as ENGAGE's is
- * refused on the Eagle mirror.
- */
+// The handler writes through systemAccess(), so only `apim:engage` may pass; eagle-api's
+// principal is refused here as ENGAGE's is on the Eagle mirror.
 
 process.env.NODE_ENV = 'test';
 

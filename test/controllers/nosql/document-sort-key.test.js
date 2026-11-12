@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * `displayNameSort` at the three controller write sites. The seed's own site is covered by
- * test/seed/transform.test.js, and it is the one that also serves eagle-api's push.
- *
- * Documents have no write choke point, so a site that forgets the key writes a row the indexer then
- * carries with a NULL sort field — which orders it before every named row under
- * `sortBy=displayName` and says nothing anywhere.
- */
+// Documents have no write choke point: a site that forgets `displayNameSort` silently sorts the
+// row first under `sortBy=displayName`. The seed site is in test/seed/transform.test.js.
 
 process.env.NODE_ENV = 'test';
 

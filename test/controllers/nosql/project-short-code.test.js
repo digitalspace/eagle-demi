@@ -36,12 +36,8 @@ const stored = (overrides = {}) => ({
 const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
 const lostRace = () => Object.assign(new Error('Precondition failed'), { code: 412 });
 
-/**
- * Mocks both repositories over one stored row. `ids` are link records Cosmos already holds, on top
- * of one per code the row holds at its target; `owners` maps a code to the project ids claiming
- * it, `upsert` replaces the default write, `moved` lists codes whose record changed since read, so
- * their repoint 412s.
- */
+// `ids`: extra link records Cosmos holds; `owners`: code to claiming project ids; `moved`: codes
+// whose record changed since read, so their repoint 412s.
 function setup(t, { project = stored(), ids = {}, owners = {}, upsert, moved = new Set() } = {}) {
   const created = [];
   const upserts = [];

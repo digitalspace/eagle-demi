@@ -1,8 +1,7 @@
 'use strict';
 
-// GET /users and /groups on the native list contract, through the real controllers and
-// repositories over a fake Cosmos that applies the role predicate the query carries, so what an
-// anonymous caller may see is observed in the response.
+// The fake Cosmos applies the role predicate the query carries, so what an anonymous caller may
+// see is observed in the response.
 
 process.env.NODE_ENV = 'test';
 

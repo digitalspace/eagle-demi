@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * POST /api/access/simulate answers with the REAL engine, so this suite is written as literals: a
- * table of callers and exactly what each of them reaches. Recomputing the expectation from
- * access-sql.js would make it pass whatever the ladder did next, which is the failure this
- * endpoint exists to prevent in the frontend.
- */
+// Expectations are literals on purpose: recomputing them from access-sql.js would pass whatever
+// the ladder did next.
 
 process.env.NODE_ENV = 'test';
 

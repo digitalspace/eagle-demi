@@ -1,9 +1,7 @@
 'use strict';
 
-// Native update and notification reads, driven through the real handlers and repositories over a
-// fake Cosmos that applies the role arm, equality, IN, `<=`, pinned, parent gate and ORDER BY
-// clauses of each query, plus `>=`, the presence clause and the flag clause, so what a caller may see is observed in the response. The indexes are faked at
-// `searchActivities`/`searchNotifications`, so the OData filter they are asked with is observed too.
+// The fake Cosmos applies each query's clauses, so what a caller may see is observed in the
+// response; the faked index calls expose the OData filter too.
 
 process.env.NODE_ENV = 'test';
 
@@ -33,11 +31,10 @@ const HIDDEN_EAGLE_ID = 'cccccccccccccccccccccccc';
 const SCOPED = { projectScope: ['p1', 'p2'] };
 
 const CONTAINERS = {
-  // Live: u1, u4 and u6. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
-  // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
-  // u6 has a null status, as the backfill leaves a row whose Eagle source had none; the gate admits it.
+  // Live: u1, u4, u6 (u6 has the null status the backfill leaves). u2 draft, u3 scheduled: staff only.
+  // u5 is public, but its parent project p2 is staff-only, so it is hidden below staff.
   updates: [
-    // u1 and u4 store `pinned` and the C&E flag as the mirror now writes them; the rest are rows from before that.
+    // u1 and u4 store `pinned` and the C&E flag as the mirror writes them; the rest lack both.
     { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', pinned: false, complianceAndEnforcement: false, read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
     { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', documentUrl: '/doc/b.pdf', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
     { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },

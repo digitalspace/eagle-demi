@@ -1,20 +1,7 @@
 'use strict';
 
-/**
- * The `public` config document, both ends: GET /config/public serves it and
- * PUT /eagle/config/public is how eagle-api keeps it current.
- *
- * Two things are asserted about the read that nothing else can see. First the allowlist: this
- * document is a copy of eagle-api's Mongo `Config`, so anything that lands there lands here, and
- * only PUBLIC_KEYS may reach an anonymous caller. Second the refusal: where /config degrades to
- * app settings, this route answers 503, because the safe answer to "I do not know whether the
- * access curtain is closed" is not `ACCESS_GATE: false`.
- *
- * The push is asserted on the same allowlist from the other side — eagle-api sends its whole
- * /api/config and the KEYCLOAK_* block must not land in a document an anonymous site reads — plus
- * the two fields whose absence is dangerous rather than merely wrong, and the route chain that is
- * the only thing between the stored payload and an unauthenticated caller.
- */
+// The document copies eagle-api's whole Mongo `Config`, so only PUBLIC_KEYS may reach an anonymous
+// caller. An unreadable document answers 503, never a guessed `ACCESS_GATE: false`.
 
 process.env.NODE_ENV = 'test';
 
@@ -140,9 +127,8 @@ test('public config controller', async (t) => {
 });
 
 test('the documented payload is the served one', () => {
-  // The swagger PublicConfig schema is the only published statement of what an anonymous caller
-  // gets, and it is hand-maintained. Text-scanned rather than parsed: there is no YAML parser in
-  // this project's dependencies, and the failure this guards against is forgetting, not evasion.
+  // The swagger PublicConfig schema is hand-maintained. Text-scanned because no YAML parser is a
+  // dependency, and the risk is forgetting, not evasion.
   const yaml = fs.readFileSync(
     path.join(__dirname, '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8').split('\n');
 
@@ -205,11 +191,8 @@ test('public config over the dispatcher', async (t) => {
   });
 });
 
-/**
- * eagle-api's live /api/config, as it pushes it: the allowlisted keys plus the ones this API must
- * not store. `ACCESS_GATE: false` and `SHOW_SURVEY_BANNER: false` are here deliberately — a filter
- * that drops falsy values would store neither, and the first of those opens the access curtain.
- */
+// The `false` values are deliberate: a filter that drops falsy values would store neither, and a
+// missing `ACCESS_GATE` opens the access curtain.
 const PUSHED = {
   ENVIRONMENT: 'test',
   BANNER_COLOUR: 'orange',
@@ -235,11 +218,8 @@ const SERVED = {
   SHOW_SURVEY_BANNER: false
 };
 
-/**
- * An in-memory `public` document, so a push and the GET after it see the same container rather
- * than two stubs that could agree about nothing. The stored row carries the Cosmos system fields
- * an upsert really returns — the response must not.
- */
+// A push and the GET after it share one in-memory container. The stored row carries the Cosmos
+// system fields an upsert returns; the response must not.
 function stubDocument(t, initial = null) {
   let stored = initial;
   t.mock.method(configRepository, 'getPublic', async () => stored);
@@ -299,9 +279,8 @@ test('public config push', async (t) => {
   });
 
   await t.test('a { doc } envelope is 400 — the body is the bare config object', async () => {
-    // The contract with eagle-api: what /api/config serves, sent as the body itself. There is one
-    // config document and Eagle has no id for it, so this route is deliberately not the `{ doc }`
-    // shape the record mirrors take, and an envelope must not be stored as a config.
+    // There is one config document and Eagle has no id for it, so unlike the record mirrors this
+    // route takes the bare config, not a `{ doc }` envelope.
     const read = stubDocument(t);
     const res = mockRes();
 
@@ -312,9 +291,8 @@ test('public config push', async (t) => {
   });
 
   await t.test("a Mongo row's own fields do not ride in on a bare push", async () => {
-    // eagle-api strips `_id`, `__v` and `_schemaName` before it pushes. The allowlist is what makes
-    // that a belt on top of braces rather than the only thing standing between a Mongo row and a
-    // document an anonymous site reads.
+    // eagle-api strips `_id`, `__v` and `_schemaName` before it pushes; the allowlist is the
+    // second guard.
     const read = stubDocument(t);
     const res = mockRes();
 
@@ -344,14 +322,8 @@ test('public config push', async (t) => {
     assert.equal(res.body.SEARCH_API_PATH, '');
   });
 
-  /**
-   * Bodies the route must refuse, one subtest each so a failure names the case rather than an
-   * index. `ENVIRONMENT` and `ACCESS_GATE` are the two whose absence is dangerous rather than
-   * merely wrong: an rproxy that fell through to the SPA answers 200 with something that parses
-   * but is not eagle-api's config — the seeder refuses that case for the same reason — and a gate
-   * that is missing or stringy leaves the access curtain undecided. `'false'` is truthy, which is
-   * the `string(bool)` trap that already switched a feature off once.
-   */
+  // Without `ENVIRONMENT` the body may be an SPA fallback page, not eagle-api's config; a missing
+  // or string `ACCESS_GATE` leaves the curtain undecided, and `'false'` is truthy.
   const REJECTED = [
     ['an empty object', {}, /ENVIRONMENT/],
     ['an array', [PUSHED], /JSON object/],
@@ -498,11 +470,8 @@ test('EXTENDED_PROJECT_PAGES', async (t) => {
   });
 });
 
-/**
- * The route chain, run end to end. The handler reads and writes no ACL predicate — it stores what
- * it is given — so the chain is the whole thing standing between an anonymous caller and the
- * payload eagle-public boots on.
- */
+// The handler checks no ACL, so the route chain is all that stands between an anonymous caller
+// and the payload eagle-public boots on.
 test('the config push route is behind authMiddleware + requireWrite + requireEagleMirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

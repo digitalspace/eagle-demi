@@ -396,7 +396,7 @@ test('short link controller', async (t) => {
     t.mock.method(projects, 'listShortCodeOwners', async () => holders);
     t.mock.method(projects, 'getById', gatedGetById(HIDDEN_207));
     t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null, _etag: '"a"' }));
-    // The adoption lands after the read, so the stored revision is no longer "a".
+    // The adoption lands after the read, so the stored revision differs from "a".
     const guarded = async (etag) => {
       holders = adopter ? [adopter] : [];
       if (etag !== '"b"') throw Object.assign(new Error('Precondition failed'), { code: 412 });

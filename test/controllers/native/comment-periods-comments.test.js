@@ -1,8 +1,7 @@
 'use strict';
 
-// Native comment period and comment reads, driven through the real handlers and repositories over a
-// fake Cosmos that applies the role arm, the equality and IN clauses and the ORDER BY of each query,
-// so what a caller may see, and in what order, is observed in the response.
+// The fake Cosmos applies each query's role arm, equality, IN and ORDER BY clauses, so what a
+// caller may see, and in what order, is observed in the response.
 
 process.env.NODE_ENV = 'test';
 

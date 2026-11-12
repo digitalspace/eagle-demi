@@ -1,8 +1,7 @@
 'use strict';
 
-// `GET /projects` `pcp` filter and `eacDecisionSort` sort. Cosmos is faked at `query`; the fake runs
-// each emitted comment-period status clause over the period fixtures, so the assertions are about
-// the SQL the request built, not about the fake.
+// The fake runs each emitted comment-period status clause over the fixtures, so the assertions
+// are about the SQL the request built, not about the fake.
 
 process.env.NODE_ENV = 'test';
 
