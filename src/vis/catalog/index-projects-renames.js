@@ -48,4 +48,10 @@ function dialsForIndex(dials) {
   return out;
 }
 
-module.exports = { PROJECT_TO_INDEX, dialsForIndex };
+/** The stored project fields a projects index column is built from; a column that does not rename is its own. */
+function storedFieldsOf(column) {
+  const sources = Object.keys(PROJECT_TO_INDEX).filter(field => PROJECT_TO_INDEX[field].includes(column));
+  return sources.length ? sources : [column];
+}
+
+module.exports = { PROJECT_TO_INDEX, dialsForIndex, storedFieldsOf };

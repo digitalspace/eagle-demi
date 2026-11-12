@@ -27,18 +27,12 @@ const { dialAllows } = require('../helpers/dial');
 const { inList, selectWhere, selectFor, fetchAll } = require('../repositories/_sql');
 const { NAME_CONTAINS_FIELDS, nameContainsClause, presenceTerm } = require('./eagle-query');
 const { levelOf } = require('../vis/level');
-const { PROJECT_TO_INDEX } = require('../vis/catalog/index-projects-renames');
+const { storedFieldsOf } = require('../vis/catalog/index-projects-renames');
 const updates = require('../repositories/updates');
 const { logger } = require('../utils/logger');
 
 /** Most ranked ids one keyword list reads: one service request, never a second. */
 const ID_PAGE = aiSearch.SERVICE_MAX_TOP;
-
-/** The stored fields an index column is built from, from the data source's rename map. */
-function sourcesOf(renames, column) {
-  const sources = Object.keys(renames).filter(field => renames[field].includes(column));
-  return sources.length ? sources : [column];
-}
 
 // A `<field>Tokens` column is its field again under the filename analyzer (data sources).
 const TOKEN_TWINS = Object.freeze({ nameTokens: 'name', fileNameTokens: 'documentFileName' });
@@ -105,7 +99,7 @@ const INDEX_MAPS = Object.freeze({
     // Matched in the index so a hit ranked past the id page is not lost; Cosmos still re-checks it.
     contains: { name: NAME_CONTAINS_FIELDS.Project },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
-      .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
+      .flatMap(storedFieldsOf))]
   },
   activities: {
     search: opts => aiSearch.searchActivities(opts),

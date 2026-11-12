@@ -210,6 +210,29 @@ async function listIdsByName(access, text) {
   return ids.slice(0, NAME_MATCH_MAX_IDS).map(String);
 }
 
+/** The most ids `listDialHiddenIds` answers. Past it the read throws: a cut list lets the rest through. */
+const DIAL_HIDDEN_MAX_IDS = 500;
+const DIAL_HIDDEN_OVER_CAP = 'DIAL_HIDDEN_OVER_CAP';
+
+/** Ids of the projects this caller may see whose own dial hides any of `storedFields` from them. */
+async function listDialHiddenIds(access, storedFields) {
+  const fields = [...new Set(storedFields)];
+  if (fields.length === 0) return [];
+  const allowed = fields.map(field => dialAllows(field, levelOf(access))).join(' AND ');
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [{ clause: `NOT (${allowed})`, params: [] }],
+    select: 'VALUE c.id'
+  });
+  const ids = await cosmos.queryPage(CONTAINER, spec, { size: DIAL_HIDDEN_MAX_IDS + 1 });
+  if (ids.length > DIAL_HIDDEN_MAX_IDS) {
+    logger.error('[projects] dial-hidden ids past their cap', { fields, cap: DIAL_HIDDEN_MAX_IDS });
+    throw Object.assign(new Error('[projects] dial-hidden ids past their cap'), { code: DIAL_HIDDEN_OVER_CAP });
+  }
+  return ids.map(String);
+}
+
 /** `listByIds` by Eagle id in one `IN`, plus `address` and `vis`, so a per-row dial still hides it. */
 async function listByEagleIds(access, eagleIds) {
   const unique = Array.from(new Set((eagleIds || []).map(String)));
@@ -473,6 +496,9 @@ module.exports = {
   listRowsByIds,
   listIdsByName,
   NAME_MATCH_MAX_IDS,
+  listDialHiddenIds,
+  DIAL_HIDDEN_MAX_IDS,
+  DIAL_HIDDEN_OVER_CAP,
   listByEagleIds,
   listDecisions,
   listWithCentroid,

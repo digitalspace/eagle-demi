@@ -123,6 +123,9 @@ const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read'
 const PROJECT_SEARCH_FIELDS =
   'name,displayName,description,proponent,nameTokens,searchLabels,tags,tagsTokens';
 
+/** What leg two of a document keyword search matches a project on: the names it goes by, never its description. */
+const LEG_TWO_SEARCH_FIELDS = 'name,displayName,proponent,nameTokens,tags,tagsTokens';
+
 /**
  * The fields a document keyword query matches on, compat and native alike. One copy, because
  * compat's leg-two exclusion clause has to complement exactly these. `fileNameTokens` is
@@ -1580,7 +1583,7 @@ async function searchDocuments(opts = {}) {
       fuzzy: opts.fuzzy,
       prefix,
       filter: opts.projectFilter,
-      searchFields: 'name,displayName,proponent,nameTokens,tags,tagsTokens',
+      searchFields: LEG_TWO_SEARCH_FIELDS,
       select: 'id',
       top: MAX_PROJECT_FANOUT
     });
@@ -2249,6 +2252,7 @@ module.exports = {
   searchDocuments,
   searchDocumentIds,
   DOCUMENT_SEARCH_FIELDS,
+  LEG_TWO_SEARCH_FIELDS,
   searchActivities,
   searchNotifications,
   // The `/search/counts` legs. `countKeyword` is exported for the guard test that pins the request
