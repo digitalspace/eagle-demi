@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The eagle-notify push. What is asserted is the wire: the URL, the function-key header and the
- * event body, because eagle-notify is a separate service and nothing else in this repo would
- * notice the payload drifting.
- *
- * Retry and dark mode are the other half — a notification that throws would fail the mirror, and a
- * dark environment that "sent" something would suppress the real notification later.
+ * The eagle-notify push, asserted on the wire (URL, key header, body): nothing else here sees it drift.
+ * A throw would fail the mirror, and a dark environment that "sent" would suppress the real send.
  */
 
 process.env.NODE_ENV = 'test';
@@ -16,6 +12,7 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 const notify = require('../../src/services/notify');
+const { finishes } = require('../helpers/finishes');
 
 const ITEM = {
   id: '5cf00c03a266b7e1877504db',
@@ -123,6 +120,43 @@ test('notify.updatePublished', async (t) => {
     assert.strictEqual(notify.summaryOf(html), 'Rock & Roll’s “Café” — ’');
     // An entity costs one character, not six, against the cap.
     assert.strictEqual(notify.summaryOf(`<p>${'&amp;'.repeat(300)}</p>`), '&'.repeat(280));
+  });
+
+  await t.test('excerpt and summary drop bidi and control characters, raw or as entities', () => {
+    const html = '<p>Site\u202e C\u2066 Re\u0001port &#x202E;draft&#x2066;</p>';
+    assert.strictEqual(notify.excerptOf(html), 'Site C Report draft');
+    assert.strictEqual(notify.summaryOf(html), 'Site C Report draft');
+    const rtl = '<p>\u05e9\u05dc\u05d5\u05dd\u200f (EAO)\tnext\nline</p>';
+    assert.strictEqual(notify.excerptOf(rtl), '\u05e9\u05dc\u05d5\u05dd\u200f (EAO) next line');
+  });
+
+  await t.test('headline, short headline and summary are sent without bidi or control characters', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+    const hidden = 'Site\u202e C\u2066 Re\u0001port';
+
+    await notify.updatePublished({ ...ITEM, headline: hidden, shortHeadline: hidden, summary: hidden }, null);
+    await notify.updateCancelled({ ...ITEM, headline: hidden });
+
+    const [published, cancelled] = calls.map(call => JSON.parse(call.opts.body));
+    assert.strictEqual(published.title, 'Site C Report');
+    assert.strictEqual(published.shortHeadline, 'Site C Report');
+    assert.strictEqual(published.summary, 'Site C Report');
+    assert.strictEqual(cancelled.title, 'Site C Report');
+  });
+
+  await t.test('the image alt text is sent as plain text without bidi characters', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+
+    await notify.updatePublished(ITEM, null, { document: '5cf00c03a266b7e187750002', alt: '<b>\u202egnp.exe</b>' });
+
+    assert.strictEqual(JSON.parse(calls[0].opts.body).featuredImageAlt, 'gnp.exe');
+  });
+
+  await t.test('excerpt and summary stay linear on a long run of tags that never close', () => {
+    const module = require.resolve('../../src/services/notify');
+    assert.ok(finishes(module, "m.excerptOf('<'.repeat(400000))"));
   });
 
   await t.test('the fallback summary never carries a tag, split, escaped or unclosed', () => {

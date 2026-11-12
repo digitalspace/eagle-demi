@@ -3342,7 +3342,8 @@ paths:
         larger file still streams. Its pool is `DOWNLOAD_STREAM_MAX_CONCURRENT` (default 2; 0 = no
         limit). Any other case gets the 302 above, never JSON, except that a ranged request stamped
         by the edge and starting past byte 0 answers the 503 instead of that 302.
-        `DOWNLOAD_STREAM_MAX_BYTES=0` turns stream mode off and sends the 302 to every caller.
+        `DOWNLOAD_STREAM_MAX_BYTES=0` turns stream mode off and sends the 302 to every caller
+        except an edge-stamped range starting past byte 0, which still answers the 503.
 
         A single byte range answers 206;
         a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
@@ -4313,8 +4314,11 @@ paths:
         `attachments` (document ids), `regions`, `location`,
         `engagementUrl` (http/https only, else null), `status` and `publishDate` (ISO; the
         record's `dateAdded` when it has none). Image `alt`, `caption` and `credit` are stored as
-        plain text with `<` and `>` stripped; `caption` is cut at 300 characters and `credit` at
-        150, and an empty one is stored as null. An image entry with no `document` is dropped. Every
+        plain text with `<`, `>`, bidi overrides and isolates, and control characters stripped;
+        `caption` is cut at 300 characters and `credit` at
+        150, and an empty one is stored as null. `headline`, `shortHeadline` and `summary` are
+        stored with bidi overrides, isolates and control characters stripped, and as null when
+        nothing else is left. An image entry with no `document` is dropped. Every
         read by a non-staff caller shows a row with a `status` only when it is `published` and
         its `publishDate` has passed; a row with no `status`
         follows `read[]` alone. An update is emailed at most once: withdrawing one DEMI announced
@@ -9932,7 +9936,9 @@ components:
       description: >-
         Every field is optional. A Corporate update needs `subject`; any other category needs
         `projectId`, `pcp`, or the comment period notification type. `shortHeadline` and
-        `summary` are plain text.
+        `summary` are plain text. `headline`, `shortHeadline`, `summary` and image `alt`,
+        `caption` and `credit` are stored with bidi overrides, isolates and control characters
+        stripped, and as null when nothing else is left.
       properties:
         projectId:
           type: string

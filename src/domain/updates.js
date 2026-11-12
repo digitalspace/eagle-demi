@@ -17,6 +17,7 @@ const { writeRow, queued, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_REA
 const { UPDATE } = require('../sync-out/kinds');
 const images = require('./update-images');
 const { logger } = require('../utils/logger');
+const { withoutControlsOrNull } = require('../helpers/html-entities');
 
 /** updateRules.js:11. */
 const STATUSES = Object.freeze(['draft', 'published', 'archived']);
@@ -108,9 +109,7 @@ function imageErrors(image, label, { requireDocument }) {
 /** The nested fields `check` has no type for. */
 function shapeErrors(body) {
   let errors = {};
-  if (Object.hasOwn(body, 'featuredImage') && body.featuredImage !== null) {
-    errors = { ...errors, ...imageErrors(body.featuredImage, 'featuredImage', { requireDocument: false }) };
-  }
+  if (Object.hasOwn(body, 'featuredImage') && body.featuredImage !== null) errors = { ...errors, ...imageErrors(body.featuredImage, 'featuredImage', { requireDocument: false }) };
   if (Object.hasOwn(body, 'images')) {
     if (!Array.isArray(body.images)) errors.images = 'must be a list';
     else if (body.images.length > IMAGES_MAX) errors.images = `must hold ${IMAGES_MAX} or fewer`;
@@ -128,11 +127,12 @@ function shapeErrors(body) {
 function shaped(body) {
   const imageOf = (image) => ({
     document: isBlank(image.document) ? null : String(image.document),
-    alt: image.alt ?? null,
-    caption: isBlank(image.caption) ? null : image.caption,
-    credit: isBlank(image.credit) ? null : image.credit
+    alt: withoutControlsOrNull(image.alt ?? null),
+    caption: isBlank(image.caption) ? null : withoutControlsOrNull(image.caption),
+    credit: isBlank(image.credit) ? null : withoutControlsOrNull(image.credit)
   });
   const out = {};
+  for (const key of ['headline', 'shortHeadline', 'summary']) if (Object.hasOwn(body, key)) out[key] = withoutControlsOrNull(body[key]);
   if (Object.hasOwn(body, 'featuredImage')) {
     out.featuredImage = body.featuredImage && !isBlank(body.featuredImage.document) ? imageOf(body.featuredImage) : null;
   }

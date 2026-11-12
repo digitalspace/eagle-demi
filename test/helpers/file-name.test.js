@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { clean, fileNameFor, pdfTitleFor } = require('../../src/helpers/file-name');
+const { finishes } = require('./finishes');
 
 const DOC = {
   id: '5f1e2d3c4b5a69788796a5b4',
@@ -100,4 +101,60 @@ test('clean keeps the joiners real scripts and emoji are written with', () => {
   const persian = '\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645';
   assert.equal(clean(persian), persian);
   assert.equal(clean('\u{1F469}\u200d\u{1F4BB} notes'), '\u{1F469}\u200d\u{1F4BB} notes');
+});
+
+test('clean folds look-alikes of separators, dots and refused characters', async (t) => {
+  await t.test('fullwidth dots and backslashes leave no path and no leading dots', () => {
+    assert.strictEqual(clean('\uff0e\uff0e\uff3c\uff0e\uff0e\uff3cx.bat'), 'x.bat');
+    assert.strictEqual(clean('\uff0e\uff0e\uff0fx.bat'), 'x.bat');
+  });
+
+  await t.test('drops the fullwidth forms of the characters Windows refuses', () => {
+    assert.strictEqual(clean('a\uff1c\uff1e\uff1a\uff02\uff5c\uff1f\uff0ab'), 'ab');
+  });
+
+  await t.test('drops the division and fraction slashes, which NFKC keeps', () => {
+    assert.strictEqual(clean('a\u2215b'), 'ab');
+    assert.strictEqual(clean('a\u2044b'), 'ab');
+  });
+
+  await t.test('leaves other compatibility characters as written', () => {
+    assert.strictEqual(clean('\ufb01nal m\u00b2 \u00bd \uff21.pdf'), '\ufb01nal m\u00b2 \u00bd \uff21.pdf');
+  });
+});
+
+test('clean drops what Japanese and Korean code pages turn into a backslash or colon', () => {
+  assert.strictEqual(clean('a\u00a5..\u00a5..\u00a5x.exe'), 'a....x.exe');
+  assert.strictEqual(clean('a\u20a9b\u2216c\u2236d'), 'abcd');
+});
+
+test('clean collapses a run of whitespace, so padding cannot push the extension out of view', () => {
+  assert.strictEqual(clean(`invoice.pdf${' '.repeat(120)}x.exe`), 'invoice.pdf x.exe');
+  assert.strictEqual(clean('a \u00a0\u3000 b'), 'a b');
+  assert.strictEqual(clean('a\u00a0b'), 'a\u00a0b');
+});
+
+test('clean drops fillers, format characters and tags that show as nothing', () => {
+  const hidden = '\u115f\u1160\u2800\ufeff\u00ad\u034f\u17b4\u17b5\u180b\u180c\u180d\u180f' +
+    '\ufff9\ufffa\ufffb\u{e0001}\u{e0041}\u{e007f}\u{1d173}\u{1d17a}';
+  assert.strictEqual(clean(`Site${hidden}C.pdf`), 'SiteC.pdf');
+  assert.strictEqual(clean('\u2764\ufe0f notes'), '\u2764\ufe0f notes', 'emoji are written with U+FE0F');
+});
+
+test('fileNameFor keeps a name off the console device names', () => {
+  assert.strictEqual(fileNameFor({ ...DOC, documentFileName: 'CONIN$.txt' }, {}), '_CONIN$.txt');
+  assert.strictEqual(fileNameFor({ ...DOC, documentFileName: 'conout$' }, {}), '_conout$');
+});
+
+test('clean is linear in a long inner run of spaces or dots', () => {
+  const module = require.resolve('../../src/helpers/file-name');
+  assert.ok(finishes(module, "m.clean('a' + ' '.repeat(400000) + 'b')"));
+  assert.ok(finishes(module, "m.clean('a' + '.'.repeat(400000) + 'b')"));
+});
+
+test('clean collapses padding interleaved with joiners, and keeps a joiner inside a word', () => {
+  assert.strictEqual(clean(`invoice.pdf${' \u200c'.repeat(60)}x`), 'invoice.pdf x');
+  assert.strictEqual(clean(`invoice.pdf${'\u3000\u200d'.repeat(60)}x`), 'invoice.pdf x');
+  assert.strictEqual(clean('\u0915\u094d\u200d\u0937 a \u200cb'), '\u0915\u094d\u200d\u0937 a \u200cb');
+  assert.strictEqual(clean('\u{1F469}\u200d\u{1F4BB} \u{1F468}\u200d\u{1F373}'), '\u{1F469}\u200d\u{1F4BB} \u{1F468}\u200d\u{1F373}');
 });
