@@ -3,10 +3,8 @@
 const { authenticate } = require('../helpers/auth');
 
 /**
- * Auth for the sealed compartment, and deliberately NOT `middleware/auth.js`: that gate demands
- * AUTHENTICATED_ROLES, which excludes `compliance` on purpose, so mounting it here would 403 the
- * compartment's only caller. Verification only — `requireRole('compliance')` beside it decides who
- * gets in (docs/rbac-architecture.md §1, "Level 0").
+ * Verification only, deliberately not `middleware/auth.js`: its AUTHENTICATED_ROLES excludes `compliance`,
+ * the sealed compartment's only caller. `requireRole('compliance')` beside it decides who gets in.
  */
 module.exports = (req, res, next) => {
   authenticate(

@@ -1,19 +1,8 @@
 'use strict';
 
 /**
- * Visibility for the Cosmos NoSQL API. The single place a read predicate is built.
- *
- * Two ORTHOGONAL dimensions — this is the scaling decision, see the wiki's Architecture page:
- *
- *   1. WHAT KIND of access  -> `read[]` holds role TYPES only — the ladder tokens
- *      'team', 'staff', 'idir', 'public'. Bounded and indexed at /read/[]/?.
- *   2. WHICH PROJECTS       -> the partition key (/id on projects, /projectId elsewhere).
- *
- * Putting project identity into read[] instead would mean a user in 50 projects carrying 150
- * roles, and every read becoming a cross-partition ACL scan. Project scope is already the
- * partition boundary, so scoping by it costs nothing.
- *
- * Nothing here interpolates a caller value into SQL. Every value is a bound parameter.
+ * The single place a Cosmos read predicate is built. `read[]` holds role types only; project scope
+ * rides the partition key, never `read[]`. Every caller value is a bound parameter.
  */
 
 const { levelFromRoles } = require('../vis/level');
@@ -28,22 +17,14 @@ const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'publi
 const LADDER_TOKENS = Object.freeze(Object.values(LEVEL_TOKENS));
 
 /**
- * The sealed compartment's token — level 0, off the ladder (docs/rbac-architecture.md §1,
- * "Level 0"). It is a role name like any other, so a sealed row needs no separate store; what makes
- * it sealed is that every read carries an exclusion — privileged callers and the role's own holders
- * included — except the compartment routes' own, see `opensSealed`.
+ * Level 0, off the ladder. A plain role name; a row is sealed because every read excludes it,
+ * privileged callers included, except the compartment routes' own (see `opensSealed`).
  */
 const SEALED_TOKEN = 'compliance';
 
 /**
- * The `read[]` a row carries at `level`.
- *
- * Levels 2-4 nest, so staff reads every row at level 2 or above with one token. Level 1 shares
- * NOTHING with them and is reached only through the team arm: a level-2 row carrying `team` would
- * hand a team-only caller every All-EAO row of its own project.
- *
- * 0 is the sealed compartment, the one non-ladder level this accepts. It shares no token with the
- * ladder, so no ladder caller reaches it and the exclusion below keeps privileged ones out too.
+ * Levels 2-4 nest. Level 1 shares no token with them and is reached only through the team arm, else
+ * a team-only caller would read every All-EAO row of its project. Level 0 is the sealed compartment.
  */
 function readForLevel(level) {
   if (level === 0) return [SEALED_TOKEN];
@@ -55,11 +36,8 @@ function readForLevel(level) {
 }
 
 /**
- * A row's level: the widest ladder token in its `read[]`, 1 when it carries none, 0 when sealed.
- *
- * Legacy ACLs (`['sysadmin','staff','demi-admin']`, plus `'public'` when published) therefore read
- * as level 2 and 4 — today's meaning. Admin role names are ignored: they only ever matched callers
- * that short-circuit anyway. No stored ACL is rewritten.
+ * Widest ladder token in `read[]`, 1 when none, 0 when sealed. Admin role names are ignored, so
+ * legacy ACLs read as level 2, or 4 when published, with no stored ACL rewritten.
  */
 function levelOfRead(read) {
   const tokens = Array.isArray(read) ? read : [];
@@ -72,14 +50,8 @@ function levelOfRead(read) {
 }
 
 /**
- * `own` narrowed to `cap`'s level, never widened by it: the lower of the two ladder levels.
- *
- * At level 1 the result never lets in a caller the cap keeps out. A read with no ladder token
- * (`['sysadmin','inspector']`) opens only to privileged callers and holders of the roles it names,
- * so it keeps its privileged names plus those the cap also admits (every name, under a public cap),
- * and never becomes `team`. A ladder read under a cap with no ladder token keeps only the cap's
- * privileged names. Either way, nothing left is `['sysadmin']`, never `[]`. Otherwise, an empty or
- * missing cap included, it lands at `team`.
+ * `own` narrowed to `cap`'s level, never widened. At level 1 a read with no ladder token keeps only
+ * names the cap also admits and never becomes `team`; an empty result is `['sysadmin']`, never `[]`.
  */
 function capRead(own, cap) {
   const level = Math.min(levelOfRead(own), levelOfRead(cap));
@@ -99,10 +71,8 @@ function noLadderToken(read) {
 }
 
 /**
- * Do two `read[]`s let in the same callers under `readClause`? Every caller holds `public`, so two
- * level-4 reads always do; at 2 and 3 privileged names are ignored, as those callers pass anyway.
- * Levels 0 and 1 compare exactly: `['team']`, `['sysadmin']` and `['sysadmin','inspector']` are
- * all level 1, so a level alone cannot tell a move.
+ * Same callers under `readClause`? Level 4 always matches; 2 and 3 ignore privileged names. Levels 0
+ * and 1 compare exactly, since `['team']` and `['sysadmin','inspector']` are both level 1.
  */
 function sameAccess(a, b) {
   const level = levelOfRead(a);
@@ -128,16 +98,8 @@ function heldSealed(row) {
 }
 
 /**
- * The tokens a credential's `levels` admit, and the tokens that prove a row sits ABOVE them
- * (docs/rbac-architecture.md §1, "Selected Credentials").
- *
- * Levels 2-4 nest in `read[]`, so "carries a granted token" alone is not "is at a granted level":
- * a level-3 row carries `staff` too, and a `levels: [2]` credential would reach it. The second set
- * is the ceiling that makes the arm mean `levelOfRead(read) ∈ levels` exactly, with no SQL shape
- * the role arm does not already use.
- *
- * A row carrying NO ladder token matches neither set, so it stays privileged-only — `levelOfRead`
- * reads it as 1, and a `levels: [1]` credential must not be a way in.
+ * Granted tokens plus `wider`, the ceiling: levels nest, so a level-3 row also carries `staff`. A row
+ * with no ladder token matches neither set and stays privileged-only, even for `levels: [1]`.
  */
 function levelTokens(levels) {
   const granted = (levels || []).map(l => LEVEL_TOKENS[l]).filter(Boolean);
@@ -153,17 +115,8 @@ function matchesLevels(read, levels) {
 }
 
 /**
- * The field a credential's `scope.ids` are compared against in THIS container, or null when the
- * grant says nothing about it.
- *
- * A project-scoped grant names project ids, which is the partition field — `id` on projects,
- * `projectId` everywhere else, the same choice the team arm makes.
- *
- * A document-scoped grant names the records themselves. In a Cosmos container that is `id`, and on
- * projects it is nothing at all: sight of a document is not sight of its project. A SEARCH INDEX
- * names the field instead of inferring it — a chunk carries its document as `documentId`, and the
- * chunk index's own `id` is not filterable, so the inferred field would be a 400 rather than a
- * narrower result.
+ * Field `scope.ids` compare against here, or null. A document grant never opens its project; search
+ * indexes pass `documentField` because the chunk index's `id` is not filterable.
  */
 function credentialField(credential, partitionField, documentField) {
   const scope = (credential && credential.scope) || {};
@@ -174,42 +127,25 @@ function credentialField(credential, partitionField, documentField) {
 }
 
 /**
- * Roles that grant PRIVILEGED visibility — read everything, ACL predicate collapses to `true`.
- * `staff` is deliberately NOT here: that's what makes level 1 real. Session eligibility is
- * AUTHENTICATED_ROLES below, a separate question.
+ * Privileged: the ACL predicate collapses to `true`. `staff` is deliberately not here, which is what
+ * makes level 1 real.
  */
 const SECURE_ROLES = Object.freeze([
   'sysadmin', 'demi-admin', 'demi-service-read', 'demi-service-write'
 ]);
 
-/**
- * Roles permitted to administer the SERVICE ITSELF — mint and revoke registry keys, run an
- * operator sync. Exactly the pre-existing WRITE_ROLES set, so nothing a human role could do
- * yesterday is refused today.
- *
- * This is the set `/admin/*` is gated on, and it is why `demi-service-write` exists: a machine
- * writer must be able to mirror data without being able to mint itself a wider credential.
- */
+/** Gate for `/admin/*`: mint and revoke registry keys, run an operator sync. */
 const ADMIN_ROLES = Object.freeze(['sysadmin', 'staff', 'demi-admin']);
 
 /**
- * Roles permitted to MUTATE APPLICATION DATA — projects, documents, chunks, boundaries and the
- * Eagle mirror. A superset of ADMIN_ROLES, so no caller that could write yesterday loses the
- * ability today.
- *
- * `demi-service-write` is here and NOT in ADMIN_ROLES. That difference is the whole point: it is
- * what eagle-api's push and the extractor hold instead of `demi-admin`.
- *
- * Read privilege and write privilege were the same check until `requireWrite` (`authMiddleware`
- * guarded `GET /db/stats` and `DELETE /projects/:id` identically), which made "read-only consumer"
- * inexpressible. See middleware/require-roles.js.
+ * Data writes. `demi-service-write` is here and not in ADMIN_ROLES on purpose: machine writers
+ * (eagle-api push, extractor) mirror data but cannot mint themselves a wider key.
  */
 const WRITE_ROLES = Object.freeze([...ADMIN_ROLES, 'demi-service-write']);
 
 /**
- * Roles permitted to HOLD A SESSION on the routes behind `middleware/auth.js` — a separate set
- * from SECURE_ROLES so `staff` isn't locked out once it left the privileged set. `compliance` is
- * deliberately out: those sealed routes mount their own gate.
+ * Session on routes behind `middleware/auth.js`; separate from SECURE_ROLES so `staff` gets in.
+ * `compliance` is deliberately out: the sealed routes mount their own gate.
  */
 const AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])]);
 
@@ -224,10 +160,8 @@ const TIER = {
 };
 
 /**
- * Roles for this request. Always includes 'public'.
- *
- * Read ONLY from req.user, which is populated exclusively by verified auth (helpers/auth.js).
- * Never from headers or query params — a caller must not be able to name their own roles.
+ * Always includes 'public'. Read only from `req.user`, set by verified auth, never from headers or
+ * query params: a caller must not name their own roles.
  */
 function rolesFor(req) {
   const roles = new Set(PUBLIC_ROLES);
@@ -261,12 +195,8 @@ function holdsSealed(roles) {
 }
 
 /**
- * May THIS read see into the compartment? Two conditions, and the route is one of them.
- *
- * Holding `compliance` is not enough: every ordinary path (`GET /documents`, `/documents/:id`,
- * `/documents/:id/download`, `/search`) carries the exclusion for every caller, so a sealed row is
- * reached only through `/api/sealed` — which is what makes "every sealed read is audited" true.
- * The flag is set by the sealed controller and by nothing else; `systemAccess()` never sets it.
+ * Needs `compliance` and a compartment read, a flag only the sealed controller sets (never
+ * `systemAccess()`), so sealed rows are reached only through audited `/api/sealed`.
  */
 function opensSealed(roles, compartment) {
   return compartment === true && holdsSealed(roles);
@@ -288,18 +218,14 @@ function canAdmin(roles) {
 }
 
 /**
- * Resolve the full access context for a request.
- *
- * `teams` GRANTS (the team OR arm) and `projectScope` RESTRICTS (an AND on every read). Two
- * different project facts that must not be merged — see `teamsFor`.
+ * `teams` grants (the team OR arm) and `projectScope` restricts (an AND on every read); never merge
+ * them.
  */
 function resolveAccess(req) {
   const roles = rolesFor(req);
   const projectScope = projectScopeFor(req);
   const teams = teamsFor(req);
-  // Whether a credential was PRESENTED, which is not the same question as the tier: `req.user` is
-  // set only by verified auth (an API key or a Keycloak token), and a `compliance` key resolves to
-  // TIER.PUBLIC while still being an identified caller.
+  // Credential presented, not the tier: a `compliance` key is TIER.PUBLIC yet identified.
   const authenticated = Boolean(req && req.user);
   // Live grants for this caller, loaded and window-filtered by middleware/credentials.js. A GRANT
   // like `teams`, never a restriction; absent (an unmounted route, a failed load) means none.
@@ -308,15 +234,8 @@ function resolveAccess(req) {
   // attributes of one. Carried here so every response boundary has it without re-deriving.
   const level = levelFromRoles(roles);
 
-  // Scope is resolved BEFORE the privilege check, and the order is the whole point. The reverse
-  // returned PRIVILEGED with `projectScope: null` and threw the scope away, so a key minted as
-  // `roles: ['staff'], projectScope: ['207']` read the entire corpus — the restriction its issuer
-  // asked for did nothing at all, silently.
-  //
-  // The two dimensions are orthogonal: roles say WHICH ROWS, scope says WHICH PROJECTS. A
-  // privileged credential carrying a scope is privileged WITHIN those projects. `readClause` and
-  // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
-  // the role predicate for a privileged role set.
+  // Scope before privilege, else a scoped privileged key drops its scope and reads everything.
+  // `readClause` and `canRead` key privilege off roles, not tier, so it stays privileged in scope.
   if (Array.isArray(projectScope)) {
     return { tier: TIER.SCOPED, roles, projectScope, teams, credentials, authenticated, level };
   }
@@ -336,21 +255,8 @@ function isAnonymous(access) {
 }
 
 /**
- * Prefix marking a Keycloak role as a project scope rather than a role type.
- *
- * Keycloak dictates all roles, so scope has to arrive in the token — there is no separate
- * membership store. But a BARE role name cannot be classified: given `ajax`, nothing
- * distinguishes "scoped to the Ajax project" from a role type like `staff` or `compliance`.
- * Guessing would be a security bug in whichever direction it guessed. So scope is explicit:
- *
- *   project:207        -> member of project 207's team
- *   project:eagle-abc  -> member of an Eagle-only project's team
- *   staff, compliance  -> role types, land in read[] matching
- *
- * The value after the prefix is a CANONICAL project id (the partition key), not a name. That
- * keeps this synchronous and lookup-free, which matters because it runs on every request.
- * ponytail: id-only. Accepting a project NAME would need a slug→id map loaded from the
- * registry; add a cached lookup here if operators find ids unusable.
+ * `project:<canonical id>` marks team membership; a bare role name cannot be told from a role type.
+ * ponytail: id-only, no lookup per request; add a cached name-to-id map if ids prove unusable.
  */
 const PROJECT_ROLE_PREFIX = 'project:';
 
@@ -372,13 +278,8 @@ function teamsFor(req) {
 }
 
 /**
- * Project ids this caller is RESTRICTED to, or null for "not project-scoped".
- *
- * Only the explicit `projectScope` an API key was minted with (`controllers/nosql/api-key.js`). It
- * is the key issuer's restriction, so it is ANDed into every read and sets TIER.SCOPED.
- *
- * An empty array is meaningful and distinct from null: scoped to nothing, which `scopeClause`
- * renders as `false`.
+ * The `projectScope` an API key was minted with, ANDed into every read, or null. An empty array
+ * means scoped to nothing (`false` in `scopeClause`), not unscoped.
  */
 function projectScopeFor(req) {
   const user = req && req.user;
@@ -387,21 +288,8 @@ function projectScopeFor(req) {
 }
 
 /**
- * Access context for an internal job that must read EVERY item regardless of ACL — the extraction
- * worker, the purge, and whole-corpus passes.
- *
- * Deliberately built from the normal privileged tier rather than a bypass flag: it goes through
- * `readClause` like every other caller and simply resolves to `true`. A separate "skip the
- * predicate" path is exactly the shape that let a half-working translator disable access control
- * in this codebase, and it would not be covered by the SQL-asserting tests.
- *
- * Safe for the search index because visibility is enforced at QUERY time, not at index time: the
- * index holds every row's `read[]` verbatim, and `access-odata.js` translates the caller's resolved
- * access context into the OData `$filter` on each search. An indexing job therefore has to read
- * rows it will never itself return — copying an ACL it was not allowed to see is impossible.
- * This is why widening here does not widen what anyone can find.
- *
- * NEVER derive this from a request. It takes no arguments for that reason.
+ * Internal jobs only, via the normal privileged tier, never a bypass flag. No arguments, so it can
+ * never be derived from a request.
  */
 function systemAccess() {
   return {
@@ -416,30 +304,21 @@ function systemAccess() {
 }
 
 /**
- * Rows one list page may return. MAX_PAGE_SIZE is also what `repositories/_sql.pageOptions`
- * clamps `maxItemCount` to, and is imported from here so the two cannot drift.
- *
- * A caller that presented no credential gets a tenth of it. The list routes are reachable with no
- * credential at all, and a 1000-row cross-partition page is the cheapest way for one to cost real
- * RU. Any verified credential keeps the full ceiling, privileged or not: the cap is about whether
- * the spend can be attributed to someone, not about what the caller may see.
+ * `repositories/_sql.pageOptions` imports MAX_PAGE_SIZE. Anonymous callers get a tenth: the cap is
+ * about whether RU spend can be attributed to someone, not about what the caller may see.
  */
 const MAX_PAGE_SIZE = 1000;
 const ANON_MAX_PAGE_SIZE = 100;
 
 /**
- * Deepest row an offset page may reach (`pageNum * pageSize + pageSize`). Cosmos has no offset, so
- * a page costs every row before it; past this a request is refused. Data on 2026-10-03: 2,510
- * updates, 802 comments in the largest period.
+ * Deepest row (`pageNum * pageSize + pageSize`) a page may reach: Cosmos has no offset, so a page
+ * costs every row before it. Largest data seen: 2,510 updates, 802 comments in one period.
  */
 const MAX_PAGE_DEPTH = 20000;
 
 /**
- * Page size for a list read: `{ pageSize }`, or `{ error }` when a caller that presented no
- * credential asked for more than its cap.
- *
- * Refused, not truncated — quietly returning 100 of the 500 rows asked for answers a different
- * question than the one asked, and the caller has no way to tell. Same rule as controllers/search.js.
+ * `{ pageSize }`, or `{ error }` when an anonymous caller asks above its cap. Refused, not
+ * truncated, since a short page is silently a different answer. Same rule as controllers/search.js.
  */
 function pageSizeFor(access, raw) {
   const anonymous = !access || !access.authenticated;
@@ -460,16 +339,11 @@ function pageSizeFor(access, raw) {
 const TEAM_PARTITION_FIELDS = Object.freeze(['projectId', 'id']);
 
 /**
- * The visibility predicate for these roles, as a SQL fragment plus bound parameters.
- *
- * Privileged callers short-circuit to `true` — the same code path returning a wider filter,
- * not a bypass branch that could drift.
- *
+ * Privileged callers get `true` from this same path, not a bypass branch that could drift.
  * @param {string[]} roles
  * @param {object}   [opts]
  * @param {string}   [opts.alias='c']       table alias in the query
- * @param {string}   [opts.prefix='@role']  parameter-name prefix, so multiple clauses in one
- *                                          query cannot collide
+ * @param {string}   [opts.prefix='@role']  parameter-name prefix, so clauses in one query cannot collide
  * @param {string[]} [opts.teams]           caller's team project ids — the level-1 OR arm
  * @param {string}   [opts.partitionField='projectId']  field the team arm compares, 'id' on projects
  * @param {boolean}  [opts.compartment]     this read is a compartment route's — see opensSealed
@@ -479,9 +353,8 @@ function readClause(roles, opts = {}) {
   const alias = opts.alias || 'c';
   const prefix = opts.prefix || '@role';
 
-  // The sealed compartment, and the reason a privileged caller no longer gets a bare `true`: the
-  // short-circuit is what would hand `sysadmin` a level-0 row. Literal, not a parameter, because
-  // it is our own token and never a caller value.
+  // Privileged callers get this exclusion, not a bare `true`, so `sysadmin` never sees level 0.
+  // A literal, not a parameter: our own token, never a caller value.
   const sealed = opensSealed(roles, opts.compartment)
     ? null
     : `NOT ARRAY_CONTAINS(${alias}.read, '${SEALED_TOKEN}')`;
@@ -494,12 +367,8 @@ function readClause(roles, opts = {}) {
   const names = effective.map((_, i) => `${prefix}${i}`);
   const params = names.map((name, i) => ({ name, value: effective[i] }));
 
-  // EXISTS with a subquery, NOT ARRAY_CONTAINS_ANY: the latter does not use the index, which
-  // on the security path turns every gated read into a full scan. This form is one clause
-  // regardless of how many roles the caller has, and uses the /read/[]/? range index.
-  //
-  // There is no third arm. A row carrying no ladder token is visible to privileged callers only —
-  // `isPublished` MIRRORS `read.includes('public')` and never grants on its own.
+  // EXISTS subquery, not ARRAY_CONTAINS_ANY, which skips the /read/[]/? index and full-scans.
+  // No third arm: `isPublished` mirrors `read.includes('public')` and never grants on its own.
   const arms = [
     `EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${names.join(', ')}))`
   ];
@@ -521,9 +390,8 @@ function readClause(roles, opts = {}) {
     params.push(...teamNames.map((name, i) => ({ name, value: String(teams[i]) })));
   }
 
-  // The credential arm: a named party's sight of named records at named levels, for a fixed window
-  // (docs/rbac-architecture.md §1, "Selected Credentials"). An OR like the team arm — it GRANTS,
-  // and it changes nothing about the row it matches. One arm however many grants the caller holds.
+  // Credential arm: a named party's sight of named records at named levels. An OR that grants,
+  // one arm however many grants the caller holds.
   const credentials = Array.isArray(opts.credentials) ? opts.credentials : [];
   const credArms = [];
   credentials.forEach((cred, i) => {
@@ -575,10 +443,8 @@ function scopeClause(access, field, opts = {}) {
   const alias = opts.alias || 'c';
   const prefix = opts.prefix || '@scope';
 
-  // No partition field means the container has no project axis at all — boundaries are
-  // administrative geography, not project data. Scoping them on a field the items do not carry
-  // would match nothing, so a project-scoped caller would lose every public boundary and the map
-  // would silently go blank. Role ACL still applies; only the project narrowing is skipped.
+  // No partition field = no project axis (boundaries). Scoping on it would blank the map for scoped
+  // callers; role ACL still applies.
   if (!field) {
     return { clause: 'true', params: [] };
   }
@@ -600,11 +466,8 @@ function scopeClause(access, field, opts = {}) {
 }
 
 /**
- * AND several fragments together and merge their parameters.
- * `true` fragments are dropped; a single `false` collapses the whole predicate.
- *
- * Throws on a duplicate parameter name — silently dropping one would change the meaning of
- * the query, which on this path means changing who can see what.
+ * `true` fragments drop out; one `false` collapses all. A duplicate parameter name throws, since
+ * dropping one would change who can see what.
  */
 function andClauses(...fragments) {
   const parts = [];
@@ -650,19 +513,12 @@ function visibilityFor(access, partitionField = 'projectId', opts = {}) {
   );
 }
 
-/**
- * Is an already-fetched item visible to this caller?
- *
- * Required on every point read — `container.item(id, pk).read()` bypasses the query
- * predicate entirely, so without this a by-id fetch would leak what a list would not.
- */
+/** Required on every point read: `container.item(id, pk).read()` skips the query predicate. */
 function canRead(doc, access, partitionField = 'projectId') {
   if (!doc || !access) return false;
 
-  // Scope FIRST, and it narrows a privileged caller too — otherwise a scoped staff key would
-  // point-read its way out of its own scope, which is the leak `resolveAccess` was just fixed to
-  // prevent on the query path. A falsy partitionField means the container has no project axis
-  // (boundaries); see scopeClause.
+  // Scope first, narrowing privileged callers too, else a scoped key point-reads out of scope.
+  // Falsy partitionField = no project axis (boundaries).
   if (access.tier === TIER.SCOPED && partitionField) {
     const scope = access.projectScope || [];
     if (!scope.includes(String(doc[partitionField]))) return false;
@@ -677,9 +533,8 @@ function canRead(doc, access, partitionField = 'projectId') {
   // reads a sealed row. The SQL twin is readClause's `NOT ARRAY_CONTAINS`.
   if (read.includes(SEALED_TOKEN) && !opensSealed(access.roles, access.compartment)) return false;
 
-  // Privilege is a property of the ROLES, not of the tier — this mirrors readClause(), which
-  // collapses to `true` for a privileged role set whatever the tier happens to be. Keying it off
-  // the tier would deny a scoped-but-privileged caller its own in-scope private rows.
+  // Privilege keys off roles, not tier, as in readClause, so a scoped privileged caller keeps its
+  // in-scope private rows.
   if (isPrivileged(access.roles || [])) return true;
 
   if (read.some(r => (access.roles || []).includes(r))) return true;
