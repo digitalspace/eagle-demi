@@ -1,17 +1,7 @@
 'use strict';
 
-/**
- * Where the generator reads its inputs and writes its output.
- *
- * The generator runs from a workstation, and Cosmos and AI Search are both private-endpoint only —
- * unreachable from anywhere but the VNet. The DEMI API is not: it is behind the proxy and answers a
- * staff token. So the generator talks to the API rather than to the data stores, and the ACL that
- * applies is the one on the caller's token, exactly as it would be for a page request.
- *
- * One adapter, one interface: `{project, documents, chunksForDocument, organizations, summary,
- * save}`. A later in-VNet caller (a timer, the devbox) can add a second implementation of the same
- * methods without the generator changing.
- */
+// The generator runs outside the VNet, where Cosmos and AI Search (private endpoints) cannot be
+// reached, so it reads and writes through the DEMI API under the caller token's ACL.
 
 const { logger } = require('../utils/logger');
 
@@ -47,9 +37,8 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
 
   const headers = {
     'Content-Type': 'application/json',
-    // One or the other, never both: `helpers/auth.js` prefers `X-Api-Key` and would ignore a
-    // bearer token silently, so a request carrying both would authenticate as something other than
-    // what the operator thinks they passed.
+    // One or the other, never both: `helpers/auth.js` prefers `X-Api-Key` and silently ignores a
+    // bearer token sent beside it.
     ...(apiKey ? { 'X-Api-Key': apiKey } : { Authorization: `Bearer ${token}` })
   };
 
@@ -71,11 +60,8 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
     project: id => call(`/projects/${encodeURIComponent(id)}`),
 
     /**
-     * Every document of one project, following the continuation token.
-     *
-     * The header is what carries it (`x-continuation-token`), so a caller that reads only the body
-     * stops at the first 1,000 — Site C has 2,158 documents, so that is not a theoretical limit and
-     * a truncated list would silently drop the Inspection Records the compliance counts come from.
+     * Every document of one project. The continuation token is in the `x-continuation-token`
+     * header; reading only the body stops at 1,000 and silently drops documents past that.
      */
     async documents(projectId) {
       const all = [];
@@ -119,13 +105,8 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
     },
 
     /**
-     * The project's documents whose text matches `keywords`, best match first.
-     *
-     * `/search?dataset=DocumentChunk` is the only keyword read over chunk text, and it answers
-     * DOCUMENT rows: `pageSize` is a window of chunks grouped by document, and each row carries an
-     * escaped snippet with `content` empty, because the index does not return chunk text. So this
-     * says WHICH documents to read and the caller reads their chunks the usual way — a snippet is
-     * display markup and can be neither cited nor grounded against.
+     * The project's documents whose text matches `keywords`, best first. Rows carry a display
+     * snippet and empty `content`, so the caller reads the chunks to ground and cite.
      */
     async chunkSearch({ projectId, keywords, pageSize = CHUNK_SEARCH_PAGE_SIZE }) {
       const query = new URLSearchParams({
@@ -138,11 +119,8 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
     },
 
     /**
-     * The Indigenous Group Organization rows, which is what nation names are joined to.
-     *
-     * Through `/search`, not a repository: it is the read the plan confirmed against test, and it
-     * is the only route that answers this container. `and[companyType]` is a filter, so the API
-     * refuses a pageSize above 500 here — paged the same way `documents` pages past its cap.
+     * The Indigenous Group Organization rows that nation names are joined to. Through `/search`:
+     * it is the only route that answers this container.
      */
     async organizations() {
       const all = [];
@@ -169,11 +147,8 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
 }
 
 /**
- * The adapter for the current environment.
- *
- * Only one exists today. `DEMI_API_URL` unset is an error rather than a fallback: there is no
- * second path, and defaulting to one that cannot work would fail as a connection timeout to a
- * private endpoint rather than as a missing setting.
+ * The adapter for the current environment. `DEMI_API_URL` unset throws: any fallback would fail
+ * later as a connection timeout to a private endpoint.
  */
 function sourceFor(env = process.env) {
   if (!env.DEMI_API_URL) {
