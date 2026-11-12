@@ -92,8 +92,8 @@ const TABLE = routes.map(route => ({ ...route, ...compile(route.path) }));
 
 /** The path the route table sees. */
 function routePath(pathname) {
-  // One leading `/api` only: rproxy mounts this API at both `/api` and `/`, which is what the old
-  // app got from mounting the same router twice.
+  // Strip one leading `/api` only: APIM forwards to the app under `/api`, while direct calls to the
+  // function host, such as the deploy health check, use the bare path.
   let target = pathname;
   if (target === '/api') target = '/';
   else if (target.startsWith('/api/')) target = target.slice(4);
