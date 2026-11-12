@@ -194,7 +194,7 @@ const config = {
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
 
   // Largest answer ?inline=1 streams to a caller that is not anonymous and edge-stamped; bigger
-  // ones get the 302. 0 = no streaming and the 302 for everyone.
+  // ones get the 302. 0 = no streaming, 302 for all but an edge piece past byte 0 (503).
   downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
   // Streams per instance, 0 = no limit: past the edge pool (anonymous stamped) a 503, else the 302.
   downloadStreamMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_MAX_CONCURRENT', 2),

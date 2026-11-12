@@ -3342,7 +3342,8 @@ paths:
         larger file still streams. Its pool is `DOWNLOAD_STREAM_MAX_CONCURRENT` (default 2; 0 = no
         limit). Any other case gets the 302 above, never JSON, except that a ranged request stamped
         by the edge and starting past byte 0 answers the 503 instead of that 302.
-        `DOWNLOAD_STREAM_MAX_BYTES=0` turns stream mode off and sends the 302 to every caller.
+        `DOWNLOAD_STREAM_MAX_BYTES=0` turns stream mode off and sends the 302 to every caller
+        except an edge-stamped range starting past byte 0, which still answers the 503.
 
         A single byte range answers 206;
         a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
