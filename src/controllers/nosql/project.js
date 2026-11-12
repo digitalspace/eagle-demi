@@ -173,10 +173,7 @@ const LOOSE_JOINER = /(?<=^|\s)[\u200C\u200D]+|[\u200C\u200D]+(?=\s|$)/g;
 const cleanTag = (tag) => tag.normalize('NFC').replace(ZERO_WIDTH, '').replace(LOOSE_JOINER, '')
   .replace(/\s+/g, ' ').trim();
 
-/**
- * Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left.
- * @returns {{ tags: string[] } | { error: string }}
- */
+/** Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left. */
 function normalizeTags(value) {
   if (!Array.isArray(value) || value.some(tag => typeof tag !== 'string')) {
     return { error: 'tags must be an array of strings' };
@@ -205,11 +202,7 @@ function trimLabels(row) {
   return row;
 }
 
-/**
- * A number or a four-digit string to a number, blank to null. The index field is an Int32, so
- * anything else is refused rather than stored.
- * @returns {{ value: number|null } | { error: string }}
- */
+/** A number or a four-digit string to a number, blank to null; anything else is refused, as the index field is an Int32. */
 function normalizeLegislationYear(value) {
   if (value === null || value === '') return { value: null };
   const year = typeof value === 'string' && /^\d{4}$/.test(value.trim()) ? Number(value) : value;
@@ -218,10 +211,7 @@ function normalizeLegislationYear(value) {
     : { error: 'legislationYear must be a year, such as 2002 or 2018' };
 }
 
-/**
- * A PUT body's tags, labels and year, cleaned in place.
- * @returns {string|null} the message to 400 with, or null
- */
+/** A PUT body's tags, labels and year, cleaned in place; the message to 400 with, or null. */
 function cleanChanges(changes) {
   if (changes.tags !== undefined) {
     const normalized = normalizeTags(changes.tags);
@@ -241,7 +231,21 @@ function cleanChanges(changes) {
  * Carry a project's visibility to its index row and its child rows (`ownRead ∩ projectRead`); an error message, or null.
  * ponytail: documents only, not chunks — a chunk gates on its parent document at query time.
  */
-async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = true } = {}) {
+async function cascadeProjectVisibility(projectId, acl, eagleId, options) {
+  const failure = await cascadeOnce(projectId, acl, eagleId, options);
+  const stored = await projects.readForWrite(projectId).catch(err => err);
+  if (!stored || stored instanceof Error) {
+    logger.warn('[Project Controller] project not re-read after its cascade', { projectId, error: stored && stored.message });
+    return failure;
+  }
+  const now = { read: stored.read, isPublished: stored.isPublished };
+  if (!visibilityMoved(acl, now)) return failure;
+  // One more pass only: whoever moves the row after this read runs its own cascade.
+  logger.warn('[Project Controller] project moved during cascade, re-running', { projectId });
+  return cascadeOnce(projectId, now, eagleId, options);
+}
+
+async function cascadeOnce(projectId, acl, eagleId, { updates = true } = {}) {
   // Index row first and outside the try: lists read the index, and the Cosmos write has already
   // landed, so the row must narrow even if the cascade below fails.
   await aiSearch.writeAcls(aiSearch.indexes().projects, [
@@ -260,10 +264,7 @@ async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = tru
   return failures.length ? failures.join(' ') : null;
 }
 
-/**
- * Re-derive the comment periods' and comments' ACLs; the mirror constrains them to the project only at push time.
- * Returns an error message the caller must 500 with, or null.
- */
+/** Re-derive the comment periods' and comments' ACLs, which the mirror caps only at push time; an error message, or null. */
 async function cascadeEngagementVisibility(projectId, read) {
   try {
     const periods = await commentPeriods.setAclForProject(systemAccess(), projectId, read);
@@ -295,11 +296,7 @@ async function cascadeEngagementVisibility(projectId, read) {
   }
 }
 
-/**
- * The project's Updates, which the push capped by it. Keyed by the EAGLE id: `updates.projectId`.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
- */
+/** The project's Updates, keyed by the EAGLE id (`updates.projectId`); an error message the caller must 500 with, or null. */
 async function cascadeUpdateVisibility(projectId, eagleId, read) {
   try {
     const cascade = await updateAcl.setAclForProject(eagleId, read);
@@ -319,10 +316,8 @@ async function cascadeUpdateVisibility(projectId, eagleId, read) {
 }
 
 /**
- * The project's groups, or its inspections and the elements and items under each: every row was
- * capped by the project at push time and is gated by its own stored `read[]`.
- *
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * The project's groups, or its inspections with their elements and items, each capped by the project at push time
+ * and gated by its own `read[]`. An error message the caller must 500 with, or null.
  */
 async function cascadeMirrorVisibility(label, repo, projectId, read) {
   try {
@@ -767,15 +762,6 @@ exports.setLevel = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const from = levelOfRead(existing.read);
-    // Pulling a record back from public is incident response, not a routine correction.
-    const takedown = from === 4 && level < 4;
-    if (takedown && !access.roles.includes('sysadmin')) {
-      return res.status(403).json({
-        error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'
-      });
-    }
-
     const acl = { read: readForLevel(level), isPublished: level === 4 };
     // Same guard as the push path: a level move that replaced the item from this snapshot would
     // undo whatever content a push had written since, and carry an old `eaglePushedAt` back with it.
@@ -784,6 +770,13 @@ exports.setLevel = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current, attempt) => {
         if (!current) return { status: 'missing' };
+        // Judged per try: a retry after a lost race can find the level another request moved.
+        const from = levelOfRead(current.read);
+        // Pulling a record back from public is incident response, not a routine correction.
+        if (from === 4 && level < 4 && !access.roles.includes('sysadmin')) {
+          return { status: 'refused', code: 403,
+            error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.' };
+        }
         if (current.isDeleted === true) return { status: 'refused', code: 409, error: 'Project is deleted' };
         // Per try: a reread after a lost race can find the project moved under a locked Act.
         const move = year.value === null ? { key: null } : yearSwitch(current, year.value);
@@ -816,6 +809,7 @@ exports.setLevel = async (req, res) => {
         };
         return {
           status: 'saved',
+          from,
           switchedFrom: move.key
             ? (isDemiOwnedProject(current) ? current : eagle).currentLegislationYear || null
             : undefined,
@@ -830,7 +824,8 @@ exports.setLevel = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project level change', req.params.id);
     if (written.status === 'refused') return res.status(written.code).json({ error: written.error });
-    const { saved, switchedFrom } = written;
+    const { saved, switchedFrom, from } = written;
+    const takedown = from === 4 && level < 4;
 
     // Before the cascade, which can 500: the row someone comes looking for is the visibility
     // change, and it must not be the one path that records nothing.
@@ -949,10 +944,7 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
-/**
- * Whether a push leaves the row deleted: its own flag, else the stored delete if it stands.
- * Once DEMI owns the row, the stored flag decides.
- */
+/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands; on a DEMI-owned row, the stored flag. */
 function pushDeleted(doc, existing) {
   if (isDemiOwnedProject(existing)) return existing.isDeleted === true;
   if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
@@ -1053,8 +1045,14 @@ exports.visibilityMoved = visibilityMoved;
 
 /** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
 async function markCascadePending(saved, eagleId) {
+  const at = new Date().toISOString();
   try {
-    await projects.patchCascadePending(saved.id, new Date().toISOString(), saved._etag);
+    // Owing a cascade is never wrong, so a row that moved since `saved` still takes the marker.
+    await projects.patchCascadePending(saved.id, at, saved._etag).catch(async (err) => {
+      if (!raced(err)) throw err;
+      const fresh = await projects.readForWrite(saved.id);
+      if (fresh) await projects.patchCascadePending(saved.id, at, fresh._etag);
+    });
   } catch (patchErr) {
     logger.error('[Project Controller] could not record the owed visibility cascade', {
       projectId: saved.id, eagleId, error: patchErr.message, stack: patchErr.stack

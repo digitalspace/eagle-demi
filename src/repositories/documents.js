@@ -924,7 +924,7 @@ async function patchExtraction(id, projectId, fields) {
  * `read[]` is authoritative and `isPublished` mirrors it: only level 4 carries `public`.
  * Privileged roles retain access at every level.
  */
-async function setPublished(id, projectId, level, { levelHeldAt } = {}) {
+async function setPublished(id, projectId, level, { levelHeldAt, etag } = {}) {
   const read = readForLevel(level);
   // `undefined` leaves the stored hold alone; see `levelHoldAfter`.
   const hold = levelHeldAt === undefined ? [] : [{ op: 'set', path: '/levelHeldAt', value: levelHeldAt }];
@@ -939,7 +939,7 @@ async function setPublished(id, projectId, level, { levelHeldAt } = {}) {
     // document an operator had individually unpublished.
     { op: 'set', path: '/ownRead', value: read },
     { op: 'set', path: '/updatedAt', value: new Date().toISOString() }
-  ]);
+  ], undefined, etag);
 }
 
 /**
