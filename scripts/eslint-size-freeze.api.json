@@ -65,7 +65,7 @@
   "src/sync-out/index.js": {"complexity":[36]},
   "src/utils/audit.js": {"max-lines":[446]},
   "test/ai/project-summary.test.js": {"max-lines":[3180]},
-  "test/azure/main-bicep-wiring.test.js": {"max-lines":[1956]},
+  "test/azure/main-bicep-wiring.test.js": {"max-lines":[1875]},
   "test/controllers/document-download.test.js": {"max-lines":[991]},
   "test/controllers/nosql-controllers.test.js": {"max-lines":[2447]},
   "test/controllers/nosql/eagle-push.test.js": {"max-lines":[1436]},
