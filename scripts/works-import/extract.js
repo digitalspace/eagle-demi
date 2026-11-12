@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { parseArgs } = require('util');
 const { readFolder } = require('./cells');
+const { openSurrogates, surrogateOf } = require('./surrogates');
 const {
   STAFF_FIELDS, fingerprintOf, publicKeysFromPem, sealEnvelope, openEnvelope, sha256Hex, verify
 } = require('../../src/utils/import-envelope');
@@ -15,11 +16,8 @@ const ENVS = ['test', 'prod'];
 const MIN_PASSPHRASE = 20;
 const KEYRING_SERVICE = 'eagle-demi-works-import';
 const SEALED_SUFFIX = '.sealed.json';
-const DEFAULT_SURROGATES = 'works-surrogates.enc.json';
 const SEAL_PURPOSES = ['crosswalk', 'manual-match'];
 const OPEN_PURPOSES = ['crosswalk', 'report'];
-const SURROGATE_AAD = Buffer.from('works-import-surrogates');
-const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
 function keyringCommand(ref) {
   if (ref.startsWith('op://')) return ['op', ['read', '--no-newline', ref]];
@@ -48,7 +46,6 @@ function passphraseFrom(ref, env) {
 }
 
 const writeNew = (file, data) => fs.writeFileSync(file, data, { mode: 0o600, flag: 'wx' });
-const surrogateKey = (passphrase, salt) => crypto.scryptSync(passphrase, salt, 32, SCRYPT);
 
 function refuseExisting(...files) {
   const taken = files.filter(f => fs.existsSync(f));
@@ -58,73 +55,6 @@ function refuseExisting(...files) {
 function sealedOut(file) {
   if (!file.endsWith(SEALED_SUFFIX)) throw new Error(`--out must end with ${SEALED_SUFFIX}`);
   return file;
-}
-
-function loadSurrogates(file, passphrase) {
-  try {
-    const box = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const iv = Buffer.from(box.iv, 'base64');
-    const tag = Buffer.from(box.tag, 'base64');
-    if (iv.length !== 12 || tag.length !== 16) throw new Error('shape');
-    const decipher = crypto.createDecipheriv('aes-256-gcm',
-      surrogateKey(passphrase, Buffer.from(box.salt, 'base64')), iv, { authTagLength: 16 });
-    decipher.setAAD(SURROGATE_AAD);
-    decipher.setAuthTag(tag);
-    const plain = Buffer.concat([decipher.update(Buffer.from(box.ciphertext, 'base64')), decipher.final()]);
-    return new Map(JSON.parse(plain.toString('utf8')));
-  } catch {
-    throw new Error(`surrogate map ${file} could not be opened`);
-  }
-}
-
-function saveSurrogates(file, map, passphrase) {
-  const salt = crypto.randomBytes(16);
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', surrogateKey(passphrase, salt), iv, { authTagLength: 16 });
-  cipher.setAAD(SURROGATE_AAD);
-  const ciphertext = Buffer.concat([cipher.update(JSON.stringify([...map])), cipher.final()]);
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeNew(tmp, JSON.stringify({
-    v: 1, salt: salt.toString('base64'), iv: iv.toString('base64'),
-    tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64')
-  }));
-  fs.renameSync(tmp, file);
-}
-
-function surrogateOf(map, id) {
-  if (!map.has(id)) {
-    const used = new Set(map.values());
-    let next;
-    do next = crypto.randomInt(100000, 1000000); while (used.has(next));
-    map.set(id, next);
-  }
-  return map.get(id);
-}
-
-/**
- * Opens the surrogate map under an exclusive lock. A missing map is refused unless --new-surrogates:
- * a fresh map re-mints every surrogate, and the next load tombstones and re-creates every test sheet work.
- */
-function openSurrogates(o, env) {
-  const file = o.surrogates || DEFAULT_SURROGATES;
-  const exists = fs.existsSync(file);
-  if (!exists && !o['new-surrogates']) throw new Error(`surrogate map ${file} not found; pass --new-surrogates to start one`);
-  if (exists && o['new-surrogates']) throw new Error(`surrogate map ${file} exists; drop --new-surrogates`);
-  need(o, 'surrogate-passphrase-ref');
-  const passphrase = passphraseFrom(o['surrogate-passphrase-ref'], env);
-  const lock = `${file}.lock`;
-  try {
-    writeNew(lock, String(process.pid));
-  } catch (err) {
-    throw new Error(err.code === 'EEXIST' ? `${lock} exists: another run holds the surrogate map` : `${lock} cannot be created`,
-      { cause: err });
-  }
-  try {
-    return { file, lock, passphrase, map: exists ? loadSurrogates(file, passphrase) : new Map() };
-  } catch (err) {
-    fs.rmSync(lock, { force: true });
-    throw err;
-  }
 }
 
 function need(opts, ...names) {
@@ -173,14 +103,23 @@ async function extract(o, io) {
   refuseExisting(sealedOut(o.out));
   const { keys, fingerprint } = recipientOf(o['recipient-key'], o['expect-fingerprint']);
   const policy = policyOf(o);
-  const surrogates = policy.numbersReal ? null : openSurrogates(o, io.env);
+  let surrogates = null;
+  if (policy.numbersReal && (o.surrogates || o['new-surrogates'])) {
+    throw new Error('--surrogates and --new-surrogates apply only when numbers are replaced (--env test without --keep-numbers-on-test)');
+  }
+  if (!policy.numbersReal) {
+    need(o, 'surrogates', 'surrogate-passphrase-ref');
+    surrogates = openSurrogates(o.surrogates, {
+      create: Boolean(o['new-surrogates']), readPassphrase: () => passphraseFrom(o['surrogate-passphrase-ref'], io.env)
+    });
+  }
   try {
     const data = await readFolder(o.in);
     for (const row of Object.values(data.records).flat()) {
       if (!policy.staffIncluded) STAFF_FIELDS.forEach(f => delete row[f]);
       if (surrogates && 'id' in row) row.id = surrogateOf(surrogates.map, row.id);
     }
-    if (surrogates) saveSurrogates(surrogates.file, surrogates.map, surrogates.passphrase);
+    if (surrogates) surrogates.save();
     const plaintext = Buffer.from(JSON.stringify({ schemaVersion: 1, env: o.env, ...policy, ...data }));
     writeNew(o.out, sealEnvelope(plaintext, {
       purpose: 'extract', env: o.env, keyFingerprint: fingerprint, recipientKey: keys.rsa, ...policy
@@ -190,7 +129,7 @@ async function extract(o, io) {
     Object.entries(kinds).forEach(([kind, n]) => io.write(`flag.${kind}=${n}`));
     io.write(`plaintextSha256=${sha256Hex(plaintext)}`);
   } finally {
-    if (surrogates) fs.rmSync(surrogates.lock, { force: true });
+    if (surrogates) surrogates.release();
   }
 }
 

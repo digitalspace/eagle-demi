@@ -69,7 +69,11 @@ test('an extract body that disagrees with its header, or is not JSON, is refused
     { ...body, signoffRefs: { ...signoffRefs, keepStaff: 'X' } },
     { ...body, records: { projects: [{ id: 1, epd: null }] } }
   ];
-  for (const wrong of bodies) assert.throws(() => openExtract(sealFor(JSON.stringify(wrong)), local), /^Error: envelope refused/);
+  const shapes = [null, [], 7, { ...body, records: null }, { ...body, records: { projects: 'x' } },
+    { ...body, records: { projects: [null] } }];
+  for (const wrong of [...bodies, ...shapes]) {
+    assert.throws(() => openExtract(sealFor(JSON.stringify(wrong)), local), /^Error: envelope refused/);
+  }
   assert.throws(() => openExtract(sealFor('{not json'), local), /^Error: envelope refused/);
 });
 

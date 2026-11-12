@@ -87,12 +87,14 @@ function projects(workbook) {
     R: day('2001-01-10'), AB: day('2000-05-05'), AE: 'Substantially Started', AF: day('2004-02-02'), AG: 'Yes',
     AH: { formula: 'TODAY()+30', result: day('2026-12-01') }, AI: day('2009-01-01'), AL: day('2030-01-01') });
   put(ws, 7, { A: 120, B: PROJECT_NAMES[2], C: { error: '#N/A' }, G: { formula: '1/0', result: { error: '#DIV/0!' } },
-    R: day('2003-04-04'), U: FILL, AB: 1e10 });
+    R: day('2003-04-04'), U: FILL, V: '1850-01-01', W: '2001-02-30', AB: 1e10 });
   ws.getCell('AB7').numFmt = 'yyyy-mm-dd';
   put(ws, 8, { A: 'x12', B: 'Unnumbered Project' });
   put(ws, 9, { A: 46, D: 'Active' });
   put(ws, 10, { A: 7, B: 'Birch Point Terminal' });
-  prefill(ws, 11);
+  put(ws, 11, { A: 44000, B: 'Date Formatted Id Project' });
+  ws.getCell('A11').numFmt = 'yyyy-mm-dd';
+  prefill(ws, 12);
   junk(workbook, 'Lookups', 'For BI');
 }
 
@@ -106,6 +108,7 @@ function amendments(workbook) {
     J: 'Low', K: 'Open', L: day('2010-05-05') });
   put(ws, 6, { A: 7, B: PROJECT_NAMES[1], E: 'Low', F: 'Complete', G: day('2005-01-01'), H: day('2005-03-01') });
   prefill(ws, 7);
+  put(ws, 7, { A: null, E: 'Low' });
   fillBlocks(ws, 4, 5, 15, Array.from({ length: PREFILLED_TO - 4 }, (_, i) => i + 5));
   junk(workbook, 'Lookups', 'For BI');
 }

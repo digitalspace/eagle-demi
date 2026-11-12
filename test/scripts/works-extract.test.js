@@ -4,71 +4,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const ExcelJS = require('exceljs');
-const { run } = require('../../scripts/works-import/extract');
-const { readFolder } = require('../../scripts/works-import/cells');
-const {
-  fingerprintOf, openEnvelope, openExtract, sealEnvelope, sign, sha256Hex
-} = require('../../src/utils/import-envelope');
+const { readFolder, readInput } = require('../../scripts/works-import/cells');
+const { fingerprintOf, openEnvelope, sealEnvelope, sign, sha256Hex } = require('../../src/utils/import-envelope');
 const {
   buildWorkbooks, STAFF_VALUES, NEVER_READ_VALUES, PROJECT_NAMES, REAL_IDS
 } = require('../fixtures/works-import/build-workbooks');
-
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'works-extract-'));
-const sheetsDir = path.join(tmp, 'sheets');
-const throwaway = (length = 40) => crypto.randomBytes(length).toString('hex').slice(0, length);
-const secrets = { surrogate: throwaway(), operator: throwaway(), short: throwaway(19), other: throwaway() };
-let n = 0;
-const fresh = (name) => {
-  n += 1;
-  const dir = path.join(tmp, `${name}-${n}`);
-  fs.mkdirSync(dir);
-  return dir;
-};
-const copyOfSheets = () => {
-  const dir = fresh('sheets');
-  fs.cpSync(sheetsDir, dir, { recursive: true });
-  return dir;
-};
-const modeOf = file => fs.statSync(file).mode & 0o777;
-
-// A stand-in for `secret-tool lookup service <s> account <ref>`: the account is the fifth argument.
-function fakeKeyring() {
-  const bin = fresh('bin');
-  const cases = Object.entries(secrets).map(([ref, value]) => `  ${ref}) printf '%s\\n' '${value}' ;;`).join('\n');
-  const script = `#!/bin/sh\ncase "$5" in\n${cases}\n  *) exit 1 ;;\nesac\n`;
-  for (const name of ['secret-tool', 'security']) fs.writeFileSync(path.join(bin, name), script, { mode: 0o700 });
-  return { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-}
-const env = fakeKeyring();
-
-function devboxKeys() {
-  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-  const ed = crypto.generateKeyPairSync('ed25519');
-  const pemFile = path.join(fresh('devbox'), 'devbox.pub.pem');
-  fs.writeFileSync(pemFile, [rsa.publicKey, ed.publicKey].map(k => k.export({ type: 'spki', format: 'pem' })).join(''));
-  return { rsa, ed, pemFile, fingerprint: fingerprintOf({ rsa: rsa.publicKey, ed25519: ed.publicKey }) };
-}
-const devbox = devboxKeys();
-
-async function cli(argv, cliEnv = env) {
-  const lines = [];
-  await run(argv, { env: cliEnv, write: line => lines.push(line) });
-  return lines;
-}
-
-async function extractTo(args, keys = devbox, out = path.join(fresh('out'), 'extract.sealed.json')) {
-  const lines = await cli(['extract', '--in', sheetsDir, '--recipient-key', keys.pemFile,
-    '--expect-fingerprint', keys.fingerprint, '--out', out, ...args]);
-  const sealed = fs.readFileSync(out);
-  const opened = openExtract(sealed, { env: args[args.indexOf('--env') + 1], keyFingerprint: keys.fingerprint, privateKey: keys.rsa.privateKey });
-  return { out, lines, sealed, ...opened };
-}
-
-const newMap = () => path.join(fresh('map'), 'surrogates.enc.json');
-const surrogateArgs = (file, ...extra) => ['--surrogates', file, '--surrogate-passphrase-ref', 'surrogate', ...extra];
+const {
+  EXTRACT, tmp, sheetsDir, secrets, fresh, copyOfSheets, modeOf, devboxKeys, devbox, cli, extractTo, newMap, surrogateArgs
+} = require('../fixtures/works-import/harness');
 
 test.before(async () => {
   fs.mkdirSync(sheetsDir);
@@ -100,11 +46,15 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   const kinds = flags.map(f => `${f.sheet}:${f.row}:${f.slot || 0}:${f.field}:${f.kind}`).sort();
   assert.deepEqual(kinds, [
     'Amendments:5:1:endDate:endBeforeStart',
+    'Amendments:7:0:name:unnamedRow',
     'Projects:10:0:id:duplicateId',
+    'Projects:11:0:id:badId',
     'Projects:5:0:intakeDate:sentinel',
     'Projects:6:0:decisionDate:endBeforeStart',
     'Projects:6:0:expiryDate:volatileFormula',
+    'Projects:7:0:airAccepted:badDate',
     'Projects:7:0:decisionDate:badDate',
+    'Projects:7:0:draftAir:badDate',
     'Projects:7:0:proponent:errorCell',
     'Projects:7:0:subsector:errorCell',
     'Projects:8:0:id:badId',
@@ -138,9 +88,25 @@ test('two workbooks matching one name, a symbolic link and an oversized file are
   fs.symlinkSync(path.join(linked, 'elsewhere.bin'), path.join(linked, projects));
   await assert.rejects(readFolder(linked), /is a symbolic link/);
 
+  assert.throws(() => readInput(linked, projects, 0), /is a symbolic link/, 'lstat check where O_NOFOLLOW is missing');
+
   const large = copyOfSheets();
   fs.truncateSync(path.join(large, projects), 50 * 1024 * 1024 + 1);
   await assert.rejects(readFolder(large), /is over 52428800 bytes/);
+
+  // Central directory entries declare each inflated size at offset 24.
+  const declare = async (sizeOf, pattern) => {
+    const dir = copyOfSheets();
+    const zip = fs.readFileSync(path.join(dir, projects));
+    const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+    for (let at = zip.indexOf(signature), i = 0; at >= 0; at = zip.indexOf(signature, at + 4), i += 1) {
+      zip.writeUInt32LE(sizeOf(i), at + 24);
+    }
+    fs.writeFileSync(path.join(dir, projects), zip);
+    await assert.rejects(readFolder(dir), pattern);
+  };
+  await declare(i => (i === 0 ? 300 * 1024 * 1024 : 1), /holds an entry over 209715200 bytes/);
+  await declare(() => 150 * 1024 * 1024, /inflates to over 524288000 bytes/);
 });
 
 test('real-folder counts', { skip: !process.env.WORKS_REAL_DIR && 'set WORKS_REAL_DIR on the laptop' }, async () => {
@@ -180,20 +146,79 @@ test('surrogates are stable across two operator keys', async () => {
 
 test('a missing surrogate map needs --new-surrogates, which refuses an existing map', async () => {
   const map = newMap();
-  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /not found; pass --new-surrogates/);
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]),
+    (err) => err.message.includes(`${path.resolve(map)} not found. Pass --new-surrogates only on the very first run`));
   assert.equal(fs.existsSync(map), false);
+  await assert.rejects(extractTo(['--env', 'test', '--surrogate-passphrase-ref', 'surrogate', '--new-surrogates']),
+    /missing --surrogates/);
   await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
   const before = fs.readFileSync(map);
   await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]), /exists; drop --new-surrogates/);
   assert.deepEqual(fs.readFileSync(map), before);
+  for (const args of [['--env', 'prod', ...surrogateArgs(map)], ['--env', 'prod', '--new-surrogates'],
+    ['--env', 'test', '--keep-numbers-on-test', 'SIGNOFF-2', ...surrogateArgs(map)]]) {
+    await assert.rejects(extractTo(args), /apply only when numbers are replaced/);
+  }
 });
 
-test('a second run refuses while another holds the surrogate map lock', async () => {
+test('a surrogate map that appears during a --new-surrogates run is left unchanged', async () => {
+  const map = newMap();
+  const running = extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
+  fs.writeFileSync(map, 'written by another run');
+  await assert.rejects(running, /appeared during this run; it was left unchanged/);
+  assert.equal(fs.readFileSync(map, 'utf8'), 'written by another run');
+  assert.deepEqual(fs.readdirSync(path.dirname(map)), [path.basename(map)]);
+});
+
+test('an empty or corrupt surrogate map is refused and left unchanged', async () => {
+  for (const content of ['', '{"v":1,"iv":"AAAA","tag":"AAAA","salt":"AAAA","ciphertext":"AAAA"}']) {
+    const map = newMap();
+    fs.writeFileSync(map, content);
+    await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /could not be opened/);
+    assert.equal(fs.readFileSync(map, 'utf8'), content);
+    assert.equal(fs.existsSync(`${map}.lock`), false);
+  }
+});
+
+test('a held lock refuses a second run and stays; this run releases its own lock on failure', async () => {
   const map = newMap();
   await extractTo(['--env', 'test', ...surrogateArgs(map, '--new-surrogates')]);
   assert.equal(fs.existsSync(`${map}.lock`), false);
   fs.writeFileSync(`${map}.lock`, '1');
-  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /lock exists: another run holds/);
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]),
+    (err) => /holds the surrogate map\. Delete it only when no run is active$/.test(err.message));
+  assert.equal(fs.readFileSync(`${map}.lock`, 'utf8'), '1');
+  fs.writeFileSync(`${map}.lock`, '2147483646');
+  await assert.rejects(extractTo(['--env', 'test', ...surrogateArgs(map)]), /process 2147483646 named in it is not running/);
+  fs.rmSync(`${map}.lock`);
+
+  await assert.rejects(extractTo(['--env', 'test', '--surrogates', map, '--surrogate-passphrase-ref', 'other']), /could not be opened/);
+  assert.equal(fs.existsSync(`${map}.lock`), false);
+  await assert.rejects(cli(['extract', '--env', 'test', '--in', path.join(tmp, 'no-such-dir'), ...surrogateArgs(map),
+    '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint,
+    '--out', path.join(fresh('out'), 'x.sealed.json')]), /ENOENT/);
+  assert.equal(fs.existsSync(`${map}.lock`), false);
+
+  const running = extractTo(['--env', 'test', ...surrogateArgs(map)]);
+  fs.writeFileSync(`${map}.lock`, '1');
+  await running;
+  assert.equal(fs.readFileSync(`${map}.lock`, 'utf8'), '1', 'a lock now naming another run is left alone');
+});
+
+test('SIGTERM during a run removes the surrogate map lock', async () => {
+  const map = newMap();
+  const bin = fresh('slow-bin');
+  fs.writeFileSync(path.join(bin, 'secret-tool'), `#!/bin/sh\nsleep 2\nprintf '%s\\n' '${secrets.surrogate}'\n`, { mode: 0o700 });
+  const child = spawn(process.execPath, [EXTRACT, 'extract', '--env', 'test', '--in', sheetsDir, ...surrogateArgs(map, '--new-surrogates'),
+    '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint, '--out', path.join(fresh('out'), 'x.sealed.json')],
+  { env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, stdio: 'ignore' });
+  const exited = new Promise(resolve => child.on('exit', (code, signal) => resolve(signal)));
+  for (let i = 0; i < 100 && !fs.existsSync(`${map}.lock`); i += 1) await new Promise(r => setTimeout(r, 50));
+  assert.equal(fs.existsSync(`${map}.lock`), true, 'lock taken before the keyring read');
+  child.kill('SIGTERM');
+  assert.equal(await exited, 'SIGTERM');
+  assert.equal(fs.existsSync(`${map}.lock`), false);
+  assert.equal(fs.existsSync(map), false);
 });
 
 test('surrogate passphrase is read from the keyring, not a file', async () => {
@@ -212,6 +237,15 @@ test('a missing keyring tool is named, not reported as a missing entry', async (
   const noTools = { ...process.env, PATH: fresh('empty-bin') };
   await assert.rejects(cli(['keygen', '--env', 'test', '--out-dir', fresh('keys'), '--passphrase-ref', 'operator'], noTools),
     /(secret-tool|security) is not installed/);
+
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  try {
+    await assert.rejects(cli(['keygen', '--env', 'test', '--out-dir', fresh('keys'), '--passphrase-ref', 'operator']),
+      /not supported on win32/);
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+  }
 });
 
 test('transition read holds no EPD or Notes value', async () => {
@@ -313,6 +347,8 @@ test('seal prints the manual-match SHA-256', async () => {
   const file = path.join(fresh('manual'), 'manual-match.csv');
   fs.writeFileSync(file, 'sheetId,trackId\n1,2\n');
   const out = path.join(path.dirname(file), 'manual-match.sealed.json');
+  await assert.rejects(cli(sealArgs('manual-match', file, path.join(path.dirname(file), 'manual-match.json'))),
+    /must end with \.sealed\.json/);
   const lines = await cli(sealArgs('manual-match', file, out));
   assert.deepEqual(lines, [`manualMatchSha256=${sha256Hex(fs.readFileSync(file))}`]);
   assert.equal(modeOf(out), 0o600);

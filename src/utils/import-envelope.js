@@ -120,7 +120,7 @@ function openEnvelope(sealed, { purpose, env, keyFingerprint, privateKey }) {
 }
 
 function hasStaffField(extract) {
-  return Object.values(extract.records || {}).some(rows =>
+  return Object.values(extract.records).some(rows =>
     rows.some(row => STAFF_FIELDS.some(f => Object.prototype.hasOwnProperty.call(row, f))));
 }
 
@@ -133,6 +133,10 @@ function openExtract(sealed, opts) {
   } catch {
     throw refused('extract', opts.env);
   }
+  const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const shaped = isObject(extract) && isObject(extract.records)
+    && Object.values(extract.records).every(rows => Array.isArray(rows) && rows.every(isObject));
+  if (!shaped) throw refused('extract', opts.env);
   const agrees = extract.env === opts.env
     && extract.staffIncluded === opened.staffIncluded
     && extract.numbersReal === opened.numbersReal

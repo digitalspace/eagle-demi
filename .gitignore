@@ -75,3 +75,4 @@ operator-*.key.pem
 *.sealed.json
 works-surrogates.enc.json
 works-surrogates.enc.json.lock
+works-surrogates.enc.json.*.tmp

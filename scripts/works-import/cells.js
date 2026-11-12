@@ -8,6 +8,8 @@ const { SOURCES, D, T } = require('./sources');
 const SENTINEL_DATE = '1995-06-30';
 const NULL_TEXT = new Set(['', '---', 'n/a']);
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
+const MAX_INFLATED_BYTES = 500 * 1024 * 1024;
+const MAX_ENTRY_BYTES = 200 * 1024 * 1024;
 const NOW_ONLY = /^=?\s*(NOW|TODAY)\s*\(\s*\)\s*$/i;
 const VOLATILE = /\b(NOW|TODAY)\s*\(/i;
 const YEARS = [1900, 2100];
@@ -36,14 +38,22 @@ function typed(cell, type) {
   const value = cached(cell.value);
   if (value === ERROR) return { value: null, flag: 'errorCell' };
   if (value == null || (typeof value === 'string' && NULL_TEXT.has(value.trim().toLowerCase()))) return { value: null, flag };
-  if (value instanceof Date) {
-    const day = isoDay(value);
-    return day ? { value: day, flag } : { value: null, flag: 'badDate' };
+  // An id is digits only; a date-formatted id cell reads back as a Date and must not become a register id.
+  if (type === 'id') {
+    const text = typeof value === 'number' || typeof value === 'string' ? String(value).trim() : '';
+    return /^\d+$/.test(text) ? { value: Number(text), flag } : { value: null, flag: 'badId' };
   }
-  const text = String(value).trim();
-  if (type === 'id') return /^\d+$/.test(text) ? { value: Number(text), flag } : { value: null, flag: 'badId' };
-  if (type === D) return /^\d{4}-\d{2}-\d{2}$/.test(text) ? { value: text, flag } : { value: null, flag: 'badDate' };
-  return { value: typeof value === 'string' ? text : value, flag };
+  const day = value instanceof Date ? isoDay(value) : type === D && textDay(String(value).trim());
+  if (value instanceof Date || type === D) return day ? { value: day, flag } : { value: null, flag: 'badDate' };
+  return { value: typeof value === 'string' ? value.trim() : value, flag };
+}
+
+/** A typed-in YYYY-MM-DD that is a real calendar day inside the year range, else null. */
+function textDay(text) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return null;
+  const day = isoDay(new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))));
+  return day === text ? day : null;
 }
 
 function label(ws, rowNo, col) {
@@ -92,7 +102,6 @@ function rangeFlags(source, rec, ref, flags) {
 
 // Ids and slot numbers are pre-filled far below the data, so a nameless row only counts when it holds more.
 function unnamedWithData(base, row, slots, ref) {
-  if ('id' in base && base.id == null) return false;
   const { id: _id, name: _name, ...rest } = base;
   return !blank(rest) || slots.some(columns => !blank(pick(row, columns, ref, [])));
 }
@@ -142,19 +151,47 @@ function countsOf(records) {
   return counts;
 }
 
-/** Reads one regular file, refusing a symbolic link or anything over the size cap. */
-function readInput(dir, file) {
+/** Refuses a zip whose central directory declares more than the inflate caps, before anything is inflated. */
+function checkInflatedSize(buf, file) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0 || eocd + 22 > buf.length) throw new Error(`${file} is not a zip workbook`);
+  const entries = buf.readUInt16LE(eocd + 10);
+  let at = buf.readUInt32LE(eocd + 16);
+  if (entries === 0xffff || at === 0xffffffff) throw new Error(`${file} is a zip64 archive, which is not supported`);
+  let total = 0;
+  for (let i = 0; i < entries; i += 1) {
+    if (at + 46 > buf.length || buf.readUInt32LE(at) !== 0x02014b50) throw new Error(`${file} has a damaged zip directory`);
+    const size = buf.readUInt32LE(at + 24);
+    if (size > MAX_ENTRY_BYTES) throw new Error(`${file} holds an entry over ${MAX_ENTRY_BYTES} bytes`);
+    total += size;
+    if (total > MAX_INFLATED_BYTES) throw new Error(`${file} inflates to over ${MAX_INFLATED_BYTES} bytes`);
+    at += 46 + buf.readUInt16LE(at + 28) + buf.readUInt16LE(at + 30) + buf.readUInt16LE(at + 32);
+  }
+}
+
+/** Reads one regular file, refusing a symbolic link or more than the size cap even if the file grows. */
+function readInput(dir, file, noFollow = fs.constants.O_NOFOLLOW) {
+  const full = path.join(dir, file);
+  if (!noFollow && fs.lstatSync(full).isSymbolicLink()) throw new Error(`${file} is a symbolic link`);
   let fd;
   try {
-    fd = fs.openSync(path.join(dir, file), fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    fd = fs.openSync(full, fs.constants.O_RDONLY | (noFollow || 0));
   } catch (err) {
     throw new Error(err.code === 'ELOOP' ? `${file} is a symbolic link` : `${file} cannot be opened`, { cause: err });
   }
   try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
-    if (stat.size > MAX_INPUT_BYTES) throw new Error(`${file} is over ${MAX_INPUT_BYTES} bytes`);
-    return fs.readFileSync(fd);
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${file} is not a regular file`);
+    const chunks = [];
+    const chunk = Buffer.alloc(1024 * 1024);
+    let total = 0;
+    for (let n = fs.readSync(fd, chunk); n > 0; n = fs.readSync(fd, chunk)) {
+      total += n;
+      if (total > MAX_INPUT_BYTES) throw new Error(`${file} is over ${MAX_INPUT_BYTES} bytes`);
+      chunks.push(Buffer.from(chunk.subarray(0, n)));
+    }
+    const buf = Buffer.concat(chunks, total);
+    checkInflatedSize(buf, file);
+    return buf;
   } finally {
     fs.closeSync(fd);
   }
@@ -178,4 +215,4 @@ async function readFolder(dir) {
   return { ...out, counts: countsOf(out.records) };
 }
 
-module.exports = { readFolder };
+module.exports = { readFolder, readInput };
