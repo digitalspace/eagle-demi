@@ -92,7 +92,7 @@ test('audit writer', async (t) => {
     assert.ok(!row.ActorRoles.includes('project:abc'));
   });
 
-  await t.test('analytics rows carry no durable identity', async () => {
+  await t.test('anonymous analytics rows carry no durable identity', async () => {
     audit.analyticsEvent(fakeReq(), { eventName: 'search', searchTerm: 'pipeline', resultCount: 12 });
     await audit.flush();
 

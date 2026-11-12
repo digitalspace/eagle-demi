@@ -29,7 +29,7 @@ const { cosmosContainer } = require('../helpers/cosmos-bicep');
 
 // Two ways for the probe to stay green through a real outage; `az bicep build` sees a URL string
 // either way.
-test('the prod availability probe goes through rproxy and reaches AI Search', () => {
+test('the prod availability probe takes the public Front Door path and reaches AI Search', () => {
   const match = /^param availabilityUrl = '([^']+)'$/m.exec(PROD_PARAMS);
   assert.ok(match, 'prod must set availabilityUrl, or the module gate deploys no test at all');
   const url = new URL(match[1]);
@@ -39,7 +39,7 @@ test('the prod availability probe goes through rproxy and reaches AI Search', ()
   assert.strictEqual(url.hostname, 'projects.eao.gov.bc.ca',
     'the probe must take the public path visitors take, not the app hostname behind it');
   assert.ok(url.pathname.startsWith('/demi-search/'),
-    'that public path is what rproxy routes to demi-api-fc-prod');
+    'that public path is what Front Door route demi sends through APIM to demi-api-fc-prod');
 
   // A bare project list has no criteria, so src/controllers/search.js answers it from Cosmos and an
   // AI Search outage would not move it. Every document read goes to the index.

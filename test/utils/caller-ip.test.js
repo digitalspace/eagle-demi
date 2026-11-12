@@ -112,7 +112,7 @@ test('callerIp behind APIM', async (t) => {
   });
 });
 
-test('callerIp behind our own rproxy', async (t) => {
+test('callerIp behind a trusted proxy', async (t) => {
   t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
   t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
 
