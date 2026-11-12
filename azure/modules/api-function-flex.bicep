@@ -477,11 +477,21 @@ resource storageLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@
           type: 'Lifecycle'
           definition: {
             filters: {
-              blobTypes: ['blockBlob']
+              blobTypes: ['blockBlob', 'appendBlob']
               prefixMatch: ['${worksImportContainer.name}/']
             }
             actions: {
               baseBlob: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+              version: {
+                delete: {
+                  daysAfterCreationGreaterThan: 7
+                }
+              }
+              snapshot: {
                 delete: {
                   daysAfterCreationGreaterThan: 7
                 }
