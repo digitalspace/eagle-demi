@@ -29,7 +29,7 @@ const PUT_SECONDS = 120;
 const PUT_MARGIN_MS = 60 * 1000;
 /** Clock skew allowed between this API and the store before a PUT link counts as dead. */
 const PUT_SKEW_MS = 30 * 1000;
-/** Owner decision 6: larger files are skipped. */
+/** The worker holds the whole PDF and its rewritten copy in memory, so larger files are skipped. */
 const MAX_BYTES = 256 * 1024 * 1024;
 /** The titler's increment (Info, rewritten XMP, one xref); a file whose XMP is bigger is refused at commit. */
 const MAX_GROWTH = 256 * 1024;
