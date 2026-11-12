@@ -325,8 +325,8 @@ function nativeCriteria(spec, parsed, access) {
     criteria.push({ clause: `(${any.join(' OR ')})`, params: [{ name: '@nq', value: parsed.q }] });
   }
 
-  const orderBy = parsed.sort ? `c.${parsed.sort.field} ${parsed.sort.desc ? 'DESC' : 'ASC'}` : undefined;
-  return { criteria, orderBy };
+  if (parsed.sort) criteria.push({ clause: dialAllows(parsed.sort.field, level), params: [] });
+  return { criteria, orderBy: parsed.sort ? `c.${parsed.sort.field} ${parsed.sort.desc ? 'DESC' : 'ASC'}` : undefined };
 }
 
 /** A 24-hex Eagle id, which a by-id read also accepts. */

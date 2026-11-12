@@ -35,7 +35,7 @@
   "src/repositories/comment-periods.js": {"max-lines":[507]},
   "src/repositories/documents.js": {"max-lines":[1086]},
   "src/repositories/projects.js": {"max-lines":[521]},
-  "src/repositories/updates.js": {"max-lines":[787]},
+  "src/repositories/updates.js": {"max-lines":[785]},
   "src/scripts/apply-search-definitions.js": {"complexity":[37],"max-lines":[458]},
   "src/scripts/backfill-chunk-parent-fields.js": {"complexity":[31,31,25],"max-lines":[656],"max-lines-per-function":[377]},
   "src/scripts/backfill-document-list-ids.js": {"complexity":[32],"max-lines":[446],"max-lines-per-function":[278]},

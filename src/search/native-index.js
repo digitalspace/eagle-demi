@@ -15,8 +15,8 @@
  * sends to Cosmos (`cosmosServes`), cross-project lists without `q` included. With no sort, a `q`
  * list ranks by relevance and any other takes the map's default order, each then by `id`. Its
  * `searchVis` column is the lowest dial over the searched fields, so a keyword cannot count a row
- * whose searched field the caller may not see. Filter fields carry no dial in the index; Cosmos re-checks them on the
- * page only, which is latent while no route writes document dials.
+ * whose searched field the caller may not see. Filter and sort fields carry no dial in the index; Cosmos re-checks
+ * them on the page only, which is latent while no route writes document dials.
  */
 
 const aiSearch = require('./ai-search');
@@ -352,7 +352,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     }, access);
     const dialOnly = [...new Set([
       ...Object.keys(parsed.filters).filter(field => types[field]),
-      ...(parsed.ranges || []).map(range => range.field),
+      ...(parsed.ranges || []).map(range => range.field), ...(parsed.sort ? [parsed.sort.field] : []),
       ...Object.keys(parsed.contains || {}).flatMap(field => searchedOf(map.contains[field].join(',')))
     ])].map(field => ({ clause: dialAllows(field, level), params: [] }));
 
