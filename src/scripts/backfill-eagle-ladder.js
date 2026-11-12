@@ -374,8 +374,6 @@ async function runReverse(args, io) {
   return summaries;
 }
 
-// ---------------------------------------------------------------------------------------------
-
 function newSummary(container, args) {
   return {
     container, mode: args.live ? 'live' : 'dry-run', direction: args.reverse ? 'reverse' : 'forward',
