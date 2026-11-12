@@ -16,7 +16,7 @@
   "src/controllers/nosql/user.js": {"complexity":[21]},
   "src/controllers/search-definitions.js": {"complexity":[26]},
   "src/controllers/search.js": {"complexity":[62,23,21],"max-lines":[2376],"max-lines-per-function":[709]},
-  "src/db/cosmos-nosql.js": {"max-lines":[663]},
+  "src/db/cosmos-nosql.js": {"max-lines":[658]},
   "src/domain/updates.js": {"max-lines":[498]},
   "src/helpers/access-odata.js": {"complexity":[25]},
   "src/helpers/access-sql.js": {"max-lines":[745]},
