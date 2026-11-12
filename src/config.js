@@ -193,12 +193,12 @@ const config = {
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
 
-  // Largest single answer (whole file or range) ?inline=1 streams; bigger ones get the 302. 32 MiB
-  // is ~5 s at 6.4 MB/s, under APIM's 30 s and Front Door's 240 s origin timeout. 0 = no streaming.
+  // Largest answer ?inline=1 streams to a caller that is not anonymous and edge-stamped; bigger
+  // ones get the 302. 0 = no streaming and the 302 for everyone.
   downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
-  // Streams one instance serves at once; past it the 302. Bounds what slow readers or cache-busting
-  // query strings can hold open. 0 = no limit.
-  downloadStreamMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_MAX_CONCURRENT', 8),
+  // Streams per instance, 0 = no limit: past the edge pool (anonymous stamped) a 503, else the 302.
+  downloadStreamMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_MAX_CONCURRENT', 2),
+  downloadStreamEdgeMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_EDGE_MAX_CONCURRENT', 6),
 
   // Featured documents one project may hold; PUT /documents/:id answers 409 past it. 0 = nothing can be featured.
   featuredDocumentsMax: intFromEnv('FEATURED_DOCUMENTS_MAX', 5),

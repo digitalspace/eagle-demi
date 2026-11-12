@@ -12,6 +12,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { finished } = require('stream/promises');
+const { Readable } = require('stream');
 const { once } = require('events');
 const storage = require('../../storage');
 const { contentDisposition, inlineType } = require('../../storage/content-disposition');
@@ -37,6 +38,7 @@ const {
 } = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
 const { fromEdge } = require('../../utils/caller-ip');
+const { notModified, byteRange, UNSATISFIABLE, RANGE } = require('../../utils/http-range');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument } = require('../../seed/transform');
 const { naturalSortKey } = require('../../helpers/natural-sort');
@@ -770,6 +772,8 @@ async function withTimeout(promise, ms, what) {
   }
 }
 
+const noStoredFile = res => res.status(404).json({ error: 'Document has no stored file.' });
+
 /** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
 function statBounded(key) {
   return withTimeout(storage.statObject(key), STAT_TIMEOUT_MS, 'store stat');
@@ -804,7 +808,7 @@ async function headDownload(req, res) {
       return res.status(500).json(downloadFailed(err).body);
     }
   }
-  if (stat === null) return res.status(404).json({ error: 'Document has no stored file.' });
+  if (stat === null) return noStoredFile(res);
 
   // The fallback reads what this caller may see of the record, as GET /documents/:id would show.
   const size = stat ? stat.size : recordedSize(record);
@@ -820,18 +824,27 @@ async function headDownload(req, res) {
 
 /**
  * `?inline=1` without `redirect=1`: the bytes from this origin, so the link never expires and the
- * edge can cache it. Else the redirect mode's 302, or a 503 to a mid-file edge piece; never JSON.
+ * edge can cache it. An anonymous edge-stamped caller gets a 404 or 503 where others get the 302.
  */
 async function inlineDownload(req, res) {
   try {
     const found = await findStoredFile(req, req.params.id);
     if (found.status) return res.status(found.status).json(found.body);
+    const edge = fromEdge(req.headers);
+    const anonymous = isAnonymous(resolveAccess(req));
+    // DOWNLOAD_STREAM_MAX_BYTES=0 is the operator's way back to the 302, for every caller.
+    const how = { edge, anonymous, ranged: Boolean(req.headers.range), neverRedirect: edge && anonymous && config.downloadStreamMaxBytes > 0 };
     const type = inlineType(found.doc.mimeType, found.fileName);
-    const stat = type && config.downloadStreamMaxBytes > 0 && await streamableStat(found.doc.s3Key);
-    const sent = stat && await sendBytes(req, res, found, type, stat);
-    if (sent) return sent;
+    let refused = 'off';
+    if (how.neverRedirect || (type && config.downloadStreamMaxBytes > 0)) {
+      const stat = await streamableStat(found.doc.s3Key);
+      if (stat === null && how.neverRedirect) return noStoredFile(res);
+      const sent = stat && (stat.size > 0 || how.neverRedirect) ? await sendBytes(req, res, found, type, stat, how) : 'stat';
+      if (typeof sent !== 'string') return sent;
+      refused = sent;
+    }
     // Past byte 0 the edge has already sent the start of a 200: a 302 would be spliced into it.
-    if (midFileEdgePiece(req)) return res.set('Retry-After', '5').status(503).send('');
+    if (how.neverRedirect || midFileEdgePiece(req)) return refuse(res, refused, edge);
     const { body } = await presignDownload(req, found, type);
     return res.redirect(302, body.url);
   } catch (err) {
@@ -840,80 +853,45 @@ async function inlineDownload(req, res) {
   }
 }
 
-/** The store's stat when the object has both validators, else null. */
+/** A 503 a reload recovers from, so the caller stays on this host. */
+function refuse(res, reason, edge) {
+  logger.warn('[Document Controller] download refused', { evt: 'download-refused', reason, edge });
+  return res.set('Retry-After', '5').status(503).type('txt').send('Busy, reload in a few seconds.\n');
+}
+
+/** The store's stat when the object has both validators; null when it is missing; else false. */
 async function streamableStat(key) {
   let stat;
   try {
     stat = await statBounded(key);
   } catch (err) {
-    logger.warn(`[Document Controller] stream stat failed, redirecting instead: ${err.message}`);
-    return null;
+    if (isBadObjectName(err)) return null;
+    logger.warn(`[Document Controller] stream stat failed: ${err.message}`);
+    return false;
   }
   // Front Door revalidates by Last-Modified only, so no date means no stream.
-  return stat && stat.size > 0 && stat.lastModified && stat.etag ? stat : null;
+  return stat && (stat.lastModified && stat.etag ? stat : false);
 }
 
-/** Whole seconds: Last-Modified and the dates compared against it carry no finer precision. */
-function httpSeconds(value) {
-  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
-}
-
-/** RFC 9110 13.1.2/13.1.3: a weak comparison against our one tag; If-None-Match beats the date. */
-function notModified(req, etag, lastModified) {
-  const tags = req.headers['if-none-match'];
-  if (tags) {
-    return tags.trim() === '*' || tags.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag);
-  }
-  const since = httpSeconds(req.headers['if-modified-since']);
-  // RFC 9110 13.1.3: a date in the future is invalid, so it cannot vouch for the copy.
-  return since !== null && since <= Date.now() / 1000 && httpSeconds(lastModified) <= since;
-}
-
-const UNSATISFIABLE = 'unsatisfiable';
-const RANGE = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/;
 const midFileEdgePiece = req => Number(RANGE.exec(req.headers.range)?.[1]) > 0 && fromEdge(req.headers);
+// Front Door fetches a file as closed ranges of 8 MiB or less, in turn and fast: no slot for those.
+const edgePiece = (req, range, length) =>
+  Boolean(range) && /\d-\d/.test(req.headers.range) && length <= 8 * 1024 * 1024 && fromEdge(req.headers);
 
-/**
- * The one byte range to send, `UNSATISFIABLE`, or null for the whole file. A malformed or
- * multi-part Range, or an If-Range that no longer matches, is ignored as RFC 9110 14.2 allows.
- */
-function byteRange(req, size, etag, lastModified) {
-  const m = RANGE.exec(String(req.headers.range || ''));
-  if (!m || (!m[1] && !m[2])) return null;
-
-  const ifRange = req.headers['if-range'];
-  if (ifRange) {
-    const fresh = /^(W\/)?"/.test(ifRange)
-      ? ifRange === etag
-      : httpSeconds(ifRange) !== null && httpSeconds(ifRange) === httpSeconds(lastModified);
-    if (!fresh) return null;
-  }
-
-  if (!m[1]) {
-    const suffix = Number(m[2]);
-    return suffix > 0 ? { start: Math.max(0, size - suffix), end: size - 1 } : UNSATISFIABLE;
-  }
-  const start = Number(m[1]);
-  const last = m[2] ? Number(m[2]) : Infinity;
-  if (last < start) return null;
-  return start < size ? { start, end: Math.min(last, size - 1) } : UNSATISFIABLE;
-}
-
-// Streams this process is serving; capped by config.downloadStreamMaxConcurrent.
-let activeStreams = 0;
+// Streams this process is serving per pool: `edge` for anonymous stamped callers, `direct` for the rest.
+const activeStreams = { edge: 0, direct: 0 };
 
 /**
  * Takes a stream slot before any await, so requests opening at once cannot all pass the cap.
  * Returns its release, safe to call twice, or null at the cap.
  */
-function takeStreamSlot() {
-  const max = config.downloadStreamMaxConcurrent;
-  if (max !== 0 && activeStreams >= max) return null;
-  activeStreams += 1;
+function takeStreamSlot(pool) {
+  const max = pool === 'edge' ? config.downloadStreamEdgeMaxConcurrent : config.downloadStreamMaxConcurrent;
+  if (max !== 0 && activeStreams[pool] >= max) return null;
+  activeStreams[pool] += 1;
   let held = true;
   return () => {
-    if (held) activeStreams -= 1;
+    if (held) activeStreams[pool] -= 1;
     held = false;
   };
 }
@@ -922,10 +900,14 @@ function takeStreamSlot() {
  * The store read, once its first bytes are in. Null, with the stream released, when it fails or
  * has not started within STREAM_OPEN_TIMEOUT_MS: the caller can still send the 302 then.
  */
-async function openStream(key, opts) {
+async function openStream(key, offset, length, stat) {
+  if (length === 0) return Readable.from([]);
   let stream;
   const started = (async () => {
-    stream = await storage.getObjectStream(key, opts);
+    // Pinned to the stat's version, or in an unversioned store to its etag, so a replace between
+    // the stat and the read cannot send bytes the headers do not describe.
+    stream = await storage.getObjectStream(key, { offset, length, versionId: stat.versionId || undefined,
+      ifMatch: stat.versionId ? undefined : stat.etag });
     await once(stream, 'readable');
     return stream;
   })();
@@ -940,8 +922,11 @@ async function openStream(key, opts) {
   }
 }
 
-/** The 200, 206, 304 or 416; null, with no header set, where the caller answers instead. */
-async function sendBytes(req, res, { doc, fileName }, type, stat) {
+/**
+ * The 200, 206, 304 or 416; else, with no header set, why not (`cap`, `slot` or `open`) for the
+ * caller to answer. A null `type` is a file the browser must not show: sent as an attachment.
+ */
+async function sendBytes(req, res, { doc, fileName }, type, stat, how) {
   const { size } = stat;
   // A rename or a visibility change moves the record, not the object, and Front Door revalidates
   // by date alone.
@@ -951,11 +936,11 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     ETag: `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
       .digest('base64url').slice(0, 32)}"`,
     'Last-Modified': modified.toUTCString(),
-    'Content-Type': type,
-    'Cache-Control': isAnonymous(resolveAccess(req))
-      ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
+    'Content-Type': type || 'application/octet-stream',
+    'Cache-Control': how.anonymous ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
   };
-  const disposition = contentDisposition(fileName, { inline: true });
+  const disposition = contentDisposition(fileName, { inline: Boolean(type) });
+  const { edge, ranged, anonymous } = how;
   const setValidators = () => Object.entries(validators).forEach(([name, value]) => res.set(name, value));
 
   if (notModified(req, validators.ETag, modified)) {
@@ -963,7 +948,8 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     return res.status(304).send('');
   }
 
-  const range = byteRange(req, size, validators.ETag, modified);
+  // An empty file has no satisfiable range, so the whole (empty) file answers, as RFC 9110 14.2 allows.
+  const range = size > 0 && byteRange(req, size, validators.ETag, modified);
   if (range === UNSATISFIABLE) {
     res.set('Content-Range', `bytes */${size}`);
     return res.status(416).send('');
@@ -971,31 +957,27 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
 
   const { start, end } = range || { start: 0, end: size - 1 };
   const length = end - start + 1;
-  if (length > config.downloadStreamMaxBytes) {
-    logger.info(`[Document Controller] ${length} bytes is over the stream cap, redirecting`);
-    return null;
+  if (!how.neverRedirect && length > config.downloadStreamMaxBytes) {
+    logger.info(`[Document Controller] ${length} bytes is over the stream cap, redirecting`, { edge, ranged, anonymous });
+    return 'cap';
   }
-  // Front Door fetches a file as ranged pieces in turn and reads fast, so a piece takes no slot.
-  const release = range && fromEdge(req.headers) ? () => {} : takeStreamSlot();
+  const noSlot = length === 0 || edgePiece(req, range, length);
+  const release = noSlot ? () => {} : takeStreamSlot(how.neverRedirect ? 'edge' : 'direct');
   if (!release) {
-    logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
-    return null;
+    if (!how.neverRedirect) logger.info(`[Document Controller] ${activeStreams.direct} streams open, redirecting`, { edge, ranged, anonymous });
+    return 'slot';
   }
-  // Pinned to the stat's version, or in an unversioned store to its etag, so a replace between
-  // the stat and the read cannot send bytes the headers do not describe.
-  const body = await openStream(doc.s3Key, {
-    offset: start, length, versionId: stat.versionId || undefined,
-    ifMatch: stat.versionId ? undefined : stat.etag
-  });
+  const body = await openStream(doc.s3Key, start, length, stat);
   if (!body) {
     release();
-    return null;
+    return 'open';
   }
   // Closes on end, error or destroy; the router destroys it when the caller goes away.
   body.once('close', release);
+  if (edge && !noSlot) logger.info('[Document Controller] stream outside Front Door pieces', { evt: 'download-whole', edge, ranged, bytes: length });
 
   // A viewer fetching the rest of a file it already counted is not a second view.
-  recordDownload(req, doc, true, { view: start === 0 });
+  recordDownload(req, doc, Boolean(type), { view: start === 0 });
   setValidators();
   res.set('Accept-Ranges', 'bytes');
   res.set('Content-Disposition', disposition);
