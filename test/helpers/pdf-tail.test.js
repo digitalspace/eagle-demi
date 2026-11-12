@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The increment check against real `pdf-title/titler.py` output (fixtures written by it from the
- * titler's own test builders) and against hand-built increments. `classic-xmp.in-place.pdf` is
- * from the earlier titler that revised XMP in place, which the check now refuses.
+ * Fixtures are real `pdf-title/titler.py` output; `classic-xmp.in-place.pdf` revises XMP in place,
+ * which the check refuses.
  */
 
 const test = require('node:test');

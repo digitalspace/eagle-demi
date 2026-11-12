@@ -124,23 +124,11 @@ function projectLinkRecord(project, id, createdBy = 'system') {
 }
 
 /**
- * Creates the link record for `code`, or adopts a shared one already there. Adopted when only this
- * project (or its Eagle-only twin) holds the code, whatever the url; when nobody holds it, only a
- * record the system or this same named caller (`createdBy`) wrote, at this project's target or
- * `alsoUrl`. Every caller with no username is `'unknown'`, so that name proves nothing.
- * A project write that failed after its link landed leaves exactly that, and must not block the
- * retry. A personal record is never adopted: it is one staff member's own link, and the /links
- * routes refuse to edit a project's code.
- *
- * Adoption patches the record on the revision read (url to the target, `claimedBy`), so a racing
- * `releaseCreatedCode` delete gets a 412 and keeps it. A record that moved in between is judged
- * again, once.
- *
+ * Adopts an existing record only when a failed earlier write of this project could have left it;
+ * a personal record never. The etag-guarded adopt makes a racing `releaseCreatedCode` keep it.
  * @param {{links: object, projects: object}} repos
- * @param {{createdBy?: string, attempt?: object, alsoUrl?: string}} [opts] `attempt` gets
- *   `created: {code, etag}` when this call wrote the record
- * @returns {Promise<'claimed'|'taken'|'raced'>} `taken` when the code belongs to someone else,
- *   `raced` when the record kept moving under both tries, so who holds it is not known yet
+ * @param {{createdBy?: string, attempt?: object, alsoUrl?: string}} [opts] `attempt` gets `created: {code, etag}` when this call wrote the record
+ * @returns {Promise<'claimed'|'taken'|'raced'>} `raced` when the record kept moving under both tries
  */
 async function claimCode(project, code, repos, { createdBy = 'system', attempt = null, alsoUrl = null } = {}) {
   const target = projectTarget(project);
@@ -191,10 +179,8 @@ async function claimFirstFree(project, codes, repos, attempt) {
 }
 
 /**
- * Removes the record `ensureProjectShortLink` created in `attempt`, after the project write it was
- * minted for lost. Kept when a project holds the code now, or the record moved since it was
- * written (412): either way someone else is using it.
- *
+ * Removes the record minted for a project write that lost. Kept when a project holds the code now,
+ * or the record moved since written (412): either way someone else is using it.
  * @returns {Promise<boolean>} true when the record was removed
  */
 async function releaseCreatedCode(attempt, repos = {}) {
@@ -219,16 +205,10 @@ async function releaseCreatedCode(attempt, repos = {}) {
 }
 
 /**
- * Points the record behind every code the project holds, current and legacy, at its target, so a
- * printed code follows the project. Each write is guarded on the revision read; one that moved in
- * between is left and listed in `lost`. Personal records and ones already on target are skipped.
- * A held code with no record, or whose record is deleted before the patch lands, is written again
- * at the target (listed in `repointed`), or `lost`. Under `only`, which narrows the pass to
- * existing records, a missing one is skipped and one deleted before the patch is `lost`.
- *
+ * Points every code the project holds, legacy too, at its target, so a printed code follows it.
+ * A record that moved since read is `lost`; a missing one is recreated unless `only` narrows the pass.
  * @param {{links?: object}} [repos]
- * @param {{only?: function(object): (boolean|Promise<boolean>), by?: string}} [opts] `only(record)`
- *   narrows which existing records move
+ * @param {{only?: function(object): (boolean|Promise<boolean>), by?: string}} [opts] `only(record)` narrows which existing records move
  * @returns {Promise<{repointed: string[], lost: string[]}>}
  */
 async function repointProjectLinks(project, repos = {}, { only, by = 'system' } = {}) {
@@ -291,21 +271,11 @@ function carryShortLink(target, existing) {
 }
 
 /**
- * One short link per project with a public page, minted on the write paths that own the project
- * record. The code is the name slug, suffixed on a clash, and random only when both fail.
- * Idempotent: a project already carrying a code keeps it, so a rename or a re-seed cannot orphan a
- * printed link. Only the Eagle id has a public page (`/p/<eagleId>`), so a project without one is
- * skipped rather than pointed at a URL that 404s.
- *
- * The one exception is a pre-slug random code: it is swapped for the name slug once, and kept in
- * `legacyShortCodes` with its link record, so a printed copy still resolves.
- *
- * Mutates `shortCode`, `shortCodeSource` and `legacyShortCodes` — the caller upserts the record.
- *
+ * A project keeps its code, so a rename cannot orphan a printed link; only a random code with no
+ * `shortCodeSource` is swapped for the slug once, the old one kept in `legacyShortCodes`.
  * @param {object} project
  * @param {{links?: object, projects?: object}} [repos] injected by the scripts' test seams
- * @param {object} [attempt] gets `created: {code, etag}` when a record was written, for
- *   `releaseCreatedCode` should the project write then lose
+ * @param {object} [attempt] gets `created: {code, etag}` when a record was written, for `releaseCreatedCode`
  * @returns {Promise<string|null>} the code, or null when the project has no public page
  */
 async function ensureProjectShortLink(project, repos = {}, attempt = null) {

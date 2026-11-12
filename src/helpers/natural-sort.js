@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The sort key behind `displayNameSort`.
- *
- * AI Search orders strings by codepoint, so "Item 10" sorts before "Item 2" and an "Item 100" ahead
- * of both. Sortable index fields are never analyzed and Cosmos SQL has no regex or zero-pad, so the
- * key is computed here and stored on the row (src/seed/transform.js and the three document write
- * paths in src/controllers/nosql/document.js).
+ * AI Search sorts by codepoint ("Item 10" before "Item 2") and Cosmos SQL cannot zero-pad, so the
+ * `displayNameSort` key is built here and stored on the row by every document write.
  */
 
 /**

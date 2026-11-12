@@ -35,7 +35,7 @@ function isCurrent(doc) {
   return record.title === wanted || (Boolean(record.skippedTitle) && record.skippedTitle === wanted);
 }
 
-/** This file carries a title the public may no longer read. A replaced file was never titled. */
+/** This file carries a title the public may not read any more. A replaced file was never titled. */
 function needsRestore(doc) {
   const record = doc && doc.pdfTitle;
   return Boolean(record) && typeof record === 'object' &&

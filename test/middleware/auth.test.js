@@ -172,8 +172,8 @@ test('Auth Middleware Tests', async (t) => {
   }
 
   await t.test('a staff-only token passes authMiddleware after the SECURE_ROLES change', () => {
-    // `staff` is no longer privileged on the row plane, and this gate is not about that: it fronts
-    // every write and admin route, so gating it on isPrivileged would lock staff out of the API.
+    // `staff` is not privileged on the row plane, but this gate fronts every write and admin route:
+    // gating it on isPrivileged would lock staff out of the API.
     const out = withRoles(['staff']);
     assert.ok(out.nextCalled);
     assert.strictEqual(out.status, 0, 'nothing may 403 a staff session');

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The structural reader of a stored original. Fixtures `objstm-xmp` and `linearized-large` were
- * written by qpdf through pikepdf (pinned in pdf-title/requirements.txt); expected facts are
- * pikepdf's view of each file, and the size is the titler's `_next_free_number`.
+ * Fixtures `objstm-xmp` and `linearized-large` were written by qpdf through pikepdf; expected facts
+ * are pikepdf's view of each file, and the size is the titler's `_next_free_number`.
  */
 
 const test = require('node:test');
@@ -66,9 +65,8 @@ function pngGuess(type, a, b, c) {
 }
 
 /**
- * Header, `bodies` as plain objects, then an xref stream listing them with widths `w`. `zero`
- * lists object 0 as free, so /Index starts at 0. `png` encodes rows with those predictor types
- * in turn, under FlateDecode and /Predictor 12.
+ * `zero` lists object 0 as free, so /Index starts at 0. `png` encodes rows with those predictor
+ * types in turn, under FlateDecode and /Predictor 12.
  */
 function xrefStreamFile(bodies, trailer, { w, zero = false, png = null }) {
   let text = '%PDF-1.7\n';

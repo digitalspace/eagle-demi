@@ -35,9 +35,8 @@ function ownRead(eagleRead) {
 }
 
 /**
- * The read a parent caps at. A parent an Eagle push sealed (level 0, its stored `doc` without
- * `sealedAt`) caps at its Eagle read minus compliance, the read its next push lands; a DEMI seal,
- * or a parent passed without its row, caps as stored.
+ * A parent an Eagle push sealed caps at its Eagle read minus compliance, the read its next push
+ * lands; a DEMI seal, or a parent passed without its row, caps as stored.
  */
 function ceilingRead(parent) {
   const { doc } = parent;
@@ -46,20 +45,15 @@ function ceilingRead(parent) {
 }
 
 /**
- * Capped by `capRead` where the ceiling sits lower, or where either side carries no ladder token (a
- * level-1 audience a level alone cannot compare); otherwise kept verbatim, not rewritten to ladder
- * tokens. `[]` is capped only by a lower ceiling.
+ * Capped where the ceiling sits lower or either side has no ladder token (levels cannot compare
+ * those); otherwise kept verbatim. `[]` is capped only by a lower ceiling.
  */
 const capIfLower = (own, ceiling) => {
   const byRoles = own.length > 0 && (noLadderToken(own) || (noLadderToken(ceiling) && ceiling.length > 0));
   return byRoles || levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
 };
 
-/**
- * An Update's `read[]` under its parent: `ownRead`, capped by `ceilingRead`. So
- * `['sysadmin','inspector']` under a `['sysadmin']` parent stores `['sysadmin']`. `[]` stays `[]`.
- * No parent, no ceiling.
- */
+/** `['sysadmin','inspector']` under a `['sysadmin']` parent stores `['sysadmin']`. `[]` stays `[]`. */
 function readUnder(eagleRead, parent) {
   const own = ownRead(eagleRead);
   return parent ? capIfLower(own, ceilingRead(parent)) : own;
@@ -73,11 +67,8 @@ function hasNoRead(doc) {
 const ARCHIVED = 'archived';
 
 /**
- * Does an Update with no `read` take its parent's? With a status: a missing or empty read does,
- * except `archived`, which Eagle hides from staff (`updateRules.visibilityAggr`); eagle-api's
- * `applyStatus` always sets a non-empty read, so `[]` beside a status is a legacy draft, and the
- * publish gate still keeps drafts from idir and public. With no status (pre-field rows): only a
- * missing read on an `active: true` row; Eagle's `$redact` pruned `read: []`, so it stays `[]`.
+ * `archived` never inherits: Eagle hides it from staff. A row with no status inherits only when
+ * `active: true` and `read` is absent; Eagle's `$redact` pruned `read: []`, so that stays `[]`.
  */
 function inheritsParentRead(doc) {
   if (!doc) return false;
@@ -87,10 +78,7 @@ function inheritsParentRead(doc) {
 }
 
 /**
- * The `read[]` DEMI stores for an Eagle Update under `parent`: a row
- * `inheritsParentRead` admits takes the parent's ceiling as is; every other row is `readUnder`. No
- * parent, nothing to inherit.
- *
+ * A row `inheritsParentRead` admits takes the parent's ceiling as is; every other row is `readUnder`.
  * @param {{read?: *, status?: *, active?: *}} doc  the Eagle record, or its `sources.eagle` copy
  */
 function updateRead(doc, parent) {
