@@ -215,7 +215,8 @@ const nestedListsOf = (work) =>
 function childBody(kind, method, { pid, id }, body) {
   const { pushedAt, workTypeId, [kind]: record } = body || {};
   if (!record || typeof record !== 'object') return refusal('PAYLOAD_INVALID', `body.${kind} must be an object`);
-  if (method === 'POST' ? !isTrackId(record.id) : String(record.id) !== id) {
+  // A string id passes the path check but would never match the stored number, so the merge would add a twin.
+  if (!Number.isInteger(record.id) || (method === 'POST' ? !isTrackId(record.id) : String(record.id) !== id)) {
     return refusal('RECORD_ID_MISMATCH', `body.${kind}.id must be a positive integer equal to any :id in the path`);
   }
   if (kind === 'work' && String(record.project_id) !== pid) {

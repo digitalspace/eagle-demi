@@ -73,14 +73,16 @@ test('Track work, phase and event routes', async (t) => {
     assert.strictEqual(res.body.code, 'DERIVED_CONFLICT');
   });
 
-  await t.test('a write whose derived patch is lost is still audited, since its retry answers unchanged', async (t) => {
+  await t.test('a write whose derived patch is lost is audited once, and its unchanged retry is not', async (t) => {
     await seeded(t);
     const rows = recordEvents(t);
     t.mock.method(projects, 'patchDerived', async () => ({ status: 'conflict' }));
     t.mock.method(logger, 'error', () => {});
 
     await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
+    const retry = await call('putTrackPhase', { params: { id: '3001' }, body: phaseRecord() });
 
+    assert.strictEqual(retry.body.code, 'DERIVED_CONFLICT');
     assert.strictEqual((await rows(config.auditStream)).length, 1);
   });
 
@@ -187,6 +189,18 @@ test('Track work, phase and event routes', async (t) => {
     t.mock.method(logger, 'error', () => {});
 
     const res = await call('putTrackPhase', { params: { id: '3002' }, body: phaseRecord() });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'RECORD_ID_MISMATCH']);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a body id sent as a string answers 400, since the stored id is compared as a number', async (t) => {
+    const store = await seeded(t);
+    t.mock.method(logger, 'error', () => {});
+    const record = phaseRecord();
+    record.phase.id = String(record.phase.id);
+
+    const res = await call('putTrackPhase', { params: { id: '3001' }, body: record });
 
     assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'RECORD_ID_MISMATCH']);
     assert.deepStrictEqual(store.writes, []);
