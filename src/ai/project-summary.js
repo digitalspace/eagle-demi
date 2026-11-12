@@ -321,7 +321,7 @@ const sourceLine = (c, i) => {
 
 const SOURCE_SEPARATOR = '\n\n';
 
-/** The numbered sources, one per chunk, capped by `projectSummaryMaxChunks`. */
+/** The numbered sources, one per chunk. `runSection` caps the chunks it passes in. */
 function buildSourceBlock(chunks) {
   return chunks.map(sourceLine).join(SOURCE_SEPARATOR);
 }

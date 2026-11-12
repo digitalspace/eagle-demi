@@ -287,12 +287,6 @@ function chunkMatchesParent(chunk, fields) {
     CHUNK_PARENT_FIELDS.every(field => (chunk[field] ?? null) === fields[field]);
 }
 
-/**
- * Replace a document's chunks: upsert, then delete surplus, so a live document never has zero chunks.
- *
- * @param {string} documentId
- * @param {Array}  chunkItems  fully-formed items; each MUST carry a non-empty read[]
- */
 /** `bulkVerified`'s return shape for a call that had nothing to send. */
 function noWrites() {
   return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
@@ -542,6 +536,12 @@ async function deleteSurplus(access, documentId, keepIds, opts = {}) {
   return writeVerified(deletable.map(deleteOp(pk)), kept);
 }
 
+/**
+ * Replace a document's chunks: upsert, then delete surplus, so a live document never has zero chunks.
+ *
+ * @param {string} documentId
+ * @param {Array}  chunkItems  fully-formed items; each MUST carry a non-empty read[]
+ */
 async function replaceForDocument(access, documentId, chunkItems, opts = {}) {
   const pk = String(documentId);
 

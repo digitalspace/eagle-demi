@@ -418,7 +418,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
     let results;
     try {
       results = await doBulk(pending);
-    } catch (err) {                                               // noqa: BLE001
+    } catch (err) {
       // A whole-request rejection (often a serverless 429) throws with no per-operation statuses:
       // count it under `thrown` and retry the same `pending`.
       statusCounts.thrown = (statusCounts.thrown || 0) + 1;
