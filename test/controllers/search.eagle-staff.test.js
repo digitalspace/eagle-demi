@@ -252,7 +252,8 @@ test('dataset=Project keyword search: an anonymous caller gets no staff field an
   }));
   const row = resultsOf(await get('/api/search?dataset=Project&keywords=wind'))[0];
   assert.strictEqual(row.CELead, undefined);
-  assert.deepStrictEqual(specsFor(seen, 'projects'), []);
+  // The dial-hidden id read is the only projects read; no row is fetched for staff fields.
+  assert.deepStrictEqual(specsFor(seen, 'projects').filter(s => !s.query.startsWith('SELECT VALUE c.id FROM c ')), []);
 });
 
 test('x-total-count carries the measured total, not the page length', async (t) => {

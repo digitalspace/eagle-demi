@@ -37,10 +37,15 @@ function dialsForIndex(dials) {
   return out;
 }
 
-/** The stored project fields a projects index column is built from; a column that does not rename is its own. */
+// A column that names the same fact as another stored field, so that field's dial governs it too:
+// the proponent id names the proponent, and native `/projects` filters the proponent on its name.
+const ALSO_DIALLED_BY = { proponentId: ['proponentName'] };
+
+/** The stored project fields whose dials govern a projects index column; a column that does not rename is its own. */
 function storedFieldsOf(column) {
   const sources = Object.keys(PROJECT_TO_INDEX).filter(field => PROJECT_TO_INDEX[field].includes(column));
-  return sources.length ? sources : [column];
+  const also = Object.hasOwn(ALSO_DIALLED_BY, column) ? ALSO_DIALLED_BY[column] : [];
+  return [...(sources.length ? sources : [column]), ...also];
 }
 
 module.exports = { PROJECT_TO_INDEX, dialsForIndex, storedFieldsOf };
