@@ -46,8 +46,10 @@ any change to one of the foundation modules listed in the README.
 3. Deploy the release tag to `demi-api-fc-prod` through the prod workflow's Flex step
    (`gh workflow run "Deploy to Prod" -f version=<tag>`, GH environment approval gate).
 4. Mint identity rows against the prod fc host with the prod admin key
-   (`POST /api/admin/api-keys`, `id: "apim:eagle-api"` etc., roles per consumer,
-   `allowWrite: true` for write roles). No key material is generated for these rows.
+   (`POST /api/admin/api-keys`, one row per APIM subscription: `id: "apim:eagle-api"`,
+   `"apim:engage"`, `"apim:track"`; roles per consumer, `allowWrite: true` for write roles).
+   No key material is generated for these rows. A subscription with no row gets 401
+   `Unknown API Management subscription`.
 
 ## Verify before any traffic moves
 
