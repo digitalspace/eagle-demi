@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * Trim `sector` and `projectSubType` on the project rows already in Cosmos.
- *
- * The merge stores both trimmed (`TRIMMED_FIELDS` in `merge/project.js`), but rows written before
- * that still carry a trailing space ("Groundwater Extraction ", 9 rows), and the index filters them
- * by exact match. This patches only the fields that change; no re-seed.
- *
- *   node src/scripts/backfill-trim-project-labels.js [--live]
- *
- * **DRY RUN BY DEFAULT.** `--live` is the mutating flag, matching the sibling scripts. Cosmos is
- * private-endpoint-only and keyless, so a live run executes on the devbox (`demi-devbox-<env>`)
- * via `demi-run` — see README "Running anything against the database". Run it before the projects
- * indexer reset, or the index keeps the untrimmed values until each row is next written.
+ * Trim `sector` and `projectSubType` on stored projects; the index filters them by exact match.
+ * Dry run unless `--live`. Run before the projects indexer reset.
  */
 
 const projects = require('../repositories/projects');

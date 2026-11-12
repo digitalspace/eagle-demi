@@ -1,32 +1,11 @@
 'use strict';
 
-/**
- * Live ACL probe.
- *
- * Every row in the test corpus is public, so an anonymous caller and a privileged one see the same
- * rows and no probe over the corpus can fail. This mints two throwaway keys, plants a synthetic
- * hidden/control pair, and asserts a matrix in which each cell is a prediction competing hypotheses
- * disagree on. It cleans up after itself and exits non-zero on the first missed prediction.
- *
- * Two keys, not one: a privileged key short-circuits `readClause` to `true` and proves only the
- * SCOPE narrowing, so the matrix needs an unprivileged one as well. `compliance` is grantable, is
- * not in SECURE_ROLES and is not on the ladder, so it exercises the `read[]` predicate.
- *
- *   ADMIN_API_KEY=... node src/scripts/probe-acl.js
- *
- * Everything it creates is removed, and the removal is itself verified. There is no --keep: the
- * plaintext is returned by the mint route once and is unrecoverable, so kept keys could not be
- * used for anything — the flag only left two live credentials behind. Revocation is not deletion
- * (there is no delete endpoint), so each run leaves one revoked record per key in the registry.
- *
- * Exit: 0 all cells passed, 1 a cell missed its prediction, 2 aborted, 3 a leg was inconclusive.
- */
+// Live ACL probe: the test corpus is all public, so this plants a hidden/control pair and mints two keys.
+// Exit: 0 all cells passed, 1 a cell missed its prediction, 2 aborted, 3 a leg was inconclusive.
 
 const BASE = process.env.DEMI_API_BASE || 'https://demi-api-fc-test.azurewebsites.net';
-// Read straight from the shell, not through src/config.js: this script only talks to a remote API
-// over HTTP, and going through config would apply the server's boot guards to an operator shell.
-// An unresolved Key Vault reference reads as unset, so the guard below reports a missing key
-// instead of sending the reference text and reading the 401 as a broken ACL.
+// Not via src/config.js, whose boot guards are for the server. An unresolved Key Vault reference
+// reads as unset, so a 401 from sending its text is never read as a broken ACL.
 const { isKeyVaultReference } = require('../utils/key-vault-reference');
 const ADMIN_RAW = process.env.ADMIN_API_KEY || '';
 const ADMIN = isKeyVaultReference(ADMIN_RAW) ? '' : ADMIN_RAW;
@@ -67,12 +46,8 @@ async function api(path, { key, method = 'GET', body } = {}) {
 }
 
 /**
- * How many of the planted ids this caller can see on a live Cosmos list.
- *
- * Read by id (`ids=`), not by paging the project: a planted UUID lands at a random depth, and
- * offset paging stops a caller with no credential at 2,000 rows. Paging would let "0 rows" mean
- * "beyond the window" as readily as "the ACL withheld it", and every zero here must mean only the
- * second. Token paging is not an option either: it lives on the credentialed `/documents/scan`.
+ * How many planted ids this caller sees on a live list. Read by id, not paged: anonymous offset
+ * paging stops at 2,000 rows, so a zero could mean "beyond the window" instead of "withheld".
  */
 async function listSees(key, projectId, ids) {
   let seen = 0;
@@ -115,31 +90,23 @@ async function main() {
     for (const doc of created) {
       const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
         { key: ADMIN, method: 'DELETE' });
-      // Asserted, not logged. Two of the three planted rows are `public`, and test search is
-      // already served to eagle-public from this environment — a failed delete leaves them in the
-      // live corpus, and printing the status let the run still exit 0.
+      // Asserted: two planted rows are public, and test search serves eagle-public.
       cell(`deleted ${doc.label}`, 200, r.status);
     }
     for (const k of keys) {
       const r = await api(`/api/admin/api-keys/${k.id}`, { key: ADMIN, method: 'DELETE' });
       console.log(`  key ${k.id}: HTTP ${r.status}`);
     }
-    // The revocation has to be verified, not assumed: a live leftover key is the one thing here
-    // that is worse than a failed probe. Checked against an AUTH-REQUIRED route — `/documents` is
-    // passiveAuth, so it answers 200 to a rejected credential by design, having simply dropped the
-    // identity. Asserting 401 there is a prediction the route can never satisfy.
+    // Checked on an auth-required route: `/documents` is passiveAuth and answers 200 to a rejected
+    // credential, so a 401 there can never happen.
     for (const k of keys) {
       const r = await api('/api/admin/api-keys', { key: k.plaintext });
       cell(`revoked key ${k.label} is refused`, 401, r.status, 'auth-required route');
     }
 
-    // A delete has to leave the index too. The indexer's high-water mark cannot see deletes at
-    // all, so `deleteFromIndex` in the controller is the only thing that removes these rows —
-    // and only rows that REACHED the index can prove it ran. Skipped when they never did.
+    // Indexers never see deletes, so this proves `deleteFromIndex` ran; only rows that reached the index can.
     if (searchLegRan) {
-      // Polled, not read once: deletes on this service are not read-your-write, so a search
-      // issued immediately after one can legitimately still return the row. A minute is far
-      // past what was measured (seconds); still non-zero after it is a real finding.
+      // Polled: index deletes are not read-your-write. They settle in seconds, so a minute is ample.
       const settleBy = Date.now() + 60 * 1000;
       let left = await searchSees(ADMIN, term, created.map(d => d.id));
       while (left !== 0 && Date.now() < settleBy) {
@@ -160,8 +127,7 @@ async function main() {
     const [projectA, projectB] = pool;
     console.log(`projects: A=${projectA} B=${projectB}\nterm: ${term}\n`);
 
-    // The synthetic pair. `hidden` carries no `public` in read[] because resolveDocumentAcl derives
-    // it, so this needs no hand-written ACL — the same code path every upload takes.
+    // No hand-written ACL: resolveDocumentAcl derives read[] as for every upload.
     const plant = async (projectId, label, isPublished) => {
       const r = await api('/api/documents', {
         key: ADMIN, method: 'POST',
@@ -193,8 +159,7 @@ async function main() {
       }
       const plaintext = r.json.key || r.json.plaintext || r.json.apiKey;
       const id = String(r.json.id || r.json.keyId || (r.json.record && r.json.record.id));
-      // Recorded BEFORE the shape check: the key is already live for an hour by here, and a body
-      // that ever drifted would otherwise throw past the only thing that revokes it.
+      // Recorded before the shape check: the key is live, and a throw here would skip its revoke.
       keys.push({ id, plaintext, label });
       if (!plaintext) throw new Error(`mint ${label}: no plaintext in response`);
       console.log(`minted ${label} key ${id} roles=${JSON.stringify(roles)} scope=${JSON.stringify(projectScope || null)}`);
@@ -203,10 +168,8 @@ async function main() {
 
     // A: the only grantable NON-privileged role, so readClause does not short-circuit.
     const keyA = await mint('compliance', ['compliance'], undefined);
-    // B: privileged AND scoped — proves resolveAccess resolves scope before the privilege check.
-    // `demi-service-read`, not `staff`: only the first is in SECURE_ROLES, and `staff` is in
-    // WRITE_ROLES so the mint route refuses it without `allowWrite: true`. A probe has no business
-    // holding a write credential.
+    // B: privileged and scoped. `demi-service-read`, not `staff`: staff is a write role, and a probe
+    // holds no write credential.
     const keyB = await mint('scoped-service-read', ['demi-service-read'], [projectA]);
 
     // BEFORE reading: the admin sees all three, or the rest of the matrix measures nothing.
@@ -222,8 +185,7 @@ async function main() {
     cell('compliance key sees the control row', 1, await listSees(keyA, projectA, [control]));
 
     cell('scoped key sees its own project', 1, await listSees(keyB, projectA, [control]));
-    // The paired control the other zeroes have and this one lacked: without it a 0 below reads
-    // the same whether the scope narrowed or the row was simply never in the window.
+    // Control for the zero below: proves the row is listable at all.
     cell('the out-of-scope row IS listable at all', 1, await listSees(ADMIN, projectB, [otherProject]),
       'or the zero under it proves nothing');
     cell('scoped key sees NOTHING outside its scope', 0,
@@ -238,9 +200,7 @@ async function main() {
     cell('scoped point read outside its scope', 404, await pointRead(keyB, otherProject, projectB));
 
     console.log('\n--- search (index, PT5M indexer) ---');
-    // BOTH rows the leg asserts on, not just the control: `otherProject` is planted after it, so
-    // an indexer pass landing between the two writes would make its own control read as a MISSED
-    // prediction rather than as an unfinished index.
+    // Wait for both controls: `otherProject` is planted later and may miss an indexer pass.
     const deadline = Date.now() + INDEX_WAIT_MS;
     let indexed = 0;
     while (Date.now() < deadline) {
@@ -250,8 +210,7 @@ async function main() {
     }
 
     if (indexed !== 2) {
-      // Not a pass and not a failure of the predicate: without its control in the index the search
-      // leg cannot tell a working filter from an empty index.
+      // Neither pass nor fail: without its controls indexed the leg cannot tell a filter from an empty index.
       console.log(`INCONCLUSIVE search leg: ${2 - indexed} of its 2 control rows did not reach ` +
         `the index within ${INDEX_WAIT_MS / 60000} min. Nothing below it is evidence.`);
       results.push({ name: 'search leg', expected: '2 controls indexed', actual: indexed, ok: null });
@@ -273,8 +232,7 @@ async function main() {
   const inconclusive = results.filter(r => r.ok === null).length;
   console.log(`\n${results.filter(r => r.ok === true).length} passed, ${failures} failed, ` +
     `${inconclusive} inconclusive`);
-  // An inconclusive leg is not a pass. It proved nothing about six of the cells, and anything
-  // reading only the exit status would have been told otherwise.
+  // An inconclusive leg is not a pass.
   process.exit(failures > 0 ? 1 : (inconclusive > 0 ? 3 : 0));
 }
 

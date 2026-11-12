@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * The revoke in `scripts/with-search-admin.sh` is the whole reason that script exists.
- *
- * Three index changes have each granted Search Service Contributor by hand, done the work, and
- * revoked by hand. The failure that costs something is not the typing — it is a grant left standing
- * because the middle step errored, leaving the identity the PUBLIC API runs as holding the ability
- * to delete an index. So none of these cases test the happy path on its own. Each one kills the run
- * a different way — a failing command, SIGTERM, a revoke that itself fails — and asserts the grant
- * came back off, or that the operator was told loudly enough to remove it by hand.
- *
- * `AZ` stands in for the `az` CLI. The
- * fake logs every invocation, so "did it revoke" is measured off the log rather than asserted from
- * the script's own output.
+ * A grant left standing lets the identity the public API runs as delete an index, so each case ends
+ * the run a different way and checks the revoke on the fake az log, not the script's own output.
  */
 
 const test = require('node:test');
@@ -84,13 +74,8 @@ test('with-search-admin.sh', async (t) => {
   });
 
   await t.test('revokes when the SCRIPT ITSELF is signalled', async () => {
-    // A Ctrl-C or a dropped tunnel signals the SCRIPT, not the command it is running, and that is
-    // a different code path from a non-zero exit — killing the inner command would only re-test the
-    // case above, since the script would then see an ordinary failure.
-    //
-    // This does NOT distinguish `trap revoke EXIT` from `trap revoke EXIT INT TERM`, and it should
-    // not pretend to: measured on bash 5.2.15, the EXIT trap runs on SIGTERM and SIGINT anyway. It
-    // catches the mutation that matters — no trap at all — on the signal path specifically.
+    // Signals the script, not the inner command. On bash 5.2 the EXIT trap runs on SIGTERM and
+    // SIGINT too, so this catches a missing trap, not `EXIT` versus `EXIT INT TERM`.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsa-sig-'));
     const az = path.join(dir, 'az');
     const log = path.join(dir, 'az.log');
@@ -98,9 +83,8 @@ test('with-search-admin.sh', async (t) => {
     fs.writeFileSync(az, FAKE_AZ, { mode: 0o755 });
     fs.writeFileSync(log, '');
 
-    // `stdio: 'ignore'`, and a short sleep. The grandchild inherits the spawn's pipes, so with
-    // pipes and `sleep 30` the test process stayed alive for the full 30s AFTER the assertions
-    // passed — 22s added to a 9.5s gate that runs before every commit.
+    // `stdio: 'ignore'`: the grandchild inherits the spawn's pipes and would hold the test open
+    // until its sleep ends.
     const child = spawn('bash', [SCRIPT, '--', 'bash', '-c', `touch ${started}; sleep 5`], {
       stdio: 'ignore',
       env: { ...process.env, AZ: az, AZ_LOG: log }
@@ -133,10 +117,8 @@ test('with-search-admin.sh', async (t) => {
   });
 
   await t.test('a create that returns NO id stops, and does not run the command', async () => {
-    // The trap keys on a non-empty ASSIGNMENT_ID, so an empty one made the revoke a silent no-op:
-    // the command ran, the script exited 0, and zero delete calls were made. Reproduced before the
-    // fix. The grant may exist server-side even when the CLI returns nothing, so "no id" has to
-    // mean "stop and tell the operator", never "nothing to revoke".
+    // The trap keys on a non-empty ASSIGNMENT_ID, and the grant may exist even when the CLI returns
+    // no id, so "no id" means stop and tell the operator, never "nothing to revoke".
     const r = run(['--', 'bash', '-c', 'echo COMMAND-RAN'], { env: { AZ_CREATE_EMPTY: '1' } });
     assert.notStrictEqual(r.status, 0, 'a grant that cannot be confirmed must not proceed');
     assert.ok(!/COMMAND-RAN/.test(r.stdout), 'the command must not run without a confirmed grant');
@@ -146,9 +128,8 @@ test('with-search-admin.sh', async (t) => {
   });
 
   await t.test('resolves the identity in the SAME subscription it grants on', async () => {
-    // Without --subscription the identity is looked up in whatever az defaults to, while the scope
-    // names SUBSCRIPTION — best case a confusing ResourceGroupNotFound, worst case a same-named
-    // identity in another subscription becomes the principal that gets granted.
+    // On the az default subscription a same-named identity elsewhere could become the principal
+    // that gets granted.
     const r = run(['--', 'true'], { env: { SUBSCRIPTION: 'sub-x' } });
     const lookup = r.calls.find(c => c.startsWith('identity show'));
     assert.match(lookup, /--subscription sub-x/);
@@ -163,8 +144,7 @@ test('with-search-admin.sh', async (t) => {
   });
 
   await t.test('grants at the SERVICE scope, never the resource group', async () => {
-    // A resource-group-scoped grant would cover every search service in the group and outlive the
-    // reasoning in the header.
+    // A resource-group-scoped grant would cover every search service in the group.
     const r = run(['--', 'true'], { env: { RG: 'rg-x', SERVICE: 'svc-x', SUBSCRIPTION: 'sub-x' } });
     const create = creates(r.calls)[0];
     assert.match(create, /--scope \/subscriptions\/sub-x\/resourceGroups\/rg-x\/providers\/Microsoft\.Search\/searchServices\/svc-x/);
@@ -172,9 +152,8 @@ test('with-search-admin.sh', async (t) => {
   });
 
   await t.test('says so when the grant never becomes readable, and still runs', async () => {
-    // RBAC replication is often just slow, so refusing here would strand real work. But silence
-    // means the operator gets a 403 from the command with no hint why — the poll is invisible.
-    // POLL_TRIES keeps the test to two attempts rather than the default twenty.
+    // RBAC replication is often just slow, so refusing would strand real work; silence would leave
+    // the operator a 403 with no hint why.
     const r = run(['--', 'bash', '-c', 'echo COMMAND-RAN'],
       { env: { AZ_LIST_EMPTY: '1', POLL_TRIES: '2', POLL_SLEEP: '0' } });
 

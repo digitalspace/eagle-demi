@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The post-deploy check, exercised end to end against a stub API.
- *
- * The 2026-09-08 outage passed every gate the pipeline had, because the app was up: only a real
- * query showed it. So the assertions here are about what counts as an answer — a 200 with no rows
- * is a failure for the unfiltered queries, and a 200 with no rows is fine for the project-filtered
- * one, which can legitimately match nothing.
+ * An app that is up can still answer nothing, so a 200 with no rows fails the unfiltered queries;
+ * the project-filtered one may match nothing.
  */
 
 const test = require('node:test');
@@ -87,8 +83,8 @@ test('search-smoke.sh', async (t) => {
   });
 
   await t.test('an empty base URL fails instead of reading as a passing gate', async () => {
-    // One renamed repository variable away: a post-deploy check that exits 0 having asked the
-    // deploy nothing is the green release the 2026-09-08 outage already shipped once.
+    // One renamed repository variable away: a check that exits 0 having asked the deploy nothing
+    // is a green release with search down.
     for (const args of [[''], []]) {
       const run = await runScript(SCRIPT, args, { cwd: REPO_ROOT });
       assert.strictEqual(run.status, 1, JSON.stringify(args));

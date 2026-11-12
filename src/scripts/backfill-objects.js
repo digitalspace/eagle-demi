@@ -1,35 +1,9 @@
 'use strict';
 
 /**
- * Copy the document objects this environment's bucket is missing out of the prod bucket.
- *
- * WHY. The non-prod bucket (`MINIO_BUCKET_NAME`, keys nested under `MINIO_KEY_PREFIX`) holds a copy
- * of prod taken before ~2020-05, so roughly 8,500 documents posted after that date point at a key
- * that 404s — the row lists and downloads, the download 404s. Every `s3Key` still exists in the
- * prod bucket `ozwdez` on the same NRS host under the identical key with NO prefix.
- *
- * Two transfer modes. With one credential the copy is server side — `copyObject` moves the bytes
- * inside the object store and nothing streams through the machine running this. Set
- * `SOURCE_MINIO_ACCESS_KEY`/`SOURCE_MINIO_SECRET_KEY` (plus `SOURCE_MINIO_HOST`, `_PORT`,
- * `_USE_SSL` when the source is a different endpoint) and the source bucket is read under that
- * second credential and streamed into the target instead, for the case the target's credentials
- * are not authorized on the source bucket.
- *
- *   node src/scripts/backfill-objects.js --probe
- *   node src/scripts/backfill-objects.js --since 2020-01-01 --live
- *     [--source-bucket ozwdez] [--concurrency 4] [--limit N]
- *
- * `--probe` stats one document's key in both buckets and exits: it answers "can these credentials
- * read the source at all", and reports which transfer mode a run would use.
- *
- * **DRY RUN BY DEFAULT**, matching the sibling scripts; a dry run counts the gap and writes nothing.
- * Resumable by nature: every key is stat'd in the target before it is copied, so a killed run
- * re-runs as a no-op over whatever already landed.
- *
- * Cosmos and the object store are both private, so a live run executes on the devbox via
- * `demi-run`, detached with a log file — see the wiki, "Backfill missing objects on test".
+ * Copy objects missing from this env's bucket out of the prod bucket (same key, no prefix). Dry run
+ * unless `--live`; `--probe` checks source access. Wiki: Bulk-Download-Operations.
  */
-
 const Minio = require('minio');
 const config = require('../config');
 const documents = require('../repositories/documents');
@@ -132,11 +106,8 @@ async function readPartition(access, projectId, select = SELECT) {
 }
 
 /**
- * Every document row, partition by partition.
- *
- * Per-partition, not one cross-partition read: each partition is bounded, so fetchAll drains it
- * whole. Concurrent `next()` calls are queued by the runtime, so the worker pool can share one
- * iterator.
+ * Per partition, so fetchAll drains a bounded set. Concurrent `next()` calls queue, so the worker
+ * pool can share one iterator.
  */
 async function* eachRow(documentsRepo, readRows, access, since) {
   const sinceMs = since ? Date.parse(since) : null;

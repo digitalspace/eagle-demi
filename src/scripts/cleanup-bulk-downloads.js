@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * Delete the zip parts of bulk downloads past their retention window.
- *
- *   node src/scripts/cleanup-bulk-downloads.js
- *
- * In Azure it is the `cleanupBulkDownloads` Functions timer in this app (api/index.js, scheduled by
- * BULK_CLEANUP_SCHEDULE). The JOB ROW survives: `bulkJobTtlDays` is longer than
- * `bulkZipRetentionDays`, so Cosmos TTL removes it later and until then a poll answers `expired`
- * rather than a 404 that reads as "never existed".
- *
- * ponytail: if an NRS lifecycle rule on `zips/` is adopted, delete this timer and this script —
- * one deleter only, or the two race each other over the same keys.
+ * Delete zip parts past retention. The job row stays until Cosmos TTL, so a poll answers `expired`.
+ * ponytail: one deleter only; adopting an NRS lifecycle rule on `zips/` means deleting this script.
  */
 
 const config = require('../config');
@@ -31,10 +22,8 @@ const SWEPT_STATUSES = ['ready', 'failed', 'cancelled'];
 const PAGE = 500;
 
 /**
- * How much of the row's own retention is left, in seconds.
- *
- * Cosmos measures `ttl` from the LAST WRITE, so patching a row without resetting it hands the job
- * another full `bulkJobTtlDays` — the sweep would keep the row alive instead of letting it go.
+ * Seconds of the row's retention left. Cosmos counts `ttl` from the last write, so a patch without
+ * it would hand the job another full `bulkJobTtlDays`.
  */
 function remainingTtl(job, now) {
   const from = Date.parse(job.finishedAt || job.createdAt || '');

@@ -47,12 +47,8 @@ function fakeChunks(perDoc, opts = {}) {
 }
 
 /**
- * Stands in for `src/search/ai-search.js`. The name matters: `purge()` reads `opts.index`, and four
- * tests here used to pass `typesense:` — a key left behind when Typesense was replaced. Those tests
- * silently fell through to the REAL AI Search client. Harmless only by luck, because
- * `deleteChunksForDocument` returns 0 when SEARCH_ENDPOINT is unset; on a machine with a populated
- * `.env` they would have issued live deletes against the dev index. Assert on `state.deleted` in
- * live tests so the next rename fails here instead of in Azure.
+ * Stands in for `src/search/ai-search.js` under `opts.index`. A wrong key falls through to the real
+ * client; asserting on `state.deleted` in live tests catches that here instead of in Azure.
  */
 function fakeIndex() {
   const state = { deleted: [] };
@@ -144,10 +140,7 @@ test('the cleared set fits in one Cosmos patch', () => {
 });
 
 test('a live run nulls the page provenance of the chunks it just deleted', async () => {
-  // A document left claiming "page numbered, 12 pages" with no chunks behind it is a claim nothing
-  // can check: the work list would re-extract it while the UI still quoted page numbers for text
-  // that is gone. Asserted against the patch the purge actually writes, not against the constant,
-  // which would only compare the code under test with itself.
+  // Asserted on the patch the purge writes, not the constant, which would compare the code with itself.
   const docs = fakeDocuments(DOCS);
 
   await purge(['--live'], { documents: docs, chunks: fakeChunks(PER_DOC), index: fakeIndex() });
@@ -183,11 +176,8 @@ test('a partial bulk failure is recorded rather than counted as success', async 
 
   assert.strictEqual(summary.failures.length, 1);
   assert.match(summary.failures[0].message, /bulk operation/);
-  // d1 IS still indexed-deleted and flag-cleared, unlike the thrown case above. The asymmetry is
-  // deliberate: a throw leaves an unknown number of chunks behind, whereas a partial failure leaves
-  // a known few — and chunk ids are deterministic, so re-ingest upserts over the survivors and
-  // `replaceForDocument` sweeps any surplus. Asserting this also proves the fake was wired in at
-  // all; passing the wrong opts key would silently use the real client. See fakeIndex().
+  // Unlike a throw, a partial failure still clears d1: chunk ids are deterministic, so re-ingest
+  // upserts over the few survivors. This also proves the fake index was wired in.
   assert.deepStrictEqual(index.state.deleted, ['d1', 'd2', 'd3']);
 });
 
@@ -223,18 +213,15 @@ test('only documents flagged contentExtracted are selected', async () => {
   assert.strictEqual(docs.state.listCalls[0].listOpts.extracted, true);
 });
 
-// A recorded failure sets contentExtracted TOO, so the query cannot tell the two apart. These are
-// the documents the extraction host parked as permanent failures — 855 in the 2026-07-30 cascade,
-// 5,908 after the 2026-08-02 full-corpus run.
+// A recorded failure sets contentExtracted too, so the query cannot tell the two apart.
 const MIXED = [
   { id: 'ok1', projectId: '207' },
   { id: 'failed', projectId: '207', contentExtractionError: 'docling-serve HTTP 500' },
   { id: 'ok2', projectId: '311', contentExtractionError: null }
 ];
 
-// Two failure classes side by side, which is the state the corpus is actually in: 5,802 documents
-// whose source 404s (false — the dev object store is a partial copy) against ~106 that are
-// genuinely unreadable. `--errors-only` cannot tell them apart.
+// Two failure classes: a 404 from a partial object store copy (false) and a genuinely unreadable
+// file. `--errors-only` cannot tell them apart.
 const TWO_CLASSES = [
   { id: 'ok1', projectId: '207' },
   { id: 'gone1', projectId: '207', contentExtractionError: 'download failed: 404 Client Error: Not Found for url: https://x/a?X-Amz-Signature=abc' },

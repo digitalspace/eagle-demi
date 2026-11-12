@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * putDataSources() PUTs the committed Cosmos data sources on the search service.
- *
- * POST /admin/search-definitions/apply now calls this in process, so a bad PUT has to throw rather
- * than print and carry on — a job that reported success without writing what was asked for is the
- * failure worth pinning. The body it sends is the other one: the connection string and identity are
- * what let the indexers read Cosmos without a key.
- */
+// A bad PUT must throw, not print: the apply job runs this in process. The connection string and
+// identity in the body are what let indexers read Cosmos without a key.
 
 const test = require('node:test');
 const assert = require('node:assert');

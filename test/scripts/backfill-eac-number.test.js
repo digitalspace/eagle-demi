@@ -10,12 +10,7 @@ const {
 } = require('../../src/scripts/backfill-eac-number');
 const merge = require('../../src/merge/project');
 
-/**
- * Track records as the next export will carry them. Hand-written and NOT read off
- * `src/data/track_projects_enriched.json`: that file has no `ea_certificate` column yet, so a
- * fixture derived from it would exercise the empty path only and every assertion below would pass
- * vacuously.
- */
+/** Track records as the next export will carry them, hand-written rather than read off the export. */
 const WITH_CERT = { track_project_id: 207, name: 'Nicomen Wind Energy', ea_certificate: 'E05-01' };
 const WITH_CERT_2 = { track_project_id: 208, name: 'Berg Mine', ea_certificate: 'E14-02' };
 // Track uses the column for certificate STATE too — 58 records read "Withdrawn", 41 "In progress".
@@ -158,7 +153,7 @@ test('backfillEacNumbers', async (t) => {
   });
 
   await t.test('the checked-in export loads and counts its certificates', async () => {
-    // Pinned to the 2026-08-31 export: 382 records, 342 with a non-empty `ea_certificate`.
+    // Pinned to the checked-in export: 382 records, 342 with a non-empty `ea_certificate`.
     // A regenerated export moves these numbers; update them with it.
     const patch = fakePatch();
     const summary = await backfillEacNumbers(['--live'], {

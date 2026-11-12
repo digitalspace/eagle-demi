@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Forward: `ownRead` on Eagle documents lacking one. `--reverse`: undo the dropped 2026-10-05 rule
- * that added `staff` to Eagle reads with no ladder token. Dry run unless `--live`; README "Eagle read
- * ladder backfill" has the rules and counters.
+ * Forward: `ownRead` on Eagle documents lacking one. `--reverse`: undo the dropped rule that added
+ * `staff` to Eagle reads with no ladder token. Dry run unless `--live`; rules in README.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -22,10 +21,8 @@ const LADDER = Object.freeze(Object.values(LEVEL_TOKENS));
 const INSPECTION_KINDS = Object.freeze(['Inspection', 'InspectionElement', 'InspectionItem']);
 
 /**
- * Containers in parent-first order, with each one's partition key and parent. Every output of the
- * dropped rule carries `staff` or is `['team']`, so a container is read only where `read` carries
- * one of them, except: `loadAll` containers cap others and are read in full, and Updates
- * (`scanAll`) are read in full because the old cap kept some at their own roles.
+ * Parent-first. The dropped rule always wrote `staff` or `['team']`, so only those rows are read,
+ * except `loadAll` parents and Updates (`scanAll`: the old cap kept some at their own roles).
  */
 const STEPS = Object.freeze([
   { container: 'projects', pk: 'id', loadAll: true },
@@ -42,9 +39,8 @@ const STEPS = Object.freeze([
 ]);
 
 /**
- * The rule as it stood before 2026-10-08, frozen here so the reverse recognises what it wrote: the
- * old `eagleBaseAcl` and `capRead` (level-1 reads made only of SECURE_ROLES kept), plus the staff
- * widening. Never call it on a push.
+ * The dropped rule, frozen so the reverse recognises what it wrote: old `eagleBaseAcl` and `capRead`
+ * plus the staff widening. Never call it on a push.
  */
 const droppedRule = Object.freeze({
   base(upstreamRead) {
@@ -140,9 +136,7 @@ function pageParams(skip) {
   return [{ name: '@skip', value: skip }, { name: '@size', value: PAGE_SIZE }];
 }
 
-// ---------------------------------------------------------------------------------------------
 // Forward: `ownRead` on documents that lack one.
-// ---------------------------------------------------------------------------------------------
 
 const NO_OWN_READ_SQL = 'NOT (IS_ARRAY(c.ownRead) AND ARRAY_LENGTH(c.ownRead) > 0)';
 
@@ -191,9 +185,7 @@ async function runForward(args, io) {
   return [s];
 }
 
-// ---------------------------------------------------------------------------------------------
 // Reverse.
-// ---------------------------------------------------------------------------------------------
 
 function reverseSpec(step) {
   const touched = step.loadAll || step.scanAll ? ''
@@ -227,9 +219,8 @@ function parentEntry(row, after) {
 }
 
 /**
- * The parent that caps a row, `undefined` for none, `null` when the parent is not stored. A
- * notification wins its id over a project (`parent-admit:pickParent`); it caps only groups,
- * inspections and Updates.
+ * The capping parent: `undefined` for none, `null` when not stored. A notification wins its id over
+ * a project (`parent-admit:pickParent`) and caps only groups, inspections and Updates.
  */
 function parentOf(step, row, parents) {
   const lookup = (map, ref) => (map.has(String(ref)) ? map.get(String(ref)) : null);
@@ -259,9 +250,8 @@ function derive(step, rule, row, eagleRead, parent, parentRead) {
 }
 
 /**
- * What the dropped rule and Eagle's rule give for one row, as pairs. A deleted row may hold either
- * pair: a push or cascade applies the delete ceiling, an inspection push does not. The dropped
- * rule is tried against the parent's read after this run too, as a second pass would see it.
+ * Dropped-rule and Eagle-rule reads as pairs. Deleted rows get both with and without the delete
+ * ceiling (an inspection push skips it); parent reads before and after this run are both tried.
  */
 function candidates(step, row, eagleRead, parent) {
   const after = derive(step, eagleRule, row, eagleRead, parent, parent && parent.after);
@@ -276,10 +266,8 @@ function candidates(step, row, eagleRead, parent) {
 }
 
 /**
- * The read a row is patched to, or why not: `{read}`, `{skip: 'held'|'differs'|'noParent'|'unchanged'}`,
- * or null when the row has no Eagle read or already holds Eagle's. `unchanged`: both rules give the
- * same read. A row whose step stores it uncapped when its parent is not stored is planned as having no
- * parent, flagged `parentMissing`.
+ * `{read}`, `{skip: 'held'|'differs'|'noParent'|'unchanged'}`, or null when there is nothing to undo.
+ * An `ownWhenParentMissing` row with no stored parent is planned parentless, flagged `parentMissing`.
  */
 function planReverse(step, row, parents) {
   // A row DEMI owns holds DEMI's read; the dropped rule never wrote it, so it is not the reverse's to undo.
@@ -385,8 +373,6 @@ async function runReverse(args, io) {
   }
   return summaries;
 }
-
-// ---------------------------------------------------------------------------------------------
 
 function newSummary(container, args) {
   return {

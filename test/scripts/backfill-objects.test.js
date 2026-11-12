@@ -23,9 +23,8 @@ const DOCS = [
 ];
 
 /**
- * Documents repository double, partitioned by `projectId` the way Cosmos is.
- * The partition walk and the per-partition read are separate calls, so a script that skipped a
- * partition — or read one twice — shows up in `state.reads`.
+ * Documents double partitioned by `projectId`. Partition walk and read are separate calls, so a
+ * skipped or repeated partition shows in `state.reads`.
  */
 function fakeDocuments(docs = DOCS) {
   const state = { reads: [] };
@@ -41,9 +40,8 @@ function fakeDocuments(docs = DOCS) {
 }
 
 /**
- * Object-store double. `present` is what the TARGET bucket already holds and `sourceMissing` the
- * keys the source bucket does not, so a wrong prefix or a wrong source path lands on neither list
- * and is visible in the recorded calls.
+ * `present`: keys the target holds; `sourceMissing`: keys the source lacks. A wrong prefix or source
+ * path lands on neither list and shows in the recorded calls.
  */
 function fakeStorage({ present = [], sourceMissing = [], delayMs = 0 } = {}) {
   const notFound = () => Object.assign(new Error('Not Found'), { code: 'NotFound' });

@@ -138,9 +138,8 @@ test('mergeSection', async (t) => {
   });
 
   await t.test('renumbers citations so an untouched section still points at its own source', () => {
-    // The fresh section's `[1]` and the stored status section's `[1]` are DIFFERENT chunks.
-    // Concatenating the two lists would leave the status sentence citing a condition chunk — a
-    // citation that resolves, to the wrong thing, which is worse than one that does not.
+    // The fresh `[1]` and the stored status `[1]` are different chunks; concatenating would make
+    // the status sentence cite a condition chunk.
     const merged = mergeSection(STORED, FRESH, 'conditions');
 
     const statusSource = merged.citations.find(c => c.n === merged.sections.status.citations[0]);
@@ -169,9 +168,8 @@ test('mergeSection', async (t) => {
   });
 
   await t.test('refuses to merge into a record built from a wider set of documents', () => {
-    // The sections nobody regenerated keep the STORED record's sources. Merging into a record that
-    // predates the public-only filter would relabel those sections as public without rereading a
-    // single document.
+    // A record older than the public-only filter would have its kept sections relabelled public
+    // without rereading a document.
     const stale = { ...STORED, sourceAccess: undefined };
 
     assert.throws(() => mergeSection(stale, FRESH, 'conditions'),
@@ -183,9 +181,8 @@ test('mergeSection', async (t) => {
   });
 
   await t.test('replaces the section with the reason it came back empty', () => {
-    // A regenerated section that failed overwrites a good stored one. Storing that null without
-    // this run's reason leaves the record saying the section is empty and nothing saying why,
-    // and the run's own verdict line reports failed=none.
+    // Storing the null without this run's reason would say the section is empty but not why, and
+    // the verdict line would report failed=none.
     const failed = {
       ...FRESH,
       sections: { ...FRESH.sections, conditions: null },

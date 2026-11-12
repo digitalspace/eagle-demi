@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * `scripts/point-env-js.sh` is the guard the 2026-08-11 incident asked for: a bundle deployed with
- * another environment's Keycloak realm looks entirely healthy.
- *
- * The guard it replaced could not fail. It matched on the OLD value (`sed dev -> test`), and the
- * committed env.js already held the test values, so `sed` matched nothing, exited 0, and the `grep`
- * after it passed on committed text. So the cases here are the ones that must be loud: a key that
- * is not in the file at all, and a file already holding the wrong environment's values.
+ * A bundle with another environment's Keycloak realm looks healthy, so these cases must be loud: a
+ * key missing from the file, and a file already holding the wrong environment's values.
  */
 
 const test = require('node:test');

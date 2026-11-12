@@ -182,20 +182,17 @@ function reconcileLogPath(now, dir = '/home') {
 }
 
 /**
- * Removes through `remove`: `purgeDocument`, which also clears the search index no indexer cleans
- * up, or the project retire, which flags and caps the row.
+ * Removes through `remove`: `purgeDocument` (also clears the search index) or the project retire.
  * @param {Array}    rows      `{id, ...}` read out of Cosmos
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
- * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted,
- *                             `{ skipped: true }` = nothing left to remove
+ * @param {function} remove    row -> Promise, live only; `{ rowKept: true }` = not deleted, `{ skipped: true }` = nothing left
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
  * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs ask too, so `wouldKeep` and `wouldDelete` match a live run
  * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
  * @param {boolean}  [opts.held]    a surplus row still live upstream holds every delete: the rest log held
- * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place, `keptLive` = ids eagle-api still serves,
- *   `skipped` = rows `remove` found nothing left to remove
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left, `keptLive` = ids eagle-api serves, `skipped` = nothing left
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
   { live, logPath, audit, spare = () => false, servedUpstream = () => false, held = false }) {

@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * Announce scheduled Updates once their `publishDate` passes.
- *
- *   node src/scripts/announce-updates.js
- *
- * In Azure it is the `announceUpdates` Functions timer in this app (api/index.js, scheduled by
- * ANNOUNCE_UPDATES_SCHEDULE). eagle-api does not push again at `publishDate`, so without this a
- * scheduled update would go live on the site and never reach subscribers. Each row goes through the
- * push path's own `announce`, so the conditional claim keeps it to one email even when a push and a
- * tick race, and a row archived or rescheduled after this run listed it fails the claim.
- *
- * The same list carries claims whose send got no answer, once their lease runs out, up to
- * NOTIFY_MAX_ATTEMPTS in all — a run killed mid-send included.
+ * Announce scheduled Updates once `publishDate` passes; eagle-api does not push again then. Uses the
+ * push path's `announce` claim, so a racing push and tick send one email.
  */
 
 const updates = require('../repositories/updates');

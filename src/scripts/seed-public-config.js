@@ -1,34 +1,8 @@
 'use strict';
 
 /**
- * Seeds the `public` config document that GET /api/config/public serves to eagle-public.
- *
- * It seeds FROM eagle-api's own live `GET /api/config`, so the first read after seeding returns
- * what eagle-public was already booting on. Parity is by construction rather than by
- * transcription — there is no table here to keep in step with Mongo.
- *
- * This is the BOOTSTRAP and the manual override, not the thing that keeps the copy current:
- * eagle-api pushes every Config write to PUT /eagle/config/public, so a hand edit in Mongo lands
- * here on its own. Run this to create the document before the first push, or to force it back to
- * eagle-api's live payload. Mongo `Config` stays the source of truth and nothing writes back.
- *
- * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run`. `demi-cosmos-*` is
- * private-endpoint-only and keyless, reachable as the app's managed identity and from nowhere
- * else; a laptop with `az` logged in cannot reach it. See
- * README.md for the recipe.
- *
- * Usage:
- *   node src/scripts/seed-public-config.js                  # print what would be written
- *   node src/scripts/seed-public-config.js --live           # write it
- *   node src/scripts/seed-public-config.js --live --force   # overwrite an existing document
- *
- * The source URL comes from `EAGLE_CONFIG_URL`, defaulting per `ENVIRONMENT` — the environment is
- * chosen by the settings the process starts with, never by a flag, as every other database script
- * does it.
- *
- * Only the keys the controller will serve (`PUBLIC_KEYS`) are stored. Storing eagle-api's whole
- * payload would put `BUILD_ID`, `API_LOCATION` and the `KEYCLOAK_*` block in a document that
- * exists to be read by an anonymous public site, where none of them mean anything.
+ * Seed the `public` config document from eagle-api's live `GET /api/config`: bootstrap and manual
+ * override only, since eagle-api pushes later writes. Dry run unless `--live`; `--force` overwrites.
  */
 
 const { pickPublicKeys } = require('../controllers/config');
@@ -55,11 +29,8 @@ function parseArgs(argv) {
 }
 
 /**
- * The eagle-api /api/config URL this run reads.
- *
- * An unrecognised ENVIRONMENT throws rather than falling back to dev: seeding the test or prod
- * container from the dev payload would publish dev paths to the public site, and it would look
- * like it worked.
+ * An unknown ENVIRONMENT throws: falling back to dev would publish dev paths to the public site and
+ * look like it worked.
  */
 function eagleConfigUrl(env = config.environmentName) {
   if (process.env.EAGLE_CONFIG_URL) return process.env.EAGLE_CONFIG_URL;
@@ -73,12 +44,8 @@ function eagleConfigUrl(env = config.environmentName) {
 }
 
 /**
- * eagle-api's payload, filtered to what this API will serve.
- *
- * The controller's own filter, so a seeded document and a pushed one are narrowed identically.
- * Absent keys stay absent — the controller serves what the document carries and defaults nothing,
- * so writing a null here would be a value the public site then has to interpret. A stored `false`
- * IS a value and is kept.
+ * The controller's own filter, so seeded and pushed documents match. Absent keys stay absent (the
+ * controller defaults nothing); a stored `false` is kept.
  */
 function buildDocument(payload) {
   return pickPublicKeys(payload);
@@ -95,9 +62,8 @@ async function seed(argv, deps = {}) {
   const payload = await fetchJson(url);
   const doc = buildDocument(payload);
 
-  // A payload missing ENVIRONMENT is not eagle-api's config: an rproxy that fell through to the
-  // SPA answers 200 with index.html, and JSON.parse would have thrown, but a JSON error envelope
-  // would not. Refusing here beats seeding an empty document the controller then serves.
+  // No ENVIRONMENT means not eagle-api's config, such as a JSON error envelope; refuse rather than
+  // seed an empty document the controller would serve.
   if (!doc.ENVIRONMENT) {
     throw new Error(`${url} answered without ENVIRONMENT — that is not an eagle-api config payload.`);
   }

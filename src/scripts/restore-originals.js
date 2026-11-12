@@ -1,26 +1,8 @@
 'use strict';
 
 /**
- * Put stored documents back to the copies held in the Azure archive backup. Break-glass only.
- *
- *   node src/scripts/restore-originals.js plan      <selection> --manifest objects.jsonl.gz [--out ids.txt]
- *   node src/scripts/restore-originals.js rehydrate <selection> --manifest <file> --account <acct> [--live]
- *   node src/scripts/restore-originals.js status    <selection> --manifest <file> --account <acct>
- *   node src/scripts/restore-originals.js apply     <selection> --manifest <file> --account <acct>
- *     [--live --confirm <rows>]
- *
- * <selection> is exactly one of `--id <docId>`, `--ids <file>`, `--project <projectId>`,
- * `--all-changed`. Every mode takes `--max <n>` and `--concurrency <n>`.
- * Set `BACKUP_CLIENT_ID` to reach blob storage as that identity; Cosmos stays on `AZURE_CLIENT_ID`.
- *
- * **DRY RUN BY DEFAULT**: without `--live` nothing is written. A row is one bucket key with the
- * selected documents that store it. `rehydrate` copies the archived blob into `restore` at Cool
- * (up to 15 hours); `apply` checks those bytes against the verify manifest, checks the object still
- * has the ETag seen at plan time, writes them back with a signed Content-MD5, reads them back, and
- * only then marks each document's `pdfTitle` record `restored`. The PUT carries no If-Match: the
- * NRS store answers 412 to it on objects stored years ago even when the ETag matches. Nothing in the bucket is deleted; the
- * replaced object stays as an older version.
- * Exit codes: 0 clean, 1 any row refused, changed or failed, 2 rows still rehydrating.
+ * Break-glass restore from the Azure archive backup; dry run unless `--live`. Usage: wiki
+ * Document-Backup-Restore. The PUT sends no If-Match: NRS answers 412 on old objects even when it matches.
  */
 
 const crypto = require('crypto');

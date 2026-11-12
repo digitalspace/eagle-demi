@@ -34,18 +34,8 @@ const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notificatio
 const STORED_LABELS = ['users', 'groups', 'inspections', 'inspectionElements', 'inspectionItems'];
 
 /**
- * The ENGAGE API a period's `metURL` slug is resolved against. NOT the public site host —
- * `engage.eao.gov.bc.ca` is the single-page app, and its nginx answers 200 with `index.html` for
- * every unknown path, so a check pointed there calls every slug alive. The API is the one that
- * answers `/api/slugs/<slug>`. Verified 2026-09-17:
- *   test  https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api
- *   prod  https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api
- * Both come from the site's own `/config/config.js`, which names the API as `VITE_API_URL` — read
- * it rather than composing a hostname, because the public host and the API host are different
- * services and only one of them answers this question.
- *
- * UNSET MEANS SKIP. Guessing a host and getting it wrong reports every live period as an orphan,
- * which is the one outcome a delete flag must not be offered alongside.
+ * The ENGAGE API (`VITE_API_URL` in the site's /config/config.js), never the public host, whose SPA
+ * answers 200 for every path. Unset means skip: a wrong host reports every live period as an orphan.
  */
 const ENGAGE_API_BASE = require('../config').engageApiBase;
 
@@ -67,11 +57,8 @@ function parseArgs(argv) {
 }
 
 /**
- * The engagement slug an `isMet` period points at, from the `metURL` the mirror stores.
- *
- * The last non-empty path segment, with any query or fragment cut first. `null` for a URL with no
- * segment to take, OR one whose segment is not a valid percent escape — both are reported as
- * unknown, never as an orphan.
+ * The last non-empty path segment of a period's `metURL`. `null` when there is none or its escape
+ * is malformed; both report as unknown, never as an orphan.
  */
 function slugOf(metURL) {
   const raw = String(metURL || '').trim();
@@ -82,25 +69,14 @@ function slugOf(metURL) {
   try {
     return decodeURIComponent(segments[segments.length - 1]);
   } catch {
-    // A malformed escape (e.g. `%zz`) throws URIError; the caller must not see that, or one bad
-    // mirrored URL fails the whole reconcile run instead of reporting this one period as unknown.
+    // A malformed escape must not fail the whole run.
     return null;
   }
 }
 
 /**
- * Does ENGAGE still resolve this slug?
- *
- * THREE ANSWERS, AND ONLY ONE OF THEM IS "GONE". ENGAGE answers a slug it does not hold with
- * `400 {"message": "No engagement slug found for <slug>"}` — verified against the prod API on
- * 2026-09-17 — and that exact shape is the only thing this reads as gone. A 401 (the test host
- * sits behind basic auth), a 404, a 5xx, an HTML body from a host that is not the API, a timeout
- * or a DNS failure are all UNKNOWN: they say the check could not run, not that the engagement was
- * deleted, and a delete driven off them would destroy live rows.
- *
- * A timeout and an outright network failure are both UNKNOWN, and both stay non-destructive — but
- * they are not the same fact, so `reason` names which one it was rather than folding them into one
- * `catch`. Never retried: a slug is checked at most once per reconcile run.
+ * Does ENGAGE still resolve this slug? Only `400 No engagement slug found` is gone; any other
+ * status, body, timeout or network error is unknown, and `reason` names the failure. Never retried.
  *
  * @returns {Promise<{state: 'gone'|'live'|'unknown', reason?: string}>}
  */
@@ -112,8 +88,7 @@ async function slugState(base, slug, deps = {}) {
     const res = await get(`${base.replace(/\/+$/, '')}/slugs/${encodeURIComponent(slug)}`,
       { signal: controller.signal });
     if (res.status === 400) {
-      // The body is read, not assumed: a 400 from a proxy in front of ENGAGE is not ENGAGE saying
-      // the slug is gone, and the two are indistinguishable by status code alone.
+      // A 400 from a proxy in front of ENGAGE looks the same by status alone.
       const body = await res.text();
       return { state: /no engagement slug found/i.test(body) ? 'gone' : 'unknown' };
     }
@@ -126,32 +101,17 @@ async function slugState(base, slug, deps = {}) {
 }
 
 /**
- * The `isMet` periods whose ENGAGE engagement no longer exists.
- *
- * WHY THESE ARE SAFE TO DELETE WHEN NO OTHER DIFF IS: every other set here is ambiguous because
- * eagle-api cannot tell an anonymous caller "unpublished" from "deleted". This one is not. The row
- * says it is run in ENGAGE and names the engagement; ENGAGE says there is no such engagement. The
- * row therefore renders a link that 404s for every visitor, and there is no reading of it under
- * which it is correct.
- *
- * Cause, as far as it is known: ENGAGE's `delete_from_epic` returns early when
- * `project_tracking_id` is unset, so an engagement deleted before its first successful push leaves
- * the mirror row behind with nothing to retract it.
- *
- * Scale, measured on test 2026-09-17: 18 of 38 `isMet` periods point at a slug ENGAGE no longer
- * holds, and one of the two periods open that day was among them — so a rail that renders open
- * periods ships a dead external link on half its rows without this.
+ * The `isMet` periods whose ENGAGE engagement is gone. Unlike other sets these are safe to delete:
+ * ENGAGE itself says the engagement does not exist, so the row only renders a dead link.
  *
  * @param {object[]} periodRows  every mirrored period
  * @param {object}   opts        {base, drop, periodsRepo, deps}
  * @returns {Promise<{checked, dead, unknown, unknownReasons, dropped, failures}>}
  */
 async function engageOrphans(periodRows, { base, drop = false, periodsRepo, deps = {} } = {}) {
-  // `unknownReasons` is keyed by period id, and only set for a round trip that actually failed —
-  // a metURL with no slug never made one, so it has nothing to attribute a timeout or an error to.
+  // `unknownReasons` holds only round trips that failed; a metURL with no slug made none.
   const result = { checked: 0, dead: [], unknown: [], unknownReasons: {}, dropped: [], failures: [] };
-  // `isMet` is the whole population: a period run here has no slug to resolve and no dead link
-  // to ship.
+  // Only `isMet` periods carry a slug.
   const met = periodRows.filter(row => row.isMet === true);
 
   for (const row of met) {
@@ -181,12 +141,8 @@ async function engageOrphans(periodRows, { base, drop = false, periodsRepo, deps
 }
 
 /**
- * Both directions in one pass.
- *
- * `pushOwned` is why projects need every row carrying an `eagleId` and not just the
- * `sourceSystem: 'eagle'` ones: a Track-sourced row also holds an `eagleId`, so reading only the
- * Eagle-sourced rows would compute ~350 matched projects as missing from DEMI. It is in the
- * membership test and out of the push's own drift.
+ * Both directions in one pass. Projects pass every row with an `eagleId`, Track-sourced ones too,
+ * else matched projects read as missing; `pushOwned` keeps those out of the push's own drift.
  *
  * @param {Array}    rows             DEMI rows
  * @param {function} keyOf            row -> the Eagle id it mirrors
@@ -216,9 +172,8 @@ function splitRetired(d, retired) {
 }
 
 /**
- * Ids in both Eagle and DEMI whose DEMI `read[]` grants different access than the one the mirror
- * would write from Eagle's, or whose `isPublished` has come apart from its own `read[]`. Every
- * id-set diff passes these.
+ * Ids in both systems whose `read[]` differs from what the mirror would write, or whose
+ * `isPublished` disagrees with its own `read[]`.
  *
  * @param {Map}      eagleRead     Eagle id -> that record's `read[]`; an id without one is skipped
  * @param {function} parentReadOf  row -> the DEMI parent ACL the mirror narrows against, or null
@@ -267,10 +222,8 @@ function updateRead(upstream, parent) {
 }
 
 /**
- * Ids whose stored `read[]` is not what the mirror would write from the Eagle copy stored beside
- * it, under its stored parent, or whose `isPublished` has come apart from it. A DEMI seal is kept
- * by the mirror on purpose, so it is skipped; a row without a stored Eagle read has nothing to
- * derive from.
+ * Ids whose `read[]` differs from what the mirror derives from the stored Eagle copy and parent.
+ * Sealed rows (the mirror keeps a seal) and rows with no stored Eagle read are skipped.
  */
 function storedAclMismatch(rows, parentReadOf) {
   return rows.filter(row => {
@@ -283,9 +236,8 @@ function storedAclMismatch(rows, parentReadOf) {
 }
 
 /**
- * The user, group and inspection mirrors. eagle-api serves none of them to an anonymous caller,
- * so there is no Eagle id set to diff against: drift here is a row that disagrees with the rule
- * applied to its own stored Eagle copy and its stored parent, and a child whose parent row is gone.
+ * User, group and inspection mirrors: eagle-api serves none anonymously, so drift is a row that
+ * disagrees with its stored Eagle copy, or a child whose parent row is gone.
  */
 async function storedMirrorDrift(access, projectRead, repos) {
   // null for a container not provisioned yet: its labels stay out of the summary and read `skipped`.
@@ -320,9 +272,7 @@ async function storedMirrorDrift(access, projectRead, repos) {
 
 /** Every id set a diff produced, as one drift number. */
 function driftOf(summary) {
-  // A dead ENGAGE slug is in Eagle AND in DEMI, so every id-set diff reads it as clean — but it is
-  // a link that 404s for every visitor, so the nightly alert has to see it. The ones that were
-  // dropped are no longer drift; the ones only reported still are.
+  // A dead ENGAGE slug passes every id-set diff, so it counts here until dropped.
   const orphans = summary.engageOrphans
     ? summary.engageOrphans.dead.length - summary.engageOrphans.dropped.length
     : 0;
@@ -342,10 +292,8 @@ function driftOf(summary) {
 }
 
 /**
- * The line a log alert matches. `drift=0 parentFieldsPending=0` is clean.
- *
- * A container the run did not sweep says `skipped` rather than zero — `comments` is behind
- * `--comments` and a zero there would read as "no drift" for a sweep that never happened.
+ * The line a log alert matches; `drift=0 parentFieldsPending=0` is clean. An unswept container says
+ * `skipped`, not zero.
  */
 function summaryLine(summary) {
   const { projects: p, documents: d } = summary;
@@ -378,12 +326,7 @@ function summaryLine(summary) {
     `drift=${summary.drift}`;
 }
 
-/**
- * Every published id of one `/search` dataset.
- *
- * `fetchAllPages` throws on a short read, so an id missing here is an id Eagle does not publish
- * rather than one a truncated fetch did not reach.
- */
+/** Every published id of one `/search` dataset; `fetchAllPages` throws on a short read. */
 async function eagleIds(src, dataset, into = new Set(), onRow) {
   for (const row of await src.fetchAllPages(src.EAGLE_API_BASE, dataset)) {
     into.add(String(row._id));
@@ -555,16 +498,8 @@ async function reconcile(argv = [], deps = {}) {
     ...splitRetired(documentDiff, row => retiredParents.has(String(row.projectId))),
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
-  // The public-read containers, enumerated with the SAME predicates a request reads under, but
-  // whole: a request's read stops at MAX_PAGE_SIZE rows, and every row past it would report as
-  // Eagle-only drift. Their rows carry `id === eagleId`, and every one of them is the backfill's
-  // or the push's, so there is no `pushOwned` split to make.
-  //
-  // Comment periods DO need a parent gate. eagle-api's `dataset=CommentPeriod` gates on the
-  // period's own `read[]` and joins no parent (`api/aggregators/searchAggregator.js`), so a period
-  // Eagle publishes under a project it does not publish is still in the id set — while the mirror
-  // drops it, because its parent project row is not in DEMI. Measured on test 2026-09-07: 29 such
-  // periods under 20 unpublished projects, every one of them reported as push drift.
+  // Public-read containers are read whole, not capped at MAX_PAGE_SIZE. Periods need a parent gate:
+  // Eagle lists a period on its own `read[]`, even under a project it does not publish.
   const notificationRows = await notificationsRepo.listEvery(access);
   const everyPeriodRow = [];
   // Every partition a period can live in: `commentPeriods` partitions on the parent, and the
@@ -603,11 +538,8 @@ async function reconcile(argv = [], deps = {}) {
   const eagleNotificationIds = await eagleIds(src, 'ProjectNotification', new Set(), keep);
   const eagleUpdateIds = await eagleIds(src, 'RecentActivity', new Set(), keep);
 
-  // Rows that ARE mirrored, under a parent the admission rule would not choose. Nothing above sees
-  // these: they are in both Eagle and DEMI, so every id-set diff reads them as clean. They are the
-  // shape the project-first rule wrote — a period whose Eagle ref names a `ProjectNotification`
-  // filed in a Track project's partition, under that project's ACL, with its comments cascaded to
-  // the same level. Periods only: `listSeededIds` carries no partition for the documents.
+  // Mirrored periods under a parent the admission rule would not choose; id diffs read them clean.
+  // Periods only: `listSeededIds` carries no partition for documents.
   const misfiledPeriods = periodRows
     .filter(row => {
       const parent = admit(eaglePeriodProject.get(String(row.id)));
@@ -699,9 +631,7 @@ async function reconcile(argv = [], deps = {}) {
   if (args.comments) {
     const commentRows = [];
     const eagleCommentIds = new Set();
-    // Comments under a period the mirror could not resolve. Walking DEMI's periods alone never
-    // fetched them, so they were neither drift nor reported — a silent hole the size of the
-    // unresolved-period set. They cost one round trip each, on a flag that is already opt-in.
+    // Comments under unresolved periods, which a walk of DEMI's periods never reaches.
     const unresolvedComments = new Map(); // comment id -> its period id
     for (const periodId of summary.commentPeriods.unresolvedParent) {
       await eachCommentPage(periodId, { sources: src }, (items) => {
@@ -746,11 +676,8 @@ async function reconcile(argv = [], deps = {}) {
   }
 
   summary.drift = driftOf(summary);
-  // Not push drift, so not folded into `drift`: these are documents whose CHUNKS never got their
-  // parent fields re-stamped (`controllers/nosql/document.js`, markParentFieldsPending). Reported
-  // on the same line because this run is the only thing that looks at the corpus nightly, and the
-  // repair is `backfill-chunk-parent-fields.js --live --pending`, which clears the flag on every
-  // document it verifies — as does `--live --project <id>`, the poison-queue repair.
+  // Not push drift: documents whose chunks still lack parent fields. The repair is
+  // `backfill-chunk-parent-fields.js --live --pending`.
   summary.parentFieldsPending = await documentsRepo.countParentFieldsPending(access);
 
   return summary;
@@ -771,13 +698,8 @@ function report(summary, { json } = {}) {
     if (s.engageOwned) {
       lines.push(`  engageOwned (ENGAGE-owned, left out of this diff and never dropped): ${s.engageOwned}`);
     }
-    // NOT a delete list. eagle-api's `/api/public/{document,project}/{id}` answers `200 []` for a
-    // deleted row AND for one that merely lost `public` from its `read[]` — both are what
-    // `runDataQuery(..., ['public'], ...)` returns when nothing matches — so an anonymous caller
-    // cannot tell an unpublished row from a hard-deleted one. Purging on this set would destroy
-    // an unpublished row, its chunks and its index entries.
-    // ponytail: report-only until eagle-api offers a tombstone or DEMI holds a credential that
-    // can read unpublished rows; then this set can be probed one id at a time and purged.
+    // Not a delete list: eagle-api answers `200 []` alike for deleted and unpublished rows.
+    // ponytail: report-only until eagle-api has a tombstone or DEMI can read unpublished rows.
     line('unpublishedOrDeleted (gone from Eagle\'s public search, NOT purged)',
       s.unpublishedOrDeleted.map(r => r.id));
     line('eagleOnly (the push missed these)', s.eagleOnly);
@@ -865,16 +787,8 @@ function report(summary, { json } = {}) {
 }
 
 /**
- * One run, logging exactly what the CLI logs — the nightly schedule and the CLI must not be able
- * to produce different output, because the log alert matches only one of its lines.
- *
- * `--drop-orphans` is the only mode that writes, and the nightly timer never passes it: a scheduled
- * job that deletes rows off a third party's answer is not something an alert can undo.
- *
- * @param {object} [opts] {json} full id sets, {comments} sweep the comment container too (one
- *   eagle-api round trip per comment period), {engage} resolve every `isMet` period's slug,
- *   {dropOrphans} delete the ones ENGAGE no longer holds, {store} upsert the class report for
- *   GET /admin/reconcile, {deps} the test seam `reconcile` takes, plus `cache`
+ * One run, logging exactly what the CLI logs; `store` upserts the report for GET /admin/reconcile.
+ * The nightly timer never passes `dropOrphans`: a scheduled delete off ENGAGE's answer is final.
  */
 async function run({ json = false, comments: sweepComments = false, engage = false,
   dropOrphans = false, store = false, deps } = {}) {

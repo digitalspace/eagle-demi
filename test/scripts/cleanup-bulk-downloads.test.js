@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The zip sweeper. Storage and the repository are stubbed: the behaviour worth pinning is that
- * every part key is deleted before the row is marked expired, that the row itself survives, and
- * that marking it does not hand it a fresh retention window.
+ * Pins that every part key is deleted before the row is marked expired, and that the row survives
+ * without a fresh retention window.
  */
 
 process.env.NODE_ENV = 'test';
@@ -83,10 +82,8 @@ test('cleanup-bulk-downloads', async (t) => {
   });
 
   await t.test('a full page of cancelled rows is swept once, not re-queried forever', async () => {
-    // A cancelled row KEEPS its status, so the only thing taking it out of the sweep's query is
-    // losing its parts. The loop reads another page whenever a full one expired something, so a
-    // row that stays selectable pages over the same work until the timer is killed.
-    // 500 is the script's page size: a shorter page ends the loop on its own and proves nothing.
+    // A cancelled row keeps its status, so only losing its parts leaves the query; else the loop
+    // pages over it until the timer dies. 500 is the script's page size, so the page is full.
     const rows = Array.from({ length: 500 }, (_, i) => row(`job-${i}`, { status: 'cancelled' }));
     let queries = 0;
     t.mock.method(bulkDownloads, 'listExpired', async () => {
@@ -125,9 +122,8 @@ test('cleanup-bulk-downloads', async (t) => {
 
     await cleanup.run();
 
-    // The worker released the finished job's slot when it finished, and stamped slotReleasedAt on
-    // the one it failed; releasing either again frees a slot the requester's other jobs hold. Only
-    // the dead instance's slot was never released by anyone.
+    // The worker already released the finished and failed jobs' slots; releasing them again frees a
+    // slot another job holds. Only the dead instance's slot is still taken.
     assert.deepStrictEqual(released, ['key-job-dead']);
   });
 

@@ -1,25 +1,8 @@
 'use strict';
 
 /**
- * One-time backup of every stored original from the object store into the Azure archive container.
- *
- *   node src/scripts/backup-originals.js list-bucket --bucket zdspnb --out bucket.jsonl
- *   node src/scripts/backup-originals.js export-rows --out rows.jsonl
- *   node src/scripts/backup-originals.js copy --bucket zdspnb --account <acct>
- *     --bucket-list bucket.jsonl --rows rows.jsonl [--missing-out missing.txt] [--concurrency 8] [--live]
- *   node src/scripts/backup-originals.js verify --env test --account <acct>
- *     --bucket-list bucket.jsonl --rows rows.jsonl [--bucket-missing missing.txt] [--live]
- *   node src/scripts/backup-originals.js drill --account <acct> --drill-list drill.jsonl [--sample 20] [--live]
- *   node src/scripts/backup-originals.js drill --account <acct> --drill-list drill.jsonl --check [--live]
- *
- * `--exclude-prefix <prefix>` (repeatable) leaves keys under that prefix out of list-bucket, copy
- * and verify alike; verify records the prefixes and the excluded totals in its summary.
- * Set `BACKUP_CLIENT_ID` to reach blob storage as that identity; Cosmos stays on `AZURE_CLIENT_ID`.
- *
- * **DRY RUN BY DEFAULT**: without `--live` nothing is written to Azure. Each blob name is the
- * s3Key unchanged. A blob is committed straight to Archive, create-only, and only after the bytes
- * read are proven equal to the source; resume is a rerun, because existing names are skipped.
- * Exit codes: 0 clean, 1 any failure or gap, 2 drill still rehydrating.
+ * One-time backup of stored originals into the Azure archive container; dry run unless `--live`.
+ * Modes, flags and exit codes: wiki Document-Backup.
  */
 
 const crypto = require('crypto');

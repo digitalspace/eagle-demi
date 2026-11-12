@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * Edge ban detector: finds addresses that pull many documents through Front Door with no sign of a
- * browser, bans the datacenter and VPN ones for 1 h, 4 h, then 24 h, and keeps the `banauto` rule's
- * SocketAddr list in step with the unexpired bans. Judge order and soak plan: wiki DEMI edge-ban page.
- *
- * Modes: `off` writes the placeholder back (kill switch), `shadow` records bans without touching
- * the rule, `write` also PATCHes the rule's conditions.
- *
- *   node src/scripts/edge-ban.js --dry-run --env test [--floor N]
- *
- * The CLI is read-only: it queries the access log and prints each candidate, no Cosmos, no rule write.
+ * Bans datacenter and VPN addresses that pull many documents through Front Door with no browser
+ * sign, and keeps the `banauto` rule in step. Modes, CLI and soak plan: wiki Edge-Ban-Detector.
  */
 
 const net = require('node:net');
@@ -27,7 +19,7 @@ const LOGS_SCOPE = 'https://api.loganalytics.io/.default';
 const HOUR_MS = 60 * 60 * 1000;
 const FEED_MAX_AGE_MS = 24 * HOUR_MS;
 
-// The PR #66 scraper alert regex (eagle-edge observability.bicep), with the document id captured.
+// The scraper alert regex in eagle-edge observability.bicep, with the document id captured.
 const DOWNLOAD_PATH = '^/(api/|api/public/|demi-search/)documents?/([^/]+)/(download|fetch)(/|$)';
 
 const DEFAULT_POLICY = {
@@ -52,7 +44,7 @@ const CRAWLER_FEEDS = [
   'https://openai.com/chatgpt-user.json'
 ];
 
-// Declared search and AI crawlers stay readable (crawler policy 2026-10-05); compared lowercased.
+// Declared search and AI crawlers stay readable under the crawler policy; compared lowercased.
 const CRAWLER_AGENTS = [
   'googlebot', 'googleother', 'google-inspectiontool', 'bingbot', 'adidxbot', 'gptbot',
   'oai-searchbot', 'chatgpt-user', 'claudebot', 'claude-user', 'claude-searchbot', 'perplexitybot',
