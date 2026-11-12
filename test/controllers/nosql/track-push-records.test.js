@@ -18,6 +18,8 @@ const { mockRes } = require('../../helpers/mock-res');
 const { useConfig } = require('../../helpers/use-config');
 const { STAFF } = require('../../helpers/eagle-mirror-fixtures');
 const { recordEvents } = require('../../helpers/record-events');
+const { syncWorkDocs } = require('../../../src/scripts/sync-works');
+const cosmos = require('../../../src/db/cosmos-nosql');
 const config = require('../../../src/config');
 
 const PID = '1001';
@@ -148,6 +150,25 @@ test('Track work, phase and event routes', async (t) => {
     assert.deepStrictEqual(res.body, { id: '2001', action: 'skipped', reason: 'apiRow' });
     assert.deepStrictEqual(store.writes, []);
   });
+
+  await t.test('adopted document survives a Track PUT (answered 200 skipped adopted) and the nightly (counted adopted)',
+    async (t) => {
+      const store = await seeded(t);
+      const work = () => store.rows('works').find(r => r.id === 'track-2001');
+      await cosmos.upsert('works', { ...work(), owner: 'demi', simpleTitle: 'Staff title' });
+      const adopted = work();
+      t.mock.method(logger, 'warn', () => {});
+      const put = fixture('work');
+
+      const res = await call('putTrackWork', { params: { id: '2001' },
+        body: { ...put, pushedAt: LATER, work: { ...put.work, simple_title: 'Track title' } } });
+      const counts = await syncWorkDocs(PID, [fixture('new_work').work], { pushedAt: LATER + 1, live: true });
+
+      assert.deepStrictEqual(res.body, { id: '2001', action: 'skipped', reason: 'adopted' });
+      assert.strictEqual(counts.adopted, 1);
+      // The same `_etag`: nothing landed, though the nightly's create was tried and refused by Cosmos.
+      assert.deepStrictEqual(work(), adopted);
+    });
 
   await t.test('only a write a reader can see is audited', async (t) => {
     await seeded(t);

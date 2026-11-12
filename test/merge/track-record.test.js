@@ -14,6 +14,8 @@ const PROJECT = 'p-1';
 
 const fixture = (name) => structuredClone(require(`../fixtures/track-records/${name}.json`));
 const nestedWork = () => fixture('new_work_two_phases').work;
+/** The nightly's document: the mapper's, stamped as Track's by the nightly's upsert. */
+const nightlyDoc = () => ({ ...workDocOf(nestedWork(), { projectId: PROJECT }), source: 'track', owner: 'track' });
 
 /** The nested work as the per-record bodies Track sends for it, all read at `pushedAt`. */
 function recordsOf(work, pushedAt = AT) {
@@ -65,14 +67,14 @@ for (const seed of [1, 7, 42]) {
   test(`records applied one at a time in shuffled order (seed ${seed}) build the nightly's document`, () => {
     const doc = deliver(shuffled(recordsOf(nestedWork()), seed));
 
-    assert.deepStrictEqual(contentOf(doc), contentOf(workDocOf(nestedWork(), { projectId: PROJECT })));
+    assert.deepStrictEqual(contentOf(doc), contentOf(nightlyDoc()));
   });
 }
 
 test('a nested new-work POST builds the nightly\'s document and stamps every record it holds', () => {
   const doc = stored();
 
-  assert.deepStrictEqual(contentOf(doc), contentOf(workDocOf(nestedWork(), { projectId: PROJECT })));
+  assert.deepStrictEqual(contentOf(doc), contentOf(nightlyDoc()));
   assert.deepStrictEqual(Object.keys(doc.pushStamps).sort(), ['event:4001', 'event:4002', 'event:4003',
     'event:4004', 'event:4005', 'phase:3001', 'phase:3002', 'work']);
 });
