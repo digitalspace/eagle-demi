@@ -278,10 +278,8 @@ test('search definition job', async (t) => {
   });
 
   await t.test('a bulk-download id on this queue is refused before the row is read', async () => {
-    // Both workers read the `bulkDownloads` container. A zip job's UUID arriving here — a
-    // misrouted message, or a caller that can reach the queue — must not become this handler
-    // patching that row to `running` and then `failed`, which takes a caller's download away and
-    // makes the zip worker's own writes race a second owner.
+    // Both workers read `bulkDownloads`: patching a zip job's row here would take a caller's
+    // download away and race the zip worker's own writes.
     const reads = [];
     const patches = [];
     t.mock.method(jobs, 'getById', async (id) => {
@@ -297,8 +295,7 @@ test('search definition job', async (t) => {
   });
 
   await t.test('a prefixed id whose row is another kind is refused after the read', async () => {
-    // The prefix is an id convention, not a guarantee about the row. A row that carries one
-    // without being a search-definition job still names no request this module recorded, so
+    // The prefix is only an id convention: a row of another kind names no recorded request, so
     // running it would reset indexers on nobody's say-so.
     const patches = [];
     t.mock.method(jobs, 'getById', async (id) => ({ id, kind: 'somethingElse', status: 'queued' }));

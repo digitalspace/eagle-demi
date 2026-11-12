@@ -1,20 +1,8 @@
 'use strict';
 
 /**
- * Apply the committed search definitions from inside the Function app. Producer and handler
- * together, the same shape as src/jobs/restamp-chunks.js.
- *
- * WHY A QUEUE. The apply PUTs indexes and indexers, then resets and runs the indexers and waits
- * for them. A full chunks rebuild runs for hours and the platform cuts an HTTP request off at
- * about 230 seconds, so the route can only accept the work and hand back a job id.
- *
- * WHAT IT REPLACES. The same steps used to run on demi-devbox through `az vm run-command invoke`,
- * where every call is a 20-45 s ARM long poll. docs/runbook-search-outage.md keeps the devbox
- * recipe as break-glass for when this app itself is broken.
- *
- * THE ROLE IS STILL THE CONSTRAINT: writing definitions needs Search Service Contributor at the
- * service scope, which this app's identity is not meant to hold permanently. A run outside a grant
- * window fails on the first PUT with the 403 apply-search-definitions.js explains.
+ * Queue producer and handler that apply the committed search definitions; a chunks rebuild outlives
+ * an HTTP request. Needs Search Service Contributor, so a run outside a grant window gets a 403.
  */
 
 const crypto = require('crypto');
@@ -25,40 +13,27 @@ const jobs = require('../repositories/bulk-downloads');
 const aiSearch = require('../search/ai-search');
 const apply = require('../scripts/apply-search-definitions');
 const datasources = require('../scripts/put-search-datasources');
-// Required as MODULES, not destructured: a destructured binding cannot be replaced by `t.mock`,
-// and these three are what a test stands in for (src/scripts/apply-search-definitions.js says the
-// same about aiSearch).
+// Required as modules, not destructured, so tests can stand in for them with `t.mock`.
 const resetIndexers = require('../scripts/reset-and-run-indexers');
 const { logger } = require('../utils/logger');
 
-/**
- * Job rows share the `bulkDownloads` container, so the id says which kind of row this is. The
- * prefix is what keeps these rows off GET /bulk-downloads/:id, whose id check is a bare UUID —
- * the same trick the `quota:` rows in that container use.
- */
+// Job rows share `bulkDownloads`; the prefix keeps them off GET /bulk-downloads/:id (bare UUID).
 const JOB_PREFIX = jobs.SEARCH_DEF_PREFIX;
 
-// And the row says it too. The prefix is only an id convention, so a row that somehow carries a
-// `searchdef:` id without being one of these jobs is still refused: `run()` resets indexers, and
-// it may only do that for a request this module itself recorded.
+// The kind is checked too: `run()` resets indexers only for a row this module recorded.
 const JOB_KIND = jobs.SEARCH_DEF_KIND;
 
 // A finished job is never re-run: a redelivered message for one has nothing left to do.
 const TERMINAL = ['succeeded', 'failed', 'warned'];
 
-// Step lines kept ON THE ROW. The apply report is the first few dozen; everything after that is
-// poll lines, so the head is what a reader wants and the tail is what gets dropped. Every line
-// also goes to the log, which is where a full transcript lives.
+// Step lines kept on the row; the head is the apply report, the tail poll lines. The log has all.
 const MAX_STEPS = 200;
 
-// Shorter than host.json's 30-minute functionTimeout on purpose: the wait has to end while this
-// invocation can still write the row. At the ceiling the host kills the worker mid-write and the
-// job stays `running` with nothing coming to finish it.
+// Under host.json's 30-minute functionTimeout, so the wait ends while this invocation can still
+// write the row; at the ceiling the host kills it mid-write and the job stays `running`.
 const WAIT_TIMEOUT_MS = 25 * 60 * 1000;
 
-// How long past that ceiling a row may sit before the run behind it is presumed dead. The ceiling
-// is the longest a live worker goes without writing the row, so anything beyond it plus the margin
-// for the queue handoff and the final patch is a worker that is not coming back.
+// Past the wait ceiling plus a margin for queue handoff and the final patch, a worker is dead.
 const STALE_AFTER_MS = WAIT_TIMEOUT_MS + 10 * 60 * 1000;
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
@@ -76,10 +51,7 @@ function queueClient() {
   });
 }
 
-/**
- * The definition names a request may ask for: an index (`chunks`), or its indexer
- * (`chunks-indexer`), because `--only` has always accepted either.
- */
+/** The definition names a request may ask for: an index (`chunks`) or its indexer (`chunks-indexer`). */
 function knownNames() {
   return [
     ...apply.load(apply.INDEX_DIR).map(d => d.body.name),
@@ -93,14 +65,8 @@ function knownDataSourceNames() {
 }
 
 /**
- * Is this `queued` or `running` row a run nothing is working on?
- *
- * The 409 that keeps applies one-at-a-time reads the row's status, and a worker the host killed
- * mid-run leaves `running` there for the rest of the row's 30-day TTL. Without this the next apply
- * is refused for a month and a hand-edited Cosmos document is the only way out.
- *
- * A row with no readable stamp is NOT stale: refusing an apply costs a caller a retry, while
- * starting a second one resets an indexer another run is rebuilding.
+ * Is this `queued` or `running` row one nothing works on, such as a killed worker's? A row with no
+ * readable stamp is not stale: a refused apply costs a retry, a second one resets a rebuild.
  */
 function isStale(job, now = Date.now()) {
   if (!job) return false;
@@ -117,10 +83,8 @@ async function enqueue(jobId) {
 }
 
 /**
- * The row a request creates, `queued`, before its message is sent.
- *
- * `request` is the whole of what the handler acts on — it re-reads the row rather than trusting a
- * message body, so a redelivery cannot change what was asked for.
+ * The `queued` row a request creates. The handler re-reads `request` from the row, never the message
+ * body, so a redelivery cannot change what was asked for.
  */
 function newJob({ only, datasources: dataSourceNames, live, check, requesterId }) {
   return {
@@ -137,11 +101,8 @@ function newJob({ only, datasources: dataSourceNames, live, check, requesterId }
 }
 
 /**
- * Collect the step lines: onto the row (bounded), into the log (all of them), and into the result
- * table when the line is one of reset-and-run-indexers.js's verdicts.
- *
- * Those `DEMI_*` lines are that script's reporting contract — demi-devbox.sh reads the same ones
- * off a run-command transcript.
+ * Step lines go onto the row (bounded), into the log, and into results when they are
+ * reset-and-run-indexers.js `DEMI_*` verdicts, the contract demi-devbox.sh also reads.
  */
 function sink(jobId) {
   const steps = [];
@@ -191,25 +152,13 @@ function indexersFor(only) {
 }
 
 /**
- * One job, start to finish.
- *
- * REDELIVERY IS THE CASE THIS IS SHAPED AROUND. A queue message can arrive again — the host
- * redelivers after a worker recycle — and a second reset would throw away the high-water mark of
- * an indexer already rebuilding, which for chunks is hours of work. So `resetIssuedAt` is written
- * BEFORE the reset, and a redelivery that finds it skips the apply and the reset and only watches
- * the executions the first delivery started.
- *
- * Failures do NOT rethrow. The queue's retry is the wrong tool here: a half-applied definition set
- * needs a human to look at the row, and a retry that re-PUT and re-reset would cost another
- * rebuild. The row carries the verdict and the steps that led to it.
+ * One job. `resetIssuedAt` is written before the reset, so a redelivery only watches. Failures never
+ * rethrow: a queue retry would re-PUT and re-reset; the row carries the verdict for a person.
  */
 async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   const id = String(jobId);
-  // WHAT THE MESSAGE MAY NAME, decided before the read. This queue and the zip queue read the same
-  // container, so a message carrying a bulk-download UUID would otherwise be point-read here and
-  // then patched to `running`, `failed` and so on — this handler rewriting another worker's row
-  // and taking a caller's zip away from them. A message that names nothing this job owns is
-  // dropped, not retried: nothing about it will be different on redelivery.
+  // The zip queue reads the same container, so a non-prefixed id is dropped before any read; the
+  // handler must never patch another worker's row.
   if (!id.startsWith(JOB_PREFIX)) {
     logger.error(`[search-definitions] refusing a message that is not a ${JOB_PREFIX} job id: ${id}`);
     return;
@@ -250,9 +199,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   };
 
   try {
-    // The route refuses this pair before it writes a row, so one that carries it came from
-    // somewhere else — an older build, or a row written by hand. Applying everything live resets
-    // every indexer, chunks included, which is hours with search serving a partial index.
+    // The route refuses this pair, so such a row was written elsewhere; it would reset every indexer.
     if (request.live && only.length === 0) {
       await finish('failed', {
         error: 'live needs a non-empty only list: applying everything resets every indexer, chunks included.'
@@ -260,10 +207,8 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       return;
     }
 
-    // CLAIM the row rather than stamping it. A plain patch cannot tell "nobody has this job" from
-    // "another delivery is applying it right now", so a redelivered message would start a second
-    // apply of the same definitions. A redelivery past the reset stamp is the resume case above
-    // and keeps its own path — its row is already `running` and has work left to watch.
+    // Claimed, not stamped, so a redelivery cannot start a second apply. A redelivery past the
+    // reset stamp takes the resume path instead.
     if (!resuming) {
       const claimed = await jobs.patchIfStatus(
         id, { status: 'running', startedAt: new Date().toISOString() }, ['queued']
@@ -294,9 +239,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       // look dead to the 409 guard while this worker still watches.
       await jobs.patch(id, { startedAt: new Date().toISOString(), steps: out.steps });
     } else {
-      // ONE `run()` PER NAME. The script's `--only` takes a single definition, and a list has to
-      // fail before the first PUT rather than partway through, which is the guard it already runs
-      // per call.
+      // One `run()` per name: `--only` takes a single definition.
       for (const name of only.length > 0 ? only : ['']) {
         await apply.run({
           endpoint, live: Boolean(request.live), only: name,
