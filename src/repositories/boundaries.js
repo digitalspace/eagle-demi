@@ -1,32 +1,8 @@
 'use strict';
 
 /**
- * Administrative boundaries — Cosmos NoSQL.
- *
- * Container `boundaries`, partitioned by `/type` (Regional District / Municipality /
- * Electoral District). Three partition values is normally an anti-pattern; it is correct here
- * because there are 281 items totalling a few MB, and the only list query filters on type.
- *
- * **Gated like every other repository.** This container used to be the one exception: no `read[]`
- * on the items, no `access` argument on any function, so a boundary could not be restricted even
- * in principle. That held only while the corpus was public reference geodata — the moment a
- * staff-only shapefile arrives it would have been world-readable on insert, silently.
- *
- * Two things make this different from the project-partitioned containers:
- *
- *  1. **No project axis.** Boundaries are geography, not project data, so `visibilityFor` is
- *     called with a NULL partition field — role ACL applies, project scope does not. Scoping them
- *     on a field the items do not carry would match nothing and blank the map for every
- *     project-scoped caller. See `scopeClause`.
- *  2. **Every row carries `read[]`.** `seed/transform.js` stamps reference geography `public`, so a
- *     boundary is governed by the ordinary role predicate like every other container. Rows seeded
- *     before the ACL existed carry neither field and are invisible until the boundaries seed stage
- *     is re-run over them.
- *
- * Items store SIMPLIFIED geometry only. Full-resolution GeoJSON is a build artifact already
- * emitted to frontend/public/assets/geojson/ and already preferred by the frontend; keeping
- * it here put the largest districts at ~1.6 MB against a 2 MB cap and made every write
- * enormously expensive to index.
+ * Container `boundaries`, partitioned by `/type`: three values suit 281 small items listed by type.
+ * Simplified geometry only; full GeoJSON nears the 2 MB item cap and ships in frontend/public/assets/geojson/.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -38,8 +14,8 @@ const CONTAINER = 'boundaries';
 const PARTITION_FIELD = 'type';
 
 /**
- * Boundaries have no project axis, so the visibility predicate is role-only. Passing `null` here
- * is load-bearing, not a placeholder — see the header.
+ * No project axis, so the predicate is role-only. Scoping on a field the items lack would blank
+ * the map for every project-scoped caller.
  */
 const SCOPE_FIELD = null;
 
@@ -48,10 +24,7 @@ const SCOPE_FIELD = null;
  *
  * @param {object}  access              from resolveAccess()
  * @param {string}  [opts.type]         omit for all types (cross-partition; 281 items)
- * @param {boolean} [opts.withGeometry] default true — the caller opts OUT. The frontend sends
- *                                      `geometry=simplified` for its default fidelity and nothing
- *                                      at all on the bbox path, so defaulting to false silently
- *                                      strips the polygons from both.
+ * @param {boolean} [opts.withGeometry] default true: the frontend sends `geometry=simplified` or nothing, and both want polygons
  * @param {number}  [opts.pageSize]     bounded read; omit and the whole type is returned
  */
 async function listByType(access, { type, withGeometry = true, pageSize, continuationToken } = {}) {
@@ -68,10 +41,8 @@ async function listByType(access, { type, withGeometry = true, pageSize, continu
   const options = pageOptions({ pageSize, continuationToken });
   if (type) options.partitionKey = String(type);
 
-  // `pageSize` back OUT, because `pageOptions` is the only clamp and the caller has to compare
-  // against the number that actually bounded the read. The controller used to clamp a second time
-  // for that comparison, and the two disagreed: `?pageSize=abc` gave the controller NaN while this
-  // bounded at 1000, so a genuinely truncated page compared false and reported nothing.
+  // `pageOptions` is the only clamp; the caller compares against the number that bounded the read,
+  // or a junk `?pageSize` would hide a truncated page.
   const result = await cosmos.query(CONTAINER, spec, options);
   return { ...result, pageSize: options.maxItemCount };
 }
@@ -90,12 +61,8 @@ async function getById(access, id, type) {
 }
 
 /**
- * Look up a boundary by name.
- *
- * `type` is OPTIONAL. It is the partition key, so supplying it makes this a single-partition
- * query — but the frontend calls `/boundaries/<name>` with no type at all, and requiring it turned
- * `type` into the string "undefined", which matches nothing and 404s every time. With only 281
- * items across 3 partitions, the cross-partition fallback is cheap.
+ * `type` is optional: the frontend calls `/boundaries/<name>` without it, and with 281 items in 3
+ * partitions the cross-partition fallback is cheap.
  */
 async function getByName(access, name, type) {
   const scoped = type !== undefined && type !== null && String(type) !== '';

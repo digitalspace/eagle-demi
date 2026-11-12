@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Comments repository — Cosmos NoSQL.
- *
- * Container `comments` (Eagle `Comment`), partitioned by `/periodId`: every list is "the comments of
- * this period". `projectId` rides on each row as well, because that — never `periodId` — is the axis
- * a SCOPED caller is confined to, so it is what `canRead` and `visibilityFor` are given.
+ * Container `comments` (Eagle `Comment`), partitioned by `/periodId`. A scoped caller is confined on
+ * `projectId`, never `periodId`, so that is what `canRead` and `visibilityFor` are given.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -158,10 +155,8 @@ async function aclRowsForPeriod(access, periodId) {
 }
 
 /**
- * Re-derive every comment's ACL from its own and its period's.
- *
- * The period's ACL is already narrowed to its project, so this one constrain carries both
- * ceilings — the same reasoning the comment mirror states.
+ * Re-derive every comment's ACL from its own and its period's. The period's ACL is already narrowed
+ * to its project, so this one constrain carries both ceilings.
  */
 async function setAclForPeriod(access, periodId, read) {
   return cascadeAcl(CONTAINER, periodId, await aclRowsForPeriod(access, periodId), read);

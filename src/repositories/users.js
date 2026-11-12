@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Users repository — Cosmos NoSQL.
- *
- * Container `users` (Eagle `User`), partitioned by `/id`. A user is not project data, so `id` is
- * also the field the scope and team arms compare: no project scope or team holds a user id, so a
- * project-scoped caller reads no user at all rather than every user.
- *
- * A user pushed with `isDeleted` stays stored for the reconcile; no read here serves it
- * (`NOT_DELETED`), as eagle-api's search never did.
+ * Container `users`, partitioned by `/id`, also the scope axis: no scope holds a user id, so a scoped
+ * caller reads no user. An `isDeleted` row stays for the reconcile; reads skip it (`NOT_DELETED`).
  */
 
 const cosmos = require('../db/cosmos-nosql');
