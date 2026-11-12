@@ -1,16 +1,15 @@
 'use strict';
 
 /**
- * The entries every Eagle mirror row carries beside its own fields: identity, the derived publish
- * flag, and the never-public ACL, raw payload, dial map and Cosmos system fields. Same levels and
- * reasons as catalog/projects.js. Not an entity: catalog/index.js never lists it.
+ * Entries every Eagle mirror row carries beside its own fields. Not an entity: catalog/index.js
+ * never lists it.
  */
 module.exports = Object.freeze({
   id: { defaultVis: 4, maxVis: 4 },
   eagleId: { defaultVis: 4, maxVis: 4 },
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   isPublished: { defaultVis: 4, maxVis: 4 },
-  // Eagle no longer holds the record. A fact about the row; `read` is what hides it.
+  // Eagle has deleted the record. A fact about the row; `read` is what hides it.
   isDeleted: { defaultVis: 4, maxVis: 4 },
 
   read: { defaultVis: 0, maxVis: 0 },

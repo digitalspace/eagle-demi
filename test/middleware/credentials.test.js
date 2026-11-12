@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The load that puts a caller's grants on the request.
- *
- * Three things can go wrong here and none of them is visible downstream: loading for the wrong
- * party, serving a stale grant past the cache TTL, and letting a Cosmos failure decide access.
+ * Failures here are invisible downstream: loading for the wrong party, a stale grant past the
+ * cache TTL, and a Cosmos failure deciding access.
  */
 
 process.env.NODE_ENV = 'test';

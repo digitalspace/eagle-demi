@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * `helpers/update-parent:updateRead`, the one rule for an Update's stored `read[]`: Eagle's own under
- * the parent's ceiling, except a row that takes the parent's read: with a status other than archived,
- * a missing or empty read; with no status, a missing read on an active row. eagle-api's `$redact`
- * pruned `read: []`, and its `applyStatus` never sets one beside a status.
+ * `updateRead`: Eagle's own read under the parent's ceiling, except a non-archived row with an
+ * empty read, or a status-less active row with none, takes the parent's read.
  */
 
 process.env.NODE_ENV = 'test';
@@ -47,7 +45,7 @@ test('updateRead — a legacy open update takes its parent\'s read', async (t) =
 });
 
 test('updateRead — a missing read with a status takes its parent\'s read', async (t) => {
-  // eagle-api's 2026-09-23 status backfill gave these rows `draft`; Eagle staff still see them.
+  // eagle-api's status backfill gave these rows `draft`; Eagle staff still see them.
   await t.test('a draft takes its parent\'s read', () => {
     assert.deepStrictEqual(updateRead(legacy({ status: 'draft' }), PUBLIC_PARENT), ['staff', 'idir', 'public']);
     assert.deepStrictEqual(updateRead(legacy({ status: 'draft' }), PRIVATE_PARENT), PRIVATE_ACL);

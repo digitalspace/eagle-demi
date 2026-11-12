@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * The queue worker and the zip sweeper are host triggers, so nothing about them runs outside Azure
- * — the app is loaded against a recording `app` (test/helpers/load-index.js) and the assertions are
- * on what it registered. Same shape and same reason as test/reconcile-timer.test.js.
- *
- * The guards are the part worth testing. `%BULK_DOWNLOADS_QUEUE%` and `%BULK_CLEANUP_SCHEDULE%` are
- * resolved by the HOST at startup, and an unresolvable name is a startup error that takes the HTTP
- * functions down with it. Both settings are empty wherever the feature is not switched on.
+ * The host resolves `%BULK_DOWNLOADS_QUEUE%` and `%BULK_CLEANUP_SCHEDULE%` at startup; an unresolvable
+ * name takes the HTTP functions down, and both are empty wherever the feature is off.
  */
 
 process.env.NODE_ENV = 'test';

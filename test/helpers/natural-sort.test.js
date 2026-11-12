@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The assertions are on PLAIN STRING COMPARISON of two keys, not on the key text alone: the index
- * orders `displayNameSort` by codepoint, so "does 2 come before 10" is the only question that
- * matters, and a key that looks right while comparing wrong is the bug this file exists to catch.
+ * Assertions compare two keys as plain strings, as the index does by codepoint: a key that looks
+ * right while comparing wrong is the bug this file catches.
  */
 
 const test = require('node:test');

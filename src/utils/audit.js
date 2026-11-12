@@ -1,27 +1,8 @@
 'use strict';
 
 /**
- * audit.js — the append-only record of what happened, and the usage counters beside it.
- *
- * Two destinations, one writer, and since the audit repoint they are two different pipelines —
- * each reached through the Logs Ingestion API of a Direct data collection rule.
- *
- *   auditEvent()     -> EagleAudit_CL  privileged actions, in `analytics-logs-<env>` (eagle-analytics).
- *                                      EPIC-wide, so every row carries SourceApp. Kept 7 years.
- *                                      Falls back to DemiAudit_CL where that DCR is not configured.
- *   analyticsEvent() -> DemiEvents_CL  usage counters, in `demi-audit-<env>`. Unchanged: no durable
- *                                      identity, kept 13 months. See azure/modules/audit-logs.bicep.
- *
- * The pre-repoint DemiAudit_CL rows are not migrated (the ingestion API overwrites a TimeGenerated
- * older than two days); they age out where they are, and GET /admin/audit unions them.
- *
- * THIS MODULE MUST NEVER FAIL A REQUEST. Every entry point returns synchronously after appending
- * to an in-memory buffer; the network call happens on a timer. A failed flush is logged and
- * dropped, never thrown, and never awaited by a caller. An audit sink that can 500 a request is a
- * bigger outage than a missing audit row.
- *
- * With no AUDIT_DCR_ENDPOINT configured the whole module is inert — that is local development,
- * the test suite, and any environment where the DCR has not been deployed yet.
+ * Audit trail (EagleAudit_CL, fallback DemiAudit_CL) and usage counters (DemiEvents_CL), each sent
+ * through a Direct DCR. Never fails a request: rows buffer in memory and flush on a timer.
  */
 
 const crypto = require('crypto');
@@ -49,14 +30,11 @@ const buffers = new Map([
 let flushTimer = null;
 const warnedStreams = new Set();
 
-// Injection seam for the tests. Real code never passes anything here; `test/audit.test.js`
-// substitutes a stub so the buffering and batching logic can be exercised with no Azure and no
-// managed identity. Kept to two functions rather than a transport abstraction — there is exactly
-// one real implementation and there is not going to be a second.
+// Swapped by _setTransport in tests.
 let sendBatch = postToIngestionApi;
 let getToken = fetchIngestionToken;
 
-/** The DCR a stream is sent to. Both empty is OFF for that stream — see the module header. */
+/** The DCR a stream is sent to. Both empty turns that stream off. */
 function destinationFor(stream) {
   return stream === EVENTS_STREAM
     ? { endpoint: config.eventsDcrEndpoint, immutableId: config.eventsDcrImmutableId }
@@ -69,15 +47,8 @@ function enabled(stream) {
 }
 
 /**
- * Salt behind AnonId, rotated every UTC day.
- *
- * This is what lets DemiEvents_CL count distinct users without storing an identifier that
- * outlives the day it was minted — which in turn is why no deletion path is needed for a table
- * whose plan has no cheap targeted delete.
- *
- * ponytail: the salt lives in process memory, so a restart mints a new one mid-day and
- * dcount(AnonId) over-counts for that day. Persist it (app setting, Key Vault) only if the
- * distinct-user number ever has to be exact rather than indicative.
+ * Salt behind AnonId, rotated every UTC day so DemiEvents_CL never stores an id that outlives a day.
+ * ponytail: in-memory salt, so a restart mid-day over-counts dcount(AnonId); persist it if exact.
  */
 let salt = crypto.randomBytes(32);
 let saltDay = '';
@@ -92,25 +63,8 @@ function currentSalt() {
 }
 
 /**
- * Who did this, from the verified token only — never a header or a query param.
- *
- * Four caller shapes reach this, and telling them apart is the whole job (see helpers/auth.js):
- *
- *   Keycloak bearer  -> `sub` (stable UUID) + preferred_username. A person.
- *   Registry API key -> `keyId` + preferred_username. A named machine consumer.
- *   ADMIN_API_KEY    -> preferred_username 'internal-service', nothing else. Break-glass, a
- *                       SHARED credential, so the action is attributable to a credential and not
- *                       to a human. Recorded as what it is rather than dressed up.
- *   none             -> anonymous.
- *
- * This used to be `keyId || azp ? 'service' : 'user'`, which was wrong in both directions: the
- * break-glass key has neither and was logged as a person, while a real human signing in through
- * eagle-admin-console DOES carry `azp` and was logged as a service. Both were visible in the first
- * staging audit rows.
- *
- * `id` is the stable identifier and `name` is the human-readable one. Both are recorded, because
- * `sub` alone means every trace needs a Keycloak lookup to answer "who is this", and
- * preferred_username alone is not stable across a rename.
+ * Who did this, from the verified token only, never a header or query param. Records a stable id
+ * and a readable name: `sub` alone needs a Keycloak lookup, a username alone breaks on rename.
  */
 function actorFor(req) {
   const user = (req && req.user) || null;
@@ -121,11 +75,8 @@ function actorFor(req) {
   // A registry key: its own principal, with its own roles, expiry and revocation.
   if (user.keyId) return { id: user.keyId, name, type: 'api-key' };
 
-  // A Keycloak SERVICE ACCOUNT — client_credentials, the service-to-service path Track and
-  // ENGAGE-style callers use. These carry a `sub` like any token, so checking `sub` first would
-  // file a shared client secret as a person and keep it that way for seven years. Keycloak names
-  // the backing user after the client (`service-account-<clientId>`) and adds a `clientId` claim,
-  // so either is enough to tell them apart. Checked BEFORE the human branch for that reason.
+  // Keycloak service account (client_credentials). It also carries `sub`, so it is checked
+  // before the person branch, or a shared client secret would be filed as a person.
   if (user.clientId || name.startsWith('service-account-')) {
     return {
       id: user.sub || user.clientId || name,
@@ -134,9 +85,8 @@ function actorFor(req) {
     };
   }
 
-  // Break-glass ADMIN_API_KEY: a shared credential, attributable to a credential and not a person.
-  // Requires the ABSENCE of `sub`, so a real Keycloak principal that happens to be named
-  // 'internal-service' cannot be laundered into this bucket and have its identity discarded.
+  // Break-glass ADMIN_API_KEY: a shared credential, not a person. Requires no `sub`, so a real
+  // Keycloak user named 'internal-service' cannot be filed here.
   if (!user.sub && name === 'internal-service') return { id: name, name, type: 'break-glass' };
 
   // A person.
@@ -172,10 +122,8 @@ function enqueue(stream, row) {
   const buffer = buffers.get(stream);
   buffer.push(row);
 
-  // `.catch` on both call sites, not decoration: batches() calls JSON.stringify outside
-  // sendWithRetry's try, so a row whose Detail cannot be stringified rejects flush() with nothing
-  // attached — an unhandled rejection, which terminates the process under Node's default. This
-  // module's contract is that it never takes a request down with it; that has to hold here too.
+  // batches() stringifies outside sendWithRetry's try, so flush() can reject; left unhandled,
+  // that rejection would end the process.
   if (buffer.length >= config.auditMaxBatch) {
     flush().catch((err) => logger.error(`[Audit] flush failed: ${err.message}`));
     return;
@@ -198,27 +146,21 @@ function enqueue(stream, row) {
  * @param {object} event  { action, outcome, targetType, targetId, projectId, detail }
  */
 function auditEvent(req, event) {
-  // Wrapped because rolesFor() and callerIp() run synchronously inside each controller's own try:
-  // a throw here would surface as a 500 AFTER the mutation had already been applied, which is the
-  // precise failure this module's header says is unacceptable. Recording the action must never be
-  // the reason the action reports failure.
+  // Runs inside each controller's try: a throw here would report a 500 after the write landed.
   try {
   const actor = actorFor(req);
 
   enqueue(AUDIT_STREAM, {
     TimeGenerated: new Date().toISOString(),
-    // Client-generated so a retried batch is identifiable as the same event rather than a second
-    // one. Nothing deduplicates on ingest; a reader dedupes with `arg_min(TimeGenerated, *) by
-    // EventId` if duplicates ever show up.
+    // Client-generated so a retried batch keeps its id. Nothing dedupes on ingest; readers
+    // dedupe by EventId.
     EventId: crypto.randomUUID(),
     // Which app acted. EagleAudit_CL carries every EPIC app's rows, so a reader that does not
     // filter on this is reading somebody else's trail — GET /admin/audit filters on it.
     SourceApp: SOURCE_APP,
     Action: event.action,
     Outcome: event.outcome || 'success',
-    // `sub` is the stable Keycloak identifier and survives a rename; ActorName is what a human
-    // reads without a Keycloak lookup. Both, because either alone makes a trace worse - see
-    // actorFor().
+    // Stable id and readable name, see actorFor().
     ActorId: actor.id || 'anonymous',
     ActorName: actor.name,
     ActorType: actor.type,
@@ -248,9 +190,8 @@ function auditEvent(req, event) {
  */
 function analyticsEvent(req, event) {
   const headers = (req && req.headers) || {};
-  // The availability web test searches every 5 minutes from 5 probe locations — 1,440 synthetic
-  // searches a day, which would read as usage. Caller-supplied and so spoofable: this suppresses a
-  // usage COUNTER only. auditEvent's trail is untouched and no access decision reads it.
+  // The availability web test sends this on every probe. Spoofable, so it only skips this usage
+  // counter; audit rows and access checks never read it.
   if (headers['x-synthetic-probe']) return;
   // Same guard, same reason — see auditEvent.
   try {
@@ -259,28 +200,20 @@ function analyticsEvent(req, event) {
   enqueue(EVENTS_STREAM, {
     TimeGenerated: new Date().toISOString(),
     EventName: event.eventName,
-    // Anonymous ONLY while the caller is anonymous. A signed-in user's activity is attributable -
-    // staff searching the corpus is exactly the thing an investigator needs to be able to trace,
-    // and pretending otherwise would make this table useless for the question it will be asked.
-    // Public traffic still carries nothing but the rotating hash below.
+    // Anonymous only while the caller is: staff activity must stay traceable. Public traffic
+    // carries only the rotating AnonId hash.
     ActorId: actor.id,
     ActorName: actor.name,
     ActorType: actor.type,
-    // Kept for everyone, signed-in included: it is the join key for counting distinct callers, and
-    // for anonymous traffic it is the ONLY identifier - salted daily so it stops being linkable on
-    // its own.
+    // Join key for distinct callers, and the only id for anonymous traffic; salted daily so it
+    // cannot be linked across days.
     AnonId: anonId(req),
-    // Hashed under the SAME rotating salt as AnonId, and that is load-bearing. Stored raw, this is
-    // caller-supplied and stable for as long as the client chooses to reuse it — so joining on it
-    // would re-link one person's searches straight across the salt rotation, which is exactly the
-    // linkage the rotation exists to break. Hashing keeps within-day session stitching and drops
-    // the cross-day trail, which is the whole reason this table needs no deletion path.
+    // Hashed under the same daily salt as AnonId: a raw caller-chosen id would re-link one
+    // person's searches across salt rotations.
     SessionId: headers['x-session-id'] ? hashWithDailySalt(headers['x-session-id']) : '',
     ProjectId: event.projectId ? String(event.projectId) : '',
     DocumentId: event.documentId ? String(event.documentId) : '',
-    // Free text a caller typed. The single field here with real disclosure risk, and the single
-    // field the analytics are actually for. Flagged in the plan for privacy review rather than
-    // quietly dropped.
+    // Caller-typed free text: the one field here with real disclosure risk.
     SearchTerm: event.searchTerm || '',
     ResultCount: Number.isFinite(event.resultCount) ? event.resultCount : 0,
     DeviceType: /mobile|android|iphone/i.test(headers['user-agent'] || '') ? 'mobile' : 'desktop',
@@ -295,10 +228,8 @@ function analyticsEvent(req, event) {
 }
 
 /**
- * Split a row array into batches under both the count and byte ceilings.
- *
- * The byte ceiling is the one that matters: the ingestion API rejects a body over 1 MB, and a
- * single audit row carrying a large `Detail` diff can be tens of kilobytes.
+ * Split rows into batches under the count and byte limits. The ingestion API rejects a body over
+ * 1 MB, and one row with a large `Detail` can be tens of KB.
  */
 function batches(rows, maxCount, maxBytes) {
   const out = [];
@@ -321,16 +252,8 @@ function batches(rows, maxCount, maxBytes) {
 }
 
 /**
- * What a dropped row may say in the application log.
- *
- * The DCR transform is the masking boundary for the happy path and is deliberately impossible to
- * bypass from the app. This is the one path that goes around it, so it re-applies the same idea by
- * hand rather than trusting the destination.
- *
- * Audit: keep the record — who did what to which thing is the entire point, and losing it is the
- * failure this fallback exists to prevent. Drop SourceIp, which the transform would have masked.
- * Analytics: keep nothing identifying. A usage row is only meaningful in aggregate, so an
- * individual one is not worth recovering, and SearchTerm is caller-typed free text.
+ * What a dropped row may say in the app log, the one path around the DCR masking transform.
+ * Audit rows keep all but SourceIp; analytics rows keep only their shape.
  */
 function redactForLog(stream, row) {
   if (stream === AUDIT_STREAM) {
@@ -397,29 +320,14 @@ async function sendWithRetry(stream, batch) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await sendBatch(stream, batch);
-      // Success used to be silent, which made "delivered fine" and "this code never ran"
-      // indistinguishable from the outside — the exact ambiguity that cost an afternoon on the
-      // first staging deploy.
-      //
-      // DEBUG, not info, and the distinction is a cost one. This fires per batch per stream per
-      // flush: with a 1s interval that is a ≥2 lines/sec floor under sustained load, measured at up
-      // to ~50 MB/day, around 10% of the non-prod dailyQuotaGb — spent entirely on a message
-      // saying nothing went wrong. Failures still log at `error`, which is the line worth paying
-      // for. Raise LOG_LEVEL to debug when you need to prove delivery.
+      // Debug, not info: a success line per batch costs about 10% of the non-prod daily log
+      // quota. Set LOG_LEVEL=debug to prove delivery.
       logger.debug(`[Audit] flushed ${batch.length} row(s) to ${stream}`);
       return;
     } catch (err) {
       if (attempt === 2) {
-        // Last resort: the rows are about to be lost and the application log is the only place
-        // left to recover them from. But the fallback lands in `demi-logs-<env>`, which sets
-        // enableLogAccessUsingOnlyResourcePermissions — deliberately the WIDER read grant — and
-        // nothing masks it on the way in. Dumping the raw batch would route unmasked SourceIp and
-        // raw SearchTerm around the DCR transform that exists to be unbypassable, and it would do
-        // so precisely when the pipeline is under stress.
-        //
-        // So the two streams are treated differently, by what is worth recovering:
-        // audit rows are reconstructable and keep everything but the IP; analytics rows are
-        // aggregate by nature, so only their shape survives.
+        // Last resort before the rows are lost. demi-logs-<env> has a wider read grant and no
+        // masking, so rows are redacted first (see redactForLog).
         logger.error(
           `[Audit] dropped ${batch.length} row(s) for ${stream} after 3 attempts: ${err.message} :: ` +
           JSON.stringify(batch.map((row) => redactForLog(stream, row)))

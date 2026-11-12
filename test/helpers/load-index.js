@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Load `api/index.js` against a recording `app`, for the timer-registration tests.
- *
- * Nothing about a Functions timer runs outside Azure, so `@azure/functions` is replaced in the
- * require cache before the app loads and the assertions are on what it asked to register.
+ * Functions timers run only in Azure, so `@azure/functions` is replaced in the require cache and
+ * the tests assert on what `api/index.js` asked to register.
  */
 
 const INDEX = require.resolve('../../api/index');

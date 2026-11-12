@@ -25,9 +25,8 @@ const {
 // The break-glass identity is asserted from the real verifier, not from a copy of its role list.
 const { authenticate } = require('../../src/helpers/auth');
 
-// These tests assert the EMITTED SQL and parameters, not just behaviour. Authorization is the
-// highest-consequence surface here and this repo has already shipped a filter that failed
-// open once, so an edit that widens the predicate must fail a test rather than a review.
+// These tests assert the emitted SQL and parameters, not just behaviour, so an edit that widens
+// the predicate fails a test rather than a review.
 
 test('readClause — role ACL predicate', async (t) => {
   await t.test('privileged roles lift the role predicate, all but the sealed exclusion', () => {
@@ -383,7 +382,7 @@ test('teams grant, key scope restricts — two different project facts', async (
   });
 
   await t.test('a caller prefix cannot collide with the team parameters', () => {
-    // `@roleTeam0` used to be both this clause's first team id and the other clause's first role.
+    // A `@roleTeam` prefix must not reuse the team parameter names of a default-prefix clause.
     const merged = andClauses(
       readClause(['public'], { teams: ['207'] }),
       readClause(['public'], { teams: ['207'], prefix: '@roleTeam' })
@@ -420,9 +419,7 @@ test('teams grant, key scope restricts — two different project facts', async (
   });
 
   await t.test('a privileged key is still narrowed by its scope', () => {
-    // This used to assert the opposite — that privilege discarded the scope — which is exactly the
-    // leak: a credential minted with a projectScope read the whole corpus, so the restriction its
-    // issuer asked for did nothing and said nothing.
+    // Privilege must not discard the scope, else a scoped key reads the whole corpus.
     const access = resolveAccess(keyScoped(['sysadmin'], ['207']));
     assert.strictEqual(access.tier, TIER.SCOPED);
 
@@ -523,10 +520,8 @@ test('canRead — point reads bypass the query predicate', async (t) => {
   });
 });
 
-// The sealed compartment (docs/rbac-architecture.md §1, "Level 0"). A level-0 row sits in its
-// ordinary container with `read: ['compliance']`, so the ONLY thing keeping it sealed is that
-// every caller without that role carries an exclusion — the privileged ones especially, whose
-// predicate would otherwise collapse to `true`.
+// A level-0 row is sealed only by the exclusion every caller without `compliance` carries,
+// privileged callers most of all.
 test('level 0 — the sealed compartment', async (t) => {
   const SEALED = { id: 'p1', projectId: 'p1', read: readForLevel(0) };
   const access = (roles, extra = {}) => resolveAccess({ user: { realm_access: { roles } }, ...extra });

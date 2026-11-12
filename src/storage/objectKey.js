@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * Resolve a stored document key to the key that actually exists in this environment's bucket.
- *
- * Why this exists: a document's key is recorded by eagle-api relative to the PRODUCTION
- * bucket — `etl/<project-slug>/<hash>.pdf`. Non-production buckets were populated by copying
- * prod into a sub-prefix named after the prod bucket, so the same object lives one level
- * deeper. Measured in dev: bucket `asnpnn` contains 92,472 objects under `ozwdez/`, and
- * `etl/` does not exist at the bucket root at all. That mismatch is why every download 404'd.
- *
- * Kept as one tiny function rather than scattered string concatenation so there is a single
- * place to delete when documents move to Azure Blob with a clean, uniform key layout.
+ * Map a stored key to this bucket. eagle-api records keys relative to the prod bucket, and a
+ * non-prod bucket may hold prod's copy under a prefix (dev bucket `asnpnn` under `ozwdez/`).
  */
 
 const config = require('../config');

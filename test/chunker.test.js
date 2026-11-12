@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Boundary tests for the split rules — where a chunk starts, where it ends, and what must never be
- * dropped on the way.
- *
- * These began as capacity tests: Typesense held its index in RAM at ~1.1 KB per chunk against an
- * average 601-character chunk, so one-chunk-per-paragraph projected to 3.1M chunks / 3.4 GB and
- * accumulating to ~2500 brought it to ~740k. That argument died with Typesense, and the size
- * constants are now inherited rather than derived (see `src/config.js`). What survives is the part
- * that was always about correctness: no text lost, short paragraphs merged rather than dropped,
- * `chunkIndex` dense because ids are built from it.
+ * No text lost, short paragraphs merged rather than dropped, `chunkIndex` dense because ids are
+ * built from it. The size constants come from `src/config.js`.
  */
 
 const test = require('node:test');
@@ -42,9 +35,7 @@ test('chunkMarkdown', async (t) => {
   });
 
   await t.test('short paragraphs are NEVER dropped — they merge', () => {
-    // The regression this guards: the old implementation filtered out every paragraph shorter
-    // than MIN_CHUNK_SIZE *before* merging, so headings, table rows and short lines vanished from
-    // the indexed text. Raising the minimum would have deleted almost the whole corpus.
+    // Filtering before merging would drop headings, table rows and short lines from the index.
     const md = ['# Heading', 'Short line.', 'Another short one.'].join('\n\n');
     const chunks = chunkMarkdown(md);
 
@@ -96,9 +87,7 @@ test('chunkMarkdown', async (t) => {
   });
 
   await t.test('consecutive chunks overlap ACROSS a block boundary', () => {
-    // The path that was actually broken. `emit()` called `splitText()`, which returns any block
-    // under MAX (4000) unchanged — and blocks are emitted at TARGET (2500). So on the common path
-    // splitText was a no-op and consecutive chunks shared nothing.
+    // Blocks emit at TARGET (2500), under MAX (4000), so `splitText()` adds no overlap here.
     const md = Array.from({ length: 20 }, (_, i) => `Para${i} ${para(300, String.fromCharCode(97 + i))}`)
       .join('\n\n');
     const chunks = chunkMarkdown(md);
@@ -111,9 +100,8 @@ test('chunkMarkdown', async (t) => {
   });
 
   await t.test('overlap must not rescue a fragment below the minimum', () => {
-    // The trap in prepending overlap: 200 characters of a neighbour's text would lift any sliver
-    // over MIN_CHUNK_SIZE, and the surviving chunk would be almost entirely duplicated text. The
-    // floor has to measure the block's own contribution.
+    // 200 characters of a neighbour's text would lift any sliver over MIN_CHUNK_SIZE, so the floor
+    // measures the block's own contribution.
     const tiny = 'x'.repeat(20);
     const chunks = chunkMarkdown([para(3000, 'a'), tiny].join('\n\n'));
 
@@ -139,10 +127,8 @@ test('chunkMarkdown', async (t) => {
 });
 
 test('createChunkAccumulator', async (t) => {
-  // The streaming ingest path feeds sections one at a time and flushes as it goes. If it can
-  // produce different boundaries from the whole-string path, there are two chunking rules and the
-  // corpus becomes inconsistent depending on which door a document came through. These tests
-  // exist to make that impossible to introduce quietly.
+  // Streaming ingest must produce the same boundaries as the whole-string path, or the corpus
+  // depends on which door a document came through.
   const feed = (sections) => {
     const acc = createChunkAccumulator();
     const out = [];
@@ -190,16 +176,8 @@ test('createChunkAccumulator', async (t) => {
   });
 });
 
-// The size constants are not free parameters once a corpus exists. Chunk ids are built from
-// `chunkIndex`, so re-chunking the same document at a different TARGET or MIN produces a different
-// number of chunks with different ids — the old rows are not overwritten, they are orphaned, and
-// they stay searchable because the AI Search indexer's `_ts` high-water mark never revisits a row
-// it has already seen.
-//
-// The behavioural tests above read these values from `src/config.js`, which proves the configured
-// number reaches the chunker but CANNOT notice the number changing — they move with it. This is the
-// canary that does not move. It exists to fail, loudly, the moment someone edits a default or sets
-// the env var, so that re-chunking the corpus is a decision rather than an accident.
+// Re-chunking at other sizes orphans old ids, which stay searchable since the indexer never sees
+// deletes. The tests above read config and move with it; this one fails on any change.
 test('the chunk size defaults are pinned, because changing one orphans the corpus', () => {
   const { maxChunkSize, targetChunkSize, minChunkSize, overlapSize } = require('../src/config');
 
@@ -212,9 +190,8 @@ test('the chunk size defaults are pinned, because changing one orphans the corpu
   );
 });
 
-// The intake cleaner. docling emits `<!-- image -->` for every picture and it cannot be turned off
-// (image_export_mode admits only placeholder/embedded/referenced), so the markup reaches the
-// chunker on every document and used to reach the index and the Deep Search snippet with it.
+// docling emits `<!-- image -->` for every picture and cannot turn it off (image_export_mode
+// admits only placeholder/embedded/referenced), so every document reaches the chunker with it.
 test('intake cleaning', async (t) => {
   await t.test('image placeholders never reach a chunk', () => {
     const chunks = chunkMarkdown('The proponent <!-- image --> filed a report.');
@@ -248,8 +225,7 @@ test('intake cleaning', async (t) => {
     const rule = '_'.repeat(3000);
     const chunks = chunkMarkdown([para(3000, 'a'), rule, para(3000, 'b')].join('\n\n'));
 
-    // By SHARE, not `^furniture-only$`: every chunk carries 200 characters of overlap from its
-    // neighbour, so even a pure rule is never entirely underscores and an exact-match assertion
+    // By share, not exact match: every chunk carries 200 characters of overlap, so an exact match
     // would pass whether or not the drop fired.
     for (const c of chunks) {
       const furniture = (c.content.match(/[_.=-]/g) || []).length;
@@ -299,9 +275,7 @@ test('intake cleaning', async (t) => {
 });
 
 /**
- * Page provenance. The extraction host separates consecutive pages with a form feed, so a chunk can
- * say which PDF page it came from and a reader can be sent there. These cases are about what that
- * changes — and, first, about what it must not.
+ * The extraction host separates pages with a form feed, so a chunk can cite its PDF page.
  */
 test('page markers', async (t) => {
   /** Distinct letters per page, none of them in the prose, so a chunk's origin is readable. */
@@ -311,10 +285,8 @@ test('page markers', async (t) => {
   const pagesIn = chunk => [...new Set(chunk.content.replace(/[^QWZ]/g, ''))].join('');
 
   await t.test('a marker-free document chunks exactly as it did before pages existed', () => {
-    // THE GOLDEN. The hash was taken from the implementation at efde3d3, before any of this, over a
-    // fixture that exercises accumulation, the cross-block overlap, an oversized block split three
-    // ways and the short-tail merge. Every extraction in the corpus today is marker-free, so a
-    // change here silently re-chunks 1.1M rows and invalidates every stored chunk id.
+    // Golden hash of marker-free output: the stored corpus is marker-free, so a change here
+    // silently re-chunks it and invalidates every stored chunk id.
     const sections = Array.from({ length: 9 }, (_, i) => `Section ${i}. ${'word'.repeat(200 - i * 7)}`)
       .concat('# A heading', 'Tiny tail.', 'L'.repeat(9000));
     const chunks = chunkMarkdown(sections.join('\n\n'));
@@ -370,9 +342,8 @@ test('page markers', async (t) => {
   });
 
   await t.test('short pages with no block before them merge forward, cited from page 1', () => {
-    // Every word survives, but a sub-floor page no longer becomes a chunk of its own: one chunk per
-    // form feed turned a 2 MB file into ~38k chunks of ~50 bytes. Nothing is held before page 1,
-    // so these merge forward and the chunk is cited from the page its text starts on.
+    // A sub-floor page is not its own chunk. Nothing is held before page 1, so these merge forward
+    // and the chunk is cited from the page its text starts on.
     const chunks = chunkMarkdown(['Cover.', 'Body.', 'Appendix C.'].join(PAGE_MARKER));
 
     assert.deepStrictEqual(chunks.map(c => [c.pageNumber, c.content]),
@@ -415,7 +386,7 @@ test('page markers', async (t) => {
   });
 
   await t.test('dense page markers chunk to the target size, not one chunk per page', () => {
-    // The 2026-09-16 incident shape: ~2 MB with a form feed every ~50 bytes.
+    // ~2 MB with a form feed every ~50 bytes; one chunk per page would be ~38k tiny chunks.
     const doc = Array.from({ length: 40000 }, (_, i) => `Line ${i} of the form. ${'x'.repeat(20)}`)
       .join(PAGE_MARKER);
     const chunks = chunkMarkdown(doc);

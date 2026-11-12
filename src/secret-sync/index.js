@@ -1,12 +1,7 @@
 'use strict';
 
-// Entry point of the `demi-secret-sync-<env>` Function app. Separate app, separate package: it
-// deploys on its own and must not carry the API's routes, timers or queue workers.
-//
-// Azure Monitor has to start before anything else is required — the distro instruments modules by
-// hooking `require`, so winston loaded first would report nothing. Same guard and same reason as
-// api/index.js; the two cannot share a module because each app's entry file is the only place that
-// runs before its own requires.
+// Azure Monitor starts before any other require: the distro hooks `require`, so winston loaded
+// first reports nothing. Duplicated from api/index.js because only an entry file runs first.
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
   const { useAzureMonitor } = require('@azure/monitor-opentelemetry');
   useAzureMonitor({
@@ -58,14 +53,8 @@ async function runSync(reason) {
 }
 
 /**
- * A new version of a mapped secret. The subject of a Key Vault event is the secret name.
- *
- * An event for a name this repo does not map is ignored rather than failed: the vault also holds
- * the app settings the API resolves by reference, and those rotate on their own schedule.
- *
- * A mapped name reconciles EVERYTHING rather than just that secret. A run over unchanged secrets
- * is one GET each and no write, and doing the whole set means a version created while a run was in
- * flight is still picked up by the next event.
+ * Unmapped names are ignored: the vault also holds API app settings. A mapped name reconciles the
+ * whole set, so a version created during a run is picked up by the next event.
  */
 async function onVaultEvent(event) {
   const name = (event && event.subject) || '';

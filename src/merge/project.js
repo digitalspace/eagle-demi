@@ -451,10 +451,8 @@ function applyTrackPrecedence(merged, track, eagle) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
- * @param {Array}       [opts.works]   this project's stored Track works (seed/sources.js); absent when
- *                                     not fetched, which also leaves `legislationTransitions` out
- * @param {Array}       [opts.worksForDerive] the works list in the public shape; wins over `works`
- *                                     for `legislationTransitions`
+ * @param {Array}       [opts.works]   stored Track works; absent leaves `legislationTransitions` out
+ * @param {Array}       [opts.worksForDerive] public-shape works; beat `works` for transitions
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {

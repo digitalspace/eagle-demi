@@ -5,25 +5,8 @@ const { canWrite, canAdmin, projectScopeFor } = require('../helpers/access-sql')
 const { isRegistryIdentity } = require('../helpers/auth');
 const { logger } = require('../utils/logger');
 
-/**
- * Two gates, both layered ON TOP of authMiddleware — never instead of it.
- *
- * authMiddleware answers "is this caller privileged?", which was once the only question asked, so
- * every mutating route was reachable by anything that could read privileged data. That made a
- * read-only consumer impossible to express: any credential good enough to list projects was also
- * good enough to delete them.
- *
- * `requireWrite` guards APPLICATION DATA — projects, documents, chunks, boundaries, the Eagle
- * mirror. `requireAdmin` guards the SERVICE ITSELF — `/admin/*`, where keys are minted and
- * operator syncs are run. The split is what lets `demi-service-write` exist: eagle-api's push
- * writes the mirror without being able to mint itself a wider credential.
- *
- * Neither refuses anything that was accepted before them: `requireWrite` permits ADMIN_ROLES plus
- * the service writer, `requireAdmin` permits exactly ADMIN_ROLES.
- *
- * Order matters: mount as `authMiddleware, requireWrite` — these read `req.user`, which
- * authMiddleware populates. On their own they would 403 every request.
- */
+// Mount after authMiddleware, which sets req.user; alone these refuse every request. requireWrite
+// guards app data, requireAdmin guards /admin/*, so demi-service-write can write but not mint keys.
 function requireWrite(req, res, next) {
   const roles = (req.user && req.user.realm_access && req.user.realm_access.roles) || [];
 
@@ -44,12 +27,8 @@ function requireAdmin(req, res, next) {
   return next();
 }
 
-/**
- * Named realm roles, for a gate narrower than either set above: classifying fields, releasing a
- * sealed record, a ported eagle-api route's `x-security-scopes`. Any one listed role admits.
- * Mounted behind `authMiddleware` like the other two. The list is on the guard as `roles`, so a
- * test can compare a route's guard with the scopes it was ported from.
- */
+// Any one listed role admits. The list sits on the guard as `roles` so a test can compare it with
+// the eagle-api `x-security-scopes` the route was ported from.
 function requireRole(...names) {
   if (names.length === 0) throw new TypeError('requireRole needs at least one role name');
   const refusal = names.length === 1
@@ -69,23 +48,8 @@ function requireRole(...names) {
   return guard;
 }
 
-/**
- * The Eagle mirror, PUT /eagle/*. Mounted after `requireWrite`, and narrower than any role: the
- * handlers write through `systemAccess()` into every project, and eagle-api is the only party
- * whose records they hold. `demi-service-write` alone is not enough, because the extractor key
- * holds it and a sysadmin can mint more keys with it. So the caller must be a registry principal
- * named in `config.eagleMirrorPrincipals`, hold `demi-service-write`, and carry no project scope,
- * since a scoped key would still write any project here.
- *
- * The principal is the registry row id helpers/auth.js `identityFor` puts in `keyId`:
- * `apim:<name>` for a caller APIM proved, the hex id for a presented key. It counts only on an
- * identity `identityFor` marked, because a Keycloak token's claims become `req.user` as they are
- * and a token could carry a `keyId` claim. Break-glass has no `keyId`, so it never passes.
- */
-/**
- * A guard that admits only the registry principals `principalsOf()` names, holding
- * `demi-service-write`, with no project scope. `label` names the route family in the refusal.
- */
+// These routes write every project via systemAccess(), so a role or a scoped key is too wide.
+// keyId counts only on an identity identityFor marked: a Keycloak token could carry that claim.
 function namedWriter(principalsOf, label) {
   return function (req, res, next) {
     const user = req.user || {};
@@ -112,17 +76,11 @@ function namedWriter(principalsOf, label) {
 
 const requireEagleMirror = namedWriter(() => config.eagleMirrorPrincipals, 'Eagle mirror');
 
-/** The ENGAGE ingest, PUT /engage/*. Same terms as the Eagle mirror, its own list (`config.engagePrincipals`). */
 const requireEngageWriter = namedWriter(() => config.engagePrincipals, 'ENGAGE');
 
-/** The Track push, /track/projects and its works, phases and events. Same terms, its own list (`config.trackPrincipals`). */
 const requireTrackWriter = namedWriter(() => config.trackPrincipals, 'Track');
 
-/**
- * The PDF title worker, /documents/pdf-title/* and /documents/:id/pdf-title*. Those routes read
- * every row unfiltered and hand out links that read and write stored originals, so a scoped key or
- * a staff login must not reach them. Principals come from `config.pdfTitleWorkerPrincipals`.
- */
+// PDF title routes read every row unfiltered and hand out links that write stored originals.
 const requirePdfTitleWorker = namedWriter(() => config.pdfTitleWorkerPrincipals, 'PDF title worker');
 
 module.exports = { requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requireTrackWriter, requirePdfTitleWorker };

@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * The parent rule — `helpers/parent-admit`.
- *
- * Every mirror asks the same question: which DEMI row owns the child Eagle hangs off a `project`
- * reference. The answer decides the partition the child is written to AND the ACL it is narrowed
- * against, so getting it wrong is silent — the push still answers 200.
- *
- * The case pinned hardest is the collision: a Track project whose `epic_guid` is a
- * `ProjectNotification` id, which puts that id in the project row's `eagleId` and makes
- * `projects.getByEagleId` answer for a ref that names the notification. Project-first filed those
- * children under the Track project and its level-2 ACL.
+ * A wrong parent is silent (the push still answers 200) but sets the child's partition and ACL.
+ * Pinned hardest: a Track project whose `epic_guid` is a `ProjectNotification` id.
  */
 
 process.env.NODE_ENV = 'test';
@@ -25,7 +17,7 @@ const {
   admitParent, pickParent, refusalCode, MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 } = require('../../src/helpers/parent-admit');
 
-// Track 353's epic_guid on test, 2026-09-08: a ProjectNotification _id in a project's guid field.
+// Track 353's epic_guid on test: a ProjectNotification _id in a project's guid field.
 const SHADOWED_NOTIFICATION_ID = '5f04b1f83a147c00223ce1b3';
 const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 // Spelled out rather than built from readForLevel: an ACL derived from the helper under test would

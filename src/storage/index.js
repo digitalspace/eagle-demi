@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * Object storage — the single entry point every caller uses.
- *
- * Hand out a short-lived download or upload URL, write an upload, copy an original to its backup,
- * stream an object in or out, delete one.
- * Nothing here exposes a bucket, a container, or a client.
- *
- * The backend is chosen by an EXPLICIT `STORAGE_BACKEND` value and an unknown value throws at
- * load. Inferring it from whichever credentials happen to be set is how this repo previously
- * activated the wrong data layer on deploy: `COSMOS_ENDPOINT` was already populated, so a
- * `Boolean(...)` switch silently flipped and every switched route 500'd. A backend switch
- * decides where documents are read from and written to — it must never be a side effect.
+ * Object storage, the single entry point every caller uses; no bucket, container or client leaks.
+ * The backend comes from an explicit `STORAGE_BACKEND`, never inferred from which credentials exist.
  */
 
 const { Readable } = require('stream');
@@ -44,10 +35,7 @@ if (!BACKENDS[backendName]) {
 const backend = BACKENDS[backendName]();
 
 /**
- * A short-lived, read-only URL for downloading an object directly.
- *
- * Read-only and time-limited in both backends: a download link that could write or delete would
- * turn a leaked URL into document loss.
+ * A short-lived, read-only download URL, so a leaked link cannot write or delete.
  *
  * @param {string} key
  * @param {object} [opts]
@@ -78,10 +66,8 @@ function backupKeyFor(key) {
 }
 
 /**
- * A short-lived URL that can write one exact object, for a worker that holds no storage credential.
- *
- * Never for a key under `zips/` or `pdf-title-backup/`. `contentMd5` is signed on MinIO, so the
- * store rejects a body with another digest; Content-Type cannot be bound by either backend.
+ * A short-lived URL that writes one exact object, never under `zips/` or `pdf-title-backup/`.
+ * MinIO signs `contentMd5`; neither backend can bind Content-Type.
  *
  * @param {string} key  the recorded key, before any environment prefix
  * @param {object} [opts]
@@ -106,16 +92,13 @@ async function getUploadUrl(key, { expirySeconds = MAX_UPLOAD_EXPIRY_SECONDS, co
 }
 
 /**
- * Server-side copy between an original and its backup, only if the source still has `ifSourceEtag`.
- *
- * Two pairings only: backup (`dest === backupKeyFor(src)`, refused when that backup exists, so a
- * later run never overwrites the first, untouched copy) and restore (`src === backupKeyFor(dest)`).
+ * Server-side copy, original to backup or back, if the source still has `ifSourceEtag`. An existing
+ * backup is never overwritten.
  *
  * @param {string} src
  * @param {string} dest
  * @param {{ifSourceEtag: string}} opts  etag from statObject(src)
- * @returns {Promise<{etag: string|null, versionId: string|null}>} the written object's etag and
- *   version; versionId is null when the store keeps no versions
+ * @returns {Promise<{etag: string|null, versionId: string|null}>} versionId null when unversioned
  */
 async function copyObject(src, dest, { ifSourceEtag } = {}) {
   const fields = { src: String(src), dest: String(dest) };
@@ -134,11 +117,9 @@ async function copyObject(src, dest, { ifSourceEtag } = {}) {
 
 /**
  * Size, type and etag of a stored object, without reading it.
- *
  * @param {string} key
- * @returns {Promise<{size: number, contentType: string|null, etag: string|null,
- *   versionId: string|null, lastModified: Date|null}|null>} null when the object is absent. The
- *   etag is opaque: pass it back to copyObject on the same backend.
+ * @returns {Promise<{size: number, contentType: string|null, etag: string|null, versionId: string|null, lastModified: Date|null}|null>}
+ *   null when absent; the etag is opaque, pass it back to copyObject on the same backend
  */
 function statObject(key) {
   return backend.statObject(key);
@@ -161,9 +142,7 @@ function checkRange(op, offset, length, fields) {
 
 /**
  * `length` bytes of one original or its backup from `offset`, optionally pinned to one version.
- *
- * Shorter than `length` only when the object ends first. More bytes than asked (a store that
- * ignored the range) is refused, since they would not start at `offset`.
+ * More bytes than asked means the store ignored the range, so it is refused.
  *
  * @param {string} key
  * @param {number} offset  0 or more
@@ -204,22 +183,15 @@ async function openRange(op, key, offset, length, { versionId, ifMatch }, fields
 
 /**
  * Store a local file under `key`.
- *
- * @returns {Promise<string>} the key as actually stored, which may differ from the input — the
- *   MinIO backend prepends an environment prefix. Callers that record the key must use the
- *   value they passed in, not this one, so the record stays environment-independent.
+ * @returns {Promise<string>} the stored key, which MinIO prefixes; callers record the key they passed
  */
 function putFile(key, filePath, contentType) {
   return backend.putFile(key, filePath, contentType);
 }
 
 /**
- * Read an object as a stream, for bytes too large to buffer.
- *
- * With no options, the whole current object of any key, as before. Any option limits the key to
- * an original or its backup, as readRange does. `offset` and `length` go together and have no
- * size cap; the stream errors if the store sends more than `length` bytes. `ifMatch` (ranged only)
- * makes the store refuse the read with a 412 unless the object still has that etag.
+ * Read an object as a stream. Any option limits the key to an original or its backup; a range has
+ * no size cap, and `ifMatch` (ranged only) gets a 412 unless the etag still matches.
  *
  * @param {string} key
  * @param {{offset?: number, length?: number, versionId?: string|null, ifMatch?: string}} [opts]
@@ -241,20 +213,16 @@ async function getObjectStream(key, { offset, length, versionId, ifMatch } = {})
 }
 
 /**
- * Write a stream of UNKNOWN length under `key` — the backend multiparts it.
- *
- * @returns {Promise<string>} the key as actually stored; see putFile on why callers record the
- *   value they passed in instead.
+ * Write a stream of unknown length under `key`; the backend multiparts it.
+ * @returns {Promise<string>} the stored key; see putFile
  */
 function putObjectStream(key, stream, contentType) {
   return backend.putObjectStream(key, stream, contentType);
 }
 
 /**
- * Delete an object. Absent is not an error, in both backends.
- *
- * `versionId` deletes that one version, and only of a backup: in a versioned bucket a plain delete
- * keeps the bytes behind a delete marker, but a version of an original is its history.
+ * Delete an object; absent is not an error. `versionId` deletes one version, of a backup only,
+ * since a version of an original is its history.
  *
  * @param {string} key
  * @param {{versionId?: string|null}} [opts]

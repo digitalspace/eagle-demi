@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * In-memory stand-ins for the intake's three dependencies: the documents store, the intake
- * account's containers, and the object store. They keep state, so tests assert where bytes and
- * rows ended up rather than which calls were made.
+ * Stateful in-memory stand-ins, so tests assert where bytes and rows ended up rather than which
+ * calls were made.
  */
 
 const { Readable } = require('node:stream');

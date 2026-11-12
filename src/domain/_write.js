@@ -8,20 +8,16 @@ const { nextSyncVersion } = require('../sync-out/kinds');
 const syncOut = require('../sync-out');
 
 /**
- * The one write path for domain modules: etag-guarded, rebuilt from the stored row on every lost
- * race, and audited once when it lands. Every write raises `syncVersion`, so sync-out sends the row again.
- *
+ * The one write path for domain modules: etag-guarded, rebuilt on a lost race, audited once.
+ * Every write raises `syncVersion`, so sync-out sends the row again.
  * @param {object} options
  * @param {{req: object}} options.ctx `req` supplies the audit identity
  * @param {{upsert: (row: object, current: object|null) => Promise<object>}} options.repo
  * @param {object|null} options.existing the row the domain loaded, `null` for a create
  * @param {() => Promise<object|null>} options.reread the stored row again after a lost race
- * @param {(current: object|null) => object|null} options.build the row to store; `null` = the row
- *   is gone
- * @param {(saved: object, from: object|null) => object} options.audit the audit event for this
- *   write; `from` is the row it replaced
- * @returns {Promise<{status: 'ok', value: object, created: boolean} | {status: 'not-found'} |
- *   {status: 'busy'}>}
+ * @param {(current: object|null) => object|null} options.build the row to store; `null` = gone
+ * @param {(saved: object, from: object|null) => object} options.audit audit event; `from` = old row
+ * @returns {Promise<{status: 'ok', value: object, created: boolean} | {status: 'not-found'} | {status: 'busy'}>}
  */
 async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
   if (typeof audit !== 'function') throw new TypeError('writeRow needs an audit builder');

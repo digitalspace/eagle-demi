@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The write-body allowlist every domain module checks first.
- *
- * A SCHEMA maps each writable key to a spec: `{ type, required, nullable, ... }`. Types:
- * `string` (`max` length, required on the spec), `boolean`, `enum` (`values`), `isoDate`, `id`,
- * `idArray` (optional `max` items). A key the SCHEMA does not name is a field error, so a body
- * cannot reach a field nobody decided was writable. Every field error comes back in one result.
+ * The write-body allowlist every domain module checks first. A key the SCHEMA does not name is a
+ * field error, and every field error comes back in one result.
  */
 
 // An Eagle ObjectId or a UUID, the two id shapes rows carry.

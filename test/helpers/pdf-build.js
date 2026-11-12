@@ -18,10 +18,8 @@ function fixture(file) {
 }
 
 /**
- * Bytes to append after `prefix`: `bodies` (`[number, body]`) as objects, then one classic xref
- * section listing them and a trailer. `trailer` is a string, or a function of the objects'
- * offsets (a Map) and the section's own offset. `lie: {2: 3}` lists object 2 at object 3's
- * offset, and `free` lists numbers as free entries.
+ * `bodies` as objects, then one classic xref section and a trailer. `lie: {2: 3}` lists object 2
+ * at object 3's offset; `free` lists numbers as free entries.
  */
 function classicTail(prefix, bodies, trailer, { lie = {}, free = [] } = {}) {
   let text = '';

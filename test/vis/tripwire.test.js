@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * The last line of defence, asserted on raw response TEXT rather than a parsed body.
- *
- * Every other test in this area drives a controller and inspects the object it returned. That
- * cannot see a field re-attached by a guard, a serializer, or an error path — and raw documents
- * now flow through error and log paths too (docs/rbac-architecture.md §2 item 1). So this drives
- * the real dispatcher, answers with a row carrying every restricted name at once, and greps the
- * bytes.
+ * Greps raw response text from the real dispatcher, so it catches a restricted field re-attached
+ * by a guard, serializer or error path that object-level tests cannot see.
  */
 
 process.env.NODE_ENV = 'test';

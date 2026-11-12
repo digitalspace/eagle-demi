@@ -1,16 +1,7 @@
 'use strict';
 
-// The route table has to actually COMPILE and route.
-//
-// Every other test in `test/` calls controllers and helpers directly, so none of them loads
-// `src/http/router.js` or exercises the matcher. That gap is why a green suite said nothing when
-// Dependabot proposed express 4.22.2 -> 5.2.1 (PR #35, closed): a route pattern that used to be
-// legal started throwing AT MOUNT TIME, the whole app failed to load, and no handler test noticed.
-// Express is gone, but the shape of the failure is not — src/http/router.js compiles every route
-// regex at module load, so a bad pattern still fails on require rather than on the request.
-//
-// So this asserts what a routing change breaks and a unit test cannot see: requiring the router
-// does not throw, a real request reaches a real handler, and the 404 fallback still runs.
+// The route table compiles at module load and routes: requiring the router does not throw, a real
+// request reaches a real handler, and the 404 fallback runs. No other test loads the router.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -54,13 +45,8 @@ test('the 404 fallback still runs', async () => {
 });
 
 test('the old SPA paths 404 rather than hanging', async () => {
-  // `/map`, `/search` and `/intake` used to `res.sendFile('../public/index.html')`. That file is
-  // untracked, so in Azure it was never there, and the request hung for the platform's full 240 s.
-  //
-  // The timeout is the assertion. A plain status check would pass against the old code on any
-  // machine that happens to have a stale local build in `public/`.
-  //
-  // `/search` is deliberately not in this list: the API owns that path.
+  // The timeout is the assertion: a stale local `public/` build would pass a plain status check.
+  // `/search` is not listed because the API owns that path.
   await withServer(async (call) => {
     for (const p of ['/map', '/intake']) {
       const res = await call(p);
@@ -71,10 +57,8 @@ test('the old SPA paths 404 rather than hanging', async () => {
 });
 
 test('every request is logged', async (t) => {
-  // The per-request access log is the only record of a caller's identity, IP and latency, and it
-  // has been lost once already: it lived in a `res.on('finish')` handler, and the old adapter's
-  // fake `res` never emitted 'finish'. It ran perfectly under `yarn start` and never in Azure.
-  // Asserted on the observable log record rather than on where the call is made from.
+  // The access log is the only record of a caller's identity, IP and latency; asserted on the
+  // log record itself, not on where the call is made.
   const lines = [];
   t.mock.method(logger, 'info', (message, meta) => { lines.push({ message, meta }); });
 
@@ -90,9 +74,8 @@ test('every request is logged', async (t) => {
 });
 
 test('/api-docs serves the spec outside prod', async () => {
-  // ENVIRONMENT is unset here, so config.environmentName is 'dev' and the route is in the table.
-  // The prod half of this gate needs the variable set before src/config.js loads, which is a
-  // different process — test/router.api-docs-prod.test.js.
+  // ENVIRONMENT is unset, so environmentName is 'dev'. The prod half is
+  // test/router.api-docs-prod.test.js.
   assert.notStrictEqual(process.env.ENVIRONMENT, 'prod', 'this test is only meaningful outside prod');
   await withServer(async (call) => {
     const res = await call('/api-docs');
@@ -103,9 +86,7 @@ test('/api-docs serves the spec outside prod', async () => {
 });
 
 test('the continuation token is exposed to cross-origin callers', async () => {
-  // `x-continuation-token` is how a client asks for the next page, and without this header the
-  // browser strips it from the response before the frontend ever sees it — paging stops at page
-  // one with a 200 and nothing to show for it.
+  // Without the expose header the browser hides `x-continuation-token`, and paging stops at page one.
   await withServer(async (call) => {
     const res = await call('/api/config', { headers: { Origin: 'http://localhost:4200' } });
     const exposed = (res.headers.get('access-control-expose-headers') || '')
@@ -116,11 +97,8 @@ test('the continuation token is exposed to cross-origin callers', async () => {
 });
 
 test('an unset CORS_ORIGIN allows no deployed origin', async () => {
-  // The default allowlist used to name the three demi-frontend App Services. Those are gone: the
-  // frontend is a Storage static website behind Front Door, and an AFD endpoint hostname carries a
-  // hash assigned at deploy time, so it can only arrive via CORS_ORIGIN. That makes the fallback
-  // fail CLOSED, and this pins it — the failure mode being guarded against is a future edit
-  // "restoring" a wildcard or a guessed hostname, which no other test would notice.
+  // The fallback fails closed: the AFD hostname carries a deploy-time hash, so it only arrives via
+  // CORS_ORIGIN. Guards against an edit adding a wildcard or a guessed hostname.
   assert.strictEqual(process.env.CORS_ORIGIN, undefined, 'this test is only meaningful unset');
   await withServer(async (call) => {
     const denied = await call('/api/config', { headers: { Origin: 'https://evil.example' } });

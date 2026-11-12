@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for the `lists` container — Eagle `List` and `Organization` rows, told
- * apart by `kind`. See catalog/projects.js for the rules.
- *
- * ONE catalog for both kinds, because one container has one entity name and `catalogFor` is keyed
- * on it. That is safe only while every field of both kinds carries the same policy, which it does:
- * a List row is a lookup label, and an Organization is its published business card plus staff-side
- * fields at 2/2 that a List row never carries. Add a second container before adding a field whose
- * two kinds would disagree.
+ * One catalog for both `List` and `Organization` rows, since `catalogFor` keys on the container.
+ * Safe only while both kinds agree on every field; split the container before they differ.
  */
 module.exports = {
   // Structural / identity.

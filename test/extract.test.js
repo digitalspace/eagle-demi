@@ -9,11 +9,7 @@ const { PDFDocument } = require('pdf-lib');
 const { splitAndExtract, BATCH_PAGES } = require('../src/extract');
 
 /**
- * The batching exists to bound peak memory: docling-serve is sent BATCH_PAGES pages at a time
- * rather than a whole document, because a 5,000-page PDF as one request is what OOM-killed the
- * extraction worker. Nothing asserted any of it until now — the file had no test at all while it
- * was a Mongo-driven script, and the driver was the only reason it looked untestable.
- *
+ * A 5,000-page PDF sent as one request OOM-killed the extraction worker, hence the batching.
  * `extract` is injected, so these run with no docling-serve and no network.
  */
 
@@ -59,9 +55,8 @@ test('splitAndExtract', async (t) => {
   });
 
   await t.test('every page is covered exactly once, with no gap at the tail', async () => {
-    // The last batch is short (25 = 10 + 10 + 5). An off-by-one here silently drops the tail of
-    // every long document, which reads downstream as "the text just is not in this PDF".
-    // Assert on the ACTUAL page count of each buffer sent, not on the filenames.
+    // The last batch is short (25 = 10 + 10 + 5); an off-by-one drops the tail silently.
+    // Assert on the page count of each buffer sent, not on the filenames.
     const calls = [];
     const extract = async (buffer, filename) => {
       const doc = await PDFDocument.load(buffer);

@@ -3,21 +3,8 @@
 const crypto = require('crypto');
 
 /**
- * Registry API keys — minting, parsing and constant-time verification.
- *
- * Format: `demi_<env>_<keyId>_<secret>`
- *
- * The keyId is PUBLIC and carried in the key itself on purpose. Without it, verifying a presented
- * key would mean scanning every stored key and comparing each hash; with it, verification is a
- * single-partition point read on the `apikeys` container. It also means a leaked key can be traced
- * back to its consumer from a log line without the secret ever being logged.
- *
- * Hashing is SHA-256, NOT bcrypt/argon2, and that is deliberate. Password KDFs exist to make
- * guessing a low-entropy human secret expensive. These secrets are 32 bytes of CSPRNG output —
- * there is nothing to guess, so a KDF would only add latency to every authenticated request. What
- * does matter is that the compare is constant-time, which is what `verify` below is for.
- *
- * Nothing here touches storage; see repositories/api-keys.js.
+ * Registry API keys `demi_<env>_<keyId>_<secret>`. The keyId is public so verify is one point read on `apikeys`.
+ * SHA-256, not a password KDF: the secret is 32 random bytes with nothing to guess; the compare is constant-time.
  */
 
 const PREFIX = 'demi';
@@ -53,12 +40,8 @@ function generateKey(env = 'dev') {
 }
 
 /**
- * Split a presented key. Returns null for anything that is not one of ours, which is how the
- * auth path decides whether to consult the registry at all.
- *
- * The secret is base64url, whose alphabet INCLUDES `_`, so the secret routinely contains
- * underscores and a fixed 4-part split rejects perfectly valid keys at random. Only the first
- * three separators are structural; everything after them is the secret.
+ * Null for anything not ours, so auth skips the registry. The base64url secret can contain `_`, so
+ * only the first three separators are structural.
  */
 function parseKey(presented) {
   if (typeof presented !== 'string') return null;
@@ -74,10 +57,8 @@ function parseKey(presented) {
 }
 
 /**
- * Constant-time verification of a presented secret against a stored record.
- *
- * Checks the digest first and the lifecycle after, and returns a single boolean, so a caller
- * cannot distinguish "wrong secret" from "revoked key" by timing or by message.
+ * Digest first, lifecycle after, one boolean: "wrong secret" and "revoked key" look the same by
+ * timing and by message.
  *
  * @param {object} record   the stored registry item
  * @param {string} secret   the secret half of the presented key

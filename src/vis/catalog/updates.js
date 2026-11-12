@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a mirrored Update (Eagle `RecentActivity`). See catalog/projects.js
- * for the rules.
- *
- * Everything eagle-public renders on the home strip and the news page is 4/4 — an update is a
- * published announcement. The container has existed since the Eagle mirror shipped; it had no
- * catalog because it had no read route, and `catalogFor` throws rather than defaulting, so the
- * `/search?dataset=RecentActivity` branch could not redact a row without this file.
+ * Field visibility for a mirrored Update (Eagle `RecentActivity`). Fields eagle-public renders on
+ * the home strip and news page are 4/4: an update is a published announcement.
  */
 module.exports = {
   // Structural / identity.
@@ -35,7 +30,7 @@ module.exports = {
   documentUrl: { defaultVis: 4, maxVis: 4 },
   pcp: { defaultVis: 4, maxVis: 4 },
   projectNotification: { defaultVis: 4, maxVis: 4 },
-  // The Updates fields (PUBLIC-159). A public caller only ever reads a published, due row, so
+  // The Updates fields. A public caller only ever reads a published, due row, so
   // `status` and `publishDate` say nothing a public page does not already show.
   category: { defaultVis: 4, maxVis: 4 },
   subject: { defaultVis: 4, maxVis: 4 },

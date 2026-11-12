@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Re-derive a container's ACLs from its parent's, in one bulk patch.
- *
- * The `commentPeriods` and `comments` halves of the public-read cascade differ only in which
- * partition they read, so the rule itself lives here once. Documents keep their own copy in
- * `repositories/documents`: they carry an `ownRead` snapshot, which these two do not need — the
- * Eagle push is the only writer of either container and it stores the raw upstream
- * record, so `sources.eagle.read` is always the row's own unconstrained ACL.
+ * Public-read cascade shared by `commentPeriods` and `comments`. Documents keep their own copy in
+ * `repositories/documents` because they need an `ownRead` snapshot; these two do not.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -22,9 +17,8 @@ const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
  */
 function deriveAcls(rows, parentRead) {
   return rows.map(row => {
-    // The upstream ACL when the raw record still carries one, otherwise what the row holds today.
-    // `eagleBaseAcl` fails closed, so a record with no upstream `read[]` lands at level 2 rather than
-    // inheriting the parent's.
+    // Upstream ACL when the raw record has one, else the row's current ACL. `eagleBaseAcl` fails
+    // closed: no upstream `read[]` lands at level 2, not at the parent's ACL.
     const capped = Array.isArray(row.eagleRead) && row.eagleRead.length > 0
       ? eagleReadUnder(row.eagleRead, parentRead)
       : constrainToProject(Array.isArray(row.read) && row.read.length > 0 ? row.read : eagleBaseAcl(null), parentRead);

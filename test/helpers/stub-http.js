@@ -1,26 +1,17 @@
 'use strict';
 
 /**
- * A real socket, because the thing under test is a shell script holding a real `curl`.
- *
- * The in-process `with-server` helper cannot serve these suites: `scripts/search-schema-probe.sh`
- * and `scripts/search-smoke.sh` are what production CI runs, and their whole job is turning HTTP
- * statuses into exit codes.
+ * A real socket, not the in-process `with-server` helper: the scripts under test turn HTTP
+ * statuses from a real `curl` into exit codes.
  */
 
 const http = require('node:http');
 const { execFile } = require('node:child_process');
 
 /**
- * Start a stub on loopback.
- *
- * `destroy` kills the connection without answering, which is how a caller sees the
- * never-completed request that curl reports as status 000.
- *
- * @param {(req: import('node:http').IncomingMessage, body: string) =>
- *   { status?: number, body?: string, json?: unknown, destroy?: boolean }} respond
- * @returns {Promise<{ url: string, requests: Array<{ method: string, url: string, body: string }>,
- *   close: () => Promise<void> }>}
+ * `destroy` kills the connection without answering: the request curl reports as status 000.
+ * @param {(req: import('node:http').IncomingMessage, body: string) => { status?: number, body?: string, json?: unknown, destroy?: boolean }} respond
+ * @returns {Promise<{ url: string, requests: Array<{ method: string, url: string, body: string }>, close: () => Promise<void> }>}
  */
 async function startStub(respond) {
   const requests = [];
@@ -49,12 +40,8 @@ async function startStub(respond) {
 }
 
 /**
- * Run a script and resolve with its exit code and output.
- *
- * ASYNC ON PURPOSE. `spawnSync` blocks the event loop, so the stub above — same process — never
- * answers, and every request sits until curl's own timeout. The suite deadlocks rather than fails,
- * which is worse than either.
- *
+ * Async on purpose: `spawnSync` blocks the event loop, so the stub above never answers and the
+ * suite hangs until curl's own timeout.
  * @param {string} file
  * @param {string[]} args
  * @param {{ cwd?: string, env?: Record<string, string> }} [opts]

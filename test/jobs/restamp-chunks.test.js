@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * The chunk re-stamp queue, both ends.
- *
- * The producer runs on a request that must not wait for the walk, and the handler runs on a
- * message that may be delivered more than once — so the assertions worth making are about what
- * the body carries (ids, never values) and about what the handler does when the patch does not
- * fully land. A swallowed failure here is a document whose chunks answer the old type filter for
- * the life of the chunk, with nothing on the wire to say so.
+ * A message may arrive more than once, so the body carries ids, never values. A swallowed failure
+ * leaves chunks answering the old type filter with nothing on the wire to say so.
  */
 
 process.env.NODE_ENV = 'test';
@@ -40,11 +35,8 @@ function withQueueName(t, name) {
 }
 
 /**
- * A fresh copy of the module with the Azure queue SDK replaced by a recorder.
- *
- * Re-required rather than mocked in place because the QueueClient is memoised per queue in
- * `src/jobs/queue-client.js` at first send — a stub installed after that is never reached, and the
- * memo is why that module has to be dropped from the cache along with the SDK.
+ * Re-required, not mocked in place: `src/jobs/queue-client.js` memoises the QueueClient at first
+ * send, so it leaves the cache along with the SDK or a later stub is never reached.
  */
 function loadWithQueueStub(t, { send } = {}) {
   const MODULE = require.resolve('../../src/jobs/restamp-chunks');
@@ -158,9 +150,8 @@ test('the handler stamps the document as it reads it now, not as the message lef
 });
 
 test('the walk is guarded on the token the flag was raised with', async (t) => {
-  // Without the guard the walk writes the values it read over whatever a chunk holds, so a message
-  // that waited behind a retry puts a superseded type back onto chunks a newer walk — or the
-  // ingest that wrote them — had already made current.
+  // Unguarded, a message that waited behind a retry puts a superseded type back onto chunks a
+  // newer walk or ingest had already made current.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument({ parentFieldsPendingAt: TOKEN }));
@@ -177,9 +168,8 @@ test('the walk is guarded on the token the flag was raised with', async (t) => {
 });
 
 test('a row carrying no token is walked at the instant it was delivered', async (t) => {
-  // Rows flagged before the token existed, and the `--live` repairs that send no flag at all. The
-  // walk still has to say how new its values are, or every chunk it writes is overwritable by an
-  // older walk that has not finished yet.
+  // Rows with no token, and `--live` repairs, still need a stamp time, or an older walk still
+  // running can overwrite every chunk this one writes.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument());
@@ -199,9 +189,8 @@ test('a row carrying no token is walked at the instant it was delivered', async 
 });
 
 test('chunks a newer walk already stamped are reported, not counted as losses', async (t) => {
-  // A 412 here means the chunk is NEWER than this walk, which is the guard working. Treating it as
-  // a failed write would throw, retry the same walk three times and then poison a message that had
-  // nothing to do.
+  // A 412 means the chunk is newer than this walk: the guard working. As a failure it would
+  // retry three times and then poison a message that had nothing to do.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument({ parentFieldsPendingAt: TOKEN }));
@@ -225,9 +214,8 @@ test('chunks a newer walk already stamped are reported, not counted as losses', 
 });
 
 test('a landed patch clears the pending flag the write left behind', async (t) => {
-  // The other half of the flag the document controller sets: without this the flag is written once
-  // and never cleared, `--pending` re-stamps the same documents every run, and the reconcile line
-  // the drift alert reads never returns to zero.
+  // Uncleared, `--pending` re-stamps the same documents every run and the reconcile line the drift
+  // alert reads never returns to zero.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument({ parentFieldsPendingAt: TOKEN }));
@@ -247,10 +235,8 @@ test('a landed patch clears the pending flag the write left behind', async (t) =
 });
 
 test('an unrelated write during the walk does not refuse the clear', async (t) => {
-  // THE FLAG THAT STUCK. The clear used to carry the row's `_etag`, so any write landing during the
-  // walk — `patchExtraction` recording an ingest, a display-name push — answered 412 and left the
-  // flag up for a document whose chunks were already correct. Only an operator running
-  // `--pending` took it back down. The token is not moved by those writes.
+  // An etag guard would refuse the clear on any write during the walk (`patchExtraction`, a
+  // display-name push); the token is not moved by those writes.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () =>
@@ -297,10 +283,8 @@ test('the empty-string partition survives the message and reaches the patch', as
 });
 
 test('a flag raised after the handler read the document is left raised', async (t) => {
-  // The losing sequence: this handler reads the row, a newer parent-field write lands and raises
-  // the flag again with a token of its own, and an unconditional clear here wipes a flag that
-  // stands for chunks this run never saw. The reconcile counts the flag, so clearing it is the
-  // last signal that the newer write's chunks are stale.
+  // A newer parent-field write raised the flag again after this read; clearing it would erase the
+  // reconcile's only signal that the newer write's chunks are stale.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument({ parentFieldsPendingAt: TOKEN }));
@@ -326,8 +310,8 @@ test('a flag raised after the handler read the document is left raised', async (
 });
 
 test('a row that vanished before the clear completes the message', async (t) => {
-  // `missing` is not a failure to retry: the row is gone and its chunks went with it. Throwing
-  // here would spend the message's attempts and poison it over a document that no longer exists.
+  // `missing` is not a failure to retry: the row is gone and its chunks went with it, so throwing
+  // would poison the message over a deleted document.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(documents, 'getById', async () => storedDocument({ parentFieldsPendingAt: TOKEN }));
@@ -435,9 +419,7 @@ test('a partly failed patch throws, so the queue redelivers it', async (t) => {
   t.mock.method(chunks, 'setParentFieldsForDocument', async () =>
     patchResult({ succeeded: 17, failed: 2 }));
 
-  // Inline this was swallowed, because the document write had already answered 200 and a 500 would
-  // have failed a request that succeeded. Off the request there is nothing left to fail, and the
-  // ids-only body makes the redelivery safe.
+  // Off the request there is no response left to fail, and the ids-only body makes redelivery safe.
   await assert.rejects(restamp.run(JSON.stringify({ documentId: DOC_ID, projectId: PROJECT_ID })),
     /failed for 2 of 19 chunks/);
 });
@@ -469,12 +451,8 @@ test('a body the handler cannot read is poisoned, not dropped', async (t) => {
 });
 
 /**
- * The three partition shapes a body can carry, and the one that means "unknown".
- *
- * `''` and JSON `null` are both real Cosmos partitions — null goes on the wire as `[null]`, and an
- * ABSENT property is a different partition again (PartitionKey.None, `[{}]`). Only an absent key
- * means the partition is unknown, and only that may cost the cross-partition drain. `??` folded null
- * into undefined, so every re-stamp of a null-partition document paid for a scan.
+ * `''`, `null` (`[null]`) and an absent property (PartitionKey.None, `[{}]`) are three partitions.
+ * Only an absent key in the body means "unknown" and may cost a cross-partition drain.
  */
 test('parseMessage keeps null distinct from absent', async (t) => {
   const parse = (body) => restamp.parseMessage(body);
@@ -607,10 +585,8 @@ test('the last attempt logs the line the alert matches and throws so the message
 
 test('a redelivery of the spent message poisons it without re-running or alerting again',
   async (t) => {
-    // The queue is what poisons a message, and only after `maxDequeueCount` deliveries of it — so
-    // the message that ran out of attempts is handed back twice more. Walking the chunks again
-    // would spend the same minutes on a job already declared dead, and would fire
-    // demi-chunk-restamp-failed-<env> three times, an hour apart, for one document.
+    // Only the queue poisons, after `maxDequeueCount` deliveries, so a spent message comes back
+    // twice more; re-walking would also fire demi-chunk-restamp-failed-<env> again each time.
     t.afterEach(() => t.mock.restoreAll());
     withQueueName(t, 'chunk-restamp');
     process.env.AzureWebJobsStorage__accountName = 'demifcstore';

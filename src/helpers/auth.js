@@ -10,12 +10,8 @@ const { parseKey, verify, isLive, isStorableId } = require('./api-key');
 const { acceptedValues } = require('../utils/rotating-secret');
 
 /**
- * Verified registry lookups, cached to keep a Cosmos point read off the hot path.
- *
- * The full record is cached, INCLUDING its digest, so `verify` still runs on every request — a
- * cached entry never means a presented secret goes unchecked. Revocation on this instance is
- * immediate via `forgetCachedKey`; on any other instance it takes up to TTL. That bound is the
- * price of the cache and is written into the runbook rather than left to be discovered.
+ * The cached record keeps its digest, so `verify` still runs on every request. A revoke is instant
+ * on this instance via `forgetCachedKey`, up to the TTL on others.
  */
 const KEY_CACHE_TTL_MS = 60_000;
 const KEY_CACHE_MAX = 10_000;
@@ -43,11 +39,8 @@ async function loadKeyRecord(keyId, now = Date.now()) {
 }
 
 /**
- * Resolve a registry key to an identity, or null.
- *
- * Returns the same shape the Keycloak path produces, so everything downstream — rolesFor,
- * resolveAccess, the SQL and OData predicates — is untouched by the existence of API keys.
- * `projectScope` rides along because `access-sql.projectScopeFor` already honours it.
+ * Same identity shape as the Keycloak path, so rolesFor, resolveAccess and the predicates need no
+ * key-specific code. `access-sql.projectScopeFor` honours `projectScope`.
  */
 async function resolveRegistryKey(parsed) {
   // Keys carry the environment that minted them; any other one cannot exist here, so skip the read.
@@ -57,10 +50,8 @@ async function resolveRegistryKey(parsed) {
 
   if (!verify(record, parsed.secret)) return null;
 
-  // Fire-and-forget: a bookkeeping write must never fail an authenticated request. Only on a cache
-  // miss, so a busy consumer costs one Cosmos write per TTL rather than one per request — this path
-  // runs on public passiveAuth reads too, and lastUsedAt at minute resolution is all anyone wants
-  // from it.
+  // Fire-and-forget so bookkeeping never fails a request; cache misses only, so one Cosmos write
+  // per key per TTL even on public passiveAuth reads.
   if (fresh) apiKeys.touchLastUsed(record.id);
 
   return identityFor(record);
@@ -87,12 +78,8 @@ function isRegistryIdentity(user) {
 }
 
 /**
- * Is this request provably from our APIM gateway?
- *
- * The Function App host stays publicly reachable — Consumption APIM has no VNet — so both gateway
- * headers are attacker input until the shared secret matches. Unset secret disables the path, which
- * is the local and pre-APIM default — and an unresolved Key Vault reference counts as unset, since
- * the literal is public in this repo.
+ * The Function host is public (Consumption APIM has no VNet), so gateway headers are attacker input
+ * until the shared secret matches. Unset or unresolved Key Vault reference disables the path.
  */
 function fromGateway(req) {
   const accepted = acceptedValues('APIM_GATEWAY_SECRET');
@@ -106,11 +93,8 @@ function fromGateway(req) {
 }
 
 /**
- * Resolve an APIM-asserted subscription name to an identity, or null.
- *
- * APIM already verified the subscription key, so there is no secret of ours to check; the registry
- * row exists to carry roles, expiry and revocation. Its id is `apim:<subscription-name>` — a
- * reserved shape no minted key can collide with, so one container and one cache serve both paths.
+ * APIM verified the subscription key; the registry row carries roles, expiry and revocation. Its id
+ * `apim:<name>` cannot collide with a minted key, so one container and cache serve both paths.
  */
 async function resolveGatewaySubscription(name) {
   const id = `apim:${name}`;
@@ -125,11 +109,8 @@ async function resolveGatewaySubscription(name) {
 }
 
 /**
- * Client allowlist for verified Keycloak tokens.
- *
- * Empty means permissive, which is the dev and local case only — `src/config.js` refuses to boot
- * test or prod on an empty list. An unlisted client is rejected outright rather than demoted to
- * the public tier: one behaviour, so no caller is ever half-admitted.
+ * Empty list = permissive, dev and local only (`src/config.js` refuses an empty list on test and
+ * prod). An unlisted client is rejected, not demoted to public, so no caller is half-admitted.
  */
 function isAllowedClient(decoded) {
   const allowed = config.allowedClients;
@@ -214,14 +195,8 @@ function lookupFailed(what, onFailure) {
  * @param {function} onFailure Callback when auth fails: fn(status, error)
  */
 function authenticate(req, onSuccess, onFailure) {
-  // 1. System-to-System API Key Check.
-  // Keys come from configuration ONLY. Never hardcode a literal here — this repo is public,
-  // and any literal in this list is a world-readable unconditional sysadmin credential.
-  //
-  // ADMIN_API_KEY only. `DOCLING_API_KEY` used to be in this list, which made the secret DEMI
-  // sends OUTBOUND to docling (as an X-Api-Key header) simultaneously an INBOUND credential
-  // granting sysadmin. A logged request header or a compromised extraction host was therefore
-  // full admin. An outbound secret must never be an inbound one.
+  // Keys from config only; the repo is public. Never accept `DOCLING_API_KEY` here: an outbound
+  // secret must never be an inbound credential.
   const apiKey = req.header('X-Api-Key');
 
   // APIM edge. A presented X-Api-Key still wins, so the dual-accept window — machine callers on
@@ -241,12 +216,8 @@ function authenticate(req, onSuccess, onFailure) {
     return;
   }
 
-  // Break-glass FIRST: one shared secret, full privileges, no identity. It exists so the first
-  // registry key can be minted and so there is a way in if the registry is unreachable — which is
-  // exactly why it cannot be shadowed. Checked before the registry branch because an ADMIN_API_KEY
-  // that happens to be shaped like `demi_<env>_<id>_<secret>` would otherwise parse as a registry
-  // key, take that branch, miss in Cosmos and 401 — permanently disabling the one credential whose
-  // whole purpose is working when nothing else does. It costs one timingSafeEqual, no Cosmos read.
+  // Break-glass before the registry: an ADMIN_API_KEY shaped like a registry key would otherwise
+  // miss in Cosmos and 401, locking out the one way in when the registry is down.
   if (isBreakGlassKey(apiKey)) {
     logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
     // No `compliance`: one shared secret must not open the sealed compartment
@@ -257,9 +228,7 @@ function authenticate(req, onSuccess, onFailure) {
     });
   }
 
-  // Registry key: the normal case, and the only path that yields a per-consumer identity with its
-  // own roles, expiry and revocation.
-  // Async, so it owns the outcome of this call from here — never fall through after this branch.
+  // Registry key, async: it owns the outcome from here, so never fall through after this branch.
   const parsed = apiKey ? parseKey(apiKey) : null;
   if (parsed) {
     resolveRegistryKey(parsed)
@@ -321,15 +290,8 @@ function authenticate(req, onSuccess, onFailure) {
         return onFailure(401, 'Unauthorized. JWT verification failed.');
       }
 
-      // AUTHENTICATION ONLY. A verified token is a verified token — whether its bearer may reach
-      // a given route is the route's decision, and it is made in `middleware/auth.js`.
-      //
-      // This function used to reject any token without sysadmin/staff/demi-admin. That is correct
-      // for admin routes and wrong for the other caller: `middleware/passiveAuth.js` caught the
-      // 403, logged "continuing as anonymous", and left `req.user` unset. So a valid Keycloak user
-      // carrying `project:207` or any other role type was indistinguishable from a logged-out
-      // visitor, `resolveAccess()` never returned TIER.SCOPED, and `projectScopeFor()` could never
-      // fire — it reads roles off a `req.user` the 403 had already prevented from existing.
+      // Authentication only; route access is `middleware/auth.js`. A role check here would leave
+      // passiveAuth callers anonymous, so scoped `project:` users never reach TIER.SCOPED.
       const azp = decoded.azp || decoded.client_id;
       if (!isAllowedClient(decoded)) {
         logger.warn(`[demi-api] Client '${azp || 'unknown'}' is not in DEMI_ALLOWED_CLIENTS; refused.`);

@@ -83,7 +83,7 @@ test('isCurrent', async (t) => {
     const renamed = { ...TITLED, displayName: 'Site C Report (amended)' };
     assert.equal(isCurrent(renamed), false);
     assert.equal(isCurrent({ ...renamed, pdfTitle: { ...TITLED.pdfTitle, skippedTitle: 'Site C Report (amended)' } }), true);
-    // Renamed again, the refusal no longer applies.
+    // Renamed again, the refusal stops applying.
     assert.equal(isCurrent({ ...renamed, displayName: 'Site C Report v3', pdfTitle: { ...TITLED.pdfTitle, skippedTitle: 'Site C Report (amended)' } }), false);
   });
 

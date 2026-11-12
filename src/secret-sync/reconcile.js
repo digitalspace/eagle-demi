@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * One reconcile pass: Key Vault is the truth, the OpenShift Secret is the copy.
- *
- * Both triggers (Event Grid on a new secret version, and the daily timer) call this. It is
- * idempotent by design — a run that finds nothing changed writes nothing and restarts nothing, so
- * the daily pass costs one GET per mapped Secret and never rolls a pod on its own.
- *
- * FAIL CLOSED: a mapped vault secret that is missing or empty stops its own Secret from being
- * written, leaving the last good copy in place, and makes the whole run fail so the failure is
- * visible in Application Insights rather than silently skipped. A mapped OpenShift Secret that is
- * not in the namespace counts the same way: this app can replace a Secret, never make one, so the
- * object has to exist before the mapping entry does.
+ * Fail closed: a missing or empty vault secret, or a missing OpenShift Secret, keeps the last good
+ * copy and fails the run so it shows in Application Insights.
  */
 
 const { groupBySecret, tokenSecretName } = require('./mapping');
@@ -20,12 +11,8 @@ const VERSION_ANNOTATION = 'secret-sync/vault-version';
 const UPDATED_ANNOTATION = 'secret-sync/updated-at';
 
 /**
- * Does the live Secret already hold the mapped values?
- *
- * Only the mapped keys of `data` are compared. A key the mapping does not own is none of this
- * sync's business — it is carried through the write untouched, so counting it as drift would write
- * (and roll every consumer) on every run. The annotations this sync stamps are excluded for the
- * same reason: comparing them would make every run differ from itself.
+ * Only mapped keys count: unmapped keys and this sync's own annotations would show drift on every
+ * run and roll every consumer.
  */
 function secretDataChanged(live, desiredData) {
   if (!live || !live.data) return true;
@@ -33,11 +20,8 @@ function secretDataChanged(live, desiredData) {
 }
 
 /**
- * The object to write: the live object with the mapped keys overwritten.
- *
- * A PUT replaces the whole thing, so everything else on the GET body — the other keys, the labels,
- * the Helm release annotations, the type — is carried over. Writing only the mapped keys would
- * delete any key the mapping does not list, and the workloads that bind those keys would not start.
+ * The live object with mapped keys overwritten. PUT replaces the whole Secret, so anything not
+ * carried over is deleted and workloads binding it fail to start.
  */
 function buildSecret({ namespace, name, data, live, versions, timestamp }) {
   const annotations = { ...((live && live.metadata && live.metadata.annotations) || {}) };

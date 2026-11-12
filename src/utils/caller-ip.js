@@ -6,10 +6,8 @@ const config = require('../config');
 const { acceptedValues } = require('./rotating-secret');
 
 /**
- * `1.2.3.4:5678` → `1.2.3.4`, `[2001:db8::1]:8080` → `2001:db8::1`.
- *
- * A bare IPv6 address carries colons of its own, so a port is only stripped from a plain `:digits`
- * tail on something that is not already bracketed.
+ * `1.2.3.4:5678` → `1.2.3.4`, `[2001:db8::1]:8080` → `2001:db8::1`. A bare IPv6 address keeps its
+ * colons: only a bracketed address or one with no other colon loses a `:digits` tail.
  */
 function stripPort(value) {
   return /^\[.*\]:\d+$/.test(value)
@@ -43,10 +41,8 @@ function inCidr(ip, cidr) {
 }
 
 /**
- * An address we can key a quota on, or `''`.
- *
- * `[2001:db8::1]` → `2001:db8::1` and `::ffff:1.2.3.4` → `1.2.3.4`, so the same browser never gets
- * two quota rows depending on which form the hop wrote.
+ * An address to key a quota on, or `''`. Brackets and `::ffff:` are dropped so one browser never
+ * gets two quota rows.
  */
 function normalizeIp(value) {
   const bare = value.replace(/^\[(.*)\]$/, '$1');
@@ -70,20 +66,8 @@ function isTrustedProxy(ip) {
 }
 
 /**
- * The caller behind `asserted` — an address some hop we believe says it saw the request from.
- *
- * Where that address is a proxy WE run, every eagle-public visitor reaches us through it and the
- * asserted address is the same for all of them, so the anonymous quota would be one shared bucket.
- * The chain is then `[whatever the caller prepended,] <browser>, <our egress>` — so walk LEFTWARDS
- * and take the first hop that is not ours. Anything further left is caller-supplied and never
- * reached. Not one of ours, or nothing but ours in the chain: the asserted address is the answer.
- *
- * `anchored` starts that walk at the asserted hop's own position rather than at the end of the
- * chain. Front Door needs it: by the time DEMI reads the header the chain is
- * `<browser>, <rproxy>, <AFD egress>`, because Front Door appended its socket peer and APIM then
- * appended Front Door. Everything RIGHT of the hop that named `asserted` was written by those
- * later hops and is never the browser — an unanchored walk stops on the AFD egress and hands every
- * visitor the same key again.
+ * The caller behind `asserted`. When `asserted` is our own proxy, walk X-Forwarded-For leftwards to
+ * the first hop not ours; `anchored` starts at the asserted hop, since hops right of it are ours.
  */
 function behindProxy(asserted, headers, { anchored = false } = {}) {
   if (!isTrustedProxy(asserted)) return asserted;
@@ -111,33 +95,23 @@ function behindProxy(asserted, headers, { anchored = false } = {}) {
 function callerIp(req) {
   const headers = (req && req.headers) || {};
 
-  // Front Door terminates the connection one hop outside APIM, so the address APIM asserts is an
-  // AFD egress shared by every visitor. X-Azure-SocketIP is the peer Front Door itself accepted
-  // the connection from; X-Azure-ClientIP is derived from the caller's own X-Forwarded-For and any
-  // browser can pick it, so it is never read here. Checked ahead of the gateway branch because
-  // this is a different hop's proof — AFD reaches us through APIM either way.
+  // Behind Front Door, trust X-Azure-SocketIP, never X-Azure-ClientIP (any browser can set it).
   // ponytail: a shared header secret, rotated through utils/rotating-secret.js; Private Link from Front Door to APIM would drop the header trust entirely.
   if (fromEdge(headers)) {
-    // Front Door's own socket peer is the OpenShift rproxy on the public path
-    // (browser → rproxy → Front Door → APIM), so this is not automatically the browser either —
-    // walk on past it, anchored at the hop Front Door saw.
     const socketIp = normalizeIp(stripPort(String(headers['x-azure-socketip'] || '').trim()));
     if (socketIp) return behindProxy(socketIp, headers, { anchored: true });
   }
 
-  // Behind APIM the last forwarded hop is APIM ITSELF, so every public caller resolves to one
-  // address — which would make the per-requester bulk quota a single shared bucket. The gateway
-  // policy asserts the address it saw in X-Client-Ip (azure/modules/apim.bicep), and the gateway
-  // secret is the whole reason that header can be believed.
+  // Behind APIM the last forwarded hop is APIM itself. Its policy asserts X-Client-Ip, believed only
+  // because fromGateway() proves the gateway secret.
   if (fromGateway(req)) {
     const asserted = stripPort(String(headers['x-client-ip'] || '').trim());
     if (asserted) return behindProxy(asserted, headers);
   }
 
   const forwarded = String(headers['x-forwarded-for'] || '');
-  // The LAST entry, never the first: everything before it is caller-supplied, and App Service
-  // appends the real `<client-ip>:<port>` after whatever the client sent. Taking the first hop
-  // would let any caller mint their own quota key by sending one.
+  // The last entry, never the first: everything before it is caller-supplied, so the first would
+  // let any caller mint their own quota key.
   const last = stripPort(forwarded.split(',').pop().trim());
 
   return last || (req.socket && req.socket.remoteAddress) || '127.0.0.1';

@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * Load the caller's Selected Credentials, once per request, after auth.
- *
- * A party is whatever the verified credential says the caller IS: their Keycloak `sub`, each realm
- * group they are in, or the registry key id they presented. Never a header, never a query param —
- * the same rule `rolesFor` follows, and for the same reason.
- *
- * Revoked and out-of-window rows are dropped HERE, in JS, rather than in the query: the window is
- * two timestamps on a handful of rows, and the alternative is a time-dependent predicate compiled
- * into every read in the service.
- *
- * Attached to `req`, not to `access`: `resolveAccess` is synchronous and runs inside each
- * controller, so this is the seam that lets an async load reach it (see `access-sql.js:resolveAccess`).
+ * Parties come only from the verified credential (`sub`, realm groups, registry key id), never a header
+ * or query param. Grants land on `req`, not `access`, because `resolveAccess` is synchronous.
  */
 
 const credentials = require('../repositories/credentials');
@@ -57,6 +47,7 @@ async function attachCredentials(req, now = Date.now()) {
 
   try {
     const rows = (await Promise.all(parties.map(p => loadForParty(p, now)))).flat();
+    // Revoke and time window filter here, not in SQL, so no time-dependent predicate reaches every read.
     req.credentials = liveCredentials(rows, now);
   } catch (err) {
     logger.error(`[credentials] lookup failed, continuing with none: ${err.message}`);

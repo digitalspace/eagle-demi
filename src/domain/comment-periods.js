@@ -1,10 +1,6 @@
 'use strict';
 
-/**
- * Comment period writes: `POST /comment-periods`, `PUT`, `DELETE`, publish and unpublish on
- * `/comment-periods/:id`, ported from eagle-api `api/controllers/commentperiod.js` (rules in
- * docs/eagle-api-port.md, Comment periods).
- */
+/** Comment period writes (rules in docs/eagle-api-port.md, Comment periods). */
 
 const crypto = require('node:crypto');
 
@@ -123,9 +119,8 @@ function takeoverLog() {
 }
 
 /**
- * Re-derive the period's comments from its new read: a comment follows its period only because
- * this writes it down (controllers/nosql/comment-period.js). Runs on every visibility write, so a
- * staff retry after a failed cascade repairs it.
+ * A comment follows its period's read only because this writes it down. Runs on every visibility
+ * write, so a staff retry after a failed cascade repairs it.
  */
 async function cascadeToComments(period, read) {
   const cascade = await comments.setAclForPeriod(systemAccess(), period.id, read);

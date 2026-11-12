@@ -19,9 +19,8 @@ const { useConfig } = require('./use-config');
 const { logger } = require('../../src/utils/logger');
 
 /**
- * The two repositories a project link reaches, in memory. `ids` are link records already stored,
- * `owners` maps a code to the project ids claiming it. Stored records carry an `_etag` that every
- * write bumps, and a write handed a stale one throws 412, as Cosmos does.
+ * `owners` maps a code to the project ids claiming it. Every write bumps `_etag`, and a write
+ * handed a stale one throws 412, as Cosmos does.
  */
 function fakeRepos(onCreate, { ids = {}, owners = {} } = {}) {
   const created = [];
@@ -70,7 +69,7 @@ function fakeRepos(onCreate, { ids = {}, owners = {} } = {}) {
 
 /** What Cosmos throws for a duplicate id. */
 const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
-/** What Cosmos throws when an IfMatch etag no longer matches. */
+/** What Cosmos throws when an IfMatch etag does not match the stored one. */
 const preconditionFailed = () => Object.assign(new Error('Precondition Failed'), { code: 412 });
 
 /** Link records under these ids already point somewhere else. */

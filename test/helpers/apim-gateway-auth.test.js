@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The APIM branch of `authenticate()`: the app trusts the gateway, never the headers.
- *
- * Every case here is a request that CAN reach the app directly — the Function App host stays
- * public — so what is being proved is that the subscription header buys nothing without the
- * shared secret.
+ * The Function App host stays public, so every case here can reach the app directly: the
+ * subscription header must buy nothing without the shared secret.
  */
 
 process.env.NODE_ENV = 'test';
@@ -201,9 +198,8 @@ test('a presented X-Api-Key still owns the outcome during the dual-accept window
 test('break-glass is closed when ADMIN_API_KEY arrives as an unresolved Key Vault reference', async (t) => {
   stubRegistry(t, {});
 
-  // What App Service leaves in the variable when it cannot read the secret. It is a NAME, not a
-  // credential — it appears in the ARM template and in `az functionapp config appsettings list` —
-  // so accepting it would grant sysadmin to anyone who can read either.
+  // App Service leaves the reference text when it cannot read the secret. Anyone who can read the
+  // ARM template or the app settings sees it, so it must never authenticate.
   process.env.ADMIN_API_KEY = '@Microsoft.KeyVault(SecretUri=https://x.vault.azure.net/secrets/y)';
   t.after(() => { delete process.env.ADMIN_API_KEY; });
 

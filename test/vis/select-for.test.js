@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * `selectFor` is defence in depth, not the policy: `redactForAccess` at the response boundary is
- * what enforces visibility, and a per-record dial can restrict below `maxVis` in ways a projection
- * cannot anticipate. What this buys is that a value the caller could never see does not leave
- * Cosmos (docs/rbac-architecture.md §2 item 1).
+ * `selectFor` is defence in depth: `redactForAccess` enforces visibility, and this only keeps a
+ * value the caller could never see from leaving Cosmos.
  */
 
 process.env.NODE_ENV = 'test';

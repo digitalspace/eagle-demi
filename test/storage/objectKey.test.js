@@ -8,11 +8,8 @@ const assert = require('node:assert');
 const config = require('../../src/config');
 const { resolveObjectKey } = require('../../src/storage/objectKey');
 
-// Documents record the key eagle-api assigned against the PROD bucket (`etl/<slug>/<file>`).
-// Non-prod buckets were populated by copying prod into a sub-prefix named after the prod
-// bucket, so the same object sits one level deeper. Measured in dev: bucket `asnpnn` holds
-// 92,472 objects under `ozwdez/`, and `etl/` does not exist at the root. Every download 404'd
-// because of that one missing segment.
+// Keys are recorded against the prod bucket (`etl/<slug>/<file>`); a non-prod bucket holds the
+// same object one prefix deeper.
 
 test('resolveObjectKey', async (t) => {
   const original = config.minioKeyPrefix;

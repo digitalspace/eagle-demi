@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * How the documents of a bulk download are ESTIMATED to pack into zip parts — greedy, in the order
- * given, and only ever an estimate: `fileSize` is not recorded for every document, so a size that
- * is missing counts as 0 here. The worker packs against the bytes it actually writes, which is the
- * only count that can be right, and the controller uses this to tell the caller roughly how many
- * files to expect.
+ * An estimate only: `fileSize` is missing on some documents and counts as 0 here. The worker packs
+ * by the bytes it actually writes; the controller uses this for a rough part count.
  */
 
 /**

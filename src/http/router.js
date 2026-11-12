@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The HTTP layer: one dispatcher behind the Functions host's catch-all route.
- *
- * Azure Functions matches routes in discovery order rather than by specificity (host issue #9876),
- * so per-route `app.http` registrations plus a fallback are non-deterministic. One catch-all and
- * the table in ./routes.js is the only arrangement that routes predictably.
+ * One dispatcher behind the Functions catch-all route. The host matches routes in discovery order,
+ * not by specificity, so only one catch-all plus the table in ./routes.js routes predictably.
  */
 
 const crypto = require('crypto');
@@ -30,10 +27,8 @@ const BODY_LIMIT = 10 * 1024 * 1024;
 const MULTIPART_LIMIT = 100 * 1024 * 1024;
 
 /**
- * The fetch spec's null-body statuses. The Functions worker feeds what dispatch() returns straight
- * into `new Response(body, ...)`, and undici rejects ANY body for these — including the empty
- * string `res.send('')` leaves behind — with `Invalid response status code`, which the host then
- * serves as an empty 500. So the body is dropped here, once, for every route that answers one.
+ * Null-body statuses. undici rejects any body for these, even '', and the host then serves an empty
+ * 500, so dispatch() drops the body for every route.
  */
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
@@ -55,13 +50,8 @@ const SECURITY_HEADERS = Object.freeze({
   'x-xss-protection': '0'
 });
 
-// CORS_ORIGIN is a comma-separated allowlist. It was unset in every deployed environment, which
-// silently meant "reflect ANY origin". The fallback is narrow rather than '*', so a missing env var
-// removes access instead of removing the check — the frontend breaks visibly in one request.
-//
-// The deployed frontends cannot be listed here: since the move to a Storage static website behind
-// Front Door the browser origin is an AFD endpoint whose hostname carries a deploy-time hash,
-// supplied by CORS_ORIGIN (api-function-flex.bicep sets it from the frontendHostNames parameter).
+// CORS_ORIGIN is a comma-separated allowlist, set by api-function-flex.bicep. The fallback is narrow,
+// not '*', so a missing setting removes access rather than the check.
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:4200'];
 
 const corsOriginEnv = (process.env.CORS_ORIGIN || '').trim();
@@ -102,8 +92,8 @@ const TABLE = routes.map(route => ({ ...route, ...compile(route.path) }));
 
 /** The path the route table sees. */
 function routePath(pathname) {
-  // One leading `/api` only: rproxy mounts this API at both `/api` and `/`, which is what the old
-  // app got from mounting the same router twice.
+  // Strip one leading `/api` only: APIM forwards to the app under `/api`, while direct calls to the
+  // function host, such as the deploy health check, use the bare path.
   let target = pathname;
   if (target === '/api') target = '/';
   else if (target.startsWith('/api/')) target = target.slice(4);
@@ -236,10 +226,8 @@ function baseReq(request, url, headers, requestId) {
     url: url.pathname + url.search,
     originalUrl: url.pathname + url.search,
     headers,
-    // `querystring.parse`, which is literally what Express's default 'simple' query parser resolves
-    // to: repeated keys stay ARRAYS. `Object.fromEntries(searchParams)` keeps only the LAST value,
-    // and eagle-public emits one `and[key]=value` per selected facet option — so multi-select
-    // filters silently applied one option each, under a 200.
+    // Repeated keys must stay arrays: eagle-public sends one `and[key]=value` per selected facet
+    // option, and `Object.fromEntries(searchParams)` would keep only the last.
     query: querystring.parse(url.search.replace(/^\?/, '')),
     params: {},
     body: undefined,
@@ -352,13 +340,8 @@ const EDGE_GATE_MODES = new Set(['log', 'enforce']);
 const SKIP_SECRET_WAIT = new Set(['/health', '/health/db']);
 
 /**
- * Why this request skipped Front Door, or null when it did not.
- *
- * The Function host and the APIM host are both public, so a caller can go around the edge's rate
- * limits and WAF by asking either one directly. APIM proves the gateway hop; the edge secret proves
- * the Front Door hop. Two keyed callers pass without the edge: an APIM subscription (eagle-api's
- * `/machine` push) and a valid X-Api-Key. The key is checked here because passiveAuth routes serve
- * a bad one as anonymous.
+ * Why this request skipped Front Door, or null when it did not. Keyed callers (APIM subscription,
+ * valid X-Api-Key) may skip it; the key is checked here as passiveAuth treats a bad one as anonymous.
  */
 async function edgeGateReason(req, pathname) {
   const target = routePath(pathname);
@@ -444,9 +427,7 @@ async function dispatch(request, context) {
     } catch (err) {
       const searchReply = searchServiceReply(err);
       const status = searchReply ? searchReply.status : err.status || 500;
-      // A 4xx here is caller error the route already classified (bad JSON, oversized body, a
-      // malformed path segment) — the per-request access log below records it at warn, so an
-      // error-level stack for something that isn't a server fault would just be noise.
+      // A 4xx is caller error; the access log below records it at warn.
       if (status >= 500 || searchReply) logger.error('Central API Error:', { error: err.message, stack: err.stack });
       if (!res.finished) {
         res.status(status).json({ error: searchReply ? searchReply.error : status >= 500 ? 'Internal Server Error' : err.message });
@@ -481,7 +462,6 @@ async function dispatch(request, context) {
   });
 }
 
-// makeRes is exported for the controller suites: a hand-rolled `{ status, json }` double answers
-// twice without complaining and reports objects the real one would have serialised, which is how a
-// response assertion passes against a handler that sent something else.
+// makeRes is exported so controller tests use the real response, not a hand-rolled double that
+// answers twice silently and skips serialisation.
 module.exports = { dispatch, makeRes };

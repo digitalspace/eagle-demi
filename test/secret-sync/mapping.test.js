@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The mapping file is the whole configuration of the sync, and every mistake in it is silent at
- * deploy time: a missing key writes an incomplete Secret, a duplicate key writes whichever value
- * came last. So the shipped file is checked here, not only the validator.
+ * Mapping mistakes are silent at deploy time, so the shipped file is checked here, not only the
+ * validator.
  */
 
 process.env.NODE_ENV = 'test';

@@ -8,9 +8,8 @@ const path = require('node:path');
 const { CONTROL_PARAMS } = require('../../src/helpers/native-query');
 
 /**
- * Query name -> its swagger parameter block, for the GET on `route`. A `$ref` entry is read from
- * `components.parameters`. Text-scanned like config-public.test.js: there is no YAML parser in
- * this project's dependencies.
+ * Query name -> its swagger parameter block for the GET on `route`, `$ref` resolved. Text-scanned:
+ * there is no YAML parser in this project's dependencies.
  */
 function swaggerParams(route) {
   const yaml = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');

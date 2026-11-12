@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * A project's Community Advisory Committee: `GET`, `POST` and `DELETE /projects/:id/cac`,
- * `PUT /projects/:id/cac/publish` and `/unpublish`, `POST /projects/:id/cac/members/remove`.
- * Ported from eagle-api `api/controllers/cac.js` at `b072e79^`; rules in docs/eagle-api-port.md, CAC.
- *
- * The CAC is three project fields. Members live only in eagle-notify, as subscriptions to
- * `cac:<Eagle project id>`, so member removal and CAC delete end them there first and a failed
- * call fails the write.
+ * A project's Community Advisory Committee (rules in docs/eagle-api-port.md, CAC). Members live only
+ * in eagle-notify, so removal and delete end them there first; a failed call fails the write.
  */
 
 const projects = require('../repositories/projects');
