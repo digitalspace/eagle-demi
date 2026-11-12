@@ -7,32 +7,13 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const cosmos = require('../../src/db/cosmos-nosql');
 const projects = require('../../src/repositories/projects');
 const { logger } = require('../../src/utils/logger');
-const { resolveAccess, visibilityFor, canRead, TIER } = require('../../src/helpers/access-sql');
-const { evaluate } = require('../helpers/updates-store');
+const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
+const { dialRow: row, hiddenStore } = require('../helpers/projects-dial-store');
 
-const PUBLIC = ['staff', 'idir', 'public'];
 const anonymous = () => resolveAccess({});
 const STAFF = { tier: TIER.PRIVILEGED, roles: ['staff'], projectScope: null, teams: [], level: 2 };
-
-const row = (id, vis) => ({ id, name: id, read: PUBLIC, ...(vis ? { vis } : {}) });
-
-/** Answer `cosmos.queryPage` over `rows`: the ACL by its JS twin `canRead`, the rest by the evaluator. */
-function hiddenStore(t, rows, access) {
-  const pages = [];
-  t.mock.method(cosmos, 'queryPage', async (container, spec, options) => {
-    pages.push({ container, spec, options });
-    const where = /^SELECT VALUE c\.id FROM c WHERE (.+)$/s.exec(spec.query)[1];
-    const acl = `(${visibilityFor(access, 'id').clause}) AND `;
-    assert.ok(where.startsWith(acl), 'the read leads with the caller\'s ACL predicate');
-    const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
-    return rows.filter(r => canRead(r, access, 'id') && evaluate(where.slice(acl.length), r, params))
-      .map(r => r.id).slice(0, options.size);
-  });
-  return pages;
-}
 
 test('projects.listDialHiddenIds', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
