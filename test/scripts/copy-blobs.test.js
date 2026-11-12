@@ -172,9 +172,8 @@ test('copyOne', async (t) => {
 });
 
 test('the script has no code path that writes to the source', () => {
-  // The standing instruction is "we do not want to accidentally delete prod documents". The
-  // source backend's write operation is not imported, so no edit to this script can reach it
-  // without also changing the imports — which this test then fails.
+  // The source's write op is not imported, so no edit here can reach it without changing the
+  // imports, which this test catches.
   const src = fs.readFileSync(
     require.resolve('../../src/scripts/copy-blobs-to-azure'), 'utf8');
   // Comments stripped: the file documents what it refuses to call, and matching that prose

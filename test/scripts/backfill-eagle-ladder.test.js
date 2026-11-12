@@ -16,11 +16,8 @@ const PUBLIC_PROJECT = { id: 'p-pub', eagleId: 'e-pub', read: PUBLIC, eagleRead:
 const NOTIFICATION = { id: 'n-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], hasEagleSource: true, _etag: 'x' };
 
 /**
- * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. A query answers the rows its
- * WHERE holds for, `hasEagleSource` standing in for `sources.eagle`. A write applies its `set` ops
- * to a private copy of the row when `ifMatch` holds, and answers a 412 (`skippedIds`) when it does
- * not. `stale` hands every row out with an etag that no longer matches; `refuse` maps an id to the
- * answer its write gets instead, `'stale'` (412) or `'failed'`.
+ * Replaces `cosmos.queryPage`/`bulkVerified`: a write applies its `set` ops when `ifMatch` holds, else
+ * 412. `stale` hands out rows with a mismatched etag; `refuse` maps an id to `'stale'` or `'failed'`.
  */
 function fakeCosmos(t, seed, { stale = false, refuse = {} } = {}) {
   const rows = structuredClone(seed);

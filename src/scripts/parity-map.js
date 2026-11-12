@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Each eagle-api read a consumer makes, the native DEMI read that answers it (never `/search?dataset=`),
- * and the differences already explained. `format: 'csv'` reads pair rows on `key`, minus `ignoreColumns`;
- * `keysOnly` compares the header and the set of keys, never cell values.
- * Field entries may be `[eagleName, demiName]`; `:demiProject`/`:demiPeriod` take DEMI ids, other
- * placeholders the Eagle ids from `--id`; `mapEagle`/`mapDemi` reshape one side's rows before pairing.
+ * Each eagle-api read a consumer makes, the native DEMI read answering it (never `/search?dataset=`),
+ * and known differences. `:demiProject`/`:demiPeriod` take DEMI ids, other placeholders Eagle ids.
  */
 
 const { EAGLE_STAFF_FIELDS, TRACK_PRECEDENCE } = require('../merge/project');

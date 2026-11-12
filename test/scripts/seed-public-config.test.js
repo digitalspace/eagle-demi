@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The public config seeder.
- *
- * No network and no Cosmos: the source fetch and the repository are injected, so what is asserted
- * is the part that decides what lands in a document an anonymous site reads — the filter, the
- * environment the payload is read FROM, and that a dry run writes nothing.
+ * Fetch and repository are injected. Pins the key filter, the environment read from, and that a dry
+ * run writes nothing.
  */
 
 process.env.NODE_ENV = 'test';

@@ -25,9 +25,8 @@ const md5 = buf => crypto.createHash('md5').update(buf).digest('hex');
 const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
 
 /**
- * Object-store double. Each object is `{ body, etag?, second?, statSize? }`; `second` is what a
- * second GET returns, so a source that changes between reads is visible, and `statSize` is a stat
- * that disagrees with the bytes served. `failGet` throws on the GET.
+ * Objects are `{ body, etag?, second?, statSize? }`: `second` is a changed second GET, `statSize` a
+ * stat that disagrees with the bytes. `failGet` throws on the GET.
  */
 function fakeSource(objects, { failGet = {}, failStatOnce = {} } = {}) {
   const state = { gets: [] };
