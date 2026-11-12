@@ -12,7 +12,6 @@ const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-func
 const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
 const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
-const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
 const AVAILABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'availability.bicep'), 'utf8');
 const SEARCH_CONTROLLER = fs.readFileSync(path.join(ROOT, 'src', 'controllers', 'search.js'), 'utf8');
@@ -26,6 +25,7 @@ const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'u
 const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-search.prod.bicepparam'), 'utf8');
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
+const { cosmosContainer } = require('../helpers/cosmos-bicep');
 
 // Two ways for the probe to stay green through a real outage; `az bicep build` sees a URL string
 // either way.
@@ -561,17 +561,12 @@ test('the not-ours search path still creates the shared private link to Cosmos',
 // `GET /boundaries` and `GET /db/stats` read `boundaries` unconditionally, so gating it too would
 // leave prod reading a container that does not exist.
 test('deployEnrichment gates the wildfires container and only that one', () => {
-  const container = (name) => COSMOS_MODULE
-    .split(/^resource /m)
-    .find(b => new RegExp(`^\\w+ 'Microsoft\\.DocumentDB/databaseAccounts/sqlDatabases/containers@`).test(b)
-      && new RegExp(`\\n\\s+name: '${name}'`).test(b));
-
-  const wildfires = container('wildfires');
+  const wildfires = cosmosContainer('wildfires');
   assert.ok(wildfires, 'no wildfires container declared in cosmos-nosql.bicep');
   assert.match(wildfires.split('\n')[0], /= if \(deployEnrichment\)/,
     'wildfires must be gated on deployEnrichment — prod publishes no enrichment');
 
-  const boundaries = container('boundaries');
+  const boundaries = cosmosContainer('boundaries');
   assert.ok(boundaries, 'no boundaries container declared in cosmos-nosql.bicep');
   assert.doesNotMatch(boundaries.split('\n')[0], /= if \(/,
     'boundaries must NOT be gated — every environment serves it, empty in prod');

@@ -11,7 +11,7 @@ const MAIN = read('main.bicep');
 const API_MODULE = read('modules', 'api-function-flex.bicep');
 const APIM_MODULE = read('modules', 'apim.bicep');
 const OBSERVABILITY = read('modules', 'observability.bicep');
-const COSMOS_MODULE = read('modules', 'cosmos-nosql.bicep');
+const { COSMOS_MODULE, cosmosContainer } = require('../helpers/cosmos-bicep');
 const TEST_PARAMS = read('main.test.bicepparam');
 const PROD_PARAMS = read('main.prod.bicepparam');
 
@@ -89,18 +89,29 @@ test('demi-track-drift reads the counts the teams sync logs and is off by defaul
   assert.match(block, /windowSize: 'P2D'/);
 });
 
-const worksContainer = COSMOS_MODULE.split(/^resource /m)
-  .find(b => /^\w+ 'Microsoft\.DocumentDB\/databaseAccounts\/sqlDatabases\/containers@/.test(b) && /\n\s+name: 'works'\n/.test(b));
+const indexedPaths = (block) => [...block.matchAll(/path: '([^']+)'/g)].map(m => m[1]);
+const worksContainer = cosmosContainer('works');
 
 test('cosmos declares the works container, partitioned and indexed for per-project reads', () => {
   assert.ok(worksContainer, 'no works container in cosmos-nosql.bicep, so every works read and write 404s');
   assert.doesNotMatch(worksContainer.split('\n')[0], /= if \(/, 'every environment writes works once WORKS_WRITE is on');
   assert.match(worksContainer, /partitionKey: \{\n\s+paths: \[\n\s+'\/projectId'\n\s+\]/,
     'the partition key cannot change after creation; every read is "the works of this project"');
-  assert.deepStrictEqual([...worksContainer.matchAll(/path: '([^']+)'/g)].map(m => m[1]),
-    ['/projectId/?', '/workTypeId/?', '/deleted/?']);
+  assert.deepStrictEqual(indexedPaths(worksContainer), [
+    '/projectId/?', '/workTypeId/?', '/deleted/?', '/kind/?', '/source/?', '/owner/?', '/sourceKey/?',
+    '/actYear/?', '/workTypeCode/?', '/workState/?', '/startDate/?', '/decisionDate/?', '/summary/*',
+  ]);
   assert.match(worksContainer, /excludedPaths: noIndex\n/, 'without /* excluded, Cosmos indexes every field it is sent');
   assert.match(COSMOS_MODULE, /^var noIndex = \[\n\s+\{\n\s+path: '\/\*'\n/m);
+});
+
+test('cosmos indexes the project external id pair for the cross-project uniqueness query', () => {
+  const projects = cosmosContainer('projects');
+  assert.ok(projects, 'no projects container in cosmos-nosql.bicep');
+  const paths = indexedPaths(projects);
+  for (const p of ['/externalIds/[]/system/?', '/externalIds/[]/value/?']) {
+    assert.ok(paths.includes(p), `${p} is not indexed, so the uniqueness check scans every project`);
+  }
 });
 
 // src/config.js reads only the string 'true' as on.
