@@ -144,7 +144,7 @@ function pickPublicKeys(source) {
 
 /**
  * UNAUTHENTICATED, no defaults. Missing document answers 503 `no-store`, never a guess: a default
- * would serve `ACCESS_GATE: false`. eagle-public then falls back to eagle-api's /api/config.
+ * would serve `ACCESS_GATE: false`. eagle-public retries 3 times, then fails to boot.
  */
 exports.getPublicConfig = async (req, res) => {
   let stored;
@@ -187,8 +187,8 @@ function publicConfigRejection(body) {
 }
 
 /**
- * PUT /eagle/config/public: eagle-api pushes on every Config write. Body is the payload, not `{ doc }`,
- * and only PUBLIC_KEYS are stored, so eagle-api may send its whole /api/config.
+ * PUT /eagle/config/public: eagle-api's GET /api/config pushes when its payload differs from the last
+ * one stored. Body is that payload, not `{ doc }`; only PUBLIC_KEYS are stored.
  */
 exports.upsertPublicFromEagle = async (req, res) => {
   const rejection = publicConfigRejection(req.body);
