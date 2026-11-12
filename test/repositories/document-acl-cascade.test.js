@@ -10,8 +10,8 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const { systemAccess } = require('../../src/helpers/access-sql');
 const { transformDocument } = require('../../src/seed/transform');
 
-// The stored legacy ACLs, spelled out. Building them from a constant would pass against any value
-// of that constant, including one that no longer contains `staff`.
+// The stored legacy ACLs, spelled out: built from a constant, they would pass against any value
+// of it, even one without `staff`.
 const PUBLIC_PROJECT = ['public', 'sysadmin', 'staff', 'demi-admin'];
 const PRIVATE_PROJECT = ['sysadmin', 'staff', 'demi-admin'];
 
@@ -46,9 +46,8 @@ test('constrainToProject — the lower of the two levels', async (t) => {
   });
 
   await t.test('a legacy role name carries no level of its own', () => {
-    // `project-team` is not a ladder token, so the document reads as level 1 — stamping the
-    // project's level 2 over it would WIDEN the row, and `team` would too. A holder of the role may
-    // not hold `staff`, so the name is dropped: privileged callers only.
+    // `project-team` reads as level 1, so stamping level 2 or `team` would widen the row; its
+    // holders may lack `staff`, so the name is dropped: privileged callers only.
     assert.deepStrictEqual(
       documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['sysadmin']);
   });
@@ -115,9 +114,8 @@ test('setAclForProject', async (t) => {
   });
 
   await t.test('a round trip restores exactly what the document had', async (tt) => {
-    // ONE cascade cannot expose a ratchet — the snapshot and the live value are still equal after
-    // it. Only the second re-derivation shows whether `ownRead` was preserved or overwritten, so a
-    // single unpublish is a probe that cannot fail.
+    // One cascade leaves the snapshot equal to the live value; only the second re-derivation
+    // shows whether `ownRead` was kept or overwritten.
     const down = harness(tt, [{ id: 'd1', read: ['public', 'sysadmin'] }]);
     await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
@@ -159,9 +157,8 @@ test('setAclForProject', async (t) => {
   });
 
   await t.test('a document Eagle deleted is not republished by its project', async (tt) => {
-    // `ownRead` is the row's ACL at the moment of the delete — public, because Eagle published it
-    // right up to then — so without the flag this cascade would hand a deleted document back to
-    // the public. The mirror stores the flag (controllers/nosql/eagle-push.test.js).
+    // `ownRead` is still public from before the delete, so without the flag this cascade would
+    // republish a deleted document. The mirror stores the flag (controllers/nosql/eagle-push.test.js).
     const cap = harness(tt, [
       { id: 'd1', read: ['staff'], ownRead: ['public', 'sysadmin'], isDeleted: true }
     ]);
@@ -213,17 +210,14 @@ test('setAclForProject', async (t) => {
     });
 
   await t.test('a row with NO read field serialises a valid patch', async (tt) => {
-    // Not `read: []` — the field ABSENT. `undefined` in a `set` op emits no `value` key at all,
-    // and Cosmos rejects that. Patch ops are atomic per item, so the 400 would take the `/read`
-    // narrowing down with it: the row keeps its old ACL, and the effect is fail-OPEN for exactly
-    // the row that had no ACL to begin with.
+    // The field absent, not `[]`: `undefined` in a `set` op sends no `value`, Cosmos answers 400,
+    // and the atomic patch drops the `/read` narrowing too, failing open.
     const cap = harness(tt, [{ id: 'd1' }]);
 
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    // Asserted on the SERIALISED form, because that is where the defect shows. `{value: undefined}`
-    // still satisfies `'value' in op` — the key exists on the object — and only JSON.stringify
-    // drops it. Checking the object would be a probe that cannot fail.
+    // Asserted on the serialised form: `{value: undefined}` passes `'value' in op`, and only
+    // JSON.stringify drops the key.
     const wire = JSON.parse(JSON.stringify(cap.ops[0].resourceBody.operations));
     for (const op of wire) {
       assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
@@ -369,9 +363,8 @@ test('setPublished writes the requested level', async (t) => {
   });
 });
 
-// The caller writes the same ACLs into the search index, so the cascade has to report what it
-// derived. Re-deriving them at the call site would be a second implementation of the rule above,
-// free to drift from this one.
+// The caller writes the same ACLs into the search index, so the cascade reports what it derived;
+// re-deriving them at the call site would be a second copy of the rule, free to drift.
 test('setAclForProject reports the ACLs it derived', async (t) => {
   await t.test('one row per document, carrying the derived ACL and its mirror', async (tt) => {
     harness(tt, [
