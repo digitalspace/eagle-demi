@@ -211,11 +211,16 @@ function answerRecord(req, res, { kind, method, pid, recordId, label, pushedAt }
 const nestedListsOf = (work) =>
   Array.isArray(work.phases) && work.phases.every(phase => phase && Array.isArray(phase.events));
 
+/** The ids nested in a new work that the merge stores or matches as sent; a string event `work_phase_id` drops it. */
+const nestedIdsOf = (work) => work.phases.flatMap(phase =>
+  [phase.id, ...phase.events.flatMap(event => [(event || {}).id, (event || {}).work_phase_id])]);
+
 /** A child POST or PUT body checked against its path: `{ pushedAt, workTypeId }`, or a refusal. */
 function childBody(kind, method, { pid, id }, body) {
   const { pushedAt, workTypeId, [kind]: record } = body || {};
   if (!record || typeof record !== 'object') return refusal('PAYLOAD_INVALID', `body.${kind} must be an object`);
   // A string id passes the path check but would never match the stored number, so the merge would add a twin.
+  // The same holds for every id nested in a new work, checked below once its lists are known to exist.
   if (!Number.isInteger(record.id) || (method === 'POST' ? !isTrackId(record.id) : String(record.id) !== id)) {
     return refusal('RECORD_ID_MISMATCH', `body.${kind}.id must be a positive integer equal to any :id in the path`);
   }
@@ -229,6 +234,9 @@ function childBody(kind, method, { pid, id }, body) {
   }
   if (kind === 'work' && method === 'POST' && !nestedListsOf(record)) {
     return refusal('PAYLOAD_INVALID', 'a new work must carry phases[], each with events[]');
+  }
+  if (kind === 'work' && method === 'POST' && !nestedIdsOf(record).every(Number.isInteger)) {
+    return refusal('RECORD_ID_MISMATCH', 'every id in body.work.phases[] and their events[] must be an integer');
   }
   return { pushedAt, workTypeId };
 }

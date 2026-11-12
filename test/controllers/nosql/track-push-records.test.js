@@ -206,6 +206,43 @@ test('Track work, phase and event routes', async (t) => {
     assert.deepStrictEqual(store.writes, []);
   });
 
+  await t.test('a new work with a phase id sent as a string answers 400 and writes nothing', async (t) => {
+    const store = await seeded(t);
+    t.mock.method(logger, 'error', () => {});
+    const record = fixture('new_work');
+    record.work.phases[0].id = String(record.work.phases[0].id);
+
+    const res = await call('postTrackWork', { body: record });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'RECORD_ID_MISMATCH']);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a new work with an event id sent as a string answers 400 and writes nothing', async (t) => {
+    const store = await seeded(t);
+    t.mock.method(logger, 'error', () => {});
+    const record = fixture('new_work');
+    record.work.phases[0].events[0].id = String(record.work.phases[0].events[0].id);
+
+    const res = await call('postTrackWork', { body: record });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'RECORD_ID_MISMATCH']);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a new work with an event work_phase_id sent as a string answers 400 rather than dropping the milestone', async (t) => {
+    const store = await seeded(t);
+    t.mock.method(logger, 'error', () => {});
+    const record = fixture('new_work');
+    const [event] = record.work.phases[0].events;
+    event.work_phase_id = String(event.work_phase_id);
+
+    const res = await call('postTrackWork', { body: record });
+
+    assert.deepStrictEqual([res.statusCode, res.body.code], [400, 'RECORD_ID_MISMATCH']);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
   await t.test('a work naming another project than the path answers 400', async (t) => {
     await seeded(t);
     t.mock.method(logger, 'error', () => {});
