@@ -6,7 +6,7 @@
   "src/controllers/nosql/api-key.js": {"complexity":[31]},
   "src/controllers/nosql/bulk-download.js": {"complexity":[21],"max-lines-per-function":[193]},
   "src/controllers/nosql/comment-period.js": {"complexity":[23,21]},
-  "src/controllers/nosql/document.js": {"complexity":[29,27,25],"max-lines":[2422],"max-lines-per-function":[257,161]},
+  "src/controllers/nosql/document.js": {"complexity":[29,27,25],"max-lines":[2404],"max-lines-per-function":[257,161]},
   "src/controllers/nosql/engage-comment-period.js": {"complexity":[23]},
   "src/controllers/nosql/link.js": {"complexity":[25]},
   "src/controllers/nosql/notification.js": {"complexity":[26]},
