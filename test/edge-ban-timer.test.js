@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The edge ban timer, registered against a recording `app` (test/helpers/load-index.js). Unlike the
- * other timers it registers on EDGE_BAN_MODE, so an `off` environment still runs the tick that
- * clears the ban rule, and its schedule defaults to hourly.
+ * The edge ban timer registers on EDGE_BAN_MODE, unlike the other timers, so an `off` environment
+ * still runs the tick that clears the ban rule. Its schedule defaults to hourly.
  */
 
 process.env.NODE_ENV = 'test';

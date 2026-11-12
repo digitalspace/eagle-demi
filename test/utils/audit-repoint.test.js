@@ -1,13 +1,7 @@
 'use strict';
 
-// A SECOND file for src/utils/audit.js, and it has to be: config.js reads the environment once at
-// require time and audit.js reads the audit stream name from it once at load, so the repointed
-// environment cannot be set up inside test/utils/audit.test.js without reloading both.
-//
-// What it covers: with the eagle-analytics DCR configured, privileged actions go THERE as
-// EagleAudit_CL rows while usage counters stay on DEMI's own DCR. Two destinations, one writer —
-// sending either stream to the other's rule is silently rejected at ingest, so nothing downstream
-// would report it.
+// With the eagle-analytics DCR set, audit rows go there as EagleAudit_CL and usage stays on DEMI's
+// DCR. Own file because config.js and audit.js read the environment once at load.
 process.env.NODE_ENV = 'test';
 process.env.AUDIT_DCR_ENDPOINT = 'https://analytics-dcr.canadacentral-1.ingest.monitor.azure.com';
 process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-analyticsimmutableid';

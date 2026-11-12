@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The literal App Service leaves behind when a Key Vault reference does not resolve.
- *
- * Its own module, with no requires of its own, so a caller that needs the check — config.js, a
- * controller, an operator script — gets it without pulling in server configuration.
+ * The literal App Service leaves behind when a Key Vault reference does not resolve. No requires,
+ * so config.js and scripts can use it without loading server config.
  */
 function isKeyVaultReference(value) {
   return typeof value === 'string' && value.trim().startsWith('@Microsoft.KeyVault(');

@@ -52,10 +52,8 @@ test('audit writer', async (t) => {
   });
 
   await t.test('an environment with no events DCR sends both streams to the audit one', async () => {
-    // config.js falls EVENTS_DCR_ENDPOINT back to AUDIT_DCR_ENDPOINT: one rule declaring both
-    // tables is every environment deployed before eagle-analytics, plus local. Only the pair the
-    // URL is built from proves it — a stream sent to a rule that does not declare it is rejected at
-    // ingest with a 400 nothing downstream reports.
+    // config.js falls EVENTS_DCR_ENDPOINT back to AUDIT_DCR_ENDPOINT. Only the URL proves it: a
+    // stream sent to a rule that does not declare it gets a 400 nothing downstream reports.
     const demiDcr = {
       endpoint: 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com',
       immutableId: 'dcr-testimmutableid'
@@ -139,9 +137,8 @@ test('audit writer', async (t) => {
   });
 
   await t.test('anonymous callers stay anonymous, signed-in callers are traceable', async () => {
-    // The distinction the whole table design turns on. Public traffic must not be re-identifiable
-    // after the salt rotates; staff activity must be attributable, because "which of our people
-    // searched for this" is the question this data exists to answer.
+    // Public traffic must not be re-identifiable after the salt rotates; staff activity must be
+    // attributable.
     audit.analyticsEvent({ headers: { 'user-agent': 'Mozilla/5.0' }, socket: {} }, { eventName: 'search' });
     await audit.flush();
     const anon = sent[0].rows[0];
@@ -159,9 +156,8 @@ test('audit writer', async (t) => {
   });
 
   await t.test('a shared credential is never recorded as a person', async () => {
-    // ADMIN_API_KEY carries no sub and no keyId. It used to fall through to 'user', so break-glass
-    // actions were attributed to a human who did not exist. A Keycloak human carries `azp`, so the
-    // old check misfiled them as a service too - wrong in both directions.
+    // ADMIN_API_KEY carries no sub and no keyId; a Keycloak human carries `azp`. Neither may be
+    // filed under the other's type.
     audit.auditEvent({ headers: {}, socket: {}, user: { preferred_username: 'internal-service', realm_access: { roles: ['sysadmin'] } } },
       { action: 'project.delete', targetId: 'p1' });
     await audit.flush();
@@ -174,9 +170,8 @@ test('audit writer', async (t) => {
     assert.strictEqual(sent[0].rows[0].ActorType, 'api-key');
     assert.strictEqual(sent[0].rows[0].ActorId, 'demi_test_abc');
 
-    // A Keycloak service account carries a `sub` like any other token, so checking `sub` first
-    // would record a shared client secret as a person - for seven years. This is the path Track
-    // and ENGAGE-style callers use, and it is the one the first version of this code missed.
+    // A Keycloak service account carries a `sub` too, so checking `sub` first would record a
+    // shared client secret as a person. Track and ENGAGE-style callers use this path.
     sent = [];
     audit.auditEvent({ headers: {}, socket: {}, user: { sub: 'kc-sa-9', preferred_username: 'service-account-track-sync', realm_access: { roles: ['staff'] } } },
       { action: 'project.update', targetId: 'p3' });
@@ -220,10 +215,8 @@ test('audit writer', async (t) => {
   });
 
   await t.test('the drop path does not leak past the DCR mask', async () => {
-    // The transform in audit-logs.bicep is the masking boundary and is deliberately impossible to
-    // bypass from the app — except here, the one path that goes around it. The fallback lands in
-    // the application workspace, which grants read more widely, so what it may say is a security
-    // property and not a formatting choice.
+    // The one path around the audit-logs.bicep mask. It lands in the app workspace, which grants
+    // read more widely, so what it says is a security property.
     const logged = [];
     t.mock.method(logger, 'error', (message) => { logged.push(message); });
     audit._setTransport(async () => { throw new Error('503 upstream'); });

@@ -1,11 +1,7 @@
 'use strict';
 
-// `/api-docs` must not exist in prod.
-//
-// The spec names every route, parameter and role in the system and the route is unauthenticated.
-// `src/config.js` reads ENVIRONMENT once at require time, so this has to be set before anything
-// else loads — which is why the prod case lives in its own file. `node --test` runs each file in
-// its own process, and the non-prod half is in test/router.boot.test.js.
+// `/api-docs` must not exist in prod: the spec names every route and role, unauthenticated. Own
+// file because src/config.js reads ENVIRONMENT once at require time.
 process.env.ENVIRONMENT = 'prod';
 // src/config.js refuses to boot test or prod on an empty DEMI_ALLOWED_CLIENTS.
 process.env.DEMI_ALLOWED_CLIENTS = 'eagle-admin-console';

@@ -1,27 +1,14 @@
 'use strict';
 
-// The comma-separated CORS_ORIGIN allowlist — the branch every deployed environment runs.
-//
-// `test/router.boot.test.js` pins the UNSET fallback, which no deployed environment takes: Azure
-// always sets CORS_ORIGIN (api-function-flex.bicep passes the frontend host name through). So the parsing
-// in `src/http/router.js` was the one part of this with no test at all, and a misconfiguration on
-// exactly that path blocked every API call from the DEMI frontend for a period after the Front Door
-// cutover — with a green suite and every header check passing.
-//
-// This is a sibling file rather than more cases in router.boot.test.js because `src/http/router.js`
-// reads CORS_ORIGIN at MODULE LOAD, so a value can only be tested by a module instance that has not
-// been loaded yet, and `node --test` gives each file its own process.
-//
-// What a CORS decision looks like from outside: the request is always served. "Refused" means
-// `Access-Control-Allow-Origin` is absent and the browser, not the server, drops the response.
+// The comma-separated CORS_ORIGIN allowlist, the branch every deployed environment runs. Its own
+// file because router.js reads CORS_ORIGIN at load; "refused" means no Allow-Origin header.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const { HttpRequest } = require('@azure/functions');
 
-// Each CORS_ORIGIN value needs its own instance of `src/http/router.js`, so that one module is
-// dropped from the cache before every case. Its children (route table, Cosmos client) stay cached,
-// so nothing reconnects and no second timer starts.
+// Drops only router.js from the cache per case; its children stay cached, so nothing reconnects
+// and no second timer starts.
 async function withRouter(corsOrigin, fn) {
   process.env.CORS_ORIGIN = corsOrigin;
   delete require.cache[require.resolve('../src/http/router')];
@@ -82,9 +69,7 @@ test('CORS_ORIGIN of "*" allows any origin', async () => {
 });
 
 test('a request with no Origin header is allowed', async () => {
-  // Non-browser callers — the indexer, health probes, curl — send no Origin. They must pass
-  // through: rejecting them turns the origin decision into a 500 on every server-to-server call,
-  // which no browser-facing test would notice.
+  // Non-browser callers (indexer, health probes, curl) send no Origin and must pass through.
   await withRouter(FRONT_DOOR, async (dispatch) => {
     assert.strictEqual(await allowOriginFor(dispatch, null), null,
       'nothing to reflect, and nothing to block');
