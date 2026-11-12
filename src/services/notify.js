@@ -7,7 +7,7 @@
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
-const { decodeEntities, plainTextOf } = require('../helpers/html-entities');
+const { decodeEntities, plainTextOf, withoutControls } = require('../helpers/html-entities');
 
 const TIMEOUT_MS = 10000;
 const ATTEMPTS = 2;
@@ -26,7 +26,7 @@ function configured() {
 
 /** Markup to plain text. Tags go first, so `&lt;b&gt;` written as text survives as `<b>`. */
 function plainText(html) {
-  return decodeEntities(String(html || '').replace(/<[^>]*>/g, ' '))
+  return withoutControls(decodeEntities(String(html || '').replace(/<[^>]*>/g, ' ')))
     .replace(/\s+/g, ' ')
     .trim();
 }

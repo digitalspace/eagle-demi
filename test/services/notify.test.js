@@ -121,6 +121,14 @@ test('notify.updatePublished', async (t) => {
     assert.strictEqual(notify.summaryOf(`<p>${'&amp;'.repeat(300)}</p>`), '&'.repeat(280));
   });
 
+  await t.test('excerpt and summary drop bidi and control characters, raw or as entities', () => {
+    const html = '<p>Site\u202e C\u2066 Re\u0001port &#x202E;draft&#x2066;</p>';
+    assert.strictEqual(notify.excerptOf(html), 'Site C Report draft');
+    assert.strictEqual(notify.summaryOf(html), 'Site C Report draft');
+    const rtl = '<p>\u05e9\u05dc\u05d5\u05dd\u200f (EAO)\tnext\nline</p>';
+    assert.strictEqual(notify.excerptOf(rtl), '\u05e9\u05dc\u05d5\u05dd\u200f (EAO) next line');
+  });
+
   await t.test('the fallback summary never carries a tag, split, escaped or unclosed', () => {
     assert.strictEqual(notify.summaryOf('<p><<script>script>alert(1)<</script>/script></p>'), 'scriptalert(1)/script');
     assert.strictEqual(notify.summaryOf('<p>a &lt;script&gt;alert(1)&lt;/script&gt; b</p>'), 'a scriptalert(1)/script b');

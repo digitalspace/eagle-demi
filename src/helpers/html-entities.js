@@ -57,6 +57,15 @@ function decodeEntities(text) {
   });
 }
 
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+
+/**
+ * Text without bidi embeddings, overrides and isolates (U+202E reverses what follows) or controls
+ * but tab, LF and CR. The plain marks U+200E, U+200F and U+061C stay: right-to-left text needs them.
+ */
+const withoutControls = text => String(text).replace(CONTROLS, '');
+
 /** Tags that end a block of text: `<li>One</li><li>Two</li>` reads "One Two", not "OneTwo". */
 const BLOCK_TAG = /<\/?(?:br|p|div|li|ul|ol|h[1-6]|blockquote|tr|td|th|table|section|article)\b[^>]*>/gi;
 
@@ -77,10 +86,10 @@ function withoutTags(html) {
  */
 function plainTextOf(html) {
   // Block tags break words; any other tag is inline (`<i>`), so it goes without a space.
-  return decodeEntities(withoutTags(String(html || '').replace(BLOCK_TAG, ' ')))
+  return withoutControls(decodeEntities(withoutTags(String(html || '').replace(BLOCK_TAG, ' '))))
     .replace(/[<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-module.exports = { decodeEntities, plainTextOf };
+module.exports = { decodeEntities, plainTextOf, withoutControls };

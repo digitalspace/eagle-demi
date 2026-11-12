@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { logger } = require('../utils/logger');
-const { decodeEntities } = require('../helpers/html-entities');
+const { decodeEntities, withoutControls } = require('../helpers/html-entities');
 
 /** The registry's origin. Every href on a document page is relative to it. */
 const REGISTRY_ORIGIN = 'https://iaac-aeic.gc.ca';
@@ -37,7 +37,7 @@ const PROJ_LINK = /\/proj\/(\d+)/;
 
 /** Markup to the words in it, on one line. Titles carry `<br />` and `<em>`. */
 function textOf(html) {
-  return decodeEntities(String(html).replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+  return withoutControls(decodeEntities(String(html).replace(/<[^>]*>/g, ' '))).replace(/\s+/g, ' ').trim();
 }
 
 /** The first capture of `re` in `html`, as text, or `null`. */
@@ -208,7 +208,7 @@ function parseInlineContent(html) {
     .replace(BLOCK_BREAK, '\n\n')
     .replace(/<[^>]*>/g, ' ')
     .split(/\n{2,}/)
-    .map(part => decodeEntities(part).replace(/\s+/g, ' ').trim())
+    .map(part => withoutControls(decodeEntities(part)).replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   if (paragraphs.length === 0) return null;
 

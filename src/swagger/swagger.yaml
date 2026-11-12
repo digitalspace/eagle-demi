@@ -4287,7 +4287,8 @@ paths:
         `attachments` (document ids), `regions`, `location`,
         `engagementUrl` (http/https only, else null), `status` and `publishDate` (ISO; the
         record's `dateAdded` when it has none). Image `alt`, `caption` and `credit` are stored as
-        plain text with `<` and `>` stripped; `caption` is cut at 300 characters and `credit` at
+        plain text with `<`, `>`, bidi overrides and isolates, and control characters stripped;
+        `caption` is cut at 300 characters and `credit` at
         150, and an empty one is stored as null. An image entry with no `document` is dropped. Every
         read by a non-staff caller shows a row with a `status` only when it is `published` and
         its `publishDate` has passed; a row with no `status`

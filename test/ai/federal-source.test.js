@@ -326,6 +326,16 @@ test('parseInlineContent', async (t) => {
     }
   });
 
+  await t.test('drops bidi and control characters from title and text, raw or as entities', () => {
+    const hidden = 'Site\u202e C\u2066 Re\u0001port &#x202E;draft&#x2066;';
+    const rtl = '\u05e9\u05dc\u05d5\u05dd\u200f (EAO)';
+    const content = parseInlineContent(
+      `<h2>${hidden}</h2><p>${hidden}</p><p>${rtl}\tnext\nline</p>`);
+
+    assert.strictEqual(content.title, 'Site C Report draft');
+    assert.strictEqual(content.text, `Site C Report draft\n\nSite C Report draft\n\n${rtl} next line`);
+  });
+
   await t.test('answers null for a page with no document heading', () => {
     assert.strictEqual(parseInlineContent('<html><body><p>No heading here</p></body></html>'),
       null);
