@@ -2,6 +2,7 @@
 
 // In-memory Cosmos containers (`PARTITION` names them). Of predicates only the seal term runs, dropping a row with
 // no `read[]` as Cosmos does; any other parameter throws, so an unknown query shape fails instead of matching all.
+// `works` queries run their whole WHERE clause instead (`whereOf`).
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
@@ -26,6 +27,28 @@ function applyPatch(row, operations) {
     } else throw new Error(`mirror-store: unknown patch op ${op.op}`);
   }
   return next;
+}
+
+/**
+ * A `works` WHERE clause as a row predicate: `c.f = @p`, `= true`, IS_DEFINED, IS_BOOL, IS_STRING, STARTSWITH,
+ * NOT/AND/OR. Every term works.js writes is guarded, so two-valued logic gives Cosmos' answer.
+ */
+function whereOf({ query, parameters }) {
+  const values = Object.fromEntries(parameters.map(({ name, value }) => [name, value]));
+  const named = new Set(query.match(/@\w+/g) || []);
+  const unknown = [...named].filter(name => !(name in values)).concat(Object.keys(values).filter(name => !named.has(name)));
+  if (unknown.length) throw new Error(`mirror-store: parameter ${unknown.join(', ')} not both named and bound`);
+  const expression = query.replace(/^SELECT \* FROM c WHERE /, '')
+    .replace(/IS_DEFINED\(c\.(\w+)\)/g, '(row.$1 !== undefined)')
+    .replace(/IS_BOOL\(c\.(\w+)\)/g, "(typeof row.$1 === 'boolean')")
+    .replace(/IS_STRING\(c\.(\w+)\)/g, "(typeof row.$1 === 'string')")
+    .replace(/STARTSWITH\(c\.(\w+), (@\w+)\)/g, "String(row.$1).startsWith(values['$2'])")
+    .replace(/c\.(\w+) = (@\w+)/g, "(row.$1 === values['$2'])")
+    .replace(/c\.(\w+) = true/g, '(row.$1 === true)')
+    .replace(/\bAND\b/g, '&&').replace(/\bOR\b/g, '||').replace(/\bNOT\b/g, '!');
+  if (/\bc\.|(?<!')@/.test(expression)) throw new Error(`mirror-store: untranslated works term in ${expression}`);
+  const where = new Function('row', 'values', `return ${expression};`);
+  return (row) => where(row, values);
 }
 
 function matches(row, spec) {
@@ -63,13 +86,14 @@ function mirrorStore(t, rows) {
     const hit = find(container, { id, [PARTITION[container]]: pk });
     return hit ? { ...hit.row } : null;
   });
+  const predicateOf = (container, spec) => (container === 'works' ? whereOf(spec) : row => matches(row, spec));
   t.mock.method(cosmos, 'query', async (container, spec) => {
     cosmos.assertQuerySpec(spec, container);
-    return { items: inContainer(container).filter(row => matches(row, spec)).map(row => ({ ...row })) };
+    return { items: inContainer(container).filter(predicateOf(container, spec)).map(row => ({ ...row })) };
   });
   t.mock.method(cosmos, 'queryFirst', async (container, spec) => {
     cosmos.assertQuerySpec(spec, container);
-    const row = inContainer(container).find(r => matches(r, spec));
+    const row = inContainer(container).find(predicateOf(container, spec));
     return row ? { ...row } : null;
   });
   t.mock.method(cosmos, 'create', async (container, item) => {

@@ -8,6 +8,7 @@ const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 
 const NOW = '2026-09-02T00:00:00.000Z';
+const worksRepository = () => require('../../src/repositories/works');
 
 /** One row of `GET /api/v1/projects`, fields as Track test returns them. */
 const API_PROJECT = {
@@ -174,13 +175,14 @@ function fakeWorks(rows = []) {
     if (current ? current._etag !== etag : etag) throw preconditionFailed();
     saved.push(structuredClone(doc));
     docs.set(doc.id, { ...structuredClone(doc), _etag: `"w${++revision}"` });
+    return { status: 'written' };
   };
   return {
     docs, calls, saved,
-    listByProject: async (projectId, { includeDeleted = false } = {}) => {
+    listByProject: async (projectId, { includeDeleted = false, owner } = {}) => {
       calls.push('listByProject');
-      return [...docs.values()].filter(doc => doc.projectId === projectId && (includeDeleted || doc.deleted !== true))
-        .map(doc => structuredClone(doc));
+      return [...docs.values()].filter(doc => doc.projectId === projectId && (includeDeleted || doc.deleted !== true) &&
+        (owner === undefined || worksRepository().ownerOf(doc) === owner)).map(doc => structuredClone(doc));
     },
     get: async (_projectId, id) => { calls.push('get'); return structuredClone(docs.get(id) || null); },
     save,
@@ -190,7 +192,7 @@ function fakeWorks(rows = []) {
 
 /** Swaps the works repository's methods for {fake}'s for this test. */
 function useWorks(t, fake) {
-  const works = require('../../src/repositories/works');
+  const works = worksRepository();
   for (const name of ['listByProject', 'get', 'save', 'tombstone']) t.mock.method(works, name, fake[name]);
   return fake;
 }
