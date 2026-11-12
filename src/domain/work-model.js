@@ -62,13 +62,25 @@ function checkSize(doc) {
   return over ? { ok: false, reason: 'oversize' } : { ok: true };
 }
 
-const markupErrors = (doc, errors) => eachString(doc, (text, path, key) => {
+/** A staff key at any depth, and `<` in public text. */
+const contentErrors = (doc, errors) => eachString(doc, (text, path, key) => {
+  if (key === null && STAFF_KEYS.includes(text)) errors.push({ path: path ? `${path}.${text}` : text, rule: 'staff-data' });
   if (PUBLIC_TEXT_KEYS.has(key) && text.includes('<')) errors.push({ path, rule: 'markup' });
 });
 
+/** Calls `visit(child, path)` for each object in `owner[key]`; a non-list or a non-object child is an error. */
+function eachChild(owner, key, path, errors, visit) {
+  const at = path ? `${path}.${key}` : key;
+  if (owner[key] === undefined) return;
+  if (!Array.isArray(owner[key])) {
+    errors.push({ path: at, rule: 'list' });
+    return;
+  }
+  owner[key].forEach((child, i) => (isObject(child) ? visit(child, `${at}.${i}`) : errors.push({ path: `${at}.${i}`, rule: 'object' })));
+}
+
 function itemErrors(item, path, [startKey, endKey], errors) {
   const at = (key) => (path ? `${path}.${key}` : key);
-  for (const key of STAFF_KEYS) if (Object.hasOwn(item, key)) errors.push({ path: at(key), rule: 'staff-data' });
   for (const key of DATE_KEYS) if (given(item[key]) && !dayOf(item[key])) errors.push({ path: at(key), rule: 'date' });
   const start = dayOf(item[startKey]);
   const end = dayOf(item[endKey]);
@@ -90,8 +102,9 @@ function identityErrors(doc, errors) {
   if (!idSource) errors.push({ path: 'id', rule: 'id' });
   const sourceBad = !Object.hasOwn(WORK_ID_PATTERNS, doc.source) || (idSource && doc.source !== idSource);
   if (given(doc.source) && sourceBad) errors.push({ path: 'source', rule: 'source' });
+  if (typeof doc.projectId !== 'string' || !doc.projectId) errors.push({ path: 'projectId', rule: 'required' });
   if (idSource === 'track') return;
-  for (const key of ['source', 'projectId', 'workTypeCode']) {
+  for (const key of ['source', 'workTypeCode']) {
     if (typeof doc[key] !== 'string' || !doc[key]) errors.push({ path: key, rule: 'required' });
   }
 }
@@ -119,7 +132,7 @@ function interruptionErrors(interruption, path, errors) {
 function workErrors(doc) {
   const errors = [];
   controlErrors(doc, errors);
-  markupErrors(doc, errors);
+  contentErrors(doc, errors);
   identityErrors(doc, errors);
   if (given(doc.actYear) && !ACT_YEARS.includes(doc.actYear)) errors.push({ path: 'actYear', rule: 'act-year' });
   itemErrors(doc, '', ['startDate', 'decisionDate'], errors);
@@ -132,16 +145,16 @@ function workErrors(doc) {
     if (bad) errors.push({ path: `${path}.id`, rule: 'child-id' });
     seen.add(child.id);
   };
-  phasesOf(doc).forEach((phase, i) => {
-    itemErrors(phase, `phases.${i}`, ['startDate', 'endDate'], errors);
-    checkId(phase, `phases.${i}`);
-    childrenOf(phase, 'milestones').forEach((m, j) => {
-      itemErrors(m, `phases.${i}.milestones.${j}`, ['actualDate', 'endDate'], errors);
-      checkId(m, `phases.${i}.milestones.${j}`);
+  eachChild(doc, 'phases', '', errors, (phase, at) => {
+    itemErrors(phase, at, ['startDate', 'endDate'], errors);
+    checkId(phase, at);
+    eachChild(phase, 'milestones', at, errors, (milestone, path) => {
+      itemErrors(milestone, path, ['actualDate', 'endDate'], errors);
+      checkId(milestone, path);
     });
-    childrenOf(phase, 'interruptions').forEach((x, j) => {
-      interruptionErrors(x, `phases.${i}.interruptions.${j}`, errors);
-      checkId(x, `phases.${i}.interruptions.${j}`);
+    eachChild(phase, 'interruptions', at, errors, (interruption, path) => {
+      interruptionErrors(interruption, path, errors);
+      checkId(interruption, path);
     });
   });
   return errors;
@@ -205,11 +218,6 @@ function summaryOf(work) {
 // Accepts what legislationTransitions in merge/track-derived.js accepts, so both give one date.
 const isDated = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 
-const actBefore = (year) => {
-  const i = ACT_YEARS.indexOf(Number(year));
-  return i > 0 ? ACT_YEARS[i - 1] : null;
-};
-
 /** Track's "Project Transitioning FROM ..." milestone date naming `fromYear`, over public-shape works. */
 function trackTransitionDateOf(projectWorks, fromYear) {
   for (const work of listOf(projectWorks)) {
@@ -223,13 +231,15 @@ function trackTransitionDateOf(projectWorks, fromYear) {
   return null;
 }
 
-/** A sheet date before `TRACK_FROM`, else Track's milestone, else the stored fallback, else null. */
-function transitionDateOf(transitionOut, projectWorks) {
+/**
+ * A sheet date before `TRACK_FROM`, else Track's milestone naming the work's own `actYear`,
+ * else the stored fallback, else null.
+ */
+function transitionDateOf(transitionOut, projectWorks, actYear) {
   if (!isObject(transitionOut)) return null;
   const stored = dayOf(transitionOut.date) ? transitionOut.date : null;
   if (transitionOut.dateSource === 'sheet' && stored && dayOf(stored) < TRACK_FROM) return stored;
-  const fromYear = actBefore(transitionOut.toActYear);
-  const fromTrack = fromYear === null ? null : trackTransitionDateOf(projectWorks, fromYear);
+  const fromTrack = ACT_YEARS.includes(actYear) ? trackTransitionDateOf(projectWorks, actYear) : null;
   if (fromTrack) return fromTrack;
   return transitionOut.dateSource === 'track' ? stored : null;
 }

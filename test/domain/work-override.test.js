@@ -57,7 +57,26 @@ test('dayOf', async (t) => {
   await t.test('impossible dates and zone-less timestamps are not dates', () => {
     assert.strictEqual(dayOf('2023-02-30'), null);
     assert.strictEqual(dayOf('2023-02-30T10:00:00Z'), null);
+    assert.strictEqual(dayOf('2023-13-01'), null);
+    assert.strictEqual(dayOf('2023-13-01T10:00:00Z'), null);
     assert.strictEqual(dayOf('2023-02-01T10:00:00'), null);
+  });
+
+  await t.test('an hour above 23 or a minute or second above 59 is not a time', () => {
+    assert.strictEqual(dayOf('2023-02-01T24:00:00Z'), null);
+    assert.strictEqual(dayOf('2023-02-01T10:60:00Z'), null);
+    assert.strictEqual(dayOf('2023-02-01T10:00:60Z'), null);
+  });
+
+  await t.test('Pacific midnight on both daylight-saving change days', () => {
+    assert.deepStrictEqual(['2015-03-08T07:59:00Z', '2015-03-08T08:01:00Z', '2015-03-09T06:59:00Z', '2015-03-09T07:01:00Z'].map(dayOf),
+      ['2015-03-07', '2015-03-08', '2015-03-08', '2015-03-09']);
+    assert.deepStrictEqual(['2015-11-01T06:59:00Z', '2015-11-01T07:01:00Z', '2015-11-02T07:59:00Z', '2015-11-02T08:01:00Z'].map(dayOf),
+      ['2015-10-31', '2015-11-01', '2015-11-01', '2015-11-02']);
+  });
+
+  await t.test('a non-zero offset is read as its instant', () => {
+    assert.strictEqual(dayOf('2024-03-09T23:30:00-05:00'), '2024-03-09');
   });
 });
 
@@ -108,6 +127,21 @@ test('validateMarker', async (t) => {
     assert.deepStrictEqual(rulesOf(validateMarker(both)), ['hidden-and-alive']);
     const unlisted = marker({ trackAlive: [{ trackWorkId: 'track-1', sourceKey: '1:amendment:1' }] });
     assert.deepStrictEqual(rulesOf(validateMarker(unlisted)), ['unpaired']);
+  });
+
+  await t.test('no id repeats in trackAlive, untilTrack or pairedTrackWorkIds, and no hidden sheet work waits untilTrack', () => {
+    const alive = [{ trackWorkId: 'track-1', sourceKey: '1:amendment:1' }, { trackWorkId: 'track-1', sourceKey: '1:amendment:2' }];
+    assert.deepStrictEqual(rulesOf(validateMarker(marker({ trackAlive: alive, pairedTrackWorkIds: ['track-1'] }))), ['repeated-track-work']);
+    assert.deepStrictEqual(rulesOf(validateMarker(marker({ untilTrack: [SHEET_A, SHEET_A] }))), ['repeated-sheet-work']);
+    assert.deepStrictEqual(rulesOf(validateMarker(marker({ pairedTrackWorkIds: ['track-1', 'track-1'] }))), ['repeated-track-work']);
+    const waiting = marker({ hidden: [{ trackWorkId: 'track-1', sheetWorkId: SHEET_A }], untilTrack: [SHEET_A], pairedTrackWorkIds: ['track-1'] });
+    assert.deepStrictEqual(rulesOf(validateMarker(waiting)), ['hidden-and-until-track']);
+  });
+
+  await t.test('batch fields have their types, and boundaryAtLoad is a bare date', () => {
+    assert.deepStrictEqual(rulesOf(validateMarker(marker({ batchId: '', provenance: 'loader', schemaVersion: 1.5 }))),
+      ['required', 'required', 'required']);
+    assert.deepStrictEqual(rulesOf(validateMarker(marker({ boundaryAtLoad: '2024-06-01T12:00:00Z' }))), ['boundary']);
   });
 });
 

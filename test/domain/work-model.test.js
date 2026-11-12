@@ -56,9 +56,10 @@ test('validateWork identity', async (t) => {
     assert.deepStrictEqual(rulesOf(validateWork(work({ source: undefined }))), ['required']);
   });
 
-  await t.test('a Track work may lack source, but never carry another one', () => {
+  await t.test('a Track work may lack source and workTypeCode, but never projectId or another source', () => {
     assert.strictEqual(validateWork({ id: 'track-12', projectId: '12' }).ok, true);
-    assert.deepStrictEqual(rulesOf(validateWork({ id: 'track-12', source: 'sheet' })), ['source']);
+    assert.deepStrictEqual(rulesOf(validateWork({ id: 'track-12' })), ['required']);
+    assert.deepStrictEqual(rulesOf(validateWork({ id: 'track-12', projectId: '12', source: 'sheet' })), ['source']);
   });
 
   await t.test('a sheet work id must be sheet-<uuid>, so the marker id is not a work id', () => {
@@ -78,17 +79,38 @@ test('validateWork content', async (t) => {
   });
 
   await t.test('rejects a staff key on a work', () => {
-    assert.deepStrictEqual(rulesOf(validateWork(work({ staff: { notes: [] } }))), ['staff-data']);
+    assert.deepStrictEqual(rulesOf(validateWork(work({ staff: true }))), ['staff-data']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ capitalInvestments: [] }))), ['staff-data']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [{ milestones: [{ contacts: [] }] }] }))), ['staff-data']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [{ interruptions: [{ kind: 'suspension', notes: 'x' }] }] }))),
       ['staff-data']);
   });
 
+  await t.test('a staff key is refused at any depth', () => {
+    const deep = work({ phases: [{ milestones: [{ links: { contacts: [] } }] }] });
+    assert.deepStrictEqual(validateWork(deep).errors, [{ path: 'phases.0.milestones.0.links.contacts', rule: 'staff-data' }]);
+    const transition = work({ actYear: 2002, transitionOut: { toActYear: 2018, date: null, dateSource: 'none', notes: 'x' } });
+    assert.deepStrictEqual(rulesOf(validateWork(transition)), ['staff-data']);
+    assert.deepStrictEqual(rulesOf(validateWork(work({ sourceRef: { sheet: { investment: 5 } } }))), ['staff-data']);
+  });
+
+  await t.test('phases, milestones and interruptions must be lists of objects', () => {
+    assert.deepStrictEqual(rulesOf(validateWork(work({ phases: {} }))), ['list']);
+    assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [null] }))), ['object']);
+    assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [{ milestones: 'none' }] }))), ['list']);
+    assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [{ interruptions: [5] }] }))), ['object']);
+  });
+
   await t.test('dates must be real ISO dates', () => {
     assert.deepStrictEqual(rulesOf(validateWork(work({ startDate: '2023-02-30' }))), ['date']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ startDate: '2023-02-30T10:00:00Z' }))), ['date']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ startDate: 'March 3, 2023' }))), ['date']);
+  });
+
+  await t.test('an impossible month or day is a date error, never a throw', () => {
+    for (const startDate of ['2023-13-01', '2023-02-32', '2023-00-10', '2023-02-00', '2023-13-01T10:00:00Z']) {
+      assert.deepStrictEqual(rulesOf(validateWork(work({ startDate }))), ['date'], startDate);
+    }
   });
 
   await t.test('interruption kind and act year are checked', () => {
@@ -127,7 +149,7 @@ test('validateWork content', async (t) => {
   await t.test('rejects < in a public string and in legalSection', () => {
     assert.deepStrictEqual(rulesOf(validateWork(work({ title: 'Mine <b>' }))), ['markup']);
     assert.deepStrictEqual(rulesOf(validateWork(work({ phases: [{ sourceName: 'a<b' }] }))), ['markup']);
-    assert.deepStrictEqual(rulesOf(validateWork({ id: 'track-1', simpleTitle: 'a<b' })), ['markup']);
+    assert.deepStrictEqual(rulesOf(validateWork({ id: 'track-1', projectId: '1', simpleTitle: 'a<b' })), ['markup']);
     const doc = work({ phases: [{ interruptions: [{ kind: 'suspension', legalSection: 's.<30' }] }] });
     assert.deepStrictEqual(rulesOf(validateWork(doc)), ['markup']);
     assert.strictEqual(validateWork(work({ sourceRef: { sheet: { file: 'a<b' } } })).ok, true);
@@ -230,16 +252,18 @@ test('transitionDateOf', async (t) => {
   const trackMilestone = assessment('Project Transitioning FROM the EA Act (2002)', '2025-05-30T00:00:00.000Z');
 
   await t.test('transitionDateOf: sheet date before 2025 wins; else Track\'s milestone; else the stored fallback; else null', () => {
-    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2021-03-01', dateSource: 'sheet' }, [trackMilestone]), '2021-03-01');
-    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2025-05-21', dateSource: 'track' }, [trackMilestone]),
+    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2021-03-01', dateSource: 'sheet' }, [trackMilestone], 2002), '2021-03-01');
+    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2025-05-21', dateSource: 'track' }, [trackMilestone], 2002),
       '2025-05-30T00:00:00.000Z');
-    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2025-05-21', dateSource: 'track' }, []), '2025-05-21');
-    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, []), null);
+    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: '2025-05-21', dateSource: 'track' }, [], 2002), '2025-05-21');
+    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, [], 2002), null);
   });
 
-  await t.test('Track\'s milestone counts only when it names the Act the work leaves', () => {
-    const other = assessment('Project Transitioning FROM the EA Act (1996)', '2025-05-30');
-    assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, [other]), null);
+  await t.test('Track\'s milestone counts only when it names the work\'s own Act', () => {
+    const from1996 = assessment('Project Transitioning FROM the EA Act (1996)', '2003-01-15');
+    const out = { toActYear: 2018, date: null, dateSource: 'none' };
+    assert.strictEqual(transitionDateOf(out, [trackMilestone, from1996], 1996), '2003-01-15');
+    assert.strictEqual(transitionDateOf(out, [from1996], 2002), null);
   });
 
   await t.test('Track\'s milestone date agrees with legislationTransitions on the same works', () => {
@@ -256,7 +280,7 @@ test('transitionDateOf', async (t) => {
     ];
     for (const works of fixtures) {
       const [pair] = legislationTransitions([2002, 2018], works);
-      assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, works), pair.date);
+      assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, works, 2002), pair.date);
     }
   });
 });

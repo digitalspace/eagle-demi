@@ -30,12 +30,17 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const compareText = (a, b) => (String(a ?? '') < String(b ?? '') ? -1 : String(a ?? '') > String(b ?? '') ? 1 : 0);
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
-const TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 const PACIFIC_DAY = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Vancouver', year: 'numeric', month: '2-digit', day: '2-digit'
 });
 
-const isCalendarDay = (day) => DATE_ONLY.test(day) && new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day;
+function isCalendarDay(day) {
+  if (!DATE_ONLY.test(day)) return false;
+  const [year, month, date] = day.split('-').map(Number);
+  const at = new Date(Date.UTC(year, month - 1, date));
+  return at.getUTCFullYear() === year && at.getUTCMonth() === month - 1 && at.getUTCDate() === date;
+}
 
 /**
  * A bare `YYYY-MM-DD` as written, or the Pacific calendar day of a zoned timestamp: Track stamps
@@ -219,9 +224,14 @@ function markerPairErrors(marker, errors) {
   const hiddenTrack = listOf(marker.hidden).filter(isObject).map(pair => pair.trackWorkId);
   const hiddenSheet = listOf(marker.hidden).filter(isObject).map(pair => pair.sheetWorkId);
   const aliveTrack = listOf(marker.trackAlive).filter(isObject).map(pair => pair.trackWorkId);
+  const untilTrack = listOf(marker.untilTrack);
   const paired = new Set(listOf(marker.pairedTrackWorkIds));
   if (hasRepeat(hiddenTrack)) errors.push({ path: 'hidden', rule: 'repeated-track-work' });
   if (hasRepeat(hiddenSheet)) errors.push({ path: 'hidden', rule: 'repeated-sheet-work' });
+  if (hasRepeat(aliveTrack)) errors.push({ path: 'trackAlive', rule: 'repeated-track-work' });
+  if (hasRepeat(untilTrack)) errors.push({ path: 'untilTrack', rule: 'repeated-sheet-work' });
+  if (hasRepeat(listOf(marker.pairedTrackWorkIds))) errors.push({ path: 'pairedTrackWorkIds', rule: 'repeated-track-work' });
+  if (untilTrack.some(id => hiddenSheet.includes(id))) errors.push({ path: 'untilTrack', rule: 'hidden-and-until-track' });
   if (aliveTrack.some(id => hiddenTrack.includes(id))) errors.push({ path: 'trackAlive', rule: 'hidden-and-alive' });
   if ([...hiddenTrack, ...aliveTrack].some(id => !paired.has(id))) errors.push({ path: 'pairedTrackWorkIds', rule: 'unpaired' });
 }
@@ -237,8 +247,10 @@ function validateMarker(marker) {
   need(marker.source === 'sheet', 'source', 'source');
   need(marker.owner === 'sheet', 'owner', 'owner');
   need(typeof marker.active === 'boolean', 'active', 'boolean');
-  for (const key of ['batchId', 'provenance', 'schemaVersion']) need(given(marker[key]), key, 'required');
-  const boundary = dayOf(marker.boundaryAtLoad);
+  need(typeof marker.batchId === 'string' && marker.batchId !== '', 'batchId', 'required');
+  need(isObject(marker.provenance), 'provenance', 'required');
+  need(Number.isInteger(marker.schemaVersion), 'schemaVersion', 'required');
+  const boundary = DATE_ONLY.test(String(marker.boundaryAtLoad)) ? dayOf(marker.boundaryAtLoad) : null;
   need(Boolean(boundary) && boundary >= LEGISLATIONS[2018].inForce && boundary <= TRACK_FROM, 'boundaryAtLoad', 'boundary');
   markerListErrors(marker, errors);
   markerPairErrors(marker, errors);
