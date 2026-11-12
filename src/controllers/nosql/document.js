@@ -832,7 +832,7 @@ async function inlineDownload(req, res) {
     if (found.status) return res.status(found.status).json(found.body);
     const edge = fromEdge(req.headers);
     const anonymous = isAnonymous(resolveAccess(req));
-    // DOWNLOAD_STREAM_MAX_BYTES=0 is the operator's way back to the 302, for every caller.
+    // DOWNLOAD_STREAM_MAX_BYTES=0 is the way back to the 302, bar an edge piece past byte 0 (503).
     const how = { edge, anonymous, ranged: Boolean(req.headers.range), neverRedirect: edge && anonymous && config.downloadStreamMaxBytes > 0 };
     const type = inlineType(found.doc.mimeType, found.fileName);
     let refused = 'off';
