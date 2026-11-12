@@ -1,23 +1,8 @@
 'use strict';
 
 /**
- * The federal half of a project's story, read from the Impact Assessment Agency of Canada registry.
- *
- * WHY THIS EXISTS: the `federal` section of a stored summary can only be generated from a federal
- * decision, and DEMI holds five Decision Statements in the whole corpus. The document itself is
- * public on the IAAC registry for every project that had a federal assessment — it is just not in
- * DEMI, and the registry has no API. So this reads the registry's own HTML.
- *
- * WHAT IT IS NOT: a crawler. Every function here is a parser over one page, and the one function
- * that fetches walks a fixed four-step path — project, document list, document, PDF — with a hard
- * request ceiling per project. `robots.txt` allows `/050/evaluations/` with `Crawl-delay: 5`, so
- * requests to the host are spaced by that delay and the run caches what it read: a rerun, or a
- * `--section federal` regeneration, refetches nothing.
- *
- * `fetch`, `sleep` and the PDF extractor are INJECTED. A test that reaches the registry is a test
- * that fails when Ottawa deploys, and a test that shells out to `pdftotext` is a test that fails
- * on a runner without poppler, so nothing in `test/` touches the network or the binary and the
- * fixtures are trimmed copies of the real pages.
+ * A project's federal decision, parsed from the IAAC registry's HTML: it has no API. Not a crawler: a
+ * fixed walk, a request cap, the robots.txt crawl delay; fetch, sleep and the PDF reader are injected.
  */
 
 const { execFile } = require('node:child_process');
@@ -39,8 +24,7 @@ const USER_AGENT = 'demi-project-summary/1.0';
 const CRAWL_DELAY_MS = 5000;
 
 /**
- * Requests to the host per project, counting only the ones that actually go out — a cache hit costs
- * nothing and is not counted. Five is the whole path: search (when the catalog has no link),
+ * Requests to the host per project; a cache hit is not counted. Five is the whole path: search,
  * project page, document list, document page, PDF.
  */
 const MAX_REQUESTS = 5;
@@ -63,11 +47,8 @@ function firstText(html, re) {
 }
 
 /**
- * The CEAR id in a project catalog's `CEAALink`, or null.
- *
- * The field is free text on a Track-sourced row: it holds a registry link on most projects, an
- * empty string on many, and on a few a link to something else entirely. Only a `/proj/<id>` link
- * answers, because that id is the one every other read here is keyed on.
+ * The CEAR id in a project catalog's `CEAALink`, or null. The field is free text; only a
+ * `/proj/<id>` link answers, because every other read here is keyed on that id.
  */
 function cearIdFromLink(link) {
   const match = PROJ_LINK.exec(String(link || ''));
@@ -78,12 +59,8 @@ function cearIdFromLink(link) {
 const NOC_TITLE = /<span class="noctitle">([\s\S]*?)<\/span>/i;
 
 /**
- * The CEAR project a search page names, matched on title.
- *
- * The registry's search is a relevance ranking over full text, so the top hit is regularly a
- * DOCUMENT of another project that mentions this one. Matching on the title is what keeps a
- * federal decision belonging to a different project out of this project's summary — a wrong
- * decision statement is worse here than none at all.
+ * The CEAR project a search page names, matched on title: search ranks on full text, so the top hit
+ * is often another project's document, and a wrong decision statement is worse than none.
  *
  * @returns {{cearId: string, title: string, status: string|null}|null}
  */
@@ -110,11 +87,8 @@ function parseProjectStatus(html) {
 }
 
 /**
- * Every document row on a document list page, in the order the registry printed them.
- *
- * The list is unpaginated below 50 rows and a project's key documents never approach that, so there
- * is no paging to follow. A row missing an id or a title is skipped rather than half-built: every
- * field here is either read from the page or absent, and a row with a guessed id would be fetched.
+ * Every document row on a list page, in registry order; the list is unpaged below 50 rows. A row
+ * missing an id or a title is skipped, since a row with a guessed id would be fetched.
  *
  * @returns {Array<{docId: string, title: string, date: string|null, category: string|null}>}
  */
@@ -137,17 +111,14 @@ function parseDocumentRows(html) {
 const DECISION_STATEMENT = /decision statement/i;
 const UPDATED = /\bupdated\b/i;
 /**
- * A row filed ABOUT a decision statement rather than being one: the press release announcing it,
- * the notice that a statute moved it, the media advisory. The registry files these under the same
- * project with the same words in the title, and often on the same day.
+ * A row filed ABOUT a decision statement: press release, transition notice, media advisory. The
+ * registry files these under the same project, with the same words, often on the same day.
  */
 const ABOUT_A_DECISION = /\b(?:notice|news release|media|backgrounder|transition)\b/i;
 const NEWS_CATEGORY = /news release/i;
 /**
- * The decision statement itself, however the registry qualifies it — "Environmental Assessment
- * Decision Statement", "Minister's ... Decision Statement", "Updated Decision Statement". The
- * qualifiers lead; anything before them ("Extension of Time Limit for the Issuance of a Decision
- * Statement") is a document about the statement.
+ * The statement itself under any qualifier ("Updated Decision Statement"). Other text before it
+ * ("Extension of Time Limit for the Issuance of a Decision Statement") marks a document about it.
  */
 const IS_THE_STATEMENT =
   /^(?:(?:minister(?:'|\u2019)s|updated|amended|revised|environmental assessment|impact assessment)\s+)*decision statement\b/i;
@@ -156,18 +127,8 @@ const IS_THE_STATEMENT =
 const rowDate = row => String((row && row.date) || '');
 
 /**
- * The decision statement to summarise, or null.
- *
- * Rows that only mention a decision statement are dropped first: on CEAR 80032 the newest such row
- * is a 2024 transition notice and on CEAR 54754 it is the news release filed the same day as the
- * decision, and both were read as the decision itself. What is left is preferred in two tiers — the
- * statement under its own name over a document named after it — so a time-limit extension cannot
- * outrank the statement it postponed.
- *
- * Within a tier, newest wins. "Updated Decision Statement" is preferred ONLY when it is at least as
- * new as the plain one — Site C's updated statement supersedes the 2014 original, but a registry
- * that files an amendment to an old statement after issuing a newer one would otherwise have the
- * superseded document read as current.
+ * The decision statement to summarise, or null: rows about one dropped, the statement by name over a
+ * document named after it, then newest. "Updated" wins only when at least as new as the plain one.
  */
 function pickDecisionStatement(rows) {
   const candidates = (rows || []).filter(r => r
@@ -187,12 +148,8 @@ function pickDecisionStatement(rows) {
 }
 
 /**
- * The PDF a document page offers, and the heading above it.
- *
- * The registry renders this anchor two ways — `class="gc-dwnld"` on the newer template,
- * `id="download"` on the older one — and neither quotes the href. So the anchor is found by what it
- * points AT: a PDF under `/050/documents/`. That is the one part of the markup both templates
- * agree on, and the part that would have to change for the link to stop being a link.
+ * The PDF a document page offers, and the heading above it. Neither template quotes the href, so the
+ * anchor is found by its target, a PDF under `/050/documents/`: the one part both templates share.
  *
  * @returns {{pdfUrl: string, title: string|null}|null}
  */
@@ -213,10 +170,8 @@ function parsePdfLink(html) {
 }
 
 /**
- * The GC template's furniture, which wraps every document page: the registry menu, the search form,
- * the stylesheets, the scripts. None of it is the decision and all of it carries words — the menu
- * even carries an `<h2>` ("Registry") ahead of the document's own heading, so a read that keeps it
- * would take the menu for the title.
+ * The GC template around every document page. Its menu carries an `<h2>` ("Registry") ahead of the
+ * document's own, so a read that kept it would take the menu for the title.
  */
 const FURNITURE = /<(script|style|form|nav|header|footer)\b[^>]*>[\s\S]*?<\/\1>/gi;
 
@@ -229,25 +184,14 @@ const BLOCK_BREAK = /<\/(?:p|div|section|h[1-6]|li|ul|ol|tr|table|blockquote|dt|
 /** About one printed page of a decision statement, in characters. */
 const INLINE_PAGE_CHARS = 3000;
 
-/**
- * The least text that can be a decision. Below it the page is a stub — a row that links elsewhere,
- * or a template that rendered without its document — and calling that a decision statement would
- * put Canada's name on nothing.
- */
+/** The least text that can be a decision; below it the page is a stub, not a statement. */
 const INLINE_MIN_CHARS = 500;
 
 /**
- * The decision a document page prints in its own body, for the pages that have no PDF.
+ * The decision a page prints in its own body: CEAA 2012-era statements have no PDF. Read as markup,
+ * not a DOM: the pages are unbalanced and a strict parser would reject them.
  *
- * CEAA 2012-era statements — Ajax Mine, and three others in this corpus — were never filed as a
- * file: the registry publishes the Minister's decision as the document page itself. So the page IS
- * the statement, and the only thing missing next to the PDF path is the file.
- *
- * Read as markup, not as a DOM: the pages are unbalanced (`</div>` after the last paragraph, a
- * `<div>` that never closes) and a parser strict enough to be worth adding would reject them.
- *
- * @returns {{text: string, title: string|null}|null} the body as paragraphs, or null for a page
- *   whose main content cannot be found
+ * @returns {{text: string, title: string|null}|null} paragraphs, or null with no main content
  */
 function parseInlineContent(html) {
   let markup = String(html).replace(/<!--[\s\S]*?-->/g, ' ').replace(FURNITURE, ' ');
@@ -275,12 +219,8 @@ function parseInlineContent(html) {
 }
 
 /**
- * Inline text as numbered pages, cut at paragraph boundaries.
- *
- * An HTML decision has no pages, but everything downstream cites one: a chunk carries a page
- * number and a reader checks the quote against that page of the registry's own copy. So the text
- * is cut into page-sized pieces, never mid-paragraph — a citation that straddles a cut would
- * quote text no single page holds. A paragraph longer than a page stays whole and is its own page.
+ * Inline text as numbered pages for citations, cut only between paragraphs so no quote straddles a
+ * cut. A paragraph longer than a page is its own page.
  *
  * @returns {Array<{page: number, text: string}>}
  */
@@ -300,15 +240,8 @@ function inlinePages(text, size = INLINE_PAGE_CHARS) {
 }
 
 /**
- * A PDF's pages as text, through poppler's `pdftotext`.
- *
- * `-layout` because a decision statement's conditions are a numbered table and reading order
- * without it interleaves the columns. Pages are separated by a form feed, which is what makes a
- * page number available at all — and a page number is what a citation needs to be checkable
- * against the registry's own copy.
- *
- * The binary is not a dependency of this package and is absent on a bare Function host, so its
- * absence is an ANSWER, not a throw: the federal section is then simply not generated.
+ * A PDF's pages via `pdftotext -layout`, which keeps condition tables in reading order; form feeds
+ * give page numbers. The binary is absent on a Function host, so that answers `{error}`, no throw.
  *
  * @returns {Promise<Array<{page: number, text: string}>|{error: string}>}
  */
@@ -324,9 +257,8 @@ function pdfToPages(buffer) {
         if (error) return resolve({ error: 'pdf_extract_failed' });
 
         const text = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : String(stdout || '');
-        // Poppler writes a form feed AFTER every page, so the split leaves a trailing empty
-        // element. Dropping it by position, not by emptiness: a genuinely blank page in the middle
-        // still holds its page number, and the numbers are what citations are checked against.
+        // Poppler ends every page with a form feed. Drop the last empty part by position, so a blank
+        // page in the middle keeps its number.
         const parts = text.split('\f');
         if (parts.length > 1 && parts[parts.length - 1].trim() === '') parts.pop();
         resolve(parts.map((page, i) => ({ page: i + 1, text: page.replace(/\r\n/g, '\n') })));
@@ -341,11 +273,8 @@ function pdfToPages(buffer) {
 const cacheKey = url => String(url).replace(/[^a-z0-9]+/gi, '_').slice(-120);
 
 /**
- * The per-run cache: what was fetched, keyed by URL, under the OS temp directory.
- *
- * The point is `--section federal`. Regenerating one section of one project is the normal way this
- * is run, and without a cache each rerun would spend the whole request budget and 20 seconds of
- * crawl delay refetching pages that did not change between two runs a minute apart.
+ * Fetched pages keyed by URL under the OS temp directory, so a `--section federal` rerun does not
+ * spend the request budget and crawl delay again.
  */
 function diskCache(cearId) {
   const dir = path.join(os.tmpdir(), 'demi-iaac', String(cearId || '_search'));
@@ -372,17 +301,10 @@ function diskCache(cearId) {
 const timerSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * The federal source for one project: its CEAR entry, its document list, and the text of its
- * decision statement when it has one.
+ * One project's CEAR entry, document list and decision text. Throws on a registry failure; a listed
+ * decision that cannot be read still returns, with empty `pages` and `decision.error` set.
  *
- * Throws on a failure that is about the registry rather than about the project — a non-OK response,
- * a page that does not parse. The caller turns that into a section that is null for a stated
- * reason; it must not turn into a summary generated from nothing. Once the document list names a
- * decision statement, `decision` carries that row whether or not its PDF could be read, with
- * `decision.pages` empty and `decision.error` naming the cause.
- *
- * @param {object} project  a DEMI project row: `name`/`displayName` and, where Track has one,
- *   `CEAALink`
+ * @param {object} project  a DEMI project row: `name`/`displayName` and, from Track, `CEAALink`
  * @param {object} [opts]
  * @param {Function} [opts.fetch]  test seam; defaults to the global
  * @param {Function} [opts.sleep]  test seam; defaults to a timer
@@ -392,9 +314,7 @@ const timerSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fetchFederalSource(project, opts = {}) {
   const doFetch = opts.fetch || globalThis.fetch;
   const sleep = opts.sleep || timerSleep;
-  // Injected for the same reason as `fetch`: `pdftotext` is missing on a CI runner as well as
-  // on a Function host, so a test that shells out to it asserts what the runner has installed
-  // rather than what this walk does with the pages it gets back.
+  // Injected like `fetch`: CI runners and Function hosts lack `pdftotext`.
   const extractPages = opts.pdfToPages || pdfToPages;
   const name = String((project && (project.name || project.displayName)) || '').trim();
 
@@ -486,11 +406,8 @@ async function fetchFederalSource(project, opts = {}) {
     return source;
   }
 
-  // The registry DOES list a decision statement. Every failure below is therefore a document that
-  // could not be read, which is a different claim from Canada having issued no decision, so the row
-  // is returned either way and `decision.error` says which of the two the caller is looking at.
-  // `format` says which of the two the text came from, and is null while there is no text: the
-  // registry files a decision either as a PDF or as the document page's own body.
+  // A listed decision that cannot be read is not "no decision": the row returns either way, with
+  // `decision.error` naming the cause. `format` (PDF or page body) stays null until there is text.
   source.decision = {
     docId: row.docId,
     title: row.title,

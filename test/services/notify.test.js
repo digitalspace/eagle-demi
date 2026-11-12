@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The eagle-notify push. What is asserted is the wire: the URL, the function-key header and the
- * event body, because eagle-notify is a separate service and nothing else in this repo would
- * notice the payload drifting.
- *
- * Retry and dark mode are the other half — a notification that throws would fail the mirror, and a
- * dark environment that "sent" something would suppress the real notification later.
+ * The eagle-notify push, asserted on the wire (URL, key header, body): nothing else here sees it drift.
+ * A throw would fail the mirror, and a dark environment that "sent" would suppress the real send.
  */
 
 process.env.NODE_ENV = 'test';

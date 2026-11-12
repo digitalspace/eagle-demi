@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * eagle-notify calls: "an Update was published" and its retraction, and CAC member removal.
- *
- * DEMI owns Updates, so DEMI is what tells the subscription service one went public. The Update
- * sends never throw: each resolves an OUTCOME, and the caller decides from it whether a later tick
- * may try again. They are dark when either setting is missing. The CAC calls throw instead, and
- * throw when unconfigured too, because the DEMI write they guard must not land without them.
+ * eagle-notify calls: Update published or retracted (never throw; dark without settings) and CAC
+ * member removal (throws, even unconfigured: the DEMI write it guards must not land without it).
  */
 
 const config = require('../config');
@@ -41,9 +37,8 @@ function excerptOf(content) {
 }
 
 /**
- * Where a reader lands. With reader links on, the update's own page: `item.id` is the Eagle `_id`
- * eagle-public's `/updates/:id` reads back through `RecentActivity` `and[_id]`. Otherwise the
- * project page, or the news page for a site-wide update.
+ * Where a reader lands: with reader links on, eagle-public's `/updates/:id` (`item.id` is the Eagle
+ * `_id`); otherwise the project page, or the news page for a site-wide update.
  */
 function urlFor(item) {
   if (config.notifyUpdateReaderLinks) return `${config.linkBaseUrl}/updates/${item.id}`;
@@ -114,10 +109,8 @@ function imageUrlFor(document) {
 }
 
 /**
- * Announce one publication.
- *
- * `featuredImage` is passed apart from the row because only the caller can say whether anyone may
- * fetch it: the download route serves public documents only, so a non-public image is `null` here.
+ * Announce one publication. `featuredImage` comes apart from the row: only the caller knows if it is
+ * public, and the download route serves public documents only, so a non-public image is `null`.
  */
 async function updatePublished(item, projectName, featuredImage = null) {
   // Both or neither, and never without alt text: eagle-notify renders the image only as that pair.
@@ -152,9 +145,8 @@ class NotifyError extends Error {
 }
 
 /**
- * POSTs to an eagle-notify CAC route and resolves its JSON body on a 2xx. Unlike `post`, this
- * throws, and throws when unconfigured too: a CAC write must not land while members stay subscribed.
- * Both routes are idempotent, so a 5xx or no answer is tried once more.
+ * POSTs to a CAC route, resolving its JSON on a 2xx. Throws, even unconfigured, so a CAC write cannot
+ * land while members stay subscribed. Both routes are idempotent: a 5xx or no answer is retried once.
  */
 async function cacPost(path, body) {
   if (!configured()) throw new NotifyError('notify not configured', { configured: false });
