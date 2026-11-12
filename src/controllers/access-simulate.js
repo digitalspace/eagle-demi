@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * `POST /api/access/simulate` — what THIS engine answers for a hypothetical caller.
- *
- * Data-free: it reads no container, writes nothing, and grants nothing. Every value in the response
- * comes from the helpers the real reads compose — `resolveAccess`, `canRead`, `redactForAccess` —
- * so the Access Model screen renders the rules instead of a second copy of them that drifts.
- * Nothing here may re-encode a rule; if an answer is not available from a helper, the helper is
- * what needs the export. Authenticated, because the answer is the whole field catalog and a
- * role-privilege oracle even though the caller it describes is hypothetical.
+ * `POST /api/access/simulate`: data-free; every answer comes from the real access helpers, never a
+ * re-encoded rule. Authenticated: the answer is the whole field catalog and a role-privilege oracle.
  */
 
 const {
@@ -53,11 +47,8 @@ function listError(value, name) {
 }
 
 /**
- * Why this body is refused, or null.
- *
- * The credential is validated by `grantError`, the same function `POST /credentials` refuses a real
- * grant with — a simulated grant the registry would reject must not be simulated as if it worked.
- * The party and window it also demands are supplied here: neither is something a caller simulates.
+ * Why this body is refused, or null. `grantError` is the check `POST /credentials` uses, so a grant
+ * the registry would reject is refused here too; party and window are filled in, not simulated.
  */
 function bodyError(body, now) {
   const unknown = Object.keys(body).filter(key => !BODY_KEYS.includes(key));
@@ -126,11 +117,8 @@ function meFor(request) {
 }
 
 /**
- * One row per ladder level: the stored `read[]` it carries, can this caller read it, which arm.
- *
- * The arms are separated by REMOVING one grant at a time from the resolved access and asking the
- * real `canRead` again — a caller that reads the row with neither team nor credential is there on
- * its roles.
+ * One row per ladder level: its `read[]`, whether this caller reads it, and which arm grants it.
+ * The arm is found by removing one grant at a time and asking the real `canRead` again.
  */
 function rowsFor(access, probe) {
   const roleOnly = { ...access, teams: [], credentials: [] };
@@ -151,12 +139,8 @@ function rowsFor(access, probe) {
 }
 
 /**
- * One record carrying every catalogued key, so the real redactor can be asked what survives.
- *
- * Values are `1`: truthy, so a key is never dropped for being empty, and not `true`, so the
- * `=== true` predicates read false and each field sits at its `defaultVis`.
- * ponytail: a future predicate testing mere truthiness would widen its own field here; give the
- * probe per-field values if one lands.
+ * Values are `1`: truthy so no key drops as empty, not `true` so `=== true` predicates read false.
+ * ponytail: a predicate testing plain truthiness would widen its field; use per-field values then.
  */
 function probeRecord(catalog) {
   const record = {};
@@ -182,11 +166,8 @@ function survives(seen, field) {
 }
 
 /**
- * Every catalogued field of one entity, and whether this caller sees it. Plumbing keys included.
- *
- * The answer comes from `redactForAccess` over a probe record rather than from the catalog, so
- * rules the catalog does not carry — `sources.*` gated on ENRICHMENT_SOURCES, and whatever the
- * redactor grows next — are reported as the response boundary actually applies them.
+ * Every catalogued field of one entity and whether this caller sees it. Asks the real redactor, so
+ * rules the catalog lacks (`sources.*` gated on ENRICHMENT_SOURCES) show as the boundary applies them.
  */
 function fieldsFor(entity, access) {
   const catalog = catalogFor(entity);
