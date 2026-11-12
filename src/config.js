@@ -1,30 +1,9 @@
 'use strict';
 
-/**
- * config.js — Environment variable helpers.
- *
- * Env vars:
- *   MINIO_HOST, MINIO_PORT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
- *   MINIO_BUCKET_NAME, MINIO_USE_SSL
- *   SOURCE_MINIO_ACCESS_KEY, SOURCE_MINIO_SECRET_KEY,
- *   SOURCE_MINIO_HOST, SOURCE_MINIO_PORT, SOURCE_MINIO_USE_SSL
- *   DOCLING_URL          — docling-serve base URL (default: http://eagle-demi:5000)
- *   DOCLING_API_KEY      — X-Api-Key for docling-serve
- *
- * NO DATABASE SETTINGS. The Cosmos NoSQL client reads `COSMOS_NOSQL_DATABASE` itself and
- * authenticates with a managed identity (`src/db/cosmos-nosql.js`); this file has nothing to
- * contribute to it. The `MONGODB_` and `COSMOSDB_` keys, and the `mongodb://` URI builder that
- * used to live here, went with the Mongo account — they were read by nothing, and defaulted to
- * `localhost:27017`, so anything that picked them up would have connected somewhere real-looking
- * and empty.
- */
+// No database settings: src/db/cosmos-nosql.js reads its own and uses a managed identity.
 
-/**
- * A whole non-negative number from the environment, or the fallback when the variable is unset.
- *
- * Throws at load, like the allowedClients guard below: a cap that parsed to NaN compares false
- * against every value, so the failure mode of a silent parse is an unlimited limit.
- */
+// Throws at load: a cap that parsed to NaN compares false against every value, so a silent
+// parse would remove the limit.
 function intFromEnv(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -42,10 +21,7 @@ function timeSpanMs(value) {
   return ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000;
 }
 
-/**
- * A comma list of IPv4 addresses or CIDR blocks. Throws at load on any other shape: a typo would
- * otherwise deploy clean and silently put every visitor back on one shared quota key.
- */
+// Throws at load on a bad entry: a typo would otherwise put every visitor on one shared quota key.
 function proxyListFromEnv(name) {
   const entries = (process.env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
   const shape = /^(\d{1,3})(\.\d{1,3}){3}(\/\d{1,2})?$/;
@@ -59,22 +35,11 @@ function proxyListFromEnv(name) {
 
 const { isKeyVaultReference } = require('./utils/key-vault-reference');
 
-// Settings App Service resolved as a literal Key Vault reference instead of a secret. Names only.
-// Data, never a log line: src/utils/logger.js reads this module, so this file cannot load the
-// logger. That module reports these names once, after the logger exists.
+// Names only. The logger requires this module, so src/utils/logger.js reports them, not this file.
 const unresolvedSecrets = [];
 
-/**
- * A credential app setting, or '' when the Key Vault reference behind it did not resolve.
- *
- * azure/modules/api-function-flex.bicep deploys every credential as
- * `@Microsoft.KeyVault(SecretUri=...)`. App Service substitutes the secret for that string, but
- * when the resolution fails — RBAC not granted yet, vault unreachable, secret deleted — it hands
- * the app the reference text itself. Taking that as the credential fails every use of it anyway
- * (the MinIO login, the client-credentials grant, the header comparison), and puts a vault URI
- * into whatever logs or echoes the value. So an unresolved reference reads as unset, and the
- * NAME of the setting is reported once. Never the value: for a resolved setting that is a secret.
- */
+// A failed Key Vault reference reaches the app as its literal text; read it as unset and record
+// only the setting's name, never the value.
 function secretFromEnv(name) {
   const raw = process.env[name];
   if (raw === undefined) return '';
@@ -107,88 +72,52 @@ const EDGE_GATE_MODES = ['', 'log', 'enforce'];
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
-  // Pinning the region lets the SDK sign presigned URLs locally. Without it, the client
-  // performs a bucket-region lookup against MinIO on every presign — which hangs for
-  // ~135s from Azure before failing, since MinIO lives on OpenShift Silver.
+  // Pinned so presigning stays local: a bucket-region lookup from Azure hangs about 135 s.
   minioRegion:  process.env.MINIO_REGION      || 'us-east-1',
   minioAccess:  secretFromEnv('MINIO_ACCESS_KEY'),
   minioSecret:  secretFromEnv('MINIO_SECRET_KEY'),
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
-  // Path segment prepended to every stored object key.
-  //
-  // Documents carry the key eagle-api recorded against the PROD bucket (`etl/<slug>/<file>`).
-  // Non-prod buckets hold a copy of prod nested one level down, under a prefix named after
-  // the prod bucket — e.g. dev's bucket `asnpnn` contains `ozwdez/etl/...`. So the stored
-  // metadata and the actual layout differ by exactly one segment, per environment.
-  //
-  // Empty in prod, `ozwdez/` in dev. Set MINIO_KEY_PREFIX per environment.
-  // This disappears once documents move to Azure Blob with a single clean key layout.
+  // Stored keys are the prod bucket's; a non-prod bucket may nest that copy under one more segment,
+  // which this prefix adds. Empty in prod.
   minioKeyPrefix: process.env.MINIO_KEY_PREFIX || '',
 
-  // Which object-storage backend serves documents: 'minio' or 'azure'.
-  //
-  // Explicit, never inferred from whichever credentials happen to be present. Inferring a mode
-  // switch from unrelated config is how COSMOS_ENDPOINT silently activated the wrong data layer
-  // on deploy. An unknown value throws at load rather than falling back — see src/storage/.
+  // 'minio' or 'azure'. Explicit, never inferred from which credentials are present; src/storage/
+  // throws on an unknown value.
   storageBackend: process.env.STORAGE_BACKEND || 'minio',
 
-  // Azure Blob backend. Keyless: auth is Entra managed identity, so there is no account key
-  // here to leak or rotate. Each environment gets its OWN container, which is what makes
-  // "dev accidentally points at prod storage" structurally impossible rather than merely
-  // discouraged — so there is no key-prefix equivalent.
+  // Keyless (managed identity). Each environment has its own container, so no key prefix exists.
   azureStorageAccount:   process.env.AZURE_STORAGE_ACCOUNT || '',
   azureStorageContainer: process.env.AZURE_STORAGE_CONTAINER || '',
 
-  // Archive-tier backup of stored originals, read by src/helpers/backup-check.js before any
-  // in-place rewrite. Keyless like the blob backend above. Empty means no backup is configured,
-  // and the check then refuses every object rather than waving it through.
+  // Checked before any in-place rewrite of an original. Empty: the check refuses every object.
   backupAccount:   process.env.BACKUP_ACCOUNT || '',
   backupContainer: process.env.BACKUP_CONTAINER || '',
 
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   secretFromEnv('DOCLING_API_KEY'),
 
-  // The public site's access curtain (POST /api/gate). Compared in controllers/gate.js and nowhere
-  // else, so it never reaches a bundle or GET /config/public — the boolean `ACCESS_GATE` in the
-  // public config document is the only part of the curtain a browser is told about.
-  //
-  // Empty is a valid state and the one prod runs: no password means no gate, and the route 404s.
-  // So there is no boot guard here, unlike allowedClients — an ungated environment is a choice.
+  // Compared only in controllers/gate.js, so it never reaches a browser. Empty is valid and what
+  // prod runs: no gate, and POST /gate 404s.
   accessGatePassword: secretFromEnv('ACCESS_GATE_PASSWORD'),
 
-  // Keys under a project's `sources` that may leave over HTTP (src/vis/redact.js).
-  // Empty = no enrichment is published, which is what prod runs.
+  // Keys under a project's `sources` that may leave over HTTP. Empty publishes none.
   enrichmentSources: (process.env.ENRICHMENT_SOURCES || '').split(',').map(s => s.trim()).filter(Boolean),
 
-  // Paragraphs accumulate to TARGET before a chunk is emitted; MAX is the hard split point and
-  // MIN is only the floor below which a trailing fragment is folded into the previous chunk.
-  //
-  // TARGET = 2500 IS CURRENTLY UNJUSTIFIED. It was derived against Typesense, which held its index
-  // in RAM and paid ~1.1 KB per 601-character chunk, so per-chunk overhead dominated the text and
-  // merging up to ~2500 cut the corpus from ~3.1M chunks to ~740k. AI Search has no such cost, so
-  // that argument no longer applies to anything. The real lever now is retrieval: chunks are the
-  // unit a conjunctive query must match within, so larger chunks satisfy AND more often and dilute
-  // BM25 term density, and smaller ones do the reverse. That trade can only be settled by
-  // re-chunking at several sizes and scoring — see the sweep planned with the re-ingest. Until
-  // then this number is inherited, not chosen.
+  // MIN is the floor below which a trailing fragment folds into the previous chunk. TARGET is
+  // inherited, not tuned for retrieval; changing any size needs a full re-ingest.
   maxChunkSize:    parseInt(process.env.MAX_CHUNK_SIZE    || '4000', 10),
   targetChunkSize: parseInt(process.env.TARGET_CHUNK_SIZE || '2500', 10),
   minChunkSize:    parseInt(process.env.MIN_CHUNK_SIZE    || '100',  10),
   overlapSize:     parseInt(process.env.OVERLAP_SIZE      || '200',  10),
 
-  // Chunk ingest guards (POST /documents/:id/chunks). The cap stops a runaway chunker before it
-  // writes. The largest real markdown is 2,198 table lines averaging 28,817 characters (63.3M); run
-  // through chunkMarkdown at the sizes above, that shape gives 16.7k-17.6k chunks and 63M of
-  // 600-character prose paragraphs 21k, so it holds with 16% to spare. ai-search
-  // deleteChunksForDocument clears at most 25,000 per document, so nothing above that could be
-  // fully removed again anyway.
+  // Stops a runaway chunker; the largest real document makes about 21k chunks.
+  // deleteChunksForDocument clears at most 25,000 per document, so more could never be removed.
   maxChunksPerDocument:       intFromEnv('MAX_CHUNKS_PER_DOCUMENT', 25000),
   // A host that retries 5xx forever is stopped after this many failures inside the window.
   chunkIngestMaxFailures:     intFromEnv('CHUNK_INGEST_MAX_FAILURES', 3),
   chunkIngestFailureWindowMs: intFromEnv('CHUNK_INGEST_FAILURE_WINDOW_MS', 24 * 60 * 60 * 1000),
 
-  // Docling request timeout in ms (large docs can take minutes)
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
@@ -203,246 +132,151 @@ const config = {
   // Featured documents one project may hold; PUT /documents/:id answers 409 past it. 0 = nothing can be featured.
   featuredDocumentsMax: intFromEnv('FEATURED_DOCUMENTS_MAX', 5),
 
-  // Bulk document download (PUBLIC-148). Caps REFUSE rather than truncate: a job that silently
-  // dropped documents would hand someone an incomplete download they had no way to notice.
-  //
-  // intFromEnv, not parseInt: `parseInt('2500 docs')` is 2500 and `parseInt('lots')` is NaN, and a
-  // NaN cap compares false against everything, so a typo in an app setting would remove the limit
-  // instead of failing the deploy.
+  // Bulk download caps refuse rather than truncate: a silently short download goes unnoticed.
   bulkMaxDocuments:     intFromEnv('BULK_MAX_DOCUMENTS', 2500),
   bulkAnonMaxDocuments: intFromEnv('BULK_ANON_MAX_DOCUMENTS', 100),
-  // Per ZIP PART: a job over this is split into numbered parts, not refused.
+  // Per zip part: a job over this is split into numbered parts, not refused.
   bulkMaxBytes:         intFromEnv('BULK_MAX_BYTES', 2147483648),
   // Whole job. The one byte ceiling that refuses.
   bulkMaxTotalBytes:    intFromEnv('BULK_MAX_TOTAL_BYTES', 21474836480),
-  // Object opens the worker keeps ahead of the archive append, so the next documents' round trips
-  // to the object store overlap the current one. Bounded by the sockets and buffers an instance
-  // can hold at once, not by how slow the object store is.
+  // Object opens kept ahead of the archive append. Bounded by the sockets and buffers an instance
+  // can hold, not by how slow the object store is.
   bulkFetchAhead:       intFromEnv('BULK_FETCH_AHEAD', 3),
-  // Object TRANSFERS that run at once. 1 = off, and the worker is bound by one connection's
-  // throughput to the object store (6.4 MB/s measured from Azure): an open ahead of the append
-  // sits on an idle socket until its turn, so only the round trip overlaps, not the bytes.
+  // Transfers at once. At 1 the worker is bound by one connection's throughput (about 6.4 MB/s
+  // from Azure); fetch-ahead then overlaps only the round trip.
   bulkFetchConcurrency: intFromEnv('BULK_FETCH_CONCURRENCY', 1),
-  // Total bytes those transfers may hold, split evenly between them — the memory ceiling of the
-  // setting above. An instance also holds one 64 MiB multipart upload buffer (src/storage/minio.js).
+  // Memory ceiling for those transfers, split evenly. An instance also holds one 64 MiB multipart
+  // upload buffer (src/storage/minio.js).
   bulkFetchBufferBytes: intFromEnv('BULK_FETCH_BUFFER_BYTES', 268435456),
-  // Concurrent jobs per requester. No app rate limiter exists and APIM Consumption cannot key-limit
-  // an anonymous caller, so this is the abuse boundary for the feature.
+  // The abuse boundary: APIM Consumption cannot key-limit an anonymous caller.
   bulkMaxPending:       intFromEnv('BULK_MAX_PENDING', 3),
-  // Jobs one requester may start in 24 hours. bulkMaxPending alone bounds concurrency only: a
-  // caller who waits for each job to finish can start an unlimited number of them.
+  // bulkMaxPending bounds concurrency only; this bounds jobs started per 24 hours.
   bulkMaxPerDay:        intFromEnv('BULK_MAX_PER_DAY', 20),
-  // How old a job may be when the worker picks it up. The access snapshot on the row is a copy of
-  // the caller's roles at submit time, so a message that sat in the queue past this is refused
-  // rather than run against credentials nobody has re-checked since.
+  // The job carries the caller's roles from submit time, so an older job is refused rather than
+  // run on unchecked credentials.
   bulkMaxJobAgeMs:      intFromEnv('BULK_MAX_JOB_AGE_MS', 7_200_000),
-  // When a `running` job is reported as failed instead: the queue's visibility timeout, read from
-  // host.json so the two cannot drift (below it a hidden message reads as dead, above it a
-  // returned one reads as alive).
+  // A `running` job older than this reads as failed. Taken from host.json so it cannot drift from
+  // the queue's visibility timeout.
   bulkStaleRunningMs:   timeSpanMs(require('../host.json').extensions.queues.visibilityTimeout),
   bulkZipRetentionDays: intFromEnv('BULK_ZIP_RETENTION_DAYS', 7),
   bulkJobTtlDays:       intFromEnv('BULK_JOB_TTL_DAYS', 30),
-  // Empty = the feature is OFF. Azure drops an app setting whose value is '', so an unset variable
-  // must mean disabled rather than fall back to a queue name nothing is bound to.
+  // Empty is off: Azure drops an app setting whose value is '', so unset must mean disabled, not
+  // a fallback queue nothing is bound to.
   bulkDownloadsQueue:   process.env.BULK_DOWNLOADS_QUEUE || '',
   bulkCleanupSchedule:  process.env.BULK_CLEANUP_SCHEDULE || '',
 
-  // Queue the chunk parent-field re-stamp runs on (src/jobs/restamp-chunks.js). Empty is the
-  // same "off" as above — and off here means the re-stamp is SKIPPED, not done inline, unless the
-  // opt-in below says otherwise.
+  // Empty is off: the re-stamp is skipped, not done inline, unless chunkRestampInline is set.
   chunkRestampQueue:    process.env.CHUNK_RESTAMP_QUEUE || '',
 
-  // Queue the search-definition apply runs on (src/jobs/search-definitions.js). Empty is the same
-  // "off": POST /admin/search-definitions/apply answers 503 rather than accept work nothing will
-  // pick up, and the devbox recipe in docs/runbook-search-outage.md is the way through.
+  // Empty is off: the apply route answers 503; use docs/runbook-search-outage.md instead.
   searchDefinitionsQueue: process.env.SEARCH_DEFINITIONS_QUEUE || '',
-  // Walk the chunks on the request instead, for `func start` with no storage account behind it.
-  // An opt-in rather than the fallback: a deployed environment that lost its queue name would
-  // otherwise put a multi-minute walk back inside eagle-api's 10-second push and block the
-  // document write itself. Skipping leaves the chunks stale and flags the row, which
-  // `backfill-chunk-parent-fields.js --live --project <id>` repairs, clearing the flag as it goes.
+  // Local `func start` only. Opt-in, not a fallback: a deployed walk would block eagle-api's
+  // 10-second push. A skipped re-stamp flags the row for backfill-chunk-parent-fields.js.
   chunkRestampInline:   process.env.CHUNK_RESTAMP_INLINE === '1',
 
   uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
 
   logLevel:              process.env.LOG_LEVEL || 'info',
 
-  // AI summarizer (see wiki ADR-006). Step 5 of the search pipeline and the only one that touches
-  // a model — retrieval is untouched lexical BM25.
-  //
-  // Keyless: the deployment is reached with the app's managed identity, so there is NO key here and
-  // none is wanted. `foundryEndpoint` is a hostname; this repo is public.
-  //
-  // Defaults to OFF. The endpoint does not exist until the Foundry account is provisioned, and a
-  // summariser that half-works is worse than one that is plainly absent — every caller path returns
-  // `{ summary: null }` while this is false.
+  // Search summary (wiki ADR-006), keyless via managed identity. Off by default: every caller gets
+  // `{ summary: null }`.
   summaryEnabled:    process.env.SUMMARY_ENABLED === 'true',
   foundryEndpoint:   process.env.FOUNDRY_ENDPOINT || '',
   foundryDeployment: process.env.FOUNDRY_DEPLOYMENT || '',
   foundryApiVersion: process.env.FOUNDRY_API_VERSION || '2024-10-21',
 
-  // The cost and latency ceiling, enforced before the request rather than hoped for after it.
-  // 8 × 1500 chars ≈ 3k input tokens ≈ 0.0021 CAD/query. Raising either raises the bill linearly, so
-  // they are configuration and the probe asserts p95 prompt_tokens stays under the implied cap.
+  // Cost ceiling, enforced before the request: 8 x 1500 chars is about 3k input tokens. Cost grows
+  // linearly with either; the probe asserts p95 prompt_tokens stays under that.
   summaryMaxChunks:  parseInt(process.env.SUMMARY_MAX_CHUNKS || '8', 10),
   summaryMaxChars:   parseInt(process.env.SUMMARY_MAX_CHARS  || '1500', 10),
   summaryMaxTokens:  parseInt(process.env.SUMMARY_MAX_TOKENS || '400', 10),
-  // Well inside the App Service 240 s request ceiling. The panel is additive: a timeout renders
-  // nothing and must never take the three result columns down with it.
+  // A timeout renders no panel and must never take the search results down with it.
   summaryTimeoutMs:  parseInt(process.env.SUMMARY_TIMEOUT_MS || '20000', 10),
 
-  // CAD per million tokens, for turning the usage the deployment reports into a number a human can
-  // read.
-  //
-  // CAD, not USD, because this subscription is billed in CAD — `az consumption budget list` reports
-  // `demi-budget-dev` in CAD, and every other cost figure in the wiki is CAD. A per-query
-  // number in a second currency is one someone has to convert before it can be compared to the
-  // budget it draws down.
-  //
-  // These rates are MODEL- AND SKU-SPECIFIC and must track `azure/modules/foundry.bicep`. They are
-  // the `gpt 4.1 mini Inp regnl` / `Outp regnl` retail meters in canadaeast — regional, because the
-  // deployment's `sku.name` is `Standard`. Changing `modelName`, or moving that SKU to
-  // `GlobalStandard` (a cheaper meter: 0.60 / 2.30 CAD), makes these wrong and every displayed cost
-  // wrong with them. They once carried 4o-mini USD rates against a gpt-4.1-mini deployment and
-  // understated every query by 3.2x, which is the failure this comment exists to prevent repeating.
-  //
-  // Refresh with:
-  //   curl -s "https://prices.azure.com/api/retail/prices?currencyCode='CAD'&\$filter=\
-  //   armRegionName eq 'canadaeast' and contains(meterName,'gpt 4.1 mini')"
-  // `unitPrice` is per 1K tokens, so multiply by 1000. Azure publishes CAD to four decimal places
-  // at that unit, so these carry roughly a percent of quantization — immaterial at this magnitude.
-  //
-  // This yields an ESTIMATE and must be labelled as one wherever it is shown. Azure bills on its
-  // own meter with its own rounding, list rates change without this file changing, and any
-  // negotiated or committed-use discount is invisible here. It is for spotting a query that costs
-  // 50x the others — not for reconciling an invoice.
+  // CAD per million tokens, an estimate. Must match the model and SKU in foundry.bicep (regional
+  // canadaeast meters); a change there makes every shown cost wrong.
   summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.70'),
   summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '2.70'),
 
-  // Per-project stored summaries (src/ai/project-summary.js). Separate ceilings from the query-time
-  // summariser above, because this path is a different shape of work: Schedule B alone is hundreds
-  // of chunks, so `summaryMaxChunks` (8) would truncate the source out from under the extraction.
-  // Generation is offline and one-off per project, so a large prompt costs cents once rather than
-  // cents per search.
+  // Stored project summaries read hundreds of chunks once per project, offline, so they get their
+  // own ceilings.
   projectSummaryMaxChunks: parseInt(process.env.PROJECT_SUMMARY_MAX_CHUNKS || '120', 10),
   projectSummaryMaxTokens: parseInt(process.env.PROJECT_SUMMARY_MAX_TOKENS || '1500', 10),
-  // Sources per call for a list section (conditions, federal), which run in batches. It bounds the
-  // REPLY, not the prompt: 16 pages of conditions is a list the model finishes inside its budget,
-  // where the whole document is one it stops in the middle of, and a stopped list parses as nothing.
+  // Bounds the reply, not the prompt: a list the model stops midway parses as nothing.
   projectSummaryBatchChunks: parseInt(process.env.PROJECT_SUMMARY_BATCH_CHUNKS || '16', 10),
-  // Passages the nations section reads, gathered by keyword search across the whole project rather
-  // than from one document. The same names repeat from document to document, so past a few pages of
-  // them a larger set costs prompt and adds no nation.
+  // Keyword hits across the project. Names repeat, so a larger set costs prompt and adds no nation.
   projectSummaryNationChunks: parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS || '40', 10),
-  // Passages any ONE document may contribute to that set. Without a per-document cap the first hit
-  // fills it: a 2011 province-wide workshop roster took all 40 on Site C, so 69 other documents
-  // contributed nothing and nations that were never consulted on the project were cited for it.
+  // Per-document cap, so one roster-like document cannot fill the set and cite nations never
+  // consulted on the project.
   projectSummaryNationChunksPerDoc:
     parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS_PER_DOC || '4', 10),
 
-  // Where the `federal` section's source document comes from when DEMI holds no Decision Statement
-  // of its own — five projects in the whole corpus do. `iaac` reads the federal decision from the
-  // public Impact Assessment Agency registry (src/ai/federal-source.js); `off` is the kill switch,
-  // and leaves the section exactly as it was before that adapter existed.
+  // Source for the `federal` section when DEMI holds no Decision Statement: `iaac` reads the public
+  // registry (src/ai/federal-source.js), `off` is the kill switch.
   federalSource: process.env.FEDERAL_SOURCE || 'iaac',
 
-  // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
-  // same account the query-time summariser uses). `ollama` is a local model on the LAN, for
-  // generating a record from a workstation without the Foundry private endpoint.
-  //
-  // COST IS ALWAYS PRICED AT THE FOUNDRY RATES, whichever provider ran — see estimateCostCad and
-  // `pricedAs` on the stored record. A local run is free in cash and the number it stores is what
-  // the same work WOULD cost on the deployed path, so a locally generated record and a deployed one
-  // carry comparable figures.
+  // `foundry` deployed, `ollama` local on the LAN. Cost is always priced at Foundry rates so local
+  // and deployed records compare.
   projectSummaryProvider: process.env.PROJECT_SUMMARY_PROVIDER || 'foundry',
-  // A LAN address, not a secret: Ollama has no auth and is not reachable from any deployed
-  // environment. Only ever the local path's default.
+  // A LAN address, not a secret: Ollama has no auth and no deployed environment can reach it.
   ollamaUrl:   process.env.OLLAMA_URL || 'http://192.168.3.8:11434',
   ollamaModel: process.env.OLLAMA_MODEL || 'qwen3.6:35b-a3b',
-  // Ollama's context window, and it MUST be set. The server's own default is 4k tokens and it
-  // TRUNCATES THE PROMPT SILENTLY at that ceiling — Schedule B alone is around 20k, so a run at the
-  // default would extract conditions from the first fifth of the document and report success.
+  // Must be set: Ollama's 4k default truncates the prompt silently and still reports success.
   projectSummaryOllamaCtx: parseInt(process.env.PROJECT_SUMMARY_OLLAMA_CTX || '65536', 10),
 
-  // Audit and usage analytics — Azure Monitor Logs ingestion (see azure/modules/audit-logs.bicep).
-  //
-  // Keyless: the app publishes with its user-assigned identity, which holds Monitoring Metrics
-  // Publisher on the DCR and nothing else. There is no key here and none is wanted.
-  //
-  // Both empty is the local-development and test case, and the writer treats it as OFF rather than
-  // as an error — an audit call must never be the reason a request fails. Same shape as
-  // SEARCH_ENDPOINT: absent endpoint disables the feature instead of breaking the caller.
-  //
-  // TWO DCRs since the audit repoint: privileged actions go to the eagle-analytics pipeline
-  // (`EagleAudit_CL`, EPIC-wide, one row per app with SourceApp), usage counters stay on DEMI's own
-  // DCR (`DemiEvents_CL`). Each pair below is one destination, and the events pair falls back to
-  // the audit one — which is every environment deployed before eagle-analytics exists, plus local.
+  // Keyless. Empty is off, never an error: an audit call must not fail a request. Audit and
+  // events are separate DCRs; the events pair falls back to the audit one.
   auditDcrEndpoint:    process.env.AUDIT_DCR_ENDPOINT || '',
   auditDcrImmutableId: process.env.AUDIT_DCR_IMMUTABLE_ID || '',
-  // Named beside the endpoint it belongs to: the analytics DCR accepts only Custom-EagleAudit_CL
-  // and DEMI's only Custom-DemiAudit_CL, so a mismatched pair is silently rejected at ingest.
+  // Must match the DCR: analytics takes only Custom-EagleAudit_CL, DEMI's only Custom-DemiAudit_CL;
+  // a mismatch is dropped silently at ingest.
   auditStream:         process.env.AUDIT_STREAM_NAME || 'Custom-DemiAudit_CL',
   eventsDcrEndpoint:    process.env.EVENTS_DCR_ENDPOINT || process.env.AUDIT_DCR_ENDPOINT || '',
   eventsDcrImmutableId: process.env.EVENTS_DCR_IMMUTABLE_ID || process.env.AUDIT_DCR_IMMUTABLE_ID || '',
-  // Flush triggers. Whichever fires first wins. 800 KB leaves headroom under the 1 MB per-call
-  // ingestion limit for the JSON envelope.
+  // Flush on whichever fires first. 800 KB leaves room for the envelope under the 1 MB call limit.
   auditFlushMs:        parseInt(process.env.AUDIT_FLUSH_MS || '1000', 10),
   auditMaxBatch:       parseInt(process.env.AUDIT_MAX_BATCH || '100', 10),
   auditMaxBatchBytes:  parseInt(process.env.AUDIT_MAX_BATCH_BYTES || '800000', 10),
 
-  // Reading Azure back for the admin panel (src/azure/monitor.js). Same stance as the writer
-  // above: empty is OFF, and the route answers 503 rather than guessing a workspace.
-  //
-  // The Log Analytics query API keys on the workspace GUID (`customerId`), NOT its resource id.
-  // DemiAudit_CL and DemiEvents_CL live in the audit workspace; AppRequests lives in the app one.
+  // Workspace GUIDs (`customerId`), not resource ids. Empty is off: the route answers 503.
   auditWorkspaceCustomerId:   process.env.AUDIT_WORKSPACE_CUSTOMER_ID || '',
   appLogsWorkspaceCustomerId: process.env.APP_LOGS_WORKSPACE_CUSTOMER_ID || '',
-  // `analytics-logs-<env>`, holding EagleAudit_CL. Empty keeps GET /admin/audit on DemiAudit_CL
-  // alone, which is what an environment deployed before eagle-analytics reads.
+  // `analytics-logs-<env>`, holding EagleAudit_CL. Empty keeps GET /admin/audit on DemiAudit_CL.
   analyticsWorkspaceCustomerId: process.env.ANALYTICS_WORKSPACE_CUSTOMER_ID || '',
   // Resource group id: the scope a cost query and the budget are both read at.
   costScope:                  process.env.COST_SCOPE || '',
   budgetName:                 process.env.BUDGET_NAME || '',
 
-  // Break-glass shared secret (src/helpers/auth.js). A getter, not a fixed value: it is compared
-  // per request, and the suites that exercise that path set the variable after this file loaded.
+  // A getter: compared per request, and tests set the variable after this file loads.
   get adminApiKey() { return secretFromEnv('ADMIN_API_KEY'); },
 
-  // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
   keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   // The realm URL a client-credentials token is minted at (services/keycloak-client-token.js).
   get keycloakIssuer() { return `${config.keycloakUrl.replace(/\/+$/, '')}/realms/${config.keycloakRealm}`; },
-  // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
-  // nothing authorises on it.
-  // ENVIRONMENT, and only ENVIRONMENT: it is what api-function-flex.bicep sets. It labels every
-  // audit row and tags minted API keys, so a name no template sets resolves to 'dev' everywhere.
+  // Only ENVIRONMENT, the name api-function-flex.bicep sets. The tag it puts on minted keys is
+  // cosmetic; nothing authorises on it.
   environmentName:       process.env.ENVIRONMENT || 'dev',
-  // Keycloak clients (azp) permitted to call this API at all. Empty admits every client, which is
-  // why the guard below refuses to boot test or prod on an empty list. See helpers/auth.isAllowedClient.
+  // Keycloak clients (azp) allowed at all. Empty admits every client; see the boot guard below.
   allowedClients:        (process.env.DEMI_ALLOWED_CLIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
-  // Registry row ids (`req.user.keyId`) allowed to write the Eagle mirror, PUT /eagle/*. Unset means
-  // eagle-api through APIM; set but empty means nobody, so blanking the setting closes the mirror
-  // instead of opening it. A getter, like adminApiKey, so the suites can change it per test.
+  // Registry row ids for PUT /eagle/*. Unset means eagle-api through APIM; set but empty means
+  // nobody, so blanking the setting closes the mirror.
   get eagleMirrorPrincipals() { return principalsFromEnv('DEMI_EAGLE_MIRROR_PRINCIPALS', 'apim:eagle-api'); },
-  // Registry row ids allowed to call the PDF title worker routes. Unset or empty means nobody: the
-  // routes sign writes to stored originals, so there is no default principal. Never list a
-  // principal that is also in eagleMirrorPrincipals: one key would hold both powers.
+  // No default: these routes sign writes to stored originals. Never share a principal with
+  // another list, or one key holds both powers.
   get pdfTitleWorkerPrincipals() { return principalsFromEnv('DEMI_PDF_TITLE_WORKER_PRINCIPALS'); },
-  // Registry row ids allowed to call the ENGAGE ingest, PUT /engage/*. Same rules as the Eagle
-  // mirror's list, defaulting to ENGAGE through APIM. Never share a principal with that list.
+  // PUT /engage/*. Same rules as the Eagle mirror list.
   get engagePrincipals() { return principalsFromEnv('DEMI_ENGAGE_PRINCIPALS', 'apim:engage'); },
-  // The Track push, /track/projects/:id. Same rules, defaulting to Track through APIM; never share a principal with those lists.
+  // The Track push. Same rules as the Eagle mirror list.
   get trackPrincipals() { return principalsFromEnv('DEMI_TRACK_PRINCIPALS', 'apim:track'); },
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
   linkBaseUrl:           process.env.LINK_BASE_URL || 'https://projects.eao.gov.bc.ca',
 
-  // eagle-notify, told when an Update is published. Both empty = dark: src/services/notify.js
-  // sends nothing and the mirror never claims a notification, so wiring it later still notifies.
+  // Both empty: nothing is sent and no notification is claimed, so wiring it later still notifies.
   notifyApiBase:         process.env.NOTIFY_API_BASE || '',
   notifyApiKey:          secretFromEnv('NOTIFY_API_KEY'),
   // On: an update email links eagle-public's reader page `/updates/<id>`. Only the React line has
@@ -452,15 +286,14 @@ const config = {
   // Update's publishDate runs on dateAdded, since an ORDER BY leaves out rows without its field.
   updatesPublishDateFallback: process.env.UPDATES_PUBLISH_DATE_FALLBACK !== 'false',
 
-  // Sync-out (src/sync-out): ENGAGE-owned rows written on to Eagle. Getters, read per access, so a
-  // suite can change them after load. Empty queue is OFF: enqueue refuses and api/index.js binds no
-  // worker.
+  // Getters so tests can change them after load. Empty queue is off: enqueue refuses and no worker
+  // is bound.
   syncOut: {
     get queue() { return envTrim('SYNC_OUT_QUEUE'); },
     eagle: {
       get enabled() { return envTrim('SYNC_OUT_EAGLE_ENABLED') === 'true'; },
-      // On only when eagle-api's POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.
-      // Before that every native create lands as a stray.
+      // On only once eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate with 409,
+      // or every native create lands as a stray.
       get nativeEnabled() { return envTrim('SYNC_OUT_EAGLE_NATIVE_ENABLED') === 'true'; },
       // Each kind goes to Eagle only with its own switch on as well, so registering a kind does not send it.
       get documentEnabled() { return envTrim('SYNC_OUT_EAGLE_DOCUMENT_ENABLED') === 'true'; },
@@ -483,8 +316,7 @@ const config = {
   // Empty registers no reconcileEngage timer. A getter: the trigger suites reload api/index.js per value.
   get reconcileEngageSchedule() { return envTrim('RECONCILE_ENGAGE_SCHEDULE'); },
 
-  // Two client-credentials identities in the realm above (src/scripts/sync-track-teams.js): one
-  // reads Track, one holds `realm-management`. Empty wherever SYNC_TEAMS_SCHEDULE is unset.
+  // Two client-credentials identities: one reads Track, one holds `realm-management`.
   trackApiBase:              process.env.TRACK_API_BASE || '',
   trackClientId:             process.env.TRACK_CLIENT_ID || '',
   trackClientSecret:         secretFromEnv('TRACK_CLIENT_SECRET'),
@@ -497,37 +329,27 @@ const config = {
 
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
-  // Empty = not enforced. No default value: an unmeasured audience 401s every caller, so this
-  // stays off until someone reads `aud` off a live token per realm.
+  // Empty is not enforced. No default: a wrong audience 401s every caller.
   ssoAudience:           process.env.SSO_AUDIENCE || '',
 
-  // Egress addresses of the OpenShift rproxy that fronts eagle-public. When APIM asserts one of
-  // these, every eagle-public visitor shares it and the anonymous bulk quota becomes one global
-  // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
+  // Proxy egress addresses. Behind one, every visitor shares an address, so utils/caller-ip.js keys
+  // the anonymous quota on the browser hop instead.
   trustedProxyIps:       proxyListFromEnv('TRUSTED_PROXY_IPS'),
 
-  // Shared secret the eagle-edge Front Door rule set stamps on origin requests as X-Edge-Secret.
-  // Front Door terminates the connection, so APIM asserts an AFD egress address for every visitor
-  // and the anonymous bulk quota becomes one global bucket again; the secret is the only reason
-  // X-Azure-SocketIP can be believed. Empty = the header is ignored until an EDGE_SECRET_URI read succeeds.
+  // Front Door stamps this as X-Edge-Secret; it is the only reason X-Azure-SocketIP is believed.
+  // Empty ignores the header until an EDGE_SECRET_URI read succeeds.
   edgeSecret:            secretFromEnv('EDGE_SECRET'),
 
-  // Where utils/rotating-secret.js reads the edge and gateway secrets (`<uri>` and `<uri>-standby`)
-  // so a rotation is accepted without a deploy. Empty = only EDGE_SECRET / APIM_GATEWAY_SECRET count.
+  // Read with `-standby` so a rotation lands without a deploy. Empty: plain settings only.
   edgeSecretUri:         vaultSecretUriFromEnv('EDGE_SECRET_URI'),
   apimGatewaySecretUri:  vaultSecretUriFromEnv('APIM_GATEWAY_SECRET_URI'),
 
-  // Refuse requests that reached the Function or APIM without passing Front Door
-  // (src/http/router.js, edgeGate). '' = off, 'log' = serve and write one warn line,
-  // 'enforce' = 403. Anything else refuses to boot (checked below).
+  // Requests that skipped Front Door: '' serves, 'log' serves and warns, 'enforce' answers 403.
   edgeGate:              (process.env.EDGE_GATE || '').trim().toLowerCase(),
 
-  // The edge ban detector (src/scripts/edge-ban.js), run by the `edgeBan` timer in api/index.js.
-  // Getters, and they throw on read rather than at load: a bad value fails the tick and logs, it
-  // does not take the HTTP API down with it.
+  // Getters that throw on read, not at load: a bad value fails one timer tick, not the HTTP API.
   edgeBan: {
-    // '' = unset (local runs), off = clear the ban rule, shadow = record would-bans only,
-    // write = record and update the rule.
+    // off clears the ban rule, shadow records would-bans only, write records and updates the rule.
     get mode() {
       const mode = envTrim('EDGE_BAN_MODE').toLowerCase();
       if (mode && !EDGE_BAN_MODES.includes(mode)) {
@@ -537,8 +359,7 @@ const config = {
     },
     // NCRONTAB, six fields. Hourly when unset.
     get schedule() { return envTrim('EDGE_BAN_SCHEDULE') || '0 0 * * * *'; },
-    // Thresholds and allow list, from a Key Vault reference. null when unset or unresolved. The
-    // error never quotes the value or the parser message, which carries a slice of it.
+    // null when unset or unresolved. Errors never quote the value or the parser message.
     get policy() {
       const raw = secretFromEnv('EDGE_BAN_POLICY').trim();
       if (!raw) return null;
@@ -549,15 +370,13 @@ const config = {
       }
       return policy;
     },
-    // Log Analytics workspace holding the Front Door access log, and the `banauto` rule's resource
-    // id. Both live in the eagle-edge resource group; empty where the detector is not wired.
+    // Front Door access log workspace and the `banauto` rule id, both in the eagle-edge group.
     get workspaceId() { return envTrim('EDGE_LOG_WORKSPACE_ID'); },
     get ruleId() { return envTrim('EDGE_BAN_RULE_ID'); }
   },
 
-  // Document intake (src/intake/): uploads land in the intake account, Defender for Storage scans
-  // them and tags the result, and the sweep reads the tag to release or quarantine each file. Empty
-  // storageAccount registers no intake function. Getters: the trigger suites reload api/index.js per value.
+  // Defender tags each upload; the sweep releases or quarantines by tag. Empty storageAccount
+  // registers no intake function.
   intake: {
     get storageAccount() { return envTrim('INTAKE_STORAGE_ACCOUNT'); },
     get incomingContainer() { return envTrim('INTAKE_INCOMING_CONTAINER') || 'incoming'; },
@@ -573,9 +392,8 @@ const config = {
   },
 };
 
-// Optional second object-store credential, read by src/scripts/backfill-objects.js: the test
-// credentials cannot read the prod bucket, so that copy streams under a credential that can.
-// Connection details default to the target's, since both buckets sit on the same NRS host.
+// For backfill-objects.js: the test credentials cannot read the prod bucket. Host and port
+// default to the target's, since both buckets sit on one host.
 config.sourceMinioAccess = secretFromEnv('SOURCE_MINIO_ACCESS_KEY');
 config.sourceMinioSecret = secretFromEnv('SOURCE_MINIO_SECRET_KEY');
 config.sourceMinioHost = process.env.SOURCE_MINIO_HOST || config.minioHost;
@@ -584,9 +402,7 @@ config.sourceMinioSsl = process.env.SOURCE_MINIO_USE_SSL
   ? process.env.SOURCE_MINIO_USE_SSL === 'true'
   : config.minioSsl;
 
-// Fail to boot rather than run a deployed environment with an allowlist that admits every client
-// in the realm. Only dev and local keep the permissive default, so a new ENVIRONMENT name is
-// treated as deployed rather than silently admitting the whole realm.
+// Only dev and local may admit every client, so an unknown ENVIRONMENT name counts as deployed.
 if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
     config.allowedClients.length === 0) {
   throw new Error(
@@ -604,8 +420,7 @@ if ((config.environmentName === 'test' || config.environmentName === 'prod') && 
   throw new Error(`KEYCLOAK_ENABLED cannot be false in ${config.environmentName}.`);
 }
 
-// The adminApiKey getter is only read per request, so an unresolved ADMIN_API_KEY would miss the
-// one boot report docs/prod-flip-runbook.md promises. The value is discarded here; only the name is recorded.
+// Read once at load so an unresolved ADMIN_API_KEY makes the boot report; the value is discarded.
 secretFromEnv('ADMIN_API_KEY');
 
 // Read by src/utils/rotating-secret.js, which takes APIM_GATEWAY_SECRET per request.
