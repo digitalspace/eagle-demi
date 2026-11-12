@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * The engagement ACL rule — `helpers/acl-cascade.deriveAcls`.
- *
- * Comment periods and comments are mirrored rows: the push stores the RAW Eagle record beside the
- * row, and `read` on the row itself has already been narrowed to whatever the parent was at push
- * time. So the row's own ACL is `sources.eagle.read` (projected as `eagleRead`), and the live
- * `read` is only a fallback for a row that has no raw copy. Deriving from `read` alone is a
- * one-way ratchet: a period pushed under a private project would stay private forever.
- *
- * Pure function, so this is the cheapest place the rule can be pinned. The wiring that carries it
- * from a project publish down to the comments is in
- * test/controllers/nosql/engagement-cascade.test.js.
+ * The row's own ACL is the raw `eagleRead`; the narrowed `read` alone would keep a period pushed
+ * under a private project private forever. Wiring test: controllers/nosql/engagement-cascade.test.js.
  */
 
 process.env.NODE_ENV = 'test';
@@ -78,9 +69,8 @@ test('deriveAcls — the raw Eagle ACL is the row\'s own', async (t) => {
   });
 
   await t.test('a row Eagle deleted is not republished by its project', () => {
-    // The raw Eagle copy of a deleted period still says `public` — it was published right up to
-    // the delete — so deriving from it alone hands the row straight back to the public the next
-    // time the project publishes. The flag is the only thing that says otherwise.
+    // The raw copy of a deleted period still says `public`; only the flag stops the next project
+    // publish from reopening it.
     assert.deepStrictEqual(
       deriveAcls([{ id: 'cp1', read: STAFF_PARENT, eagleRead: ['public'], isDeleted: true }],
         PUBLIC_PARENT),

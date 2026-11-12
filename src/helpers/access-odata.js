@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Visibility for Azure AI Search. The OData twin of `access-sql.js`.
- *
- * Roles, tiers and project scope are NOT re-derived here — they are imported, so the two search
- * backends cannot drift into disagreeing about who may see what. This module only translates an
- * already-resolved access context into an OData `$filter`.
- *
- * The two dimensions are the same as everywhere else: `read[]` holds role TYPES, and project scope
- * rides `projectId`. See `access-sql.js` for why they must stay separate.
+ * OData twin of `access-sql.js` for AI Search. Roles, tiers and scope are imported, not re-derived,
+ * so the two backends cannot disagree about who sees what.
  */
 
 const {
@@ -17,22 +11,16 @@ const {
 } = require('./access-sql');
 
 /**
- * OData string literals are single-quoted, and a literal quote is escaped by DOUBLING it.
- *
- * Role names arrive from a verified token rather than from the query string, so this is defence in
- * depth rather than the last line — but it is the only escaping there is. There is no bound
- * parameter form in an OData filter: the value IS the query text.
+ * OData escapes a quote by doubling it. OData filters have no bound parameters, so this is the only
+ * escaping there is; role names come from a verified token, so it is defence in depth.
  */
 function quote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 /**
- * `search.in(field, 'a,b,c', ',')` rather than a chain of `eq ... or ...`.
- *
- * One clause regardless of how many roles the caller carries, and the list is a single literal —
- * so the filter length grows with the data, not with the number of OR branches. A comma inside a
- * value would split the list, so values carrying one fall back to an explicit `eq` chain.
+ * One `search.in` clause however many values, so the filter does not grow by OR branches. A value
+ * holding a comma would split the list, so those fall back to an `eq` chain.
  */
 function inClause(expression, values) {
   const list = Array.from(new Set(values.map(String)));
@@ -43,29 +31,12 @@ function inClause(expression, values) {
 }
 
 /**
- * The visibility filter for this caller.
- *
+ * `empty` is the fail-closed path: OData has no `false` literal and a null or empty filter is
+ * unrestricted, so "matches nothing" means the caller returns [] and sends no request.
  * @param {object} access from resolveAccess()
- * @param {string} [partitionField='projectId']  the field carrying project identity in THIS index
- * @returns {{filter: string|null, empty: boolean}}
- *   filter — the OData `$filter`, or null for "no restriction" (privileged only)
- *   empty  — true when this caller can match NOTHING; the caller must return [] and issue no
- *            request at all
- *
- * THE `empty` FLAG IS THE FAIL-CLOSED PATH, and it exists because **OData has no `false`
- * literal**. `access-sql.js` collapses an impossible predicate to the SQL `false`; there is no
- * equivalent here, and the obvious alternatives are all wrong in the dangerous direction — a null
- * filter is UNRESTRICTED, and an empty string is unrestricted too. So "matches nothing" cannot be
- * expressed as a filter and has to be expressed as "do not ask".
- *
- * `documentField` is what a DOCUMENT-scoped credential compares in THIS index — `id` on documents,
- * `documentId` on chunks, and null (the default) where the index carries no document identity, so
- * such a grant matches nothing here rather than filtering on a field that is not filterable.
- *
- * `partitionField` exists for the same reason `visibilityFor(access, partitionField)` takes one in
- * `access-sql.js`: a project IS its own scope, so on `projects` the field is `id`, while
- * documents and chunks carry `projectId`. Scoping projects on a `projectId` they do not have would
- * match nothing at all — and an empty result is indistinguishable from an empty corpus.
+ * @param {string} [partitionField='projectId']  project field in this index: `id` on projects, `projectId` on documents and chunks
+ * @param {string|null} [documentField=null]  field a document-scoped credential compares: `id` on documents, `documentId` on chunks
+ * @returns {{filter: string|null, empty: boolean}}  null filter = unrestricted (privileged only)
  */
 function filterFor(access, partitionField = 'projectId', documentField = null) {
   // No access context at all is not a privileged caller — it is a bug upstream. Fail closed.
@@ -73,30 +44,23 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
 
   const clauses = [];
 
-  // Privileged lifts the ROLE predicate only, never the project scope — the twin of `readClause`
-  // returning `true` while `scopeClause` still narrows. Short-circuiting the whole function here
-  // discarded the scope, so a scoped privileged key searched the entire corpus.
+  // Privileged lifts the role predicate only, never the project scope, as on the SQL side.
   if (!isPrivileged(access.roles || [])) {
     const roles = Array.from(new Set([...(access.roles || []), ...PUBLIC_ROLES]));
     // `read/any(r: ...)` is the collection form. Without `any`, the filter compares the collection
     // itself and matches nothing — silently, which on this path would read as an empty corpus.
     const grants = [`read/any(r: ${inClause('r', roles)})`];
 
-    // The team arm: level 1, ORed with the role arm exactly as in `readClause`. A grant, so `or`;
-    // the scope `and` below is the restriction and stays separate.
-    //
-    // A null `partitionField` skips the arm, as `scopeClause`'s allow-list does on the SQL side:
-    // rows with no project axis carry no team scope either, and the arm would otherwise emit
-    // `search.in(null, …)` — a 400 on every request.
+    // Team arm, level 1, ORed as in `readClause`. Skipped for a null `partitionField`: rows with no
+    // project axis carry no team scope, and `search.in(null, …)` is a 400.
     const teams = access.teams || [];
     if (teams.length > 0 && partitionField) {
       grants.push(`(read/any(r: r eq ${quote(LEVEL_TOKENS[1])})` +
         ` and ${inClause(partitionField, teams)})`);
     }
 
-    // The credential arm, ORed the same way — the OData twin of `readClause`'s. `not read/any(...)`
-    // is the ceiling that keeps `levels` meaning the row's own level rather than "carries the
-    // token", which nests upward; see `levelTokens`.
+    // Credential arm, ORed. `not read/any(...)` holds `levels` to the row's own level, since tokens
+    // nest upward; see `levelTokens`.
     for (const cred of access.credentials || []) {
       const field = credentialField(cred, partitionField, documentField);
       const ids = (cred.scope && cred.scope.ids) || [];
@@ -113,18 +77,13 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
     clauses.push(grants.length > 1 ? `(${grants.join(' or ')})` : grants[0]);
   }
 
-  // The sealed compartment, the OData twin of readClause's `NOT ARRAY_CONTAINS`. Outside the
-  // privilege branch above: a privileged caller has no role clause at all, and it is exactly that
-  // caller the exclusion is for.
+  // Sealed exclusion sits outside the privilege branch: privileged callers are the ones it is for.
   if (!opensSealed(access.roles, access.compartment)) {
     clauses.push(`not read/any(r: r eq ${quote(SEALED_TOKEN)})`);
   }
 
-  // A null `partitionField` means the index has no project axis at all — `project-notifications`,
-  // the twin of `boundaries` on the Cosmos side. `scopeClause` skips the narrowing there for the
-  // same reason: scoping on a field the rows do not carry would hide every public row from a
-  // project-scoped caller. Role ACL still applies. Without this the clause below would emit
-  // `search.in(null, …)`, which is a 400 on every request rather than a narrower page.
+  // Null `partitionField` = no project axis (`project-notifications`): skip scoping as `scopeClause`
+  // does, else scoped callers lose every public row and `search.in(null, …)` is a 400.
   if (access.tier === TIER.SCOPED && partitionField) {
     const scope = access.projectScope;
     // Scoped to nothing must match nothing. Never fall through to the role clause alone, which

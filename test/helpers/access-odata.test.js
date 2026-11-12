@@ -30,9 +30,7 @@ test('access-odata filter', async (t) => {
   });
 
   await t.test('a privileged caller carrying a scope is still narrowed by it', () => {
-    // The twin of the SQL fix: privilege lifts the ROLE predicate, never the project scope. This
-    // function used to short-circuit on privilege before it ever looked at projectScope, so a
-    // scoped service key searched the whole index.
+    // Privilege lifts the role predicate, never the project scope.
     const scopedAdmin = {
       tier: TIER.SCOPED, roles: ['public', 'sysadmin'], projectScope: ['207'], teams: []
     };
@@ -61,9 +59,7 @@ test('access-odata filter', async (t) => {
     assert.match(filter, / and /, 'both dimensions apply, not either');
   });
 
-  // A project IS its own scope, so on projects the field is `id`. Scoping projects on a
-  // `projectId` they do not carry would match nothing — and an empty result is indistinguishable
-  // from an empty corpus, which is how this kind of bug survives review.
+  // Projects scope on `id`; a wrong field matches nothing, which looks like an empty corpus.
   await t.test('the scope field is per-index, not hardcoded', () => {
     const { filter } = filterFor(SCOPED, 'id');
     assert.match(filter, /(^|[^a-zA-Z])id/, 'projects scope on id');
@@ -76,9 +72,7 @@ test('access-odata filter', async (t) => {
     assert.strictEqual(filterFor(SCOPED).filter, filterFor(SCOPED, 'projectId').filter);
   });
 
-  // THE fail-closed test. OData has no `false` literal, so "may see nothing" cannot be written as
-  // a filter — a null filter and an empty string are both UNRESTRICTED. The only correct answer
-  // is to not issue the request, and `empty` is how that is signalled.
+  // The fail-closed test: OData has no `false`, and a null or empty filter is unrestricted.
   await t.test('scoped to nothing reports empty rather than an unrestricted filter', () => {
     const { filter, empty } = filterFor({ tier: TIER.SCOPED, roles: ['public'], projectScope: [] });
     assert.strictEqual(empty, true, 'must tell the caller to issue no request');
@@ -95,9 +89,8 @@ test('access-odata filter', async (t) => {
   await t.test('quotes in a value are escaped by doubling, per OData', () => {
     assert.strictEqual(quote("o'brien"), "'o''brien'");
 
-    // Asserted as an exact literal rather than by searching for a fragment: the ESCAPED output
-    // legitimately contains the injected text, so any substring test is ambiguous about whether
-    // the quote was doubled. Only the whole literal shows that it was.
+    // Exact literal, not a substring: the escaped output still contains the injected text, so only
+    // the whole literal proves the quote was doubled.
     const { filter } = filterFor({
       tier: TIER.PUBLIC,
       roles: ["public', fake/any(x: x eq 'sysadmin"],
@@ -113,7 +106,7 @@ test('access-odata filter', async (t) => {
   });
 
   await t.test('a staff caller now gets a filter', () => {
-    // `staff` left SECURE_ROLES, so it no longer lifts the role predicate here either.
+    // `staff` is not in SECURE_ROLES, so it does not lift the role predicate.
     const { filter, empty } = filterFor({
       tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null, teams: []
     });
@@ -140,9 +133,8 @@ test('access-odata filter', async (t) => {
       'the key scope stays an AND over everything the roles and teams allow');
   });
 
-  // `project-notifications` has no project axis at all, so it passes partitionField: null. Both
-  // arms that name the field must drop out — the filter still has to be valid OData, and the
-  // literal string `null` in it is a 400 on every request rather than a narrower page.
+  // `project-notifications` passes partitionField: null; a literal `null` in the filter is a 400 on
+  // every request.
   await t.test('a null partition field drops every clause that names it', () => {
     const cases = [
       ['public', PUBLIC],
@@ -168,8 +160,6 @@ test('access-odata filter', async (t) => {
     }
   });
 
-  // A comma is the separator search.in() uses, so a value containing one would silently split
-  // into two roles — granting a role nobody holds.
   // The sealed compartment. AI Search holds each row's read[] verbatim, so without this clause a
   // level-0 row is findable by anyone the index answers at all.
   await t.test('every caller without compliance excludes the sealed rows', () => {
