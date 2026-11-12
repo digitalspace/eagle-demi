@@ -1,32 +1,8 @@
 'use strict';
 
 /**
- * The per-project status summary, generated offline and stored — see the plan's "Stored record
- * contract" and wiki ADR-006 for the query-time summariser this is modelled on.
- *
- * THE RULE THIS FILE EXISTS TO ENFORCE: generate only what no query can answer, and ground every
- * generated claim on that project's own chunks. So the split is deliberate and load-bearing:
- *
- *   `facts`    — computed HERE, by code, from the documents index. Counts, dates, document ids.
- *                The model never sees them and can never contradict them.
- *   `sections` — model output, one call per section, each over the chunks of ONE named source
- *                document, each item carrying the source numbers it was drawn from.
- *
- * A section whose source document does not exist is `null` and costs nothing: no model call is made
- * at all. That is the grounding guarantee — a model handed no sources answers from its own
- * knowledge, and on a regulatory registry that is the failure mode that matters most.
- *
- * Three validation gates run on every model reply, in order, and each one drops rather than
- * repairs:
- *   1. JSON shape. Anything that is not the section's declared shape is rejected whole.
- *   2. Citation range. An item citing source 9 of 6 is dropped, not renumbered.
- *   3. Number and date grounding. A bullet carrying a figure or a date that does not appear in the
- *      chunks it cites is dropped. This is the one that catches a fluent invention, because a
- *      hallucinated condition reads exactly like a real one until you check its numbers.
- *
- * Retrieval, Cosmos and the model are reached through an ADAPTER (`project-summary-sources.js`),
- * not required directly, so the same generator runs on the devbox against Cosmos and from a
- * workstation against the DEMI API.
+ * Stored per-project summary. `facts` are counted by code; `sections` are model prose, each grounded
+ * on one source document's chunks, and a section with no source makes no model call. See ADR-013.
  */
 
 const http = require('node:http');
@@ -34,11 +10,8 @@ const https = require('node:https');
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
-// Required as a MODULE, not destructured: the three are the seam a test replaces to keep a
-// generator run off the network, and a destructured copy cannot be replaced.
+// Not destructured: tests replace these module members to keep a run off the network.
 const summarizer = require('./summarize');
-// Same reason, and the same seam: a test replaces `iaac.fetchFederalSource` to keep the generator
-// off the IAAC registry.
 const iaac = require('./federal-source');
 const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, RETRY_INSTRUCTION, systemPrompt } =
   require('./project-summary-prompts');
@@ -46,28 +19,19 @@ const { levelOfRead } = require('../helpers/access-sql');
 const { ANONYMOUS_LEVEL } = require('../vis/level');
 
 /**
- * The model the COST is priced against, whatever model actually ran.
- *
- * A local Ollama run costs no cash, so storing 0 would make every locally generated record look
- * free next to a deployed one and the two would not be comparable. The number stored is what this
- * work WOULD have cost on the deployed Foundry path, and this field is what says so.
+ * The model the cost is priced against, whatever ran. A local Ollama run is priced as the deployed
+ * path would be, so local and deployed records stay comparable.
  */
 const PRICED_AS = 'gpt-4.1-mini';
 
-// ---------------------------------------------------------------------------------------------
-// Document selection
-// ---------------------------------------------------------------------------------------------
+// --- Document selection ---
 
 /** A List ObjectId, which is what `type` carries on a `/search` row. */
 const LIST_ID = /^[0-9a-f]{24}$/i;
 
 /**
- * The document's registry type, as a LABEL.
- *
- * A `/documents` row carries the resolved label under `type` ("Certificate Package", "Inspection
- * Record"). A `/search` row carries the List ObjectId under that same key and the label under
- * `documentType`. Every picker compares against a label, so an id read as one matches nothing and
- * the whole run reads as a project whose registry holds no certificate.
+ * The registry type as a label. A `/search` row carries the List id under `type` and the label
+ * under `documentType`; pickers compare labels, so an id would match nothing.
  */
 const typeOf = doc => {
   if (!doc) return '';
@@ -85,13 +49,8 @@ const nameMatches = (doc, re) => re.test(nameOf(doc));
 const SOURCE_ACCESS = 'public';
 
 /**
- * May this document be summarised? Published, and public on the ladder.
- *
- * The stored record carries no ACL of its own and the read route gates on the PROJECT, so a
- * narrower document's prose, name, chunk id and page number would reach a caller who 404s on that
- * document. `read[]` is authoritative and `isPublished` mirrors it; the API strips `read` at the
- * response boundary (vis/catalog/documents.js) and derives `isPublished` from it there, so an API
- * row is judged on the mirror and a raw Cosmos row on both.
+ * Published and public only: the record has no ACL and its read route gates on the project. An API
+ * row has no `read` (stripped at the boundary), so it is judged on `isPublished` alone.
  */
 function isPublicSource(doc) {
   if (!doc || doc.isDeleted === true) return false;
@@ -100,16 +59,8 @@ function isPublicSource(doc) {
 }
 
 /**
- * Has this document any extracted text to ground on?
- *
- * A source document with no extracted text costs the section outright: the run reads zero chunks,
- * makes no call, and stores a null. Site C's status, timeline and compliance sections were all null
- * on 2026-09-09 for exactly that reason, and 8 of its 21 amendment packages are in the same state.
- * `/documents` carries both flags — `contentExtracted` is the extractor's verdict, `contentPageCount`
- * its output — and either one is enough.
- *
- * COUNTS ARE NOT NARROWED BY THIS: `facts` is computed over every public document, extracted or
- * not. 21 amendment packages is what the registry holds, whatever can be summarised.
+ * Either flag means extracted text exists. Narrows sources only: `facts` still counts every public
+ * document.
  */
 const hasExtractedText = doc =>
   !!doc && (doc.contentExtracted === true || Number(doc.contentPageCount) > 0);
@@ -140,12 +91,8 @@ const DECISION_WORD = /\bdecision\b/i;
 const CORRESPONDENCE_TYPE = /\bletters?\b|\be-?mails?\b|\bcomment\s+period/i;
 
 /**
- * A federal decision: Canada's own decision document.
- *
- * Naming an agency is not enough. 62 of Site C's letters and emails mention "(CEAA)" in their
- * titles, and on a bare agency match the newest of them — a consultant's letter about a panel
- * report errata — was published as Canada's decision. So the title must either name the document
- * kind outright, or name an agency AND the word "decision".
+ * Canada's own decision document. An agency name alone is not enough, as many letters cite "(CEAA)":
+ * the title must name a decision statement, or an agency and the word "decision".
  */
 function isFederalDecision(doc) {
   if (CORRESPONDENCE_TYPE.test(typeOf(doc))) return false;
@@ -160,38 +107,25 @@ const EAO_ADVICE = /recommendations?/i;
 /** Amendment paperwork, which is not the original report or application it amends. */
 const AMENDMENT_TITLE = /amendment/i;
 
-/**
- * The newest match that is not an amendment's paperwork, else the newest match.
- *
- * A project files an application for each amendment and they are newer than the original.
- */
+/** The newest non-amendment match, else the newest match: amendment filings outdate the original. */
 const preferOriginal = docs =>
   newest(docs.filter(d => !nameMatches(d, AMENDMENT_TITLE))) || newest(docs);
 
 /** Filed UNDER a submission's volumes, never the text of one. */
 const UNDER_VOLUME_TITLE = /\bappendix\b|\bappendices\b|\bannex\b|\bpart\s+\d/i;
 
-/**
- * Filing structure under a big submission, never the submission itself. Site C files 378 documents
- * under type "Application Materials"; on the type alone the application picker returned "Appendix A".
- */
+/** Filing structure under a big submission (appendix, volume), never the submission itself. */
 const isSubsidiary = title => UNDER_VOLUME_TITLE.test(title) || /\bvolume\b/i.test(title);
 
 /** Front matter bound with a submission but carrying none of its text. */
 const FRONT_MATTER_TITLE =
   /\bcontents\b|\bconcordance\b|\bdefinitions?\b|\bacronyms?\b|\babbreviations?\b|\bauthorship\b|\bcover\b/i;
 
-/**
- * A submission's own text, where the submission is filed in volumes. Site C files no single EIS
- * document — 108 "EIS - Volume N" rows — so rejecting every volume leaves it with no application.
- */
+/** Volume 1 of a submission filed only in volumes, so such a project still has an application. */
 const isMainVolume = title =>
   /\bvolume\s+0*1\b/i.test(title) && !UNDER_VOLUME_TITLE.test(title) && !FRONT_MATTER_TITLE.test(title);
 
-/**
- * A document ABOUT another, never that document. Site C's application picker returned "Technical
- * Memo - Response to ... Comments on the ... Environmental Impact Statement - dated May 8, 2013".
- */
+/** A document about another (memo, response, comments), never that document. */
 const DERIVATIVE_TITLE = new RegExp([
   '\\bmemos?\\b', '\\bresponses?\\b', '\\bcomments?\\b', '\\bletters?\\b', '\\be-?mails?\\b',
   '\\bnotice\\b', 'news\\s+release', '\\baddend(?:um|a)\\b', '\\bguidelines?\\b'
@@ -205,12 +139,8 @@ const PROPONENT_STUDY_TITLE =
 const EAO_TITLE = /\beao\b|environmental\s+assessment\s+office/i;
 
 /**
- * A French copy of a document the registry also files in English.
- *
- * Matches French-language markers only, not English words that merely contain them ("French Creek",
- * "Frenchman River", "Resume of Conditions"): "rapport" and "résumé" require a French phrase around
- * them, and bare "french"/"fr" require a marker form the registry actually types — `(french)`,
- * `(fr)`, `(français)`, "French version", or a trailing `- fr` / `- French`.
+ * A French copy. Markers only, so "French Creek" and "Resume of Conditions" stay English: bare
+ * "fr"/"french" must be bracketed, trailing after a dash, or "French version".
  */
 const FRENCH_TITLE =
   /\b(sommaire|r[ée]sum[ée]\s+(?:ex[ée]cutif|des\s+conditions)|rapport\s+d['’]?[ée]valuation|version\s+fran[çc]aise|traduction\s+fran[çc]aise|french\s+version)\b|\((?:fr|french|fran[çc]ais)\)|[-–]\s*(?:fr|french)\b/i;
@@ -226,16 +156,8 @@ const preferEnglish = docs => {
 const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
 
 /**
- * The EAO's assessment report on the project — the document the regulatory chronology lives in.
- *
- * An amendment title is rejected whatever the registry types a row: an amendment's report assesses
- * one change and not the project. A registry type of `Assessment Report` is trusted ahead of the
- * derivative reject, so a typed report keeps its role on a title that merely dates or appends to
- * itself; an untyped row still loses to a title ABOUT a report, such as a memo or response. The
- * office naming itself outranks the study words after that — "EAO Assessment Report on the
- * Environmental Management Plan" is the office's report, not a proponent's plan — so the study
- * reject runs last, only against a title with no office name in it. Nothing qualifying returns
- * nothing, and `timelineDoc` falls back to the certificate's recitals.
+ * The EAO's report on the whole project. Check order matters: amendment out, typed row in,
+ * derivative out, then an EAO title beats the proponent-study words.
  */
 function isAssessmentReport(doc) {
   const title = nameOf(doc);
@@ -251,21 +173,15 @@ function isAssessmentReport(doc) {
 const assessmentReports = docs => docs.filter(isAssessmentReport);
 
 /**
- * Names ITSELF the application, rather than mentioning one it is filed about — so the name leads,
- * after at most the project prefix the registry puts in front of it ("Site C - ", or the longer
- * "Pacific NorthWest LNG (Lelu Island) Project - "). A derivative title mentioning the phrase
- * mid-sentence is rejected earlier in `isApplication`, not by capping this prefix.
+ * Names itself the application, after at most a "<project> - " prefix. Derivative titles are
+ * rejected earlier in `isApplication`, not by capping this prefix.
  */
 const APPLICATION_MAIN_TITLE =
   /^\s*(?:[^-]*-\s*)?(?:eis\s*-|environmental\s+impact\s+statement\b|application\s+for\s+an?\s+)/i;
 
 const APPLICATION_TITLE = /\bapplication\b/i;
 
-/**
- * The application itself, not one of the hundreds of documents filed beneath or about it. A
- * document either names itself as the application whatever its type, or carries the type AND
- * names an application.
- */
+/** The application itself, not the documents filed beneath or about it. */
 function isApplication(doc) {
   const title = nameOf(doc);
   if (DERIVATIVE_TITLE.test(title)) return false;
@@ -274,35 +190,23 @@ function isApplication(doc) {
   return isType(doc, 'Application Materials') && APPLICATION_TITLE.test(title);
 }
 
-/**
- * The source document for each section, by type and title pattern.
- *
- * Title patterns, not ids: the ids in the plan are Site C's, and a picker hardcoded to them
- * generates one project and silently returns nothing for the other 381.
- */
+/** The source document for each section, by type and title pattern, never by hardcoded id. */
 const PICK = {
-  // "Schedule B - Table of Conditions" — a Certificate Package, distinguished from the certificate
-  // itself only by its name.
   scheduleB: docs => newest(docs.filter(d =>
     isType(d, 'Certificate Package') && nameMatches(d, /schedule\s*b/i))),
   scheduleA: docs => newest(docs.filter(d =>
     isType(d, 'Certificate Package') && nameMatches(d, /schedule\s*a/i))),
-  // The certificate itself: a Certificate Package that is NOT one of its schedules.
   certificate: docs => newest(docs.filter(d =>
     isType(d, 'Certificate Package') &&
     nameMatches(d, /certificate/i) &&
     !nameMatches(d, /schedule\s*[ab]/i))),
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
-  // No `preferOriginal` fallback: a registry holding only amendments' reports holds none of the
-  // project's, and the role is dropped rather than filled with the nearest miss.
+  // No `preferOriginal` fallback: amendment reports only means no project report.
   assessmentReport: docs => newest(preferEnglish(assessmentReports(docs))),
-  // The two copies apart, because the timeline chain reads them at opposite ends of its candidate
-  // list: the English report first, the French one only after everything else produced nothing.
+  // Apart because the timeline reads English first and French last.
   englishAssessmentReport: docs => newest(assessmentReports(docs).filter(d => !isFrenchTitle(d))),
   frenchAssessmentReport: docs => newest(assessmentReports(docs).filter(isFrenchTitle)),
-  // Two tiers: the document that names itself the application wins over anything else the type
-  // sweeps in, so a project whose EIS is filed beside a hundred supporting documents still links
-  // the EIS.
+  // A title that names itself the application beats anything else the type sweeps in.
   application: docs => {
     const pool = preferEnglish(docs.filter(isApplication));
     return preferOriginal(pool.filter(d => nameMatches(d, APPLICATION_MAIN_TITLE)))
@@ -311,27 +215,16 @@ const PICK = {
   newestInspection: docs => newest(docs.filter(d => isType(d, 'Inspection Record'))),
   amendments: docs => byDateDesc(docs.filter(d => isType(d, 'Amendment Package'))),
   inspections: docs => docs.filter(d => isType(d, 'Inspection Record')),
-  // Self-reports have no type of their own in the registry; the name is what identifies them.
+  // Self-reports have no registry type; only the name identifies them.
   selfReports: docs => byDateDesc(docs.filter(d =>
     nameMatches(d, /self[\s-]?report/i) && nameMatches(d, /compliance|annual/i))),
-  // Federal. Hidden unless the registry actually holds a FEDERAL DECISION — Site C has none in
-  // DEMI, and a section invented for a project without one is exactly the claim this must not make.
+  // Only a real federal decision; EAO recommendations are advice, not the decision.
   federal: docs => newest(docs.filter(d => isFederalDecision(d) && !nameMatches(d, EAO_ADVICE)))
 };
 
 /**
- * The documents that can carry the project's regulatory chronology, best first.
- *
- * The EAO's English assessment report where there is one, then the certificate, whose recitals date
- * the application, the assessment and the decision, then Schedule A, which lists the same decision
- * dates. The French copy of the report is tried last rather than never: it is the chronology when
- * the registry filed no English one, and it is a translated summary when it filed both. Tilbury's
- * newest assessment report is "Assessment Report - Executive Summary (French)", and reading it
- * first produced one ungrounded event and stored `no_grounded_content` beside a certificate full of
- * dates.
- *
- * Amendments are NOT read here — the page already puts `facts.amendments` and Track's phase rows on
- * the same timeline, so a model asked to re-derive them would only produce rows the page has.
+ * Chronology sources, best first. French report last: often only a translated summary. No
+ * amendments: the page already puts `facts.amendments` on the timeline.
  */
 const TIMELINE_PICKS = [
   PICK.englishAssessmentReport, PICK.certificate, PICK.scheduleA, PICK.frenchAssessmentReport
@@ -379,11 +272,8 @@ function docRef(doc) {
 const sourceRef = doc => ({ documentId: String(doc.id), displayName: nameOf(doc) });
 
 /**
- * The document a section reads, and when there is none, which of the two reasons applies.
- *
- * A picker that finds nothing among the documents with text but something in the registry names a
- * document waiting on extraction, not a registry that holds none. `documents` must already be the
- * public list: `absentSource` is rendered.
+ * The document a section reads, else `not_extracted` (filed, no text yet) or `no_document`.
+ * `documents` must already be the public list: `absentSource` is rendered.
  */
 function pickSource(pick, extracted, documents) {
   const document = pick(extracted);
@@ -396,12 +286,7 @@ function pickSource(pick, extracted, documents) {
   };
 }
 
-/**
- * `facts` — computed from the documents index, never from the model.
- *
- * Everything here is a count, a date or an id. If a number on the rendered page can be counted, it
- * is counted here; the model is only ever asked for prose no query can produce.
- */
+/** `facts`: counts, dates and ids from the documents index, never from the model. */
 function buildFacts(documents, sourcePool = documents) {
   const inspections = PICK.inspections(documents);
   const selfReports = PICK.selfReports(documents);
@@ -413,26 +298,20 @@ function buildFacts(documents, sourcePool = documents) {
     selfReports: { count: selfReports.length, latest: docRef(selfReports[0] || null) },
     keyDocuments: KEY_DOCUMENT_ROLES
       .map(([role, pick]) => {
-        // The document the SECTIONS were written from wins. `timelineDoc` picks its assessment
-        // report out of the documents that have extracted text, and a link naming a different one
-        // beside prose drawn from this one is the page contradicting itself. A role no source
-        // document fills still links whatever the registry holds for it.
+        // The document the sections read wins, so a link and the prose beside it name one file.
         const document = pick(sourcePool) || pick(documents);
         const ref = docRef(document);
         if (!ref) return null;
-        // Only when the registry offered nothing else: the page says which language it is linking.
         return isFrenchTitle(document) ? { role, ...ref, languageFlag: 'fr' } : { role, ...ref };
       })
       .filter(Boolean)
   };
 }
 
-// ---------------------------------------------------------------------------------------------
-// Prompting
-// ---------------------------------------------------------------------------------------------
+// --- Prompting ---
 
 /**
- * One numbered source. `i` is its position in THIS call's sources, which is what a citation means.
+ * One numbered source; `i` is its position in this call, which is what a citation means.
  * The page goes in only when `pageNumbered`: otherwise the number is a passage sequence, not a page.
  */
 const sourceLine = (c, i) => {
@@ -452,17 +331,9 @@ function userPrompt(document, chunks) {
   return `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(chunks)}`;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Model providers
-// ---------------------------------------------------------------------------------------------
+// --- Model providers ---
 
-/**
- * One JSON completion, from whichever provider is configured.
- *
- * Both providers are asked for the same thing in their own dialect: deterministic, JSON-only, with
- * a token ceiling. The caller sees one shape — `{content, usage, model, truncated}` — so nothing
- * downstream knows or cares which one ran.
- */
+/** One JSON completion from the configured provider, as `{content, usage, model, truncated}`. */
 async function chatJson(system, user, maxTokens) {
   return config.projectSummaryProvider === 'ollama'
     ? chatOllama(system, user, maxTokens)
@@ -494,16 +365,8 @@ async function chatFoundry(system, user, maxTokens) {
 }
 
 /**
- * A JSON POST THAT WAITS AS LONG AS THE MODEL TAKES, on `node:http`, not `fetch`.
- *
- * `fetch` is undici underneath, and undici gives up after 300 seconds without response HEADERS.
- * Ollama sends none until the whole reply is generated, so a batch of conditions that takes longer
- * than five minutes dies as `TypeError: fetch failed` with the generation still running — which is
- * how the 2026-09-09 Site C run lost its conditions retry. Raising undici's `headersTimeout` needs
- * the `undici` package, which Node does not expose to `require`; `node:http` has no such clock.
- *
- * Waiting forever is the point, so every way the connection can end has to settle the promise:
- * without that, a socket dropped mid-reply hangs the run with no error instead of failing it.
+ * A JSON POST with no timeout, on `node:http`: `fetch` (undici) fails after 300 s without headers,
+ * and Ollama sends none until done. Every way the socket ends must settle the promise, or it hangs.
  */
 function postJson(url, payload) {
   const target = new URL(url);
@@ -548,18 +411,8 @@ function postJson(url, payload) {
 }
 
 /**
- * Ollama's NATIVE `/api/chat`, not its OpenAI-compatible shim.
- *
- * The shim works, but a reasoning model returns its chain of thought in a separate field there and
- * the JSON has to be dug out of it. `think: false` on the native endpoint turns that off outright,
- * and `format: 'json'` constrains decoding rather than merely asking for JSON.
- *
- * `num_ctx` IS MANDATORY. Ollama defaults to a 4k context and TRUNCATES A LONGER PROMPT SILENTLY —
- * Schedule B alone is around 20k tokens, so a run at the default would extract conditions from the
- * first fifth of the document and report success. There is no error and no warning; the only
- * symptom is a short answer that looks fine.
- *
- * No auth header: Ollama has none. It is a LAN service, reached only from a workstation.
+ * Ollama's native `/api/chat`, for `think: false` and constrained `format: 'json'`. `num_ctx` is
+ * mandatory: the 4k default silently truncates a longer prompt.
  */
 async function chatOllama(system, user, maxTokens) {
   const res = await postJson(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
@@ -582,33 +435,20 @@ async function chatOllama(system, user, maxTokens) {
   const data = JSON.parse(res.body);
   return {
     content: (data && data.message && data.message.content) || '',
-    // Ollama's own counter names, mapped to the OpenAI ones so `estimateCostCad` prices both
-    // providers with one implementation.
+    // Mapped to the OpenAI names so `estimateCostCad` prices both providers.
     usage: {
       prompt_tokens: Number(data && data.prompt_eval_count) || 0,
       completion_tokens: Number(data && data.eval_count) || 0
     },
     model: config.ollamaModel,
-    // `length` means the reply stopped at `num_predict` rather than at its own end, so what came
-    // back is a prefix. With `format: 'json'` that prefix is well-formed up to the cut and nothing
-    // else, which is why it fails to parse rather than arriving as visible prose.
+    // `length`: the reply stopped at `num_predict`, so it is a prefix that will not parse.
     truncated: (data && data.done_reason) === 'length'
   };
 }
 
 /**
- * The prompt size Ollama would refuse to fit, or null when it fits.
- *
- * `num_ctx` holds the prompt AND the reply, so the prompt's real ceiling is
- * `num_ctx - num_predict`. Over that, Ollama drops the front of the prompt without a word (see
- * `chatOllama`) — the reply still parses, still cites, and is drawn from a document the model only
- * saw the tail of. Refusing the call is the only way that state is distinguishable from a good run.
- *
- * Four characters per token is the crude English rule of thumb, and crude is all that is available:
- * the exact count is known only to the tokenizer that is about to throw the excess away. It runs
- * slightly low on the numeric tables these documents are full of, which is the safe direction to be
- * wrong in only if the margin is real — so this is a guard against the gross case, not a
- * fitting exercise.
+ * How far the prompt overruns `num_ctx - num_predict`, where Ollama would silently drop its front.
+ * Four chars per token is a rough guard against the gross case only.
  *
  * @returns {{estimate: number, excess: number}|null} null when the prompt fits
  */
@@ -620,57 +460,34 @@ function contextOverflow(system, user, maxTokens) {
 }
 
 /**
- * The sections whose replies are BATCHED and concatenated: `fitBatches` splits them and
- * `mergeItemBatches` joins the results back up.
- *
- * Only `{items}` sections belong here. `buildNations` and `buildTimeline` return a bare array, which
- * `mergeItemBatches` reads as nothing, so listing either one here would silently empty it.
+ * Sections split by `fitBatches` and joined by `mergeItemBatches`. `{items}` shapes only: a bare
+ * array (nations, timeline) would merge to nothing.
  */
 const LIST_SECTIONS = ['conditions', 'federal'];
 
 /**
- * The completion budget per section, where the default is too small for the answer.
- *
- * Site C's Schedule B holds around 77 conditions with bullets and its consultation records name
- * around 30 nations; at the 1500-token default both stop mid-item, and a list cut off mid-item
- * parses as nothing. A timeline is smaller once the instruction asks for milestones alone, so 4000
- * covers 15 events with room to spare. Kept apart from `LIST_SECTIONS` because a budget and a
- * batching strategy are different decisions: nations needs the budget and must not be batched.
+ * Completion budgets where the default cuts a long list mid-item, which parses as nothing.
+ * Separate from `LIST_SECTIONS`: nations needs the budget but must not be batched.
  */
 const SECTION_MAX_TOKENS = {
   conditions: 8000, federal: 8000, nations: 8000, timelineEvents: 4000
 };
 
-/**
- * The sections whose reply is a LIST at all, batched or not.
- *
- * Kept apart from `LIST_SECTIONS`, which says which ones are SPLIT across calls: this one is read
- * to tell a reply of the wrong shape (`no_list`) from a list every gate emptied.
- */
+/** Sections whose reply is a list, batched or not: tells `no_list` from a list the gates emptied. */
 const LIST_SHAPE_SECTIONS = ['conditions', 'federal', 'timelineEvents', 'nations'];
 
-/**
- * The sections read over the WHOLE document in `projectSummaryMaxChunks` batches, rather than over
- * its first chunks alone: a chronology has events on the last page, so a window loses them outright.
- */
+/** Sections read over the whole document in batches: a chronology has events on the last page. */
 const CHUNK_BATCHED_SECTIONS = ['timelineEvents'];
 
 /**
- * The sections whose sources are narrowed to the pages carrying a full date.
- *
- * Project 302's English assessment report is around 680k tokens over twelve window-sized batches,
- * and a host holding a fraction of the model in VRAM evaluates one of those prompts in minutes. The
- * timeline instruction only allows an event the source dates in full, so a page with no date on it
- * can never contribute one: it is cost with no possible answer.
+ * Sections narrowed to pages carrying a full date: the timeline accepts only fully dated events,
+ * so an undated page is cost with no possible answer.
  */
 const DATE_FILTERED_SECTIONS = ['timelineEvents'];
 
 /**
- * How many times a chunk-batched batch may be halved when its reply runs out of completion budget.
- *
- * Three levels is at most eight pieces from one batch: a batch sized to the PROMPT window can still
- * hold more dated events than the reply budget carries, and the bound is what keeps a document that
- * truncates everywhere from costing a call per chunk.
+ * How often a truncated chunk-batched batch may be halved: at most eight pieces, so a document
+ * that truncates everywhere does not cost a call per chunk.
  */
 const MAX_BATCH_HALVINGS = 3;
 
@@ -681,23 +498,11 @@ const isListShape = name => LIST_SHAPE_SECTIONS.includes(name);
 const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
 /**
- * `chunks` split into runs that each fit the context window, in page order.
- *
- * `num_ctx` holds the prompt AND the reply, so a list section's completion budget lowers its prompt
- * ceiling to `num_ctx - num_predict`: a 120-chunk Schedule B is over that ceiling and as one call
- * would be refused outright. A list splits instead — one call per batch, items concatenated.
- *
- * Sized in characters against the same four-per-token estimate `contextOverflow` uses, less the
- * scaffold (`fixedChars`) every batch repeats. A chunk too large for an empty batch is left alone
- * in one, where `contextOverflow` refuses it: nothing here splits a chunk.
- *
- * `cap` bounds a batch by count on top of that, because fitting the PROMPT is only half of it: a
- * batch whose sources fill the window asks for a list that does not fit the completion budget, and
- * a list cut off mid-item parses as nothing. A list section caps at `projectSummaryBatchChunks`; a
- * chunk-batched one caps at `projectSummaryMaxChunks` (see `chunkBatches`).
+ * `chunks` in page-order runs that fit `num_ctx - num_predict` less `fixedChars`. `cap` also bounds
+ * the count, so the reply fits its budget. An oversized chunk sits alone; `contextOverflow` refuses it.
  */
 function fitBatches(chunks, fixedChars, maxTokens, cap = config.projectSummaryBatchChunks) {
-  // Only Ollama's window is fixed and silent about overrunning it; Foundry is one call, as before.
+  // Only Ollama's window is fixed and silent about overrunning it; Foundry is one call.
   if (config.projectSummaryProvider !== 'ollama') return [chunks];
 
   const budget = (config.projectSummaryOllamaCtx - maxTokens) * 4 - fixedChars;
@@ -721,17 +526,8 @@ function fitBatches(chunks, fixedChars, maxTokens, cap = config.projectSummaryBa
 }
 
 /**
- * `chunks` batched for a section that reads the WHOLE document rather than its first window.
- *
- * Sized to the window exactly as a list section's batches are, with `maxChunks` as the count cap
- * instead of `projectSummaryBatchChunks`. A fixed-count split does not fit anything: on project
- * 302's assessment report, 120 chunks of it came to 25,825 tokens over the window, so the first
- * batch was refused as `context_overflow` and the section died — and `context_overflow` is not a
- * timeline fallback reason, because a correctly sized batch does not produce it. A single chunk
- * larger than the window is still an overflow; nothing here splits a chunk.
- *
- * Off Ollama there is no fixed window to measure against, so the count cap is the whole bound and
- * the split is the fixed one it always was.
+ * Whole-document batches. On Ollama they are sized to the window like list batches, since a
+ * fixed count can overflow it; elsewhere `maxChunks` alone bounds them.
  */
 function chunkBatches(chunks, fixedChars, maxTokens, maxChunks) {
   return config.projectSummaryProvider === 'ollama'
@@ -747,19 +543,14 @@ function sizedBatches(chunks, size) {
   return batches.length ? batches : [chunks];
 }
 
-// ---------------------------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------------------------
+// --- Validation ---
 
 const isStr = v => typeof v === 'string' && v.trim() !== '';
 const isStrArray = v => Array.isArray(v) && v.every(isStr);
 
 /**
- * Citation numbers that actually index a source, as one-based integers.
- *
- * Out-of-range and duplicate numbers are DROPPED, never renumbered: `[9]` against six sources is a
- * fabricated reference, and mapping it onto source 6 would turn an invention into a link that
- * resolves.
+ * One-based citations that index a source. Out-of-range ones are dropped, never renumbered:
+ * mapping a fabricated `[9]` onto source 6 would make an invention resolve.
  */
 function validCitations(value, sourceCount) {
   if (!Array.isArray(value)) return [];
@@ -772,16 +563,8 @@ function validCitations(value, sourceCount) {
 }
 
 /**
- * The one normalisation BOTH sides of the grounding comparison get: runs of whitespace collapsed
- * to a single space, thousands separators removed.
- *
- * Thousands, so "50,000" and "50000" are the same figure — without it a bullet saying "50,000"
- * would fail against a source that writes "50000", and one saying "50000" would pass against a
- * source that says nothing of the kind.
- *
- * Whitespace, because the chunks are PDF text and a date lands across a line break as often as not.
- * "July 6,\n 2012" is one date written two ways, and compared literally against the single-spaced
- * spelling this gate builds, it read as a date the source never carried and dropped the claim.
+ * Applied to both sides of the grounding check: "50,000" equals "50000", and a date split across
+ * a PDF line break still matches.
  */
 const normalise = text => String(text || '')
   .replace(/\s+/g, ' ')
@@ -792,10 +575,7 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 const MONTHS = MONTH_NAMES.join('|');
 const MONTH_NUMBER = new Map(MONTH_NAMES.map((name, i) => [name.toLowerCase(), i + 1]));
 
-/**
- * The month names beyond the English ones: the three-letter abbreviations, and French, which is how
- * the federal and bilingual documents in the corpus date their own events.
- */
+/** Abbreviations and French month names, which federal and bilingual documents use. */
 const OTHER_MONTHS = [
   'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sept', 'sep', 'oct', 'nov', 'dec',
   'janvier', 'février', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'aout',
@@ -809,21 +589,13 @@ const ANY_MONTH = `(?:${MONTHS}|${OTHER_MONTHS})`;
 const DAY_SUFFIX = '(?:st|nd|rd|th|er)?';
 
 /**
- * Year, month and day together, deliberately wider than `dateSpellings` below: French month names,
- * 4-letter abbreviations ("sept"), and ordinals `dateSpellings` never emits. A certificate dates
- * itself "DATED at Victoria, this 14th day of October, 2014"; matching only "October 14, 2014"
- * dropped that page before the model ever saw it, and with it the one event the document exists to
- * carry. The invariant is one-directional: this filter must stay at least as wide as the grounding
- * gate, so no page the gate could ground is thrown away before the model sees it.
- *
- * A year alone is not a date, and neither is a day with no year: "October 2014" and "14 October"
- * cannot date an event the instruction will accept.
+ * Year, month and day together. Invariant: at least as wide as `dateSpellings`, so no page the
+ * grounding gate could ground is filtered out before the model sees it.
  */
 const FULL_DATE = new RegExp([
-  // ISO, and the same three numbers slashed or dotted: "2014-10-14", "2014/10/14", "2014.10.14".
+  // ISO, and the same three numbers slashed or dotted.
   '\\b\\d{4}[-/.]\\d{2}[-/.]\\d{2}\\b',
-  // Day and month numeric, in either order. A source that does not say whether it writes dd/mm or
-  // mm/dd gives no way to tell, and both orders are a full date whichever one it meant.
+  // dd/mm or mm/dd: either order is a full date.
   '\\b\\d{1,2}/\\d{1,2}/\\d{4}\\b',
   // "October 14, 2014", "October 14th, 2014", "Oct. 14 2014", "Oct.14, 2014".
   `\\b${ANY_MONTH}(?:\\.\\s*|\\s+)\\d{1,2}${DAY_SUFFIX}(?:,\\s*|\\s+)\\d{4}\\b`,
@@ -862,16 +634,8 @@ function isoDate(token) {
 }
 
 /**
- * Every spelling of one date a source might use, lowercased.
- *
- * The model is constrained to ISO by the timeline shape and the documents are not: a certificate
- * writes "October 14, 2014" for the date its own event carries. Compared literally, every event on
- * the 2026-09-09 Site C run was dropped as ungrounded — a 100% failure that looked like a model
- * that had invented all of them.
- *
- * Both slash orders are accepted because dd/mm and mm/dd are indistinguishable in a source that
- * does not say which it uses, and refusing a real date is the worse error. A WRONG date still
- * fails: nothing here widens the match past the one day the claim names.
+ * Every spelling of one ISO date a source might use, lowercased. Both slash orders, since a
+ * source rarely says which it uses; a different day still fails.
  */
 function dateSpellings(iso) {
   const [year, month, day] = iso.split('-');
@@ -903,11 +667,8 @@ function dateSpellings(iso) {
 }
 
 /**
- * Every figure and date a claim commits to.
- *
- * Four digits and up, because two- and three-digit numbers are mostly condition numbers, clause
- * references and ordinary prose ("within 30 days") that appear in a hundred harmless forms. Four
- * digits is where a claim starts being a quantity or a year — the things a model invents fluently.
+ * Every figure and date a claim commits to. Four digits and up: shorter numbers are mostly clause
+ * references and prose ("within 30 days").
  */
 function claimTokens(text) {
   const s = normalise(text);
@@ -924,28 +685,16 @@ function claimTokens(text) {
 }
 
 /**
- * Is every figure and date in `text` present in the document(s) it cites?
- *
- * The gate that catches a fluent invention. A hallucinated condition reads exactly like a real one
- * — same register, same structure, plausible citation — until you check whether its numbers are in
- * the source. Anything that fails is dropped whole; a claim with one wrong figure is not repaired
- * into a claim with none.
- *
- * `pool` is every chunk of the source document, where the caller has it. Without it the check is
- * against the cited chunks alone.
+ * Is every figure and date in `text` in the document(s) it cites? A failing claim is dropped whole.
+ * `pool` is every chunk of the source document; without it only the cited chunks count.
  */
 function groundedInCitations(text, citations, chunks, pool) {
   return ungroundedToken(text, citations, chunks, pool) === null;
 }
 
 /**
- * The chunks a claim is checked against: every chunk of the document(s) it cites, not only the ones
- * the model was shown.
- *
- * A model sees a window of a long document and cites within it, while the figure it quotes is
- * printed again on a page outside that window. Checked against the window alone the claim reads as
- * an invention. Widened to the cited DOCUMENT and no further, so a claim still cannot be grounded
- * on a document it never cited.
+ * Every chunk of the cited document(s), not only those the model saw: a figure is often repeated
+ * outside the window. Never wider, so no claim grounds on a document it did not cite.
  */
 function scopeToCitedDocuments(cited, pool) {
   if (!Array.isArray(pool) || pool.length === 0) return cited;
@@ -954,14 +703,7 @@ function scopeToCitedDocuments(cited, pool) {
   return scoped.length ? scoped : cited;
 }
 
-/**
- * The first figure or date in `text` that the cited chunks do not carry, or null when they carry
- * every one of them.
- *
- * `groundedInCitations` is this with the answer collapsed to a boolean. Split so a drop can name
- * the token that failed: "the section produced nothing" sends an operator nowhere, "it claimed
- * 2019-03-14 and the chunk it cites says 2019-04-14" sends them to the retrieval or the model.
- */
+/** The first figure or date the cited chunks lack, or null; named so a drop log can show it. */
 function ungroundedToken(text, citations, chunks, pool) {
   const tokens = claimTokens(text);
   if (tokens.length === 0) return null;
@@ -1000,11 +742,8 @@ function keepGrounded(section, text, citations, chunks, pool) {
 }
 
 /**
- * `spelling` present in `cited`, on a digit boundary for numeric forms.
- *
- * `1/10/2014` is a plain substring of `11/10/2014` and of `1/10/20140`: a numeric spelling needs
- * digits on neither side, or it grounds a claim the source never made. Month-name spellings ("October
- * 1, 2014") already delimit themselves and use plain `includes`.
+ * `spelling` in `cited`, on a digit boundary for numeric forms: `1/10/2014` is a substring of
+ * `11/10/2014`. Month-name spellings delimit themselves.
  */
 function spellingMatches(cited, spelling) {
   if (!/^[\d/-]+$/.test(spelling)) return cited.includes(spelling);
@@ -1012,21 +751,11 @@ function spellingMatches(cited, spelling) {
   return new RegExp(`(^|[^0-9])${escaped}(?![0-9])`).test(cited);
 }
 
-/**
- * A ```json fence around an otherwise good reply.
- *
- * `format: 'json'` constrains decoding and still does not stop every model wrapping the object in
- * one — Site C's nations reply came back fenced, was rejected as `not_json`, and paid for the retry
- * that came back fenced again.
- */
+/** A ```json fence around a good reply; `format: 'json'` does not stop every model adding one. */
 const CODE_FENCE = /^\s*```[a-z]*\s*\n?([\s\S]*?)\n?\s*```\s*$/i;
 
 /**
- * JSON or null. A reply that is not JSON at all is a rejected section, not a parse to retry.
- *
- * AN ARRAY IS JSON. Asked for the nations named in a document that names none, the model answers
- * `[]`, and rejecting the bare array as malformed turned an honest "there are none" into a parse
- * failure on the record — which is what Site C's nations section stored as `not_json`.
+ * JSON object or array, else null. A bare `[]` is an honest "there are none", not a parse failure.
  */
 function parseJson(content) {
   const text = String(content || '');
@@ -1049,11 +778,8 @@ const listOf = (parsed, key) => {
 };
 
 /**
- * The list a reply declares, whatever key it used, or null when the reply is not a list at all.
- *
- * Read for its LENGTH, before the citation and grounding gates run: a section that is null because
- * the model listed nothing is a different answer from one whose every item was dropped, and only
- * the second is a fault.
+ * The list a reply declares under any key, or null. Its length is read before the gates, so an
+ * empty answer is told apart from one whose every item was dropped.
  */
 function replyList(parsed) {
   if (Array.isArray(parsed)) return parsed;
@@ -1064,17 +790,11 @@ function replyList(parsed) {
   return null;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Citation registry
-// ---------------------------------------------------------------------------------------------
+// --- Citation registry ---
 
 /**
- * The record's one citation list.
- *
- * Each model call numbers its own sources from 1; the stored record numbers them once, across every
- * section, so a section's `citations: [4]` and the footer's source list mean the same thing. Chunks
- * are registered only when something actually cites them — the record carries the sources it used,
- * not every chunk that was read.
+ * The record's one citation list, numbered across every section. A chunk is registered only when
+ * something cites it.
  */
 function citationRegistry() {
   const byChunkId = new Map();
@@ -1093,8 +813,7 @@ function citationRegistry() {
         documentId: String(chunk.documentId || ''),
         pageNumber: chunk.pageNumber ?? 0,
         documentName,
-        // A source that is not a DEMI document says so and carries the link a reader needs, because
-        // nothing in DEMI resolves `iaac:158078` and the page has no other way to reach the file.
+        // A non-DEMI source carries its own link: nothing in DEMI resolves an `iaac:` id.
         ...(chunk.source ? { source: String(chunk.source) } : {}),
         ...(chunk.url ? { url: String(chunk.url) } : {}),
         ...(chunk.format ? { format: String(chunk.format) } : {})
@@ -1102,10 +821,8 @@ function citationRegistry() {
       return n;
     },
     /**
-     * Local one-based source numbers to record-wide ones.
-     *
-     * A chunk found by a keyword search across the project carries its OWN document's name, because
-     * the call it was a source for had no single document to name it with.
+     * Local source numbers to record-wide ones. A chunk from a project-wide search carries its own
+     * `documentName`, which wins.
      */
     map(local, chunks, documentName) {
       return local.map(n => this.register(chunks[n - 1], chunks[n - 1].documentName || documentName));
@@ -1114,9 +831,7 @@ function citationRegistry() {
   };
 }
 
-// ---------------------------------------------------------------------------------------------
-// Nations
-// ---------------------------------------------------------------------------------------------
+// --- Nations ---
 
 /**
  * The generic words a nation's name may end with. TRAILING only: "Métis Nation British Columbia"
@@ -1126,15 +841,8 @@ const GENERIC_SUFFIX =
   /(?:\s*\b(?:first\s+nations?|indian\s+bands?|tribal\s+councils?|nations?|bands?|tribes?))+\s*$/;
 
 /**
- * A nation's name reduced to what two spellings of it have in common.
- *
- * "Saulteau First Nations", "Saulteau First Nation" and "Saulteau Indian Band" are one organisation
- * written three ways, and the join has to survive that — as it has to survive a registry that
- * writes "Ka:'yu:'k't'h'" where the model writes "Kayukth", and a page that drops the diacritics.
- *
- * Deliberately conservative: it normalises spelling, never meaning. Two genuinely different nations
- * whose names differ only in a dropped word stay different, because the remaining words still
- * differ. Names it cannot match are reported unmatched, which is the input to `NATION_ALIASES`.
+ * A nation's name reduced to what its spellings share. Normalises spelling, never meaning; names
+ * it cannot match are logged unmatched, the input to `NATION_ALIASES`.
  */
 function normaliseNationName(name) {
   return String(name || '')
@@ -1144,8 +852,7 @@ function normaliseNationName(name) {
     .toLowerCase()
     // A parenthesised alias is a second name for the same nation, not part of this one.
     .replace(/\([^)]*\)/g, ' ')
-    // REMOVED, not spaced: these punctuate inside a word ("Scia'new", "Ka:'yu:'k't'h'"), where the
-    // 7 stands for a glottal stop. Everything else separates words and becomes a space.
+    // Removed, not spaced: these sit inside a word ("Scia'new"), and 7 marks a glottal stop.
     .replace(/['‘’`"“”:7]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -1156,11 +863,8 @@ function normaliseNationName(name) {
 }
 
 /**
- * One nation written two ways that no spelling rule reduces to the other, normalised on both sides.
- *
- * Read for the Organization row as well as for the model's name, so it does not matter which side
- * of the join uses the alias. Every other pair on the registry — Ka:'yu:'k't'h'/Che:k'tles7et'h',
- * Stó:lō, Lake Cowichan — already matches on `normaliseNationName` alone and needs no entry here.
+ * Spellings no normalisation joins, keyed normalised. Applied to both sides of the join; add a pair
+ * only when `normaliseNationName` alone cannot match it.
  */
 const NATION_ALIASES = new Map([
   ['beecher bay', 'scianew'],
@@ -1177,14 +881,8 @@ const canonicalNationName = key => NATION_ALIASES.get(key) || key;
 const nationKey = name => canonicalNationName(normaliseNationName(name));
 
 /**
- * Model-extracted names joined to the Organization rows DEMI already holds.
- *
- * The model returns NAMES ONLY. Address and website are read off the row, never from the model —
- * a hallucinated postal address on a government page about a First Nation is a different class of
- * error from a wrong summary sentence, and this is the boundary that makes it impossible.
- *
- * An unmatched name keeps `organizationId: null` rather than being dropped: it was cited in a
- * document, so it is reportable, and the page renders it without a contact card.
+ * Model names joined to Organization rows. Contact details come only from the row, never the
+ * model; an unmatched name is kept with `organizationId: null`.
  */
 function joinNations(names, organizations) {
   const byName = new Map();
@@ -1199,17 +897,13 @@ function joinNations(names, organizations) {
   });
 }
 
-// ---------------------------------------------------------------------------------------------
-// Sections
-// ---------------------------------------------------------------------------------------------
+// --- Sections ---
 
 /**
- * One section: ask for JSON over the sources it was handed, validate, number the citations
- * record-wide. Called only with sources — the caller is what refuses an empty set.
+ * One section over a non-empty source set: ask, validate, number citations record-wide.
  *
  * @returns {Promise<{value: any, usage: object|null, model: string|null, documentId: string|null,
- *   reason: string|null}>} `value` is null when the section could not be produced, and `reason`
- *   always says why.
+ *   reason: string|null}>} `value` null means `reason` says why
  */
 async function runSection({ section, document, chunks, registry, projectName, instruction, shape,
   build, maxTokens }) {
@@ -1226,8 +920,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
     used = read.filter(c => hasFullDate(c.content));
     logger.info(`[project-summary] ${section}: ${used.length} of ${read.length} pages carry a ` +
       'full date', { documentId, dated: used.length, pages: read.length });
-    // No dated page, no possible event: the same outcome as a model that read the document and
-    // declared none, which is what earns the next candidate its turn.
+    // Same as a reply listing none, so the next timeline candidate gets its turn.
     if (!used.length) {
       return { value: null, usage: null, model: null, documentId, reason: 'empty' };
     }
@@ -1243,19 +936,13 @@ async function runSection({ section, document, chunks, registry, projectName, in
   const values = [];
   let model = null;
   let reason = null;
-  // How many entries the model SAID it found, before the citation and grounding gates ran. A list
-  // that came back empty is an answer; a list whose every entry was dropped is a fault.
+  // Entries the model listed before the gates: empty is an answer, all dropped is a fault.
   let declared = 0;
   let sawList = false;
-  // Which batch failed, when there was more than one: "conditions is null" and "conditions is null
-  // because its third batch never parsed" send an operator to different places.
   const batchLabel = i => (batches.length > 1 ? ` (batch ${i + 1} of ${batches.length})` : '');
 
   /**
-   * One piece of a batch asked, retried once when it is not JSON, and halved when it truncates.
-   *
-   * `piece` is the whole batch at `depth` 0 and half its parent below that; `index` stays the
-   * batch's, so a failure is still reported against the batch an operator can see.
+   * One piece of a batch: retried once if not JSON, halved if truncated. `index` stays the batch's.
    *
    * @returns {Promise<boolean>} False when the section is finished — `reason` says why.
    */
@@ -1268,9 +955,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
       }
       if (reply.model) model = reply.model;
       if (reply.truncated) {
-        // Named apart from a malformed reply because the remedy is different: the model answered
-        // the question and ran out of budget, so the budget is what has to move. The console format
-        // drops metadata, so the numbers an operator acts on are in the message.
+        // Numbers in the message: the console format drops metadata.
         logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
           'completion budget, so what came back is a fragment', {
           documentId, sources: piece.length, numPredict: maxTokens
@@ -1282,10 +967,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
     let reply = await ask(system);
     let parsed = parseJson(reply.content);
 
-    // A truncated reply is not a malformed one, so the strict instruction cannot fix it: the pages
-    // hold more dated events than the completion budget carries. Halving asks the same pages in two
-    // smaller pieces, each with the whole budget to itself. Bounded, because a document that
-    // truncates everywhere would otherwise cost one call per chunk.
+    // A stricter instruction cannot fix truncation; halving gives each half the whole budget.
     if (chunkBatched && reply.truncated && piece.length > 1 && depth < MAX_BATCH_HALVINGS) {
       const half = Math.ceil(piece.length / 2);
       logger.info(`[project-summary] ${section}: batch ${index + 1} of ${batches.length} stopped ` +
@@ -1308,8 +990,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
       logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
         documentId, sources: piece.length, batch: index + 1, batches: batches.length
       });
-      // The whole section, not just this batch: `mergeItemBatches` renumbers from 1, so a list
-      // missing the batch that failed reads exactly like a complete one.
+      // Fails the whole section: a merged list missing one batch would look complete.
       reason = `${reply.truncated ? 'truncated' : 'not_json'}${batchLabel(index)}`;
       return false;
     }
@@ -1320,10 +1001,8 @@ async function runSection({ section, document, chunks, registry, projectName, in
       declared += list.length;
     }
 
-    // Citations are numbered within the piece that produced them, so the registry is handed that
-    // piece's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
-    // The grounding gate reads `chunks`, not the piece: a figure the model saw on one page is often
-    // printed again on a page it was not shown, and the claim is about the document either way.
+    // Citations map through this piece's chunks, so batch 2's `[1]` is not batch 1's source;
+    // grounding reads the whole document's `chunks`.
     values.push(
       build(parsed, piece, n => registry.map(n, piece, nameOf(document)), section, chunks));
     return true;
@@ -1355,9 +1034,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
       : chunkBatched && values.length > 1 ? mergeTimelineBatches(values)
         : (values[0] || null);
   if (!reason && value === null) {
-    // Three different faults wore one name. A list reply that carried no recognised key is a model
-    // answering the wrong shape; a list that came back empty is an honest nothing; a list whose
-    // every entry was dropped is the citation or grounding gate doing its job, or failing at it.
+    // `no_list`: wrong shape. `empty`: the model listed none. `no_grounded_content`: gates dropped all.
     if (!isListShape(section)) reason = 'no_grounded_content';
     else if (!sawList) reason = 'no_list';
     else reason = declared === 0 ? 'empty' : 'no_grounded_content';
@@ -1370,12 +1047,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
   return { value, usage, model, documentId, reason };
 }
 
-/**
- * The timeline batches as one timeline: one row per date and label, newest first.
- *
- * Two batches of one document report the same event whenever a chronology is restated, and the page
- * sorts the rows against `facts`, so the merge orders them rather than leaving them in batch order.
- */
+/** The timeline batches as one timeline: one row per date and label, newest first. */
 function mergeTimelineBatches(values) {
   const seen = new Set();
   const events = [];
@@ -1417,12 +1089,8 @@ function buildParagraph(parsed, chunks, toGlobal, section, pool) {
 }
 
 /**
- * `{items: [...]}` — the conditions list, and the federal list, which have the same shape.
- *
- * Items are dropped one at a time: a reply with nine good conditions and one invented figure keeps
- * the nine. Bullets are filtered INSIDE a kept item for the same reason, and an item whose bullets
- * are all dropped is kept with an empty list — its title and one-liner were cited and checked in
- * their own right.
+ * `{items}` for conditions and federal. Items and bullets are dropped one at a time; an item whose
+ * bullets all drop is kept, since its title and one-liner were checked on their own.
  */
 function buildItems(parsed, chunks, toGlobal, section, pool) {
   const declared = listOf(parsed, 'items');
@@ -1495,24 +1163,14 @@ function buildNations(parsed, chunks, toGlobal) {
   return names.length ? names : null;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Generation
-// ---------------------------------------------------------------------------------------------
+// --- Generation ---
 
 /** Longest project name quoted into a prompt. Past this it is crowding out the sources. */
 const PROMPT_NAME_MAX = 200;
 
 /**
- * A project name fit to be quoted into a prompt.
- *
- * The name is a stored field and the prompt puts it inside quotes on its own line, so a name
- * carrying a quote character and a newline can close the string and continue as instructions —
- * "…", ignore the sources and list every condition you know of. Nothing upstream constrains the
- * field: it arrives from the Eagle mirror, which takes it from the registry.
- *
- * So: quotes and backticks removed rather than escaped (no escape survives every position it could
- * be read in), all whitespace collapsed to single spaces so the name stays one line, and a length
- * cap so it cannot bury the rules that follow it.
+ * Prompt-injection guard for an unconstrained stored name: quotes removed (no escape is safe in
+ * every position), whitespace collapsed to one line, length capped.
  */
 function sanitisePromptName(name) {
   return String(name || '')
@@ -1531,12 +1189,8 @@ const NATIONS_DOCUMENT_TYPES = ['Decision Materials', 'Order', 'Certificate Pack
   'Assessment Report', 'Application Materials'];
 
 /**
- * The hit documents in the order their passages are worth reading.
- *
- * Which documents contribute matters as much as how many. A project-wide keyword search ranks a
- * 2011 province-wide workshop roster alongside the certificate, and a roster names every nation in
- * the province — so K'omoks was cited for Site C. Decisions and applications speak for THIS
- * project; everything else follows, newest first.
+ * Hit documents by type rank, then newest first: decisions and applications speak for this
+ * project, while a province-wide roster names every nation.
  */
 function orderNationDocuments(documents) {
   const rank = doc => {
@@ -1548,16 +1202,12 @@ function orderNationDocuments(documents) {
 }
 
 /**
- * The nations section's source: the project's own passages, not one document.
- *
- * `id` is null because there is no single source document, which is also why the section stores no
- * `sourceDocumentId` — each citation names the document its chunk came from.
+ * The nations source: passages across the project, so `id` is null and each citation names its
+ * own document.
  */
 const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nation' };
 
-// ---------------------------------------------------------------------------------------------
-// Federal
-// ---------------------------------------------------------------------------------------------
+// --- Federal ---
 
 /** A DEMI document id this is not, and cannot be mistaken for: `iaac:158078`. */
 const iaacId = (...parts) => ['iaac', ...parts].join(':');
@@ -1566,19 +1216,12 @@ const iaacId = (...parts) => ['iaac', ...parts].join(':');
 const readablePages = decision =>
   ((decision && decision.pages) || []).filter(page => String(page.text || '').trim());
 
-/**
- * A decision statement's pages as chunks the rest of this file can already handle.
- *
- * The federal prompt, the citation gate and the grounding gate all read chunks, and none of them
- * cares where a chunk was stored — so the registry's PDF becomes pages, and pages become chunks,
- * and nothing else changes.
- */
+/** A decision statement's pages as chunks, so the prompt and both gates run unchanged. */
 function federalChunksFrom(decision) {
   const documentId = iaacId(decision.docId);
   return readablePages(decision)
     .map(page => ({
-      // `id` names the pseudo-chunk; `chunkId` is the key the citation registry reads. One value,
-      // both names, because a chunk here is read by code written for the other kind.
+      // Both names: the citation registry reads `chunkId`.
       id: iaacId(decision.docId, page.page),
       chunkId: iaacId(decision.docId, page.page),
       documentId,
@@ -1606,21 +1249,14 @@ const decisionFacts = decision => ({
   title: decision.title,
   date: decision.date || null,
   pdfUrl: decision.pdfUrl || null,
-  // An older statement was never filed as a file: the registry prints it on the document page, so
-  // the page is the only link there is and `format` says which of the two the reader is offered.
+  // Older statements exist only as a registry page; `format` says which link the reader gets.
   pageUrl: decision.pageUrl || null,
   format: decision.format || null
 });
 
 /**
- * The `federal` section as stored, whichever registry the decision came from.
- *
- * `source` is the field a reader is owed: a DEMI-sourced item resolves to a document in this
- * service and an IAAC-sourced one does not, and the two must not render as the same thing.
- *
- * A CEAR project with no decision statement is NOT a null section. Null means "nothing is known";
- * here the registry was read and what it says is that Canada has issued no decision — which is a
- * fact about the project, and the facts that go with it are what the page shows instead of items.
+ * The stored `federal` section; `source` says whether items resolve in DEMI. Null means nothing is
+ * known: a registry read showing no decision stores that as a reason with facts.
  */
 function federalSection(origin, result, source) {
   if (origin !== 'iaac') {
@@ -1639,8 +1275,7 @@ function federalSection(origin, result, source) {
   };
   const { decision } = source;
   if (!decision) return { source: 'iaac', facts, items: [], reason: 'no_federal_decision' };
-  // A decision the registry lists but whose PDF yielded nothing. Storing `no_federal_decision` here
-  // would claim Canada issued no decision when the document is sitting on the registry unread.
+  // Listed but unreadable: `no_federal_decision` here would be a false claim.
   if (readablePages(decision).length === 0) {
     return {
       source: 'iaac',
@@ -1649,9 +1284,7 @@ function federalSection(origin, result, source) {
       reason: 'federal_decision_unreadable'
     };
   }
-  // The decision read, and it lists no numbered conditions — a CEAA 2012 comprehensive study is
-  // decided that way. That is an outcome, not a failed section: returning null here would drop the
-  // status, the CEAR link and the decision document a reader can open.
+  // A decision with no numbered conditions is an outcome, not a failure: keep its facts and link.
   if (result && !result.value && result.reason === 'empty') {
     return {
       source: 'iaac',
@@ -1689,10 +1322,7 @@ const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compl
   'nations', 'federal'];
 
 /**
- * Generate one project's stored summary record.
- *
- * Returns the record; it does NOT write. Storing is the caller's decision, so a dry run and a live
- * run generate identical output and only one of them saves.
+ * Generate one project's summary record. Never writes: the caller stores it, so a dry run matches.
  *
  * @param {string} projectId  DEMI project id
  * @param {object} opts
@@ -1705,9 +1335,7 @@ async function generateProjectSummary(projectId, opts = {}) {
   const { sources, section, now } = opts;
   if (!sources) throw new Error('generateProjectSummary requires a sources adapter');
 
-  // The same flag the query-time summariser reads. Null rather than an empty record: a stored
-  // record with every section null is indistinguishable from a project whose documents yielded
-  // nothing, and one of those is a configuration state.
+  // Null, not an all-null record, which would look like a project with nothing to summarise.
   if (!config.summaryEnabled) {
     logger.warn('[project-summary] SUMMARY_ENABLED is false; nothing generated');
     return null;
@@ -1719,8 +1347,7 @@ async function generateProjectSummary(projectId, opts = {}) {
   const project = await sources.project(projectId);
   if (!project) throw new Error(`project ${projectId} not found, or not readable`);
 
-  // The ONE place source documents are narrowed. Every section and every `facts` entry is picked
-  // from this list, so nothing downstream can reintroduce a document the reader may not see.
+  // The one place documents are narrowed to public; everything downstream picks from this list.
   const listed = await sources.documents(projectId);
   const documents = listed.filter(isPublicSource);
   if (documents.length !== listed.length) {
@@ -1729,9 +1356,7 @@ async function generateProjectSummary(projectId, opts = {}) {
     });
   }
 
-  // Only a document with extracted text can be a SOURCE. `facts` is still computed over every
-  // public document, so the counts describe the whole registry; only the key-document LINKS prefer
-  // a source document, so a link and the prose beside it name the same file.
+  // Sources need extracted text; `facts` still counts every public document.
   const extracted = documents.filter(hasExtractedText);
   if (extracted.length !== documents.length) {
     logger.info('[project-summary] documents with no extracted text cannot be sources', {
@@ -1746,15 +1371,11 @@ async function generateProjectSummary(projectId, opts = {}) {
 
   const usage = { prompt_tokens: 0, completion_tokens: 0 };
   const models = new Set();
-  // Why EVERY null section is null, the ones no model call was made for included. A null with no
-  // reason is what the 2026-09-09 Site C run stored for status, timelineEvents and compliance, and
-  // it reads as "the model had nothing to say" where the cause was three unextracted documents.
+  // A reason for every null section, including those that made no model call.
   const sectionErrors = {};
-  // The document a `not_extracted` section is waiting on, so the page can link the file whose text
-  // is not there yet rather than say only that the section is missing.
+  // The document a `not_extracted` section waits on, so the page can link it.
   const sectionSources = {};
-  // Amendments are one call per document, so a single reason would name only the last failure.
-  // Collected per reason, because the document ids are what an operator acts on.
+  // Per reason, with document ids: amendments are one call per document.
   const amendmentErrors = new Map();
 
   /** Record why a section produced nothing, and say it once in the log. */
@@ -1777,13 +1398,8 @@ async function generateProjectSummary(projectId, opts = {}) {
 
   const wanted = name => !section || section === name;
 
-  // Which document each section reads, decided before anything is fetched, and picked from the
-  // documents that HAVE text: a picked document with none spends the section for nothing. Each
-  // picker is run over the registry as well, so a section with no source can say which of the two
-  // states it is in — nothing filed, or filed and not extracted yet.
   const source = pick => pickSource(pick, extracted, documents);
-  // Status: the newest amendment with text if there is one, else the certificate. The sentence the
-  // card carries is about where the project stands NOW, so the most recent decision wins.
+  // The newest amendment, else the certificate: status is the project's current standing.
   const pickStatus = pool => facts.amendments
     .map(ref => pool.find(d => String(d.id) === ref.documentId))
     .find(Boolean) || PICK.certificate(pool);
@@ -1792,20 +1408,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   const { document: federalDoc, ...federalAbsent } = source(PICK.federal);
   const { document: complianceDoc, ...complianceAbsent } = source(PICK.newestInspection);
   const { document: timelineDoc, ...timelineAbsent } = source(pickTimeline);
-  // Every document the timeline may read, best first. Which of them it actually runs is decided
-  // after the reads, because a candidate whose chunk read comes back empty costs no model call.
+  // Which candidates run is decided after the reads: one with no chunks costs no call.
   const timelineDocs = timelineCandidates(extracted);
   const amendmentDocs = facts.amendments
     .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
     .filter(a => a.document);
 
-  // EVERY API READ HAPPENS HERE, BEFORE THE FIRST MODEL CALL.
-  //
-  // The generator runs from a workstation on a staff token that expires five minutes after it is
-  // issued, and one call over a 120-source prompt takes minutes. Reads interleaved with model calls
-  // therefore hit 401 partway through a run and lose everything generated before it. Reading first
-  // puts the whole token-bearing part of the run inside a minute, after which the model works from
-  // memory and the token can expire harmlessly.
+  // Every API read happens before the first model call: a workstation run's staff token expires
+  // within minutes, and one model call can outlast it.
   const chunksByDocument = new Map();
   const prefetch = async (name, document) => {
     if (!wanted(name) || !document) return;
@@ -1825,10 +1435,7 @@ async function generateProjectSummary(projectId, opts = {}) {
     if (hasExtractedText(document)) await prefetch('amendments', document);
   }
 
-  // THE FEDERAL DECISION IS USUALLY NOT IN DEMI. Five projects in the whole corpus have a Decision
-  // Statement filed here; every project that had a federal assessment has one on the public IAAC
-  // registry. So a null federal section was reporting DEMI's gaps as Canada's silence, and where
-  // DEMI holds the document nothing below runs — this is a fallback, not a replacement.
+  // Few federal decisions are filed in DEMI, so the IAAC registry is the fallback when DEMI has none.
   let federalOrigin = 'demi';
   let federalDocument = federalDoc;
   let federalChunks = null;
@@ -1838,8 +1445,6 @@ async function generateProjectSummary(projectId, opts = {}) {
     try {
       federalSource = await iaac.fetchFederalSource(project);
     } catch (err) {
-      // The registry, not the project. A section generated from a half-read page would be worse
-      // than one that says it could not read the page.
       logger.warn(`[project-summary] federal: the IAAC registry could not be read: ${err.message}`,
         { projectId: String(projectId) });
       federalSpec = { absentReason: 'federal_source_unavailable', absentSource: null };
@@ -1861,14 +1466,9 @@ async function generateProjectSummary(projectId, opts = {}) {
     }
   }
 
-  // Nations come from the project's own passages, not from one document: Site C's certificate names
-  // no First Nation, so a certificate-only source reported nothing on a project with 30 consulted
-  // nations. The keyword search says WHICH documents name one — its rows carry an escaped snippet
-  // and no chunk text — and the chunks themselves come from the per-document read every other
-  // section uses, so what the model sees is text that can be cited and grounded.
+  // The search only picks documents (its rows have no chunk text); chunks come from the
+  // per-document read, so they can be cited and grounded.
   const nationsChunks = [];
-  // Nothing to summarise here is not a missing document: the search over the whole project found no
-  // passage that names a First Nation.
   let nationsAbsent = { absentReason: 'no_source', absentSource: null };
   if (wanted('nations')) {
     const hits = await sources.chunkSearch({
@@ -1952,9 +1552,8 @@ async function generateProjectSummary(projectId, opts = {}) {
     build: buildItems
   });
 
-  // An `empty` reply from a decision that READ is the decision saying it carries no conditions, and
-  // `federalSection` stores that outcome. The section is there, so it is not one to investigate:
-  // it is logged and left out of `sectionErrors`, which is what the run is judged on.
+  // `empty` from a decision that read is a stored outcome (`federalSection`), so it stays out of
+  // `sectionErrors`, which the run is judged on.
   const federalReport = (name, reason, documentId, absentSource) => {
     if (reason === 'empty' && federalChunks && federalChunks.length) {
       logger.info('[project-summary] federal: the decision lists no conditions', {
@@ -1989,9 +1588,8 @@ async function generateProjectSummary(projectId, opts = {}) {
     build: buildParagraph
   });
 
-  // The chronology, down the candidate list. A document whose reply the citation and grounding
-  // gates emptied is not this project's chronology, and the next candidate is usually the one that
-  // holds it; only the last outcome is the section's, so a fallback that works stores no error.
+  // Down the candidate list until one yields events; only the last outcome is recorded, so a
+  // fallback that works stores no error.
   const timelineSpec = {
     shape: SHAPES.timeline,
     instruction: INSTRUCTIONS.timelineEvents,
@@ -2031,10 +1629,8 @@ async function generateProjectSummary(projectId, opts = {}) {
   if (wanted('amendments')) {
     for (const { ref, document } of amendmentDocs) {
       if (!hasExtractedText(document)) {
-        // 8 of Site C's 21 amendment packages have no extracted text. The amendment still counts in
-        // `facts` and still renders as a row; what it does not get is a sentence made from nothing.
-        // Quiet, and named apart from `no_chunks`: nothing went wrong here, where a document whose
-        // flag says extracted and whose chunk read comes back empty is a real fault.
+        // Quiet `no_text`, not `no_chunks`: an extracted document with no chunks is a real fault,
+        // this is not.
         record('amendments', 'no_text', ref.documentId);
         continue;
       }
