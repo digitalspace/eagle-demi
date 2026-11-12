@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The document half of the field redactor: which attributes of a visible document leave, and which
- * body keys may come back in. The row gate (`read[]`) decides which documents; this decides which
- * fields of one, and it is level-driven rather than a fixed strip.
- */
+// `read[]` decides which documents a caller sees; the field redactor decides which fields leave
+// and which body keys come back in, by caller level.
 
 process.env.NODE_ENV = 'test';
 
@@ -57,8 +54,8 @@ test('document field redaction', async (t) => {
 
     assert.strictEqual(res.body._etag, STORED._etag, 'maxVis 2, and sysadmin is level 1');
 
-    // `s3Key` and `read` are `maxVis: 0`, and 0 is no longer a caller level — sysadmin is 1. They
-    // reach nobody through a response now, sysadmin included.
+    // `s3Key` and `read` are `maxVis: 0` and the lowest caller level is 1 (sysadmin), so they
+    // reach nobody through a response.
     assert.strictEqual(res.body.s3Key, undefined);
     assert.strictEqual(res.body.read, undefined);
   });
@@ -151,9 +148,8 @@ test('document field redaction', async (t) => {
   });
 
   await t.test('an ordinary edit cannot clear the Eagle tombstone', async () => {
-    // `isDeleted` decides what `setAclForProject` may derive the row back to, so a body that
-    // cleared it would hand a document Eagle deleted back to the public on the next project
-    // publish. Only an eagle-api push writes it.
+    // Clearing `isDeleted` would let the next project publish re-expose a document Eagle deleted;
+    // only an eagle-api push writes it.
     const deleted = { ...structuredClone(STORED), read: ['staff'], isPublished: false,
       isDeleted: true };
     t.mock.method(documents, 'getById', async () => structuredClone(deleted));
@@ -173,8 +169,8 @@ test('document field redaction', async (t) => {
 });
 
 
-// P3-3: a document is admitted at level 1 whatever its parent's level and whatever the body asks
-// for. Widening is `PUT /api/documents/:id/level`.
+// A document is admitted at level 1 whatever its parent's level and whatever the body asks for.
+// Widening is `PUT /api/documents/:id/level`.
 test('a written document is admitted at level 1', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

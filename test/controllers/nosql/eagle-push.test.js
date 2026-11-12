@@ -1029,7 +1029,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
   await t.test('a delete of a document only idir could see still reaches the index', async () => {
     // Level 3 -> 2 moves no `isPublished` flag, and the index would otherwise keep answering idir
-    // callers with a document Eagle no longer holds.
+    // callers with a document Eagle has deleted.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => ({
       id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'idir']

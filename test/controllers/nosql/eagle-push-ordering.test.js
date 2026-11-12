@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * `pushedAt` ordering on the five mirrors that share `upsertWithRetry` — periods, comments,
- * organizations, updates, notifications. The project and document mirrors have the same rule and
- * are covered in their own race suites, which already hold the etag harness.
- *
- * The etag guard makes a lost race safe but not ordered: two eagle-api pods push one record, and
- * the older body can read the winner's row, rebuild cleanly and land last. Eagle then holds one
- * version of the record and DEMI holds the one before it, with nothing that looks wrong.
- */
+// The etag guard makes a lost race safe but not ordered: an older push from another eagle-api pod
+// can land last, so the mirrors that share `upsertWithRetry` must also order by `pushedAt`.
 
 process.env.NODE_ENV = 'test';
 
@@ -99,9 +92,8 @@ test('a push equal to the stored stamp writes', async (t) => {
 });
 
 test('a push that keeps losing its race asks to be sent again', async (t) => {
-  // eagle-api's push client retries a 500-and-up and gives up on everything below it
-  // (eagle-api api/helpers/pushClient.js), so anything under 500 here would drop the push on the
-  // floor and leave DEMI holding the pre-push record with nothing to say so.
+  // eagle-api's push client (api/helpers/pushClient.js) retries only 500 and up; a lower status
+  // here would silently drop the push.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(logger, 'warn', () => {});
 

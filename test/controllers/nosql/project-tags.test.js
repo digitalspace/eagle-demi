@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * `tags` on a project row: former and alternate names DEMI owns. Only `PUT /projects/:id` writes
- * them, so the PUT validates them and every rebuild of the row from a feed (the Eagle push) has to
- * carry them across, or the next push quietly erases what staff typed.
- */
+// DEMI owns `tags` and only `PUT /projects/:id` writes them, so every rebuild of the row from a
+// feed must carry them across or the next push erases what staff typed.
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: the audit writer is inert without them. A batch of 1 makes
@@ -371,11 +368,8 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
     id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', name: 'Nicomen Wind', read: ['staff'], _etag: '"e1"'
   };
 
-  /**
-   * A projects container in memory. `refuse` names a row whose every write fails with `refuseCode`
-   * (default 412, a lost etag race). `afterWrite` is awaited after each write, to interleave PUTs.
-   * `written` lists the ids written, in order.
-   */
+  // `refuse` names a row whose every write fails with `refuseCode`; `afterWrite` runs after each
+  // write to interleave PUTs.
   function pairStore(rows, { refuse, refuseCode = 412, afterWrite = async () => {} } = {}) {
     const byId = new Map(rows.map(row => [row.id, structuredClone(row)]));
     const written = [];

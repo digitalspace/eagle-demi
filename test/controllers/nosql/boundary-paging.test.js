@@ -27,11 +27,8 @@ test('GET /boundaries is a bounded read', async (t) => {
     assert.strictEqual(opts.maxItemCount, 1000);
   });
 
-  // ONE CLAMP, and the guard must compare against it. The controller used to clamp a second time
-  // with different arithmetic — `Math.min(parseInt(x), 1000)` against pageOptions'
-  // `Math.min(Math.max(Number(x) || 1000, 1), 1000)` — so `?pageSize=abc` gave the controller NaN
-  // while the read bounded at 1000, and `1000 >= NaN` is false: a truncated page reported nothing.
-  // `0` and `-5` inverted it, firing the warn on complete answers.
+  // The truncation guard must compare against the same clamp pageOptions applies; a second clamp
+  // gives NaN for `abc` and silences the warn, or fires it on complete pages for `0` and `-5`.
   await t.test('hostile pageSize values still bound the read, and agree with the guard', async (t2) => {
     for (const [query, expected] of [['50', 50], ['99999', 1000], ['abc', 1000], ['0', 1000], ['-5', 1]]) {
       let opts;
@@ -85,17 +82,8 @@ test('GET /boundaries is a bounded read', async (t) => {
   });
 });
 
-// AT THE LAYER WHERE THE TOKEN IS ACTUALLY LOST. Everything above stubs `listByType` wholesale, so
-// it can only prove the controller forwards a value the test itself supplied. The token does not go
-// missing there — it goes missing in the SDK, and only on one of the two paths:
-//
-//   `?type=X`  -> partitionKey set  -> DefaultQueryExecutionContext -> x-ms-continuation propagates
-//   no type    -> cross-partition + ORDER BY -> LegacyFetchImplementation, whose mergeHeaders does
-//                 NOT copy x-ms-continuation, so continuationToken is undefined with rows left
-//
-// So these drive the REAL repository and stub `cosmos.query`, asserting on the options it receives
-// and modelling each path's answer. That is the seam: the SDK's behaviour is a fact about the SDK,
-// not something this repo can assert, but WHICH PATH a request takes is entirely this repo's doing.
+// The SDK drops the continuation token on cross-partition ORDER BY reads but keeps it when a
+// partition key is set; these drive the real repository and model each path's answer.
 test('the two boundary paging paths are not interchangeable', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -138,9 +126,8 @@ test('the two boundary paging paths are not interchangeable', async (t) => {
     assert.ok(warnings.some(w => w.includes('no continuation token')),
       'a truncated map that says nothing is the failure this endpoint exists to have stopped having');
 
-    // The CALLER's side of it. A warn reaches telemetry; the client still holds a short map it
-    // cannot tell from a complete one, and the handler's default `public, max-age=86400` would
-    // keep that wrong answer in shared caches for a day.
+    // The client cannot tell a short map from a complete one, and the default one-day public
+    // cache would keep the wrong answer in shared caches.
     assert.strictEqual(res.headers['x-truncated'], 'true');
     assert.strictEqual(res.headers['Cache-Control'], 'no-store');
   });
@@ -164,9 +151,8 @@ test('the two boundary paging paths are not interchangeable', async (t) => {
     assert.ok(!warnings[0].includes(marker), 'no caller string may reach the log line');
   });
 
-  // The OTHER half of the guard. Without `!nextPage` this still passes — a full page WITH a token
-  // is correctly paged, and calling its remainder unreachable would be a lie the caller can
-  // disprove. Reachable today: `?type=Municipality&pageSize=100` against the 160-row partition.
+  // Without `!nextPage` in the guard every test above still passes; a full page with a token is
+  // correctly paged and must not warn.
   await t.test('a full page WITH a token is not reported — it is simply the next page', async (t2) => {
     t2.mock.method(cosmos, 'query', async (_c, _spec, o) => ({
       items: Array.from({ length: o.maxItemCount }, (_v, i) => ({ id: `b${i}` })),

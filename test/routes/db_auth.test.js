@@ -56,18 +56,8 @@ test('DB Management Routes Security Tests', async (t) => {
   });
 
   await t.test('generic query/import endpoints stay deleted', () => {
-    // POST /db/query and /db/import were an arbitrary-query and bulk-write surface over any
-    // collection. Nothing called them, and under the NoSQL API they would have to become a
-    // SQL passthrough — exactly the fail-open shape this codebase already shipped once.
-    // /db/seed-boundaries went with the dead boundary seeder.
-    //
-    // /db/seed, /sync, /admin/sync and /admin/seed-track went with the Mongo-era scripts they
-    // drove. seed-nosql.js replaces them and runs inside the network — a 60k-document seed
-    // outlives the request, so reintroducing the route would only produce timeouts.
-    // /admin/logs and /wildfires went with the Cosmos log transport and the unused read path.
-    // The three record-ingest routes went with that feature whole: the link to a project was never
-    // redesigned, so the ingest was removed rather than narrowed. Listed here so a reintroduction
-    // is a deliberate act rather than an accident.
+    // A generic query route over the NoSQL API is a fail-open SQL passthrough, and a full seed
+    // outlives any request. Reintroducing any of these must be a deliberate act.
     const removed = [
       '/db/query', '/db/import', '/db/seed-boundaries',
       '/db/seed', '/sync', '/admin/sync', '/admin/seed-track',

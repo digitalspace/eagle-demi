@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The HTTP adapter for every domain write: a route's write handler is `writeHandler(domainFn)`.
- * The domain function answers with a `status`; this maps it to the response, so a controller
- * that imports `domain/` never writes `res.status` or `res.json` itself.
+ * HTTP adapter for every domain write: maps the domain function's `status` to the response, so a
+ * controller importing `domain/` never writes `res.status` or `res.json` itself.
  */
 
 const { resolveAccess } = require('../../helpers/access-sql');
@@ -25,12 +24,8 @@ const REFUSALS = Object.freeze({
 });
 
 /**
- * @param {Function} fn `fn(ctx, body)` on a route without `:id`, `fn(ctx, id, body)` with it;
- *   `ctx` is `{ access, req }`. Resolves to `{status: 'ok', value, created?}`,
- *   `{status: 'invalid', fields}`, or
- *   `{status: 'forbidden'|'not-found'|'conflict'|'busy'|'unavailable'|'upstream-failed', error?}`.
- * @param {{entity: string, shape?: Function}} options the catalog entity that redacts the saved row,
- *   and `shape(redacted)` that trims it to the response body
+ * @param {Function} fn `fn(ctx, body)`, or `fn(ctx, id, body)` on a `:id` route, `ctx` = `{ access, req }`; resolves to `{status: 'ok', value, created?}`, `{status: 'invalid', fields}`, or a REFUSALS key with optional `error`.
+ * @param {{entity: string, shape?: Function}} options catalog entity that redacts the saved row; `shape(redacted)` trims it to the response body
  */
 function writeHandler(fn, { entity, shape = (body) => body }) {
   if (!entity) throw new TypeError('writeHandler needs the catalog entity');

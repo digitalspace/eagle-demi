@@ -31,8 +31,8 @@ function mockCounts(t, { projects, eagleOnly, centroid, documents, extracted, er
 
 test('GET /db/stats', async (t) => {
   await t.test('reports the unlinked project count', async () => {
-    // An Eagle project with no Track counterpart is RETAINED and FLAGGED by decision (TODO F17),
-    // so the only place its number surfaces is here. Measured 2026-08-23: 393 total, 382 Track.
+    // An Eagle project with no Track counterpart is retained and flagged, so this is the only
+    // place its count surfaces. The numbers are a measured test snapshot.
     mockCounts(t, {
       projects: 393, eagleOnly: 11, centroid: 300,
       documents: 60578, extracted: 40000, errors: 12, boundaries: 281
@@ -83,6 +83,8 @@ test('GET /db/stats', async (t) => {
     mockCounts(t, {
       projects: 1, eagleOnly: 0, centroid: 0, documents: 2, extracted: 0, errors: 0, boundaries: 3
     });
+    const percent = { chunks: 40, documents: 70, projects: 100 };
+    t.mock.method(cosmosNoSql, 'indexProgress', async (name) => percent[name]);
 
     const res = mockRes();
     await dbController.getDbStats({}, res);
@@ -92,6 +94,7 @@ test('GET /db/stats', async (t) => {
     assert.strictEqual(res.body.driver, 'azure-cosmos-nosql');
     assert.strictEqual(res.body.stats.documents, 2);
     assert.strictEqual(res.body.stats.boundaries, 3);
+    assert.deepStrictEqual(res.body.indexProgress, percent);
   });
 
   await t.test('the ingest counts surface under their own keys', async () => {

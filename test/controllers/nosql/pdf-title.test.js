@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * PDF title lease API against an in-memory row store and object store. The object store keeps
- * versions and honours copy-source If-Match like the NRS bucket, so every assertion about "the
- * original is still whole" reads real bytes back. Most PDFs are real `pdf-title/titler.py` output
- * (test/fixtures/pdf-title); the rest are built with `test/helpers/pdf-build.js`.
- */
+// The in-memory object store keeps versions and honours copy-source If-Match like the NRS bucket,
+// so "the original is still whole" is checked against real bytes.
 
 process.env.NODE_ENV = 'test';
 

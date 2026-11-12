@@ -1,15 +1,7 @@
 'use strict';
 
-/**
- * Where a document write sends the chunk re-stamp — the queue, the request, or nowhere — and the
- * outbox flag that outlives every one of those choices.
- *
- * The write raises `parentFieldsPending` on the SAME upsert that moves the field, so the document
- * is on the reconcile line from the moment it lands. Only a landed patch clears it. That ordering
- * is the point: flagging on a failed enqueue alone covered the loss anyone would notice and missed
- * the quiet one, where the message was accepted and then spent its retries into the poison queue.
- * `scripts/backfill-chunk-parent-fields.js --pending` is the repair either way.
- */
+// `parentFieldsPending` is raised on the same upsert that moves the field and cleared only by a
+// landed patch, so a poisoned re-stamp stays visible. Repair: backfill-chunk-parent-fields --pending.
 
 process.env.NODE_ENV = 'test';
 
@@ -95,13 +87,8 @@ function assertRaised(row, label) {
     'the timestamp is how long the drift has stood, so the reconcile can age it');
 }
 
-/**
- * A controller with its warn-once flag unset.
- *
- * Module-level state, so a test that asserts on the first warning has to own the module. Only the
- * controller is dropped from the cache — everything it requires stays shared, which is what keeps
- * the mocks above pointed at the objects it uses.
- */
+// Resets the module-level warn-once flag. Only the controller leaves the cache, so the mocks
+// above still point at the objects it requires.
 function freshController(t) {
   const MODULE = require.resolve('../../../src/controllers/nosql/document');
   const cached = require.cache[MODULE];
@@ -111,9 +98,8 @@ function freshController(t) {
 }
 
 test('a queue name sends the work to the queue, on a row already flagged', async (t) => {
-  // THE LOST RE-STAMP, first half. A message that went out is not proof the walk happened: it can
-  // fail every attempt and poison, and nothing comes back to say so. The row carries the flag from
-  // the write itself, so the reconcile counts this document until the handler clears it.
+  // A sent message is no proof the walk happened, so the flag comes from the write itself and
+  // stays until the handler clears it.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   const messages = [];
@@ -150,9 +136,7 @@ test('a re-stamp that could not be queued needs no second write', async (t) => {
 });
 
 test('a message that poisons leaves the flag standing', async (t) => {
-  // THE LOST RE-STAMP, second half, end to end: the write flags the row and enqueues, every
-  // attempt fails, the message poisons, and nothing has cleared the flag. Before the outbox this
-  // document was invisible — the enqueue succeeded, so the old fallback never fired.
+  // End to end: enqueue succeeds, every attempt fails, the message poisons, the flag stays.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   const messages = [];
@@ -190,9 +174,8 @@ test('CHUNK_RESTAMP_INLINE walks the chunks on the request and clears the flag i
     assert.strictEqual(patched[0].document.typeId, NEW_TYPE_ID);
     assert.deepStrictEqual(messages, []);
     assertRaised(upserted[0], 'the flag goes up before the walk, on this path too');
-    // Same token guard the queue handler uses: the walk stamped from the flag this write raised,
-    // so a newer parent-field change's flag must survive it — and an unrelated write landing in
-    // between must not refuse it, which is what an etag guard did.
+    // Token guard, as in the queue handler: a newer change's flag survives the clear, and an
+    // unrelated write in between does not refuse it (an etag guard would).
     assert.deepStrictEqual(flagged, [{
       id: DOC_ID,
       projectId: '207',
@@ -296,10 +279,8 @@ test('the flag never reaches the caller', async (t) => {
 });
 
 test('a second raise mints a token later than the one already on the row', async (t) => {
-  // Two raises inside one millisecond — an eagle-api push and a staff edit landing together, or a
-  // clock that did not move between them — used to write the same `parentFieldsPendingAt` twice.
-  // The first re-stamp's clear then matched the SECOND raise's token and took its flag down, and
-  // the chunks that write moved went stale with nothing on the reconcile line to say so.
+  // Two raises in one millisecond must get distinct `parentFieldsPendingAt` tokens, or the first
+  // re-stamp's clear takes down the second raise's flag.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   t.mock.method(restampChunks, 'enqueue', async () => {});
@@ -321,11 +302,8 @@ test('a second raise mints a token later than the one already on the row', async
 
 test('a parent field that moved mid-ingest is raised again when the last batch has landed',
   async (t) => {
-    // THE INGEST WINDOW. A stream is minutes of batches, every one of them stamped from the row
-    // read at the start. A re-type landing halfway through raises its own flag and sends its own
-    // re-stamp — but that walk reaches only the chunks written so far, and then it CLEARS the flag.
-    // The batches still to come are written afterwards, carrying the old type, with nothing left
-    // watching. The ingest closes the window from its own end.
+    // A mid-stream re-type's walk reaches only chunks written so far, then clears its flag; later
+    // batches carry the old type, so the ingest closes the window from its own end.
     t.afterEach(() => t.mock.restoreAll());
     t.mock.method(restampChunks, 'enabled', () => true);
     const messages = [];
@@ -386,10 +364,8 @@ test('the JSON ingest path checks for the same drift', async (t) => {
 });
 
 test('a long stream picks up a parent field that moved, without a read per batch', async (t) => {
-  // The narrowing beside the end-of-ingest check: a stream that runs for minutes re-reads the row
-  // every 25 batches, so the chunks written after an edit carry the new values instead of the
-  // whole tail carrying the snapshot's. It is a cadence, not a guarantee — the batches between two
-  // reads still carry the old values, and the flag raised at ingest end is what covers them.
+  // The stream re-reads the row every 25 batches. That narrows the window, not closes it: the
+  // end-of-ingest flag covers batches between reads.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   t.mock.method(restampChunks, 'enqueue', async () => {});
@@ -418,11 +394,8 @@ test('a long stream picks up a parent field that moved, without a read per batch
 });
 
 test('a value that moved and moved back during a stream is still raised', async (t) => {
-  // The end-of-ingest check compares the snapshot against the final row, and those two agree here:
-  // the type went to another value and came back. What does not agree is the middle of the stream,
-  // where the mid-stream refresh picked the other value up and every batch after it carried it —
-  // so the drift is real, it is invisible to a comparison of the two ends, and only the stream
-  // itself can report it.
+  // The type moved and came back, so start and end agree, but batches after the mid-stream refresh
+  // carry the other value. Only the stream itself can report that drift.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   const messages = [];
@@ -457,9 +430,8 @@ test('a value that moved and moved back during a stream is still raised', async 
 });
 
 test('a raise that loses every race at ingest end does not fail the ingest', async (t) => {
-  // The chunks are in and the document is marked extracted by the time this runs. A throw here
-  // would 500 a request that succeeded, and the extraction host would re-ingest a document that
-  // landed — minutes of GPU per document, on the path that is already the slow one.
+  // Chunks and extracted mark have landed; a throw here would 500 and make the extraction host
+  // re-ingest, minutes of GPU per document.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(restampChunks, 'enabled', () => true);
   t.mock.method(restampChunks, 'enqueue', async () => {});
