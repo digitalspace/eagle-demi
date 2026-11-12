@@ -68,8 +68,8 @@ export const TECH: Record<string, Tech> = {
   },
   links: {
     title: 'Short URLs',
-    chips: ['Cosmos DB — links', 'eao-nginx rproxy', '302 no-store redirect', 'audit log'],
-    note: 'Codes are 3–64 letters, digits, hyphens or underscores; left blank, DEMI generates one. Destinations must be an https gov.bc.ca address. Printed/emailed links resolve through projects.eao.gov.bc.ca, which rproxy forwards to demi-api — not through Front Door.'
+    chips: ['Cosmos DB — links', 'Front Door route demi', '302 no-store redirect', 'audit log'],
+    note: 'Codes are 3–64 letters, digits, hyphens or underscores; left blank, DEMI generates one. Destinations must be an https gov.bc.ca address. Printed/emailed links resolve through projects.eao.gov.bc.ca, where Front Door route demi sends /s/* to og-demi (APIM), then demi-api.'
   },
   rbac: {
     title: 'Access model',

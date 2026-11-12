@@ -7,7 +7,7 @@ const config = require('../../src/config');
 
 const GATEWAY_SECRET = 'test-gateway-secret';
 
-/** The rproxy egress address, as TRUSTED_PROXY_IPS would name it. */
+/** A trusted proxy's egress address, as TRUSTED_PROXY_IPS would name it. */
 const RPROXY = '142.34.64.10';
 
 /** The value eagle-edge's rule set stamps, as EDGE_SECRET would name it. */
@@ -112,13 +112,13 @@ test('callerIp behind APIM', async (t) => {
   });
 });
 
-test('callerIp behind our own rproxy', async (t) => {
+test('callerIp behind a trusted proxy', async (t) => {
   t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
   t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
 
   await t.test('takes the rightmost hop that is not ours', () => {
-    // Every eagle-public visitor arrives through the rproxy, so APIM's view is one shared bucket.
-    // The chain APIM hands us is `<browser>, <nginx egress>`.
+    // Every eagle-public visitor arrives through the proxy, so APIM's view is one shared bucket.
+    // The chain APIM hands us is `<browser>, <proxy egress>`.
     const throughRproxy = viaGateway({
       'x-client-ip': RPROXY,
       'x-forwarded-for': '198.51.100.7, 142.34.64.10'
@@ -264,11 +264,11 @@ test('callerIp behind Front Door', async (t) => {
     assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
   });
 
-  /** The rproxy egress Front Door accepts the public path's connections from. */
+  /** The proxy egress Front Door accepts the public path's connections from. */
   const RPROXY_EGRESS = '142.34.194.121';
 
   /**
-   * The public-path chain: Front Door appends the rproxy, then APIM appends Front Door, so the
+   * The public-path chain: Front Door appends the proxy, then APIM appends Front Door, so the
    * browser is two hops in from the right.
    */
   function publicPath(browser) {
@@ -288,7 +288,7 @@ test('callerIp behind Front Door', async (t) => {
   });
 
   await t.test('two browsers on that path get two different keys', () => {
-    // The whole point of the feature: same rproxy, same Front Door, different quota rows.
+    // The whole point of the feature: same proxy, same Front Door, different quota rows.
     const resolve = (browser) => withConfig(
       { edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
       () => callerIp(publicPath(browser)));
@@ -309,7 +309,7 @@ test('callerIp behind Front Door', async (t) => {
   });
 
   await t.test('a socket IP that is not ours is the caller itself', () => {
-    // The direct path, with no rproxy in front: Front Door accepted the browser's own connection.
+    // The direct path, with no proxy in front: Front Door accepted the browser's own connection.
     const direct = viaEdge({
       'x-azure-socketip': '198.51.100.7',
       'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`

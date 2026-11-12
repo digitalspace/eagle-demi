@@ -30,7 +30,7 @@
   "src/merge/project.js": {"complexity":[28],"max-lines":[713]},
   "src/repositories/chunks.js": {"max-lines":[600]},
   "src/repositories/comment-periods.js": {"max-lines":[507]},
-  "src/repositories/documents.js": {"max-lines":[854]},
+  "src/repositories/documents.js": {"max-lines":[848]},
   "src/repositories/projects.js": {"max-lines":[517]},
   "src/repositories/updates.js": {"max-lines":[722]},
   "src/scripts/apply-search-definitions.js": {"complexity":[37]},

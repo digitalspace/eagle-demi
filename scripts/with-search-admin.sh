@@ -19,8 +19,8 @@
 # The app identity permanently holds **Search Index Data Contributor**, which covers DOCUMENTS and
 # not DEFINITIONS. Creating or widening an index or an indexer needs **Search Service Contributor**
 # (7ca78c08-252a-4471-8644-bb5ff32d4ba0). It is granted at the SERVICE scope, never the resource
-# group. Revocability is not assumed: the `c4b0a8` ABAC condition restricts roleAssignments write
-# and delete to six role GUIDs and this is on neither list, proven by a grant/revoke cycle.
+# group. Revocability is not assumed: the `c4b0a8` Owners-group ABAC condition denies role
+# assignment write and delete for six privileged roles; this is not one, as a grant/revoke proved.
 #
 # Usage — the command runs on THIS machine, so the usual shape is a run-command call onto the devbox:
 #

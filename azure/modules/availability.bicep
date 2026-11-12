@@ -1,10 +1,10 @@
 // Synthetic availability monitoring for the public search path. The Application Insights component
 // and the action group are passed in, not created.
 //
-// WHAT IT PROVES: one HTTP GET along the whole chain a visitor uses — Front Door, rproxy, the app,
+// WHAT IT PROVES: one HTTP GET along the whole chain a visitor uses — Front Door, APIM, the app,
 // AI Search — so a 200 means every hop answered. Nothing else notices the API being down:
-// Application Insights records requests only while the app is there to record them, and rproxy
-// keeps answering healthily when its upstream is gone.
+// Application Insights records requests only while the app is there to record them, and a probe
+// aimed at the app hostname stays green while the edge in front of it is broken.
 
 @description('Region for the web test. Must match the Application Insights component it links to.')
 param location string

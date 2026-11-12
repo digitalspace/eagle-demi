@@ -142,8 +142,8 @@ order, and therefore `zip-stream`'s single-writer constraint, binds the
    at a time.
 2. `BULK_FETCH_CONCURRENCY` reads them early too, into bounded buffers, so
    `N` transfers share the wall time instead of queueing behind each other.
-   That is the half that beats the 6.4 MB/s a single connection to NRS
-   carries.
+   That is the half meant to beat the 5.4-6.9 MB/s one connection carried
+   in the results below.
 
 Still untested against a job built from several ≥10 MB documents: the test
 corpus is mostly small and mostly missing.
@@ -361,8 +361,8 @@ measure nothing.
    redeploy the infra (`appSettings` is a whole-collection PUT — a hand-set
    app setting is gone at the next deploy).
 
-83 MiB in 18 s is 4.6 MB/s, against 6.4 MB/s measured for one connection, so
-a job that is purely fetch-bound should approach 3-5 s at `4`. It will not:
+83 MiB in 18 s is 4.6 MB/s, against 5.4-6.9 MB/s for one connection, so
+a purely fetch-bound job should approach 3-5 s at `4`. It will not:
 whatever is left is the serial upload (#8), and the gap between the two is
 the number that says whether #8 is worth building.
 

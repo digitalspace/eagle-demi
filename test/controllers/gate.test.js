@@ -48,7 +48,7 @@ test('the access curtain', async (t) => {
   });
 
   await t.test('answers at /gate as well as /api/gate', async (t) => {
-    // rproxy mounts this API at both, and eagle-public reaches it through whichever API_PATH says.
+    // APIM forwards under `/api`; direct Function-host callers use the bare path.
     gateOn(t);
     await withServer(async (call) => {
       const res = await call('/gate', {
