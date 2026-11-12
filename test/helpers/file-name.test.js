@@ -151,3 +151,10 @@ test('clean is linear in a long inner run of spaces or dots', () => {
   assert.ok(finishes(module, "m.clean('a' + ' '.repeat(400000) + 'b')"));
   assert.ok(finishes(module, "m.clean('a' + '.'.repeat(400000) + 'b')"));
 });
+
+test('clean collapses padding interleaved with joiners, and keeps a joiner inside a word', () => {
+  assert.strictEqual(clean(`invoice.pdf${' \u200c'.repeat(60)}x`), 'invoice.pdf x');
+  assert.strictEqual(clean(`invoice.pdf${'\u3000\u200d'.repeat(60)}x`), 'invoice.pdf x');
+  assert.strictEqual(clean('\u0915\u094d\u200d\u0937 a \u200cb'), '\u0915\u094d\u200d\u0937 a \u200cb');
+  assert.strictEqual(clean('\u{1F469}\u200d\u{1F4BB} \u{1F468}\u200d\u{1F373}'), '\u{1F469}\u200d\u{1F4BB} \u{1F468}\u200d\u{1F373}');
+});

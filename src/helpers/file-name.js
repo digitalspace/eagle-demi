@@ -61,7 +61,7 @@ function clean(value) {
     // cp932 and cp949 put `¥` and `₩` where `\` is; best-fit maps U+2216 to `\` and U+2236 to `:`.
     .replace(/[/\\<>:"|?*\u00a5\u20a9\u2215\u2216\u2236\u2044]/g, '')
     .replace(INVISIBLE, '')
-    .replace(/\s{2,}/g, ' '));
+    .replace(/(?:\s[\u200c\u200d]*){2,}/gu, ' '));
 }
 
 /** The recorded type wins: `Application Report v1.2` has no extension, whatever extname says. */
