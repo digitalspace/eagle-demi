@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * Translate eagle-public's query string into an Azure AI Search request.
- *
- * The contract belongs to eagle-api, not to us: `api.ts:160-206` emits `and[key]=value` repeats,
- * `sortBy` TWICE (often one of them empty), a 0-BASED `pageNum`, and a flat `project=<id>` on the
- * project tabs. Everything in this file exists because of one of those.
- *
- * Field metadata is read from `azure/search/indexes/*.json` at load, never from a table here, and a
- * key the indexes cannot express is DROPPED and logged rather than emitted — an unknown field name
- * is an OData 400, which eagle-public renders as an empty table. See
- * wiki Search-Index-Reference#field-metadata-comes-from-the-committed-index-definitions and
- * #what-demis-indexes-cannot-express.
+ * eagle-public's query string (eagle-api's contract, api.ts:160-206) as an Azure AI Search request.
+ * A key the committed index JSON cannot express is dropped, never sent: OData 400s on it (wiki Search-Index-Reference).
  */
 
 const fs = require('fs');
@@ -28,35 +19,22 @@ const { levelOf } = require('../vis/level');
 const INDEX_DIR = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
 
 /**
- * Dataset → which `azure/search/indexes/*.json` holds its field metadata.
- *
- * SCHEMA NAMES, NOT WIRE NAMES: decoupled from `SEARCH_INDEX*` on purpose, so the physical indexes
- * can be renamed one app setting at a time. An unmatched name falls back to an empty Map, which
- * answers 200 with no filters applied rather than failing.
+ * Dataset → its `azure/search/indexes/*.json` SCHEMA name, decoupled from `SEARCH_INDEX*` so an index
+ * can be renamed one app setting at a time. Unmatched = empty Map: 200 with no filters applied.
  */
 const DATASET_INDEX = {
   Project: 'projects',
   Document: 'documents',
   DocumentChunk: 'chunks',
-  // KEYWORD SEARCHES ONLY. Both datasets are still served from Cosmos without keywords, and the
-  // index exists to rank a query the container cannot — so a field here that the Cosmos read also
-  // filters on has to mean the same thing in both places.
+  // KEYWORD SEARCHES ONLY; Cosmos serves these without keywords, so a field both paths filter on
+  // has to mean the same thing in both.
   RecentActivity: 'activities',
   ProjectNotification: 'project-notifications'
 };
 
 /**
- * The four filter-panel facets, and the index field each one lands on. ONE table, spread into both
- * `Document` and `DocumentChunk` below, because a chunk carries a COPY of these four ids from its
- * parent document (`repositories/chunks.js` CHUNK_PARENT_FIELDS, stamped at ingest and re-stamped
- * whenever the document's values move) under the SAME field names. Two hand-written copies would
- * let one dataset be renamed without the other, and a saved filter URL would then mean one thing on
- * documents and another on passages.
- *
- * List ObjectIds, never labels. Copied from eagle-search's own map rather than invented — a flip
- * changes what a saved filter URL means. `test/search/eagle-query.test.js` pins the values against
- * `CHUNK_PARENT_FIELDS`, so a facet added here without the write side fails rather than filtering
- * on a chunk field nothing fills.
+ * Filter-panel facets → List ObjectId field. ONE table for documents and chunks: a chunk copies these
+ * ids from its parent (chunks.js CHUNK_PARENT_FIELDS, pinned by a test), so a saved URL means one thing.
  */
 const DOCUMENT_FACETS = Object.freeze({
   type: 'typeId',
@@ -66,12 +44,8 @@ const DOCUMENT_FACETS = Object.freeze({
 });
 
 /**
- * Wire key → index field, per dataset.
- *
- * `_id` lands on whichever field holds the EAGLE id — `legacyEagleId` for a project, the row key
- * itself for a document or chunk. `project` is deliberately absent: its value needs translating
- * from an Eagle ObjectId to a DEMI project id, which is a read, not a rename. See
- * `projectIdsFrom`/`withProjectIds`.
+ * Wire key → index field, per dataset; `_id` lands on the field holding the Eagle id. A `project`
+ * VALUE is translated elsewhere: Eagle ObjectId → DEMI id is a read, not a rename (`withProjectIds`).
  */
 const ALIASES = {
   Project: {
@@ -84,9 +58,8 @@ const ALIASES = {
     eacDecision: 'eacDecisionId',
     currentPhaseName: 'currentPhaseNameId',
     CEAAInvolvement: 'ceaaInvolvementId',
-    // Same split, one file later: `proponent` is the NAME column the list renders and sorts on,
-    // while the facet panel filters by Organization ObjectId. Sorting is unaffected —
-    // `proponentId` is `sortable: false`, so `sortFieldFor` falls back to the name.
+    // Same split: the facet filters by Organization ObjectId; sorting stays on the name, because
+    // `proponentId` is `sortable: false` and `sortFieldFor` falls back.
     proponent: 'proponentId'
   },
   Document: {
@@ -98,56 +71,34 @@ const ALIASES = {
     _id: 'chunkId',
     project: 'projectId',
     document: 'documentId',
-    // Answered by the chunk's OWN copy of its parent's ids, so the filter is one clause on one
-    // index. It used to be resolved by querying `documents` first and scoping the chunk query to
-    // the ids that came back, which is bounded by what one request returns: every filter measured
-    // on prod (`type` 2,911 documents, `projectPhase` 1,425, `milestone` 36,471) was over that
-    // bound and came back reported as inexpressible.
+    // The chunk's OWN copy of its parent's ids, so one clause on one index: scoping by a documents
+    // query first is capped at one page of ids, and real facets match thousands of documents.
     ...DOCUMENT_FACETS
   }
 };
 
 /**
- * Wire key → the field to ORDER BY instead, per dataset. Consulted by `buildOrderBy` and by
- * NOTHING else: an ALIASES entry would redirect `and[displayName]` filters onto a padded key that
- * no caller value can match, which is a silent zero-row 200.
- *
- * `displayNameSort` is `displayName` zero-padded (helpers/natural-sort), because `$orderby` on a
- * string is codepoint order and puts "Item 10" before "Item 2".
+ * Wire key → field to ORDER BY instead; sort only, as a filter alias would match no value (zero rows).
+ * `displayNameSort` is zero-padded (helpers/natural-sort) so "Item 2" sorts before "Item 10".
  */
 const SORT_KEYS = {
   Document: { displayName: 'displayNameSort' },
-  // The same mapping `repositories/notifications.js` SORT_ALIASES makes for the Cosmos read:
-  // eagle-public sorts the notifications page by `-_id`, a Mongo id it used as an arrival proxy,
-  // and received-date descending is that order said in a field these rows carry.
+  // As notifications.js SORT_ALIASES: eagle-public's `-_id` was an arrival-order proxy, and these
+  // rows carry the received date itself.
   ProjectNotification: { _id: 'notificationReceivedDate' }
 };
 
 /**
- * Wire keys that name a REAL field of the index and must still never be filtered on.
- *
- * Empty today. `proponent` was the entry that made this necessary — it passed every gate in
- * `buildFilter` and emitted `proponent eq '<ObjectId>'` against a field holding a NAME, matching 0
- * of 382 rows under a 200. The index now carries `proponentId` and the ALIASES entry above
- * redirects onto it, so the key is expressible and the exception is gone.
- *
- * The mechanism stays: this is the only gate that can refuse a key which resolves to a real,
- * filterable field of the WRONG value space. NOT a general deny list — a key naming no field, or an
- * unfilterable one, is already dropped below. See
- * wiki Search-Index-Reference#what-demis-indexes-cannot-express.
+ * Wire keys naming a real, filterable field of the WRONG value space (an id sent against a name
+ * column): the one gate that refuses those. Not a deny list; empty for now.
  */
 const EMPTY_SET = new Set();
 
 const UNMAPPED_KEYS = {};
 
 /**
- * Wire keys that ask WHETHER A FIELD IS FILLED rather than what it holds.
- *
- * `and[documentUrl]=true` is eagle-public's "Documents attached" filter on the activities list. The
- * value space is `true`/`false` ONLY, and anything else is dropped: a URL is not something a caller
- * filters an update list by, and accepting one would make the same key mean two different questions.
- * An empty string and an absent property are both "no attachment" — the updates container writes
- * `documentUrl: ''` on some rows and omits it on others.
+ * Keys that ask WHETHER a field is filled (`and[documentUrl]=true|false`, "Documents attached"); any
+ * other value drops. Empty string and absent both mean none: updates rows store either.
  */
 const PRESENCE_KEYS = {
   RecentActivity: new Set(['documentUrl'])
@@ -196,10 +147,8 @@ const FALLBACK_TERMS = {
 };
 
 /**
- * Order applied when the caller asks for none AND there are no keywords: `search: '*'` has no stable
- * order, so without this page 2 repeats and omits rows from page 1. No entry for DocumentChunk —
- * every field in `chunks` is `sortable: false`. See
- * wiki Search-Query-Construction#default-order-and-relevance.
+ * Order when the caller asks for none and has no keywords: `search: '*'` has no stable order, so paging
+ * would repeat and omit rows. No DocumentChunk entry: nothing in `chunks` is sortable.
  */
 const DEFAULT_ORDER = {
   Project: 'name asc',
@@ -207,20 +156,12 @@ const DEFAULT_ORDER = {
 };
 
 /**
- * Query parameters this endpoint understands. Anything else is a 400 rather than a silent no-op —
- * see wiki Search-Query-Construction#unsupported-parameters-400-inexpressible-filter-keys-drop.
- */
-/**
- * The BARE filter keys the Cosmos-backed datasets accept. eagle-public sends every one of these
- * flat rather than under `and[...]` — `docIds` and `companyType` from api.ts, `top` from the
- * home-page news strip — and `and[...]` spellings of the same keys pass the gate below already.
- * `period` and `_id` are the two single-record fetches.
- *
- * Also read by `filterKeysIn`, so a dataset that does not consume one REPORTS it dropped. Accepted
- * and silently ignored is the one outcome the dropped report exists to prevent.
+ * Bare filter keys eagle-public sends flat, not under `and[...]`. `filterKeysIn` reads them too, so a
+ * dataset that ignores one reports it dropped instead of answering as if it applied.
  */
 const BARE_FILTER_KEYS = ['top', 'docIds', 'period', 'companyType', '_id'];
 
+/** Every other query parameter is a 400, never a silent no-op (wiki Search-Query-Construction). */
 const KNOWN_PARAMS = new Set([
   // this API's own
   'dataset', 'keywords', 'q', 'fuzzy', 'prefix', 'pageSize',
@@ -240,10 +181,8 @@ function loadFields() {
   try {
     files = fs.readdirSync(INDEX_DIR);
   } catch (err) {
-    // THROWING IS CORRECT: the map built below is the type gate, and an empty one would let a
-    // `filterable` geography field through to an OData `eq` the service 400s on. The message names
-    // the packaging fault because this runs at require time, where a bare ENOENT reads as a bad
-    // mount or a broken image.
+    // THROW: this map is the type gate, and an empty one lets geography fields through to a 400.
+    // The message names the packaging fault, since a bare ENOENT at require time reads as a bad mount.
     throw new Error(
       `search index definitions not found at ${INDEX_DIR} — this deploy package is incomplete; ` +
       'scripts/package-api.py must re-include azure/search/indexes (it excludes azure/ wholesale)',
@@ -271,25 +210,21 @@ function fieldsFor(dataset) {
 }
 
 /**
- * Dataset -> the catalog that classifies its INDEX field names (docs/rbac-architecture.md section 2
- * item 9). No entry for DocumentChunk: the chunks catalog classifies the STORED chunk, not index
- * field names, so chunk query keys stay ungated.
+ * Dataset -> the catalog for its INDEX field names (docs/rbac-architecture.md 2.9). No DocumentChunk:
+ * its catalog classifies the stored chunk, so chunk query keys stay ungated.
  */
 const DATASET_CATALOG = {
   Project: 'index-projects',
   Document: 'index-documents',
-  // The STORED-row catalogs, and they apply unchanged because these two data sources rename
-  // nothing: an index field here is the Cosmos field of the same name. `read` is 0/0 in both, which
-  // is what stops `and[read]=…` from being a filterable field a caller can count rows against.
+  // Stored-row catalogs fit: these data sources rename nothing. `read` is 0/0 in both, so no caller
+  // can count rows by `and[read]=…`.
   RecentActivity: 'updates',
   ProjectNotification: 'notifications'
 };
 
 /**
- * May this caller filter or sort on this index field? A field they cannot READ they cannot QUERY
- * either — a row count over a hidden value answers what the value is.
- *
- * Uncatalogued is a drop, not a pass: an index field with no policy has no answer here.
+ * May this caller filter or sort on this field? Not if they cannot READ it: a row count over a hidden
+ * value answers what it is. Uncatalogued is a drop, not a pass.
  */
 function fieldVisible(dataset, field, access) {
   const entity = DATASET_CATALOG[dataset];
@@ -319,12 +254,8 @@ function quote(value) {
 }
 
 /**
- * The Edm types `term()` has a case for — and THE GATE FOR A FILTER KEY, not `filterable`. A type
- * this cannot express is an UNSUPPORTED KEY, reported through the same `dropped` path as a key the
- * index does not carry. See wiki Search-Index-Reference#type-gates-not-filterable-and-sortable-flags.
- *
- * `Collection(Edm.String)` only: the collection branch quotes its value, so a `Collection(Edm.Int32)`
- * would emit quoted integers and 400 the same way.
+ * The Edm types `term()` handles: THE filter-key gate, not `filterable` (wiki Search-Index-Reference
+ * #type-gates-not-filterable-and-sortable-flags). Collections: String only, as that branch quotes.
  */
 const TERM_TYPES = new Set([
   'Edm.String', 'Edm.Int32', 'Edm.Int64', 'Edm.Double', 'Edm.Boolean'
@@ -341,9 +272,8 @@ function term(field, meta, value) {
   switch (meta.type) {
     case 'Edm.Int32':
     case 'Edm.Int64': {
-      // "Can the field hold it", not "does it parse": `Number` accepts `0.5` and `1e21`, and both
-      // 400 against an `Edm.Int32`. `Number.isInteger(1e21)` is TRUE, so the range test is not
-      // redundant with the integrality one — it is what catches that value.
+      // "Can the field hold it", not "does it parse": `Number.isInteger(1e21)` is true, and only the
+      // range test stops it reaching an `Edm.Int32` as a 400.
       const n = Number(v);
       if (!Number.isInteger(n)) return null;
       if (meta.type === 'Edm.Int32') return (n >= -2147483648 && n <= 2147483647) ? `${field} eq ${n}` : null;
@@ -363,12 +293,8 @@ function term(field, meta, value) {
 }
 
 /**
- * Render one edge of a date range as `field ge|lt <instant>`.
- *
- * DAY GRANULARITY, and the asymmetry is the point: the wire carries a calendar day while the field
- * is an instant, so `End` becomes `lt <next day>` — `le <that day>` would exclude a document posted
- * at 09:00 on the end date. Ported from eagle-search; both services must answer the same question
- * for the same URL. Anything that is not a datetime returns null and lands in `dropped`.
+ * One date-range edge, by day: `End` is `lt <next day>`, as `le <day>` loses rows posted later that
+ * day. Same answer as eagle-search gave for one URL; a non-date is null, so dropped.
  */
 function rangeTerm(field, meta, value, edge) {
   if (meta.type !== 'Edm.DateTimeOffset') return null;
@@ -390,21 +316,8 @@ function valuesOf(rawValue) {
 }
 
 /**
- * `and[nameContains]` -> the searchable fields it runs against, per dataset.
- *
- * A SEPARATE KEY from `and[name]` and `and[displayName]`, which keep meaning `field eq 'value'`.
- * Those two answer "this exact name"; a saved URL using one must not start meaning the other.
- * Only these two datasets have the grid cell people type a fragment of a name into.
- *
- * A LIST, not one field, because the prose fields are analyzed with `en.microsoft`, whose stopword
- * list (ANALYZER_STOPWORDS in ai-search.js) removes 'mine', 'this', 'of' and 25 more at both index
- * and query time: `nameContains=mine` over `name` alone asks for nothing and answers 0 rows, though
- * 32 project names hold the word. `nameTokens` and `fileNameTokens` are the same text under the
- * `filename` analyzer, which keeps every word — the fix the keyword path already made
- * (PROJECT_SEARCH_FIELDS in ai-search.js). No reindex: both twins are already populated.
- *
- * `documentFileName` is in the Document list because the name people read and the file the document
- * arrived as are both "the document name" to whoever types in that cell.
+ * `and[nameContains]` fields; `and[name]` keeps meaning exact match. The `*Tokens` twins use the
+ * `filename` analyzer, which keeps stopwords like 'mine' that `en.microsoft` strips (ai-search.js).
  */
 const NAME_CONTAINS_FIELDS = Object.freeze({
   Project: Object.freeze(['name', 'nameTokens']),
@@ -413,19 +326,12 @@ const NAME_CONTAINS_FIELDS = Object.freeze({
 
 const NAME_CONTAINS_KEY = 'nameContains';
 
-/**
- * Longest text accepted. The value is free text spliced into a query string rather than an id, and
- * past a full name there is nothing left to narrow — a longer one is a caller fault, not a filter.
- */
+/** Free text spliced into a query; past a full name a longer value is a caller fault, not a filter. */
 const MAX_NAME_CONTAINS = 200;
 
 /**
- * The text of `and[nameContains]`, whatever shape the parser produced.
- *
- * NOT `valuesOf`: a comma separates WORDS here, not filters, so the multi-select split every other
- * filter key does would turn "Kitimat LNG, Phase 2" into two alternatives when the caller asked
- * for one name holding all four words. A repeated key joins with a space, which narrows the same
- * way a repeated key does elsewhere.
+ * The text of `and[nameContains]`. NOT `valuesOf`: a comma separates words here, not alternatives,
+ * and a repeated key joins with a space so it narrows.
  */
 function nameContainsText(rawValue) {
   return (Array.isArray(rawValue) ? rawValue : [rawValue])
@@ -435,27 +341,16 @@ function nameContainsText(rawValue) {
 }
 
 /**
- * The clause for one `and[nameContains]`, given the Lucene query its text already produced.
- *
- * `'full', 'any'` rather than the two-argument form: the query carries explicit `AND` operators and
- * trailing `*`, and under the default simple syntax `AND` would match as the word "and". Same call
- * shape the document-scope leg in `ai-search.js` uses.
- *
- * The fields join on a comma, which is the field list `search.ismatch` takes. A word satisfies the
- * query by matching in ANY of them, so a word the prose field's analyzer strips still lands on the
- * `filename`-analyzed twin beside it.
+ * `'full'` syntax, as under simple syntax the query's `AND` matches the word "and". A word may match in
+ * ANY listed field, so one the prose analyzer strips still lands on its `filename` twin.
  */
 function nameContainsClause(fields, lucene) {
   return `search.ismatch(${quote(lucene)}, ${quote(fields.join(','))}, 'full', 'any')`;
 }
 
 /**
- * The message for an `and[nameContains]` the endpoint refuses, or null. Read by the controller,
- * which answers 400.
- *
- * REFUSED RATHER THAN DROPPED, which is what an inexpressible filter key gets: this key exists to
- * carry typed text, and a dataset with no name cell or a value past the cap means the caller built
- * the URL wrong. Saying so beats serving the unfiltered corpus under a 200.
+ * The 400 message for an `and[nameContains]` the caller built wrong, or null. Refused, not dropped:
+ * a dropped one would serve the unfiltered corpus under a 200.
  */
 function nameContainsError(query, dataset) {
   for (const [key, rawValue] of andParams(query || {})) {
@@ -472,9 +367,8 @@ function nameContainsError(query, dataset) {
 }
 
 /**
- * Every project id the caller asked to filter on, in BOTH wire forms: `&project=<id>` flat from
- * `fields[]`, and `&and[project]=<id>` from `queryModifier`. Both are live, and handling only one
- * means half the project tabs return the whole corpus.
+ * Every project id asked for, flat `project=` and `and[project]=` both: both are live, and missing
+ * one makes half the project tabs return the whole corpus.
  */
 function projectIdsFrom(query) {
   const ids = query && query.project ? valuesOf(query.project) : [];
@@ -530,23 +424,16 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     // against a DEMI project id matches nothing, which reads as an empty tab rather than a bug.
     if (key === 'project') continue;
 
-    // A substring match, not an `eq`, so it renders a `search.ismatch` clause instead of a term and
-    // is handled before the alias and field lookup below. A dataset with no name cell reports it
-    // dropped, the same answer any key that index cannot express gets.
+    // A substring match: a `search.ismatch` clause, not a term, so before the alias and field lookup.
     if (key === NAME_CONTAINS_KEY) {
       const containsFields = NAME_CONTAINS_FIELDS[dataset];
       const text = nameContainsText(rawValue);
-      // Over the cap is a REFUSED filter, so it is reported before the no-words test below: a
-      // 300-character value must not read as an empty cell and widen the request to everything.
+      // Before the no-words test: an over-cap value must not read as an empty cell and widen to all.
       if (text.length > MAX_NAME_CONTAINS) { dropped.push(key); continue; }
-      // No word left to require is not a filter at all. The grid sends the key with no value when
-      // the box is cleared, and punctuation on its own ("()") leaves nothing behind either — while
-      // a clause over no terms is a 400 from the service.
+      // No word left (cleared box, bare punctuation) is no filter; a clause over no terms is a 400.
       const lucene = buildContainsQuery(text);
       if (!lucene) continue;
-      // A dataset with no name cell, or one whose fields this caller may not read, reports the key
-      // dropped rather than silently searching a different field. EVERY field has to pass, not any:
-      // a clause naming a hidden field counts rows against it just as a clause over it alone would.
+      // EVERY field must be readable, not any: a clause naming a hidden field counts rows against it.
       if (!containsFields || !containsFields.every(f => fieldVisible(dataset, f, access))) {
         dropped.push(key);
         continue;
@@ -556,15 +443,13 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
       continue;
     }
 
-    // A `Start`/`End` suffix is a RANGE on the base field, not a field of its own. Resolved against
-    // the committed definition, so a suffixed name no index carries still falls through to
-    // `dropped` instead of becoming a 400.
+    // A `Start`/`End` suffix is a RANGE on the base field; a base no index carries still drops below
+    // instead of becoming a 400.
     const edge = /(Start|End)$/.exec(key)?.[1];
     const base = edge ? key.slice(0, -edge.length) : key;
 
-    // Before the field lookup, because both of these keys DO resolve to a field — see
-    // UNMAPPED_KEYS, and `opts.unexpressible` for a field the LIVE index turns out not to carry
-    // however the committed definition reads.
+    // Before the field lookup, as both resolve to a field: UNMAPPED_KEYS, and `opts.unexpressible`
+    // for one this request learned the LIVE index lacks whatever the committed definition says.
     if ((UNMAPPED_KEYS[dataset] || EMPTY_SET).has(base) || unexpressible.has(base)) {
       dropped.push(key);
       continue;
@@ -577,9 +462,8 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     }
 
     const meta = fields.get(field);
-    // Three ways a key cannot be filtered on, all the same answer: not in the index, not
-    // `filterable`, or a TYPE the term builder has no case for. The edge branch gates on `rangeTerm`
-    // returning something instead — a range asks a different question of the type than an `eq`.
+    // Not in the index, not `filterable`, or a TYPE `term()` cannot write: all drop. A range edge
+    // gates on `rangeTerm` instead, as it asks the type a different question.
     if (!meta || !meta.filterable || (!edge && !expressible(meta))) {
       dropped.push(key);
       continue;
@@ -632,8 +516,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     if (fields.has('categorized')) {
       groups.push(`categorized eq ${String(query.categorized) === 'true'}`);
     } else {
-      // Named, not silently ignored: `categorized` counts as criteria and routes the caller to the
-      // index, and no demi index carries the field.
+      // Named, not ignored: `categorized` routes to the index, and no demi index carries it.
       dropped.push('categorized');
     }
   }
@@ -650,10 +533,8 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
 }
 
 /**
- * The Edm types `$orderby` can name. Same gate as TERM_TYPES, one type wider: `Edm.DateTimeOffset`
- * has no `eq` case but sorts fine, and `documents.datePosted` is eagle-public's DEFAULT document
- * sort. `meta.type` keeps the whole `Collection(...)` string, so membership alone rejects
- * collections and geographies however their `sortable` flag reads.
+ * Edm types `$orderby` can name: TERM_TYPES plus DateTimeOffset (eagle-public sorts on `datePosted`).
+ * Collections and geographies fail membership however their `sortable` flag reads.
  */
 const ORDER_TYPES = new Set([...TERM_TYPES, 'Edm.DateTimeOffset']);
 
@@ -662,13 +543,8 @@ function orderable(meta) {
 }
 
 /**
- * Did the caller ask for anything only the INDEX can answer — a filter or a sort?
- *
- * THIS IS THE ROUTING TEST: the Cosmos list reads take fixed criteria in a fixed order, so a request
- * carrying either would be answered with the whole corpus under a 200.
- *
- * `project` IS DELIBERATELY NOT CRITERIA, and this is a PROJECT-dataset test only — the `Document`
- * branch no longer consults it. See wiki Search-Query-Construction#every-document-read-goes-to-the-index.
+ * Project routing test: a filter (not `project`) or sort only the INDEX can answer. The fixed Cosmos
+ * list read would answer it with the whole corpus under a 200.
  */
 function hasCriteria(query) {
   if (filterKeysIn(query).some(key => key !== 'project')) return true;
@@ -699,15 +575,14 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
     }
 
     const meta = fields.get(field);
-    // Three ways a key cannot be ordered by, all the same answer: not in the index, not `sortable`,
-    // or a TYPE `$orderby` cannot name — `centroid` is `sortable: true` and is still a 400.
+    // Not in the index, not `sortable`, or a TYPE `$orderby` cannot name (`centroid` is sortable
+    // and still a 400): all drop.
     if (!meta || !meta.sortable || !orderable(meta)) {
       dropped.push(name);
       continue;
     }
-    // ONE CLAUSE PER FIELD: a repeated field cannot change the order, so the second clause is at
-    // best noise and at worst a 400. No clause cap beside it — Azure's limit is 32 and `documents`,
-    // the widest index, has 17 fields in total, so one could never fire. Add it here if that changes.
+    // ONE CLAUSE PER FIELD: a repeat cannot change the order and may 400. No clause cap: Azure's is
+    // 32 and the widest index has 17 fields.
     if (seen.has(field)) continue;
     seen.add(field);
     parts.push(`${field} ${desc ? 'desc' : 'asc'}`);
@@ -721,9 +596,8 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
       return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped, fields: [] };
     }
     if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped, fields: [] };
-    // The default sort goes through the SAME mapping and the SAME visibility gate as the caller's
-    // own keys: a field this caller cannot read cannot order their page either, and the default
-    // document order is the one `displayNameSort` exists to fix.
+    // Same mapping and visibility gate as the caller's keys: a field they cannot read cannot order
+    // their page, and `displayNameSort` exists for the default document order.
     const [defaultName, direction] = DEFAULT_ORDER[dataset].split(' ');
     const defaultField = sortFieldFor(defaultName, dataset, fields);
     if (fieldVisible(dataset, defaultField, access)) {
@@ -739,14 +613,8 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
 }
 
 /**
- * The index field a sort key lands on.
- *
- * The sort mapping first, then the FILTER alias (`_id` → `legacyEagleId`), and the caller's own
- * name whenever the target cannot sort. `fields` comes from the committed `azure/search/indexes/
- * *.json` shipped with the app (README rollout order: index PUT -> datasource PUT -> app deploy),
- * so a deployed app always sees a field the index already has; this guard exists for a SORT_KEYS
- * target the committed JSON does not define, not for a live index the app has outrun. It also keeps
- * `sortBy=type` ordering on the label rather than the ObjectId its filter alias names.
+ * Sort key → index field: SORT_KEYS, then the filter alias, else the caller's name when the target
+ * cannot sort (keeps `sortBy=type` on the label, not the ObjectId its filter alias names).
  */
 function sortFieldFor(name, dataset, fields) {
   const target = (SORT_KEYS[dataset] || {})[name] || (ALIASES[dataset] || {})[name];
@@ -756,32 +624,24 @@ function sortFieldFor(name, dataset, fields) {
 }
 
 /**
- * The Cosmos-backed datasets whose container carries a project axis, so `controllers/search.js`
- * applies the `project` filter itself rather than through an index.
- *
- * NOT derivable from `fieldsFor`: these datasets have no index at all, and an absent index reads
- * the same as an index without the field.
+ * Cosmos-backed datasets with a project axis; search.js applies `project` itself. Not derivable from
+ * `fieldsFor`: they have no index, which reads the same as an index without the field.
  */
 const COSMOS_PROJECT_DATASETS = new Set([
   'CommentPeriod', 'RecentActivity', 'Group', 'Inspection', 'InspectionElement', 'InspectionItem'
 ]);
 
 /**
- * Can a `project` filter be EXPRESSED against this dataset at all?
- *
- * `documents` and `chunks` carry `projectId`; `projects` does not, because a project IS its own
- * scope. A dropped project filter is the one drop a route must never simply answer around: the
- * difference between one project's rows and every project's rows is the whole request.
+ * Can a `project` filter be EXPRESSED here (`projects` is its own scope)? A route must never answer
+ * around this drop: one project's rows versus every project's is the whole request.
  */
 function canScopeToProject(dataset) {
   return COSMOS_PROJECT_DATASETS.has(dataset) || Boolean(fieldsFor(dataset).get('projectId'));
 }
 
 /**
- * Every filter key the caller sent, for the paths that can apply NONE of them — the keywordless
- * Cosmos list reads, whose criteria are fixed. Naming the keys in the log is the whole point: a
- * filter panel that quietly does nothing returns the full corpus and looks like a filter that
- * matched everything.
+ * Every filter key sent, for the fixed-criteria Cosmos reads that apply none: logged by name, since
+ * a silently ignored filter looks like one that matched everything.
  */
 function filterKeysIn(query) {
   const keys = Array.from(andParams(query || {}), ([key]) => key);
@@ -796,11 +656,8 @@ function filterKeysIn(query) {
 }
 
 /**
- * Parameters this endpoint does not understand. See KNOWN_PARAMS for why this is a 400.
- *
- * `extra` is the handler's OWN parameters, not a widening of KNOWN_PARAMS: `datasets` means
- * something on `/search/counts` and nothing on `/search`, and adding it to the shared set would
- * make `/search?datasets=…` a silently ignored parameter instead of the 400 it is today.
+ * Parameters outside KNOWN_PARAMS (a 400). `extra` is one handler's own, e.g. `datasets` on
+ * `/search/counts`; adding it to the shared set would make `/search?datasets=` silently ignored.
  */
 function unknownParams(query, extra = EMPTY_SET) {
   return Object.keys(query || {}).filter(
@@ -809,20 +666,16 @@ function unknownParams(query, extra = EMPTY_SET) {
 }
 
 /**
- * The same 400, for an endpoint that reads its OWN short list rather than the `/search` set.
- *
- * `unknownParams` widens KNOWN_PARAMS and always lets `and[...]` through, which is right for the
- * one handler that builds filters. An endpoint that builds none must refuse every filter key
- * instead: accepted and silently ignored is the outcome the 400 exists to prevent.
+ * The same 400 against an endpoint's OWN list. Unlike `unknownParams` it refuses `and[...]` too,
+ * for endpoints that build no filter.
  */
 function unsupportedParams(query, allowed) {
   return Object.keys(query || {}).filter(key => !allowed.has(key));
 }
 
 /**
- * The `{_id, name}` pair eagle-public's templates expect where eagle-api populated a reference.
- * `undefined` rather than `{}`, because the templates read `?.name || '-'`: an absent value renders
- * a dash, while `{}` renders a blank cell. A dash says "no proponent", a blank says "this is broken".
+ * eagle-public's populated-reference `{_id, name}`. `undefined`, not `{}`: templates read
+ * `?.name || '-'`, so absent renders a dash ("none") and `{}` a blank cell ("broken").
  */
 function ref(id, name) {
   if (!id && !name) return undefined;
