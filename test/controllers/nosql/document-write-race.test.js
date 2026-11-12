@@ -1,19 +1,7 @@
 'use strict';
 
-/**
- * The two document write paths against a row that moved under them.
- *
- * Both rebuild the whole item from a snapshot and upsert it, and a Cosmos upsert REPLACES. So an
- * unguarded write silently undid whatever landed between the read and the write: a
- * `parentFieldsPending` clear came back from the dead and left the reconcile offering a document
- * whose chunks are already current, and a parent field another writer had just moved was reverted
- * with no flag raised at all — the stale snapshot agreed with the reverted value, so nothing saw a
- * change and the chunks kept answering the newer one.
- *
- * The etag turns both into a 412 the write rebuilds from. What is asserted here is the rebuild:
- * that the row which finally lands carries the OTHER writer's values, and that the re-stamp token
- * it mints beats the one that is actually stored.
- */
+// A Cosmos upsert replaces the item, so both write paths are etag-guarded and rebuild on 412. The
+// landed row must carry the other writer's values and a re-stamp token that beats the stored one.
 
 process.env.NODE_ENV = 'test';
 
@@ -107,9 +95,8 @@ test('a staff edit writes only while the row is still the revision it read', asy
 });
 
 test('a pending flag cleared under a staff edit is not written back', async (t) => {
-  // The re-stamp walked, cleared the flag, and this edit read the row before that landed. Writing
-  // the snapshot back raises the flag again for a walk that has already happened, and the
-  // reconcile then offers a document whose chunks are current until an operator clears it by hand.
+  // Writing the stale snapshot back would re-raise a flag the re-stamp already cleared, and the
+  // reconcile would offer a current document until an operator clears it by hand.
   t.afterEach(() => t.mock.restoreAll());
 
   const upserted = raceWith(t, [
@@ -128,10 +115,8 @@ test('a pending flag cleared under a staff edit is not written back', async (t) 
 });
 
 test('a parent field another writer moved is not reverted by a staff edit', async (t) => {
-  // The quiet half. This edit touches the name only, so the re-typed value should survive it —
-  // and rebuilding onto the stored row is the only thing that keeps it, because
-  // `stampParentFieldsPending` compares the snapshot against the row it builds and a revert to
-  // the snapshot's own value looks like no change at all.
+  // `stampParentFieldsPending` compares against the snapshot, so a revert to the snapshot's value
+  // looks like no change; only rebuilding onto the stored row keeps the other writer's value.
   t.afterEach(() => t.mock.restoreAll());
 
   const upserted = raceWith(t, [
@@ -149,9 +134,8 @@ test('a parent field another writer moved is not reverted by a staff edit', asyn
 });
 
 test('a staff edit that keeps losing answers 409 instead of overwriting', async (t) => {
-  // Three rebuilds is the same bound the repository puts on a raise. Past it nothing is known
-  // about what is stored, and the honest answer is "read it again", not a row built from a
-  // revision that is already gone.
+  // Three rebuilds, the repository's own bound; past it the answer is "read it again", not a row
+  // built from a revision that is gone.
   t.afterEach(() => t.mock.restoreAll());
 
   const upserted = raceWith(t, [storedDocument({ _etag: ETAG_READ })], Infinity);
@@ -198,9 +182,8 @@ test('an eagle push rebuilds onto the row that landed', async (t) => {
 });
 
 test('the raise a retried push leaves is minted off the row that landed', async (t) => {
-  // Two writers that read the same row mint the same token, and then the first one's clear takes
-  // the second one's flag down. The token has to beat what is STORED, which is only knowable
-  // after the re-read — so it is minted per try, not carried over from the first build.
+  // The token must beat what is stored, known only after the re-read, so it is minted per try;
+  // a shared token would let one writer's clear take down the other's flag.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
 
@@ -225,9 +208,8 @@ test('the raise a retried push leaves is minted off the row that landed', async 
 });
 
 test('an eagle push that keeps losing asks to be sent again', async (t) => {
-  // eagle-api's push client retries a 500-and-up and gives up on everything below it
-  // (eagle-api api/helpers/pushClient.js), so a 409 here would drop the push on the floor and
-  // leave DEMI holding the pre-push record with nothing to say so.
+  // eagle-api's push client (api/helpers/pushClient.js) retries only 5xx, so a 409 here would
+  // drop the push silently.
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
 

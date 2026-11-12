@@ -169,9 +169,7 @@ test('POST /admin/search-definitions/apply', async (t) => {
   });
 
   await t.test('a live run with no only list is refused', async () => {
-    // An empty `only` is "everything", and live+everything resets every indexer including chunks,
-    // which is hours of rebuild with search serving a partial index. Nobody asks for that by
-    // leaving a field out.
+    // Empty `only` means everything; live+everything resets chunks too, hours of partial search.
     const taken = accept(t);
     const response = res();
 
@@ -329,9 +327,8 @@ test('POST /admin/search-definitions/apply', async (t) => {
   });
 
   await t.test('a running row whose worker died is not a run in flight', async () => {
-    // A worker the host killed mid-run leaves `running` on the row for the rest of its 30-day TTL,
-    // and nothing is coming to finish it. Counting that row as active refuses every apply for a
-    // month, with a hand-edited Cosmos document as the only way out.
+    // A killed worker leaves `running` on the row until its TTL ends; counting it as active would
+    // refuse every apply until someone edits the Cosmos document by hand.
     const dead = new Date(Date.now() - searchDefinitions.WAIT_TIMEOUT_MS - 60 * 60 * 1000).toISOString();
     const taken = accept(t, {
       active: [{

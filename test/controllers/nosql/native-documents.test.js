@@ -1,9 +1,7 @@
 'use strict';
 
-// Native `GET /documents` (`getDocuments`) and the token-paged `GET /documents/scan`
-// (`scanDocuments`). One project's plain list reads Cosmos; every other list pages in the documents
-// index and re-reads the page's ids from Cosmos. No Cosmos or index runs here: the specs sent are
-// the observable surface, with the rows a fake store hands back.
+// One project's plain list reads Cosmos; every other list pages in the documents index and
+// re-reads the page's ids from Cosmos. The specs sent are the observable surface.
 
 process.env.NODE_ENV = 'test';
 
@@ -35,11 +33,7 @@ const DOCS = [
   { id: 'd2', projectId: '207', read: ['public'], displayName: 'Application Part B' }
 ];
 
-/**
- * Fake stores. The index answers `ids` with `count`; Cosmos answers COUNT with `total`, an `@xid`
- * read with those rows, and any other list with every row plus `continuationToken`. Every index
- * request and Cosmos spec is recorded.
- */
+/** Index answers `ids` with `count`; Cosmos answers COUNT with `total`, `@xid` with those rows. */
 function fakeStores(t, { ids = ['d2', 'd1'], count = ids.length, total = DOCS.length, continuationToken } = {}) {
   const searches = [];
   const queries = [];
@@ -243,11 +237,7 @@ test('native documents list', async (t) => {
 // An image uploaded through the eagle-admin Update form: shown on its Update, fetched by id.
 const UPDATE_IMAGE = { id: 'd3', projectId: '207', read: ['public'], documentSource: 'UPDATE', s3Key: '207/photo.jpg' };
 
-/**
- * A Cosmos fake that honours the two clauses these tests are about: the `@nid` ids an `ids=` read
- * binds, and the Update-image exclusion. A COUNT spec gets the number of rows those clauses keep.
- * Every spec sent is recorded.
- */
+/** Cosmos fake honouring the `@nid` ids binding and the Update-image exclusion, COUNT included. */
 function fakeIdsStore(t) {
   const queries = [];
   t.mock.method(cosmos, 'query', async (container, spec) => {

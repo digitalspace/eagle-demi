@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The user, group and inspection mirror routes and the two CSV reports, run through the dispatcher:
- * each path reaches its handler, and only behind the guard docs/rbac-architecture.md and the README
- * name for it.
- */
+// Each path reaches its handler only behind the guard docs/rbac-architecture.md and the README
+// name for it.
 
 process.env.NODE_ENV = 'test';
 

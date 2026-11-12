@@ -1,17 +1,11 @@
 'use strict';
 
-/**
- * POST /api/credentials, GET /api/credentials, POST /api/credentials/revoke.
- *
- * A grant is access policy, so the two things worth pinning are the gate that decides who may
- * write one and the audit row that says who did. The bulk revoke is here because "exactly that
- * batch" is the assertion an operator relies on when a grant has to be pulled back in a hurry.
- */
+// A grant is access policy: pin who may write one, the audit row that says who did, and that a
+// bulk revoke pulls back exactly that batch.
 
 process.env.NODE_ENV = 'test';
-// Before src/config is first required: the audit writer is inert without these, so the assertions
-// below would otherwise pass by recording nothing. A batch of 1 drains through the stub transport
-// synchronously, which is what lets "before the response" be observed.
+// Before src/config is first required: the audit writer is inert without the DCR pair, and a
+// batch of 1 flushes synchronously so "before the response" can be observed.
 process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
 process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 process.env.AUDIT_MAX_BATCH = '1';
@@ -185,9 +179,8 @@ test('every grant and revoke audits', async (t) => {
 });
 
 test('the routes mount the sysadmin gate, not requireWrite alone', () => {
-  // The handler checks no roles, so a route missing the layer would pass every test above while
-  // being reachable by any staff member — or by the machine writer, which could then grant itself
-  // sight of anything.
+  // The handler checks no roles: without the route gate any staff member, or the machine writer,
+  // could grant itself sight of anything.
   for (const [path, method] of [['/credentials', 'post'], ['/credentials', 'get'],
     ['/credentials/revoke', 'post']]) {
     const route = apiRoutes.find((r) => r.method === method && r.path === path);

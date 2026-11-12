@@ -56,9 +56,8 @@ async function readTarget(eagleId) {
 }
 
 /**
- * Mirror one raw Eagle `ProjectNotification`, whoever asked — the push handler below or the
- * backfill (src/scripts/seed-public-reads.js). No parent, so nothing it can fail to resolve.
- * Throws `DUPLICATE_ID` when two DEMI rows name the Eagle id.
+ * Mirror one raw Eagle `ProjectNotification` (push or backfill). Throws `DUPLICATE_ID` when two
+ * DEMI rows name the Eagle id.
  *
  * @returns {Promise<{saved, existing}|{ignored, existing}|{status: 'conflict'}>}
  */

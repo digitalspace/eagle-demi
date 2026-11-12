@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Native update reads: `GET /updates`, `/updates/feed` and `/updates/:id`, on the list contract in
- * `helpers/native-query.js`. Every read goes through the repository's publish and parent gates, so
- * a caller below staff sees published rows only.
- *
- * `projectId` on an update holds the EAGLE project id (`repositories/updates.js` SCOPE_FIELD), and
- * `project=` filters on that value as stored, any of several when repeated.
+ * `GET /updates`, `/updates/feed`, `/updates/:id`: below staff sees published rows only. `projectId`
+ * holds the EAGLE project id, and `project=` filters on it as stored.
  */
 
 const updates = require('../../repositories/updates');
@@ -99,10 +95,8 @@ function decisionRows(entity, rows, access) {
 const byFeedDateDesc = (a, b) => (Date.parse(b.feedDate) || 0) - (Date.parse(a.feedDate) || 0);
 
 /**
- * `GET /updates/feed`: the home page feed, `limit` rows in all (default `updates.TOP_ROWS`, at most
- * FEED_MAX_ROWS). Pinned updates lead; the other updates, project decisions and notification
- * decisions follow by `feedDate`, newest first. Each row keeps its own entity's shape plus `kind`
- * and `feedDate`. `type` narrows the unpinned updates only, as `updates.listTop` does.
+ * `GET /updates/feed`: pinned updates lead, then updates and decisions by `feedDate`, newest first.
+ * Rows keep their own shape plus `kind` and `feedDate`; `type` narrows unpinned updates only.
  */
 exports.getFeed = async (req, res) => {
   try {

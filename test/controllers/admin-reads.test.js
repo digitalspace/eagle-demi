@@ -121,9 +121,8 @@ test('GET /admin/audit', async (t) => {
   });
 
   await t.test('spans the repoint: this app\'s analytics rows unioned with the old table', async (t) => {
-    // Two workspaces, one panel. EagleAudit_CL is EPIC-wide, so the SourceApp filter has to sit
-    // INSIDE that leg: outside it, DemiAudit_CL rows — which have no such column — arrive null and
-    // the union drops every pre-cutover row.
+    // The SourceApp filter must sit inside the EagleAudit_CL leg: DemiAudit_CL has no such column,
+    // so filtering the union would drop every DemiAudit_CL row.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', analyticsWorkspaceCustomerId: 'ws-analytics' });
     const sent = spyLogs(t, (query) => (query.includes('summarize') ? [{ Action: 'key.mint', c: 1 }] : []));
 

@@ -1,22 +1,7 @@
 'use strict';
 
-/**
- * `PUT /eagle/projects/:eagleId` against a row that moved under it.
- *
- * eagle-api pushes on every write it makes, so a single save upstream arrives here as two pushes
- * milliseconds apart: the record before the save, then the record after it. Both read the same
- * revision, both rebuilt the whole item from that snapshot, and a Cosmos upsert REPLACES — so the
- * stale one landed last and left a project that Eagle had just published sitting private in DEMI.
- * The cascade did not correct it either: `isPublished` was compared against the stale snapshot,
- * which agreed with what was written, so nothing looked like it had moved.
- *
- * Asserted here: the write carries the revision it read, a lost race is rebuilt from the row that
- * actually stored, and two pushes for one project are applied in the order they arrived.
- *
- * The etag alone only makes a lost race safe, not ordered — two eagle-api pods push the same
- * project and the older body can still be the one that rebuilds and lands last. `pushedAt` is what
- * orders them, and the last block below is about that.
- */
+// One eagle-api save arrives as two pushes milliseconds apart. The etag makes a lost race safe;
+// only `pushedAt` orders them, since two pods can push the same project.
 
 process.env.NODE_ENV = 'test';
 
@@ -102,11 +87,7 @@ function raceWith(t, rows, losses) {
   return upserted;
 }
 
-/**
- * A stand-in for the container: reads answer whatever is stored now, a write that carries a stale
- * revision is refused, and `delays` holds each write open so two pushes can be made to finish in
- * an order the caller chooses.
- */
+// Refuses a write with a stale revision; `delays` holds each write open to choose finish order.
 function fakeStore(t, initial, delays = []) {
   let stored = initial;
   let revision = 2;
@@ -139,9 +120,8 @@ test('a push writes only while the row is still the revision it read', async (t)
 });
 
 test('a project DEMI has never seen is created, not upserted', async (t) => {
-  // There is no stored revision to test against, and an IfMatch on nothing refuses every time — so
-  // the insert is the guard instead. An unguarded upsert here would replace a project another push
-  // created in the same instant, which is the one hole the etag cannot cover.
+  // No stored revision means IfMatch cannot guard, so a create is the guard; an upsert would
+  // replace a project another push created in the same instant.
   t.afterEach(() => t.mock.restoreAll());
 
   const upserted = raceWith(t, [null], 0);
@@ -153,9 +133,8 @@ test('a project DEMI has never seen is created, not upserted', async (t) => {
 });
 
 test('a create that loses to a concurrent create is re-read and rebuilt', async (t) => {
-  // Cosmos answers a create on a row that now exists with 409. It means the same thing a 412 does
-  // — somebody else wrote this row — so it has to be answered the same way: read what landed and
-  // rebuild on it, rather than 500 and leave DEMI holding neither push.
+  // A 409 on create means what a 412 means, someone else wrote the row, so it also re-reads and
+  // rebuilds instead of answering 500.
   t.afterEach(() => t.mock.restoreAll());
 
   let read = 0;
@@ -202,9 +181,8 @@ test('a push that loses its race is rebuilt from the row that landed', async (t)
 });
 
 test('the cascade answers to the revision the winning write landed on', async (t) => {
-  // The point of the rebuild. This push republishes a project that was private when it was read;
-  // if another writer republished it first, the retry's own write moves nothing and the cascade
-  // must not run — and if it was still private, it must.
+  // If another writer republished first, the retry moves nothing and the cascade must not run; if
+  // the row is still private, it must.
   t.afterEach(() => t.mock.restoreAll());
 
   const store = fakeStore(t, privateProject({ _etag: ETAG_READ }));
@@ -234,9 +212,8 @@ test('an ACL change that does not flip isPublished still cascades', async (t) =>
 });
 
 test('a push that keeps losing asks to be sent again', async (t) => {
-  // eagle-api's push client retries a 500-and-up and gives up on everything below it
-  // (eagle-api api/helpers/pushClient.js), so a 409 here would drop the push on the floor and
-  // leave DEMI holding the pre-push record with nothing to say so.
+  // eagle-api's push client (api/helpers/pushClient.js) retries only 5xx, so a 409 here would
+  // drop the push silently.
   t.afterEach(() => t.mock.restoreAll());
 
   const upserted = raceWith(t, [privateProject({ _etag: ETAG_READ })], Infinity);
@@ -248,10 +225,8 @@ test('a push that keeps losing asks to be sent again', async (t) => {
 });
 
 test('two pushes in flight at once end on the newer record', async (t) => {
-  // The incident, as prod sent it: the pre-save record and the saved record, the stale one slower
-  // to land. Both build on the pre-publish revision, and without the stamp the slow one wins — so
-  // a project Eagle had just published stays private here. The stamp is what decides it; nothing
-  // holds either request in a queue.
+  // Pre-save and saved records, the stale one slower to land. Without the `pushedAt` stamp the
+  // slow one wins and a just-published project stays private; nothing queues either request.
   t.afterEach(() => t.mock.restoreAll());
 
   t.mock.method(logger, 'info', () => {});
@@ -367,12 +342,8 @@ test('a push that loses its race is re-judged against the row that won', async (
     'the retry rebuilt and wrote a body the winner had already superseded');
 });
 
-/**
- * The cascade is a SECOND write, after the project row has already landed. When it fails the row
- * says published while the documents, the periods and the index row still say private — and
- * eagle-api retrying the push does not fix it, because by then the visibility no longer moves
- * against the stored row and nothing looks like it needs cascading.
- */
+// The cascade is a second write after the row lands. A retried push sees no visibility change
+// against the stored row, so only the recorded failure gets the cascade re-run.
 test('a failed cascade is recorded on the row and repaired by the next push', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   t.mock.method(logger, 'error', () => {});
@@ -449,11 +420,8 @@ test('the marker survives the merge, so a retry does not clear what it still owe
   assert.strictEqual(store.stored().cascadePendingAt, '2026-09-15T00:00:00.000Z');
 });
 
-/**
- * The staff write routes take the same guard. A whole-item write from a stale snapshot undoes a
- * push that landed while the body was in flight, and the push bookkeeping is the worst of it: an
- * old stamp replayed onto the row makes every later push read as stale.
- */
+// Staff writes take the same guard: replaying an old push stamp onto the row would make every
+// later push read as stale.
 const storedFor = (t, rows, losses = 0) => {
   let read = 0;
   t.mock.method(projects, 'getById', async () => rows[Math.min(read++, rows.length - 1)]);
@@ -548,11 +516,8 @@ test('a level change that keeps losing asks to be sent again', async (t) => {
   assert.strictEqual(upserted.length, 3);
 });
 
-/**
- * The existence read against rows an ACL-gated read cannot see. The gated read missed a hidden
- * project, so the push built an Eagle-only row: a 503 loop when that row was the one hiding, and a
- * new `eagle-<id>` twin beside a hidden Track row.
- */
+// An ACL-gated existence read misses hidden projects, which gives a 503 loop or an `eagle-<id>`
+// twin beside a hidden Track row.
 test('the project push finds the row whatever its ACL', async (t) => {
   const { mirrorStore } = require('../../helpers/mirror-store');
   t.afterEach(() => t.mock.restoreAll());

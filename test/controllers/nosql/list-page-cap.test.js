@@ -1,14 +1,7 @@
 'use strict';
 
-// The anonymous page cap on the list routes.
-//
-// `GET /projects` and `GET /documents` are reachable with no credential, and a large page is the
-// cheapest way for one to cost real RU or index load. A caller that presents none therefore gets
-// 100 rows a page; any verified credential keeps the 1000-row ceiling `repositories/_sql.pageOptions`
-// clamps to, privileged or not. `GET /documents/scan` keeps the same cap.
-//
-// Over the cap is REFUSED, not truncated, so a caller cannot mistake a short page for the
-// end of the data.
+// Anonymous list reads cap at 100 rows to bound RU cost; any verified credential keeps 1000.
+// Over the cap is refused, not truncated, so a short page is never mistaken for the end.
 
 process.env.NODE_ENV = 'test';
 
@@ -36,9 +29,8 @@ const STAFF = { realm_access: { roles: ['staff'] } };
 // authenticated without being able to see any more than an anonymous caller.
 const COMPLIANCE_KEY = { keyId: 'probe-key', realm_access: { roles: ['compliance'] } };
 
-// Every route takes the same shape: a repository list read behind a controller that decides
-// `opts.pageSize`. One table drives all three so none can be hardened alone. `repo` is looked up per
-// test because the logger turns a TypeError at load into a green run.
+// One table drives all three routes so none can be hardened alone. `repo` is looked up per test
+// because the logger turns a TypeError at load into a green run.
 const ROUTES = [
   {
     name: 'projects', repo: () => projectController.projectsKind.repository, method: 'list', empty: [],

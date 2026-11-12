@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Track's `sub_type_name` (stored as `projectSubType`) put into eagle-admin's PROJECT_SUBTYPES
- * vocabulary, so a project with no Eagle `sector` still shows a sub-type. eagle-admin keeps one
- * list per Act: 26 of Track's 28 names are on the 2018 list and 24 on the 2002 one.
- *
- * Transmission lines take one name under both Acts. Solid waste and marine ports were renamed
- * between the lists, so they follow the project's legislation year; no year reads as 2018, the
- * current Act. Oil Refineries has no 2002 entry and passes through unchanged.
+ * Track's `sub_type_name` (stored as `projectSubType`) in eagle-admin's PROJECT_SUBTYPES words for
+ * the project's Act. Renamed entries follow the legislation year; no year reads as 2018.
  */
 const TRANSMISSION_LINES = 'Transmission Lines';
 const SOLID_WASTE = 'Solid Waste Management Facilities';
@@ -34,9 +29,8 @@ function normalizeSubType(value, legislationYear) {
 }
 
 /**
- * The stored sub-types that show as `shown`, and under which Act each does: normalizeSubType run
- * backwards, for a filter on the shown name. 2002 is a legislation year of 2002 or earlier; 2018
- * is any other year, or none.
+ * normalizeSubType run backwards for a filter on the shown name: each stored sub-type that shows
+ * as `shown`, and under which Act. 2002 means a legislation year of 2002 or earlier.
  * @returns {{name: string, under2002: boolean, under2018: boolean}[]}
  */
 function subTypeSources(shown) {

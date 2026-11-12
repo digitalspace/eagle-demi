@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Document controller — Cosmos NoSQL.
- *
- * The ACL rule that matters: a document can never out-rank its parent project. That is
- * enforced in one place (resolveDocumentAcl) and used by every write path — the Mongo version
- * had it in createDocument only, so an upload through the intake route could be published
- * under a private project.
+ * Document controller, Cosmos NoSQL. A document can never out-rank its parent project: every
+ * write path takes its ACL from resolveDocumentAcl.
  */
 
 const crypto = require('crypto');
@@ -72,9 +68,8 @@ const LEGACY_PUBLISH = Symbol('legacy publish alias');
 let warnedNoRestampTarget = false;
 
 /**
- * Resolve a new document's ACL: admits at level 1 (docs/rbac-architecture.md §1, "Default on
- * admission is level 1"), capped at the parent's own level so a document can never out-rank
- * its project. EVERY document write path must go through this.
+ * A new document's ACL: level 1 (docs/rbac-architecture.md §1), capped at the parent's level.
+ * EVERY document write path must go through this.
  */
 function resolveDocumentAcl(parentProject) {
   const read = capRead(readForLevel(1), parentProject.read);
@@ -84,43 +79,25 @@ function resolveDocumentAcl(parentProject) {
 }
 
 /**
- * The outbox stamp for a document write that moves a chunk parent field. Returns the row to write
- * — flagged — or null when nothing moved and the caller should write the row as it stands.
- *
- * The flag rides the SAME upsert as the change, before anything tries to re-stamp. That is what
- * makes a lost re-stamp countable: raising it only when the enqueue failed left the other loss
- * invisible, because a message that was accepted and then exhausted its retries into the poison
- * queue never came back to raise anything. Now every write that owes a re-stamp is on the
- * reconcile line from the moment it lands, and a landed patch is the only thing that takes it off.
+ * The flagged row for a write that moves a chunk parent field, or null when nothing moved. The flag
+ * rides the same upsert, so a re-stamp lost to the poison queue still leaves the row on reconcile.
  */
 function stampParentFieldsPending(existing, row) {
   if (!existing || !chunks.parentFieldsChanged(existing, row)) return null;
-  // The repository mints the token, so a raise here is guaranteed later than the one already on
-  // the row. Two raises inside the same millisecond would otherwise share a value, and the first
-  // re-stamp's clear would take the second one's flag down with it.
+  // The repository mints the token so it is always later than the row's: two raises sharing one
+  // millisecond would let the first re-stamp's clear drop the second flag.
   return { ...row, ...documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
 }
 
 /**
- * Write a row built from `existing`, but only while `existing` is still the stored revision.
- *
- * An unguarded upsert REPLACES the item from a snapshot, and two things went missing that way. A
- * `parentFieldsPending` clear that landed after the read was resurrected, so the reconcile keeps
- * offering a document whose chunks are already current. And a parent field another writer moved
- * meanwhile was reverted with NO flag raised, because `stampParentFieldsPending` compares against
- * the stale snapshot and sees nothing move — the chunks then answer the reverted value forever.
- * The etag turns both into a 412 this rebuilds from.
+ * Write a row built from `existing` only while it is still the stored revision. An unguarded upsert
+ * from a snapshot resurrects a cleared pending flag and reverts another writer's parent field.
  *
  * @param {object|null} existing the row the first build read, `null` when there is none
  * @param {() => Promise<object|null>} reread fetches the stored row again after a lost race
- * @param {(current: object|null) => object|null} build the row to write, from whatever is stored
- *   now. `null` means the request cannot be applied to that row.
- * @param {{pushedAt?: number|null}} [options] the eagle mirror's ordering stamp; a staff edit
- *   carries none and is never refused as stale.
- * @returns {Promise<{status: string, saved?: object, owed?: boolean, existing?: object|null}>}
- *   `saved` with the row that landed, whether it owes a re-stamp, and the revision it was built
- *   from; `conflict` when every try lost; `missing` when `build` refused the stored row;
- *   `stale` when a newer push already landed.
+ * @param {(current: object|null) => object|null} build the row to write; `null` refuses the row
+ * @param {{pushedAt?: number|null}} [options] the eagle mirror's ordering stamp; staff edits have none
+ * @returns {Promise<{status: string, saved?: object, owed?: boolean, existing?: object|null}>} status is `saved`, `conflict`, `missing` or `stale`
  */
 async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) {
   let written = null;
@@ -135,9 +112,8 @@ async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) 
       // Inside the attempt, so a retry after a 412 judges this push against the one that won.
       if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
       written = row;
-      // Recomputed per try, never carried over: the token has to be minted off the value the
-      // STORED row carries, or this raise repeats one that is already on the row and the other
-      // writer's clear takes this flag down with it.
+      // Recomputed per try: the token must be minted off the STORED row, or the other writer's
+      // clear takes this flag down with it.
       const owed = stampParentFieldsPending(current, row);
       const item = stampPush(owed || row, pushedAt, current);
       // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
@@ -154,21 +130,8 @@ async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) 
 }
 
 /**
- * Re-stamp the parent's filter metadata onto its chunks after a document write moved it. Call it
- * only when `stampParentFieldsPending` said the write moved one — the flag is already on the row.
- *
- * A chunk carries a COPY of its document's `projectId` and List refs, and nothing else refreshes
- * it: a re-typed document keeps answering the old type filter, and a document MOVED to another
- * project keeps answering the old project's scope. The offline writers (`scripts/seed-nosql.js`,
- * `scripts/backfill-document-list-ids.js`) call the repository directly, having no request to hang
- * this off.
- *
- * Off the request, because the walk is proportional to the document and the push timeout is not
- * (src/jobs/restamp-chunks.js). With neither the queue nor `CHUNK_RESTAMP_INLINE` set it is
- * SKIPPED rather than run inline: stale chunks are repairable, a blocked document push is not.
- *
- * Best-effort throughout — the document write is authoritative and has landed, and unlike the ACL
- * patch beside it this is no visibility boundary: a stale copy makes a filter MISS.
+ * Queue the re-stamp of a moved parent field onto the document's chunks; best-effort, since a stale
+ * copy only makes a filter miss. With no queue and no inline opt-in it is skipped, not run inline.
  */
 async function propagateParentFields(saved) {
   if (!restampChunks.enabled()) {
@@ -197,7 +160,7 @@ async function propagateParentFields(saved) {
   }
 }
 
-/** The pre-queue path, on the request, for a local run that opts in. Swallows, as it always did. */
+/** The re-stamp on the request, for a local run that opts in. Swallows errors. */
 async function patchParentFieldsInline(saved) {
   try {
     // Guarded on the same token the queue handler uses, so the two walks cannot undo each other.
@@ -222,42 +185,19 @@ async function patchParentFieldsInline(saved) {
 }
 
 /**
- * Whether the parent fields moved while an ingest was running, and the re-stamp that owes for it.
- *
- * An ingest reads the document once, at the start, and stamps every chunk it writes from that
- * snapshot — a 63 MB stream is minutes of batches. A re-type landing halfway through raises its own
- * flag and sends its own re-stamp, but that walk only reaches the chunks that exist when it runs:
- * the batches still to come are written from the snapshot, with the old values, and the walk then
- * CLEARS the flag. The drift outlives the only thing that was watching for it.
- *
- * So the row is read again once the last batch has landed and compared against the snapshot the
- * chunks were stamped from. A change raises the flag anew — a fresh token, later than the
- * mid-stream write's, so the earlier walk's clear cannot take this one down — and sends a re-stamp
- * that now walks the complete set.
- *
- * Best-effort, like `propagateParentFields`: the chunks are written and the document is marked
- * extracted by the time this runs, so a failure here is a log line rather than a 500 that would
- * have the extraction host re-ingest a document that landed. The drift stays repairable by
- * `scripts/backfill-chunk-parent-fields.js --live`.
- *
- * Comparing the two ends is not enough on the streaming path, which re-reads the row every 25
- * batches and stamps the batches after it from what that read returned. A value that moved and
- * moved back matches the snapshot again by the time this runs, while the batches in between
- * carry the middle value — so the stream latches "a value moved at some point" and passes it, and
- * a latched ingest raises even though the two ends agree.
+ * After an ingest, raise the pending flag and re-stamp when the parent fields moved mid-ingest: a
+ * re-stamp that ran halfway reached only the chunks written so far, then cleared its flag.
  *
  * @param {object} snapshot the document row the ingest stamped its FIRST batch from
- * @param {{moved?: boolean}} [opts] `moved` is the stream's latch: the values it stamped from
- *   changed at least once mid-ingest, whatever the row holds now
+ * @param {{moved?: boolean}} [opts] the stream's latch: a value moved mid-ingest, even if it moved back
  */
 async function reStampParentFieldDrift(snapshot, { moved = false } = {}) {
   try {
     const current = await documents.getById(systemAccess(), snapshot.id, snapshot.projectId);
     if (!current || (!moved && !chunks.parentFieldsChanged(snapshot, current))) return null;
 
-    // Throws only when three raises in a row lost to another writer; the outer catch takes it,
-    // because the chunks have landed and a 500 here would have the host re-ingest a document that
-    // is already in. The row keeps whichever raised flag won, so the drift is still on the line.
+    // Throws after three lost raises; the catch logs it, as a 500 would make the host re-ingest a
+    // document already in. The winning raise keeps the drift on the reconcile line.
     const raised = await documents.setParentFieldsPending(current.id, current.projectId, true);
     if (raised.status !== 'raised') return null;
 
@@ -280,15 +220,8 @@ async function reStampParentFieldDrift(snapshot, { moved = false } = {}) {
 }
 
 /**
- * The parent fields whose value is not a List id string or null.
- *
- * A TYPE CHECK, because the document row and its chunk copy are written by two different rules.
- * `chunks.parentFieldsOf` String-coerces (the index column is `Edm.String`, and an ObjectId that
- * reaches it unstringified indexes as null), while `updateDocument` stores the raw body value. Send
- * `{"typeId": 12}` and the row holds the number 12 while every chunk holds "12" — so
- * `parentFieldsChanged` sees no further movement, and a filter on the document row and the same
- * filter on its passages disagree forever. Refused at the door instead: these are List ObjectId
- * refs, so a string or `null` is the whole value space.
+ * The parent fields whose value is not a List id string or null. Chunks String-coerce these, so a
+ * number on the row would never match its chunk copy.
  */
 function badParentFieldTypes(changes) {
   return chunks.CHUNK_PARENT_FIELDS.filter(field => Object.hasOwn(changes, field) &&
@@ -345,10 +278,8 @@ const namedDocuments = documentsRepository(false);
 const repositoryFor = args => (args?.parsed?.ids ? namedDocuments : listedDocuments);
 
 /**
- * Native `GET /documents`, on the list contract in `helpers/native-query.js`. One project's plain
- * list and an `ids=` read come from Cosmos; every other list pages in the documents index
- * (`INDEX_MAPS.documents.cosmosServes`). Update-form images are left out of every list except a
- * Cosmos `ids=` read, which names its rows as `GET /documents/:id` does and so returns them too.
+ * Native `GET /documents` (`helpers/native-query.js`). Update-form images are left out of every
+ * list except an `ids=` read, which names its rows as `GET /documents/:id` does.
  */
 const documentsKind = Object.freeze({
   entity: 'documents',
@@ -387,24 +318,16 @@ exports.getDocuments = (req, res) => {
 // Recent uploads: eagle-public's homepage panel. Five projects by default, ten at most — the
 // panel is a teaser, and every extra project costs another point read.
 const RECENT_UPLOADS_DEFAULT_LIMIT = 5;
-// The ONLY accepted spellings of `limit`, matched against the RAW string. `Number()` would accept
-// `05`, `5.0`, `5e0`, `0x5` and `+5` as five, which are five different cache keys for one answer —
-// a free way to blow past the shared cache and the memo below.
+// Matched on the RAW string: `Number()` reads `05`, `5e0` and `0x5` as five, each a fresh cache key.
 const RECENT_UPLOADS_LIMIT = /^(?:[1-9]|10)$/;
-// Memo lives one minute so a fresh upload shows within a minute; the anonymous response itself
-// carries a 5-minute Cache-Control (RECENT_UPLOADS_MAX_AGE) so the edge can hold it longer. The
-// panel is a teaser, not a feed, and this read fans out across every partition — it must not run
-// once per visitor. APIM puts no rate limit on the anonymous product, so the memo is what bounds
-// an anonymous flood.
+// The read fans out across every partition and APIM has no anonymous rate limit, so this memo is
+// what bounds an anonymous flood.
 const RECENT_UPLOADS_TTL_MS = 60_000;
 const RECENT_UPLOADS_MAX_AGE = 300;
 
 /**
- * Answers for the ANONYMOUS tier only, keyed by limit.
- *
- * Tier is not an identity: `resolveAccess` puts a `compliance` API key in TIER.PUBLIC too, and a
- * staff caller's rows differ by roles, teams, scope and credentials. Caching per tier would serve
- * one caller's ranking to another, so anything that presented a credential is computed fresh.
+ * Answers for ANONYMOUS callers only, keyed by limit. Tier is not an identity (a `compliance` key is
+ * TIER.PUBLIC too), so any caller with a credential is computed fresh.
  */
 const recentUploadsMemo = new Map();
 
@@ -433,9 +356,8 @@ function recentUploadsLimit(raw) {
 }
 
 /**
- * Newest first, then id — a total order over documents, so a project with several uploads at the
- * same instant lists them the same way on every call. Cosmos guarantees no order among equal sort
- * keys, and `dateUploaded` is an ISO-8601 string, which sorts lexicographically.
+ * Newest first, then id: a total order, since Cosmos gives none among equal sort keys and a bulk
+ * push stamps whole batches with one instant.
  */
 function byNewestDocument(a, b) {
   const left = a.dateUploaded || '';
@@ -445,15 +367,8 @@ function byNewestDocument(a, b) {
 }
 
 /**
- * One ranked row as this caller may SEE it: a project and the documents its row expands to. Null
- * when the redactor withheld something the row cannot be stated without.
- *
- * Redacting HERE rather than at the response boundary, for the same reason the search fallback
- * does: the row is a wire shape (`eagleProjectId`, `documents: [...]`) that the catalog must never
- * run over. Every field, both ids included, is read off the redacted copies.
- *
- * Ordered in JS before anything is taken: Cosmos returns no particular order among documents
- * sharing one instant, and a bulk push stamps whole batches with one.
+ * One ranked row as this caller may SEE it, or null. Redacted here, not at the response boundary,
+ * because the row is a wire shape the catalog must never run over.
  */
 function recentUploadRow(rows, project, access) {
   const visibleProject = redactForAccess('projects', project, access);
@@ -461,9 +376,8 @@ function recentUploadRow(rows, project, access) {
     .map(row => redactForAccess('documents', row, access));
   const [newest] = visible;
 
-  // A row that cannot state its ranking key, name the project it ranks, or identify the document
-  // it ranks by does not belong in a ranking. A LATER document that cannot be stated is merely
-  // left out of the list below.
+  // A row missing its ranking key, project or newest document is dropped; a LATER document that
+  // cannot be stated is only left out of the list below.
   if (!visibleProject.id || !newest || !newest.dateUploaded || !newest.id) return null;
 
   return {
@@ -486,24 +400,15 @@ function recentUploadRow(rows, project, access) {
   };
 }
 
-/**
- * Newest upload first, then project id — a total order, so two requests answered from the same data
- * rank the same way. `dateUploaded` is an ISO-8601 string, which sorts lexicographically.
- */
+/** Newest upload first, then project id: a total order, so the same data always ranks the same. */
 function byNewestUpload(a, b) {
   if (a.dateUploaded !== b.dateUploaded) return a.dateUploaded < b.dateUploaded ? 1 : -1;
   return a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0;
 }
 
 /**
- * Rank projects by their newest readable upload.
- *
- * The aggregate answers WHICH projects and WHEN, one row each; the documents behind each answer are
- * then fetched from that project's own partition. Reading the newest documents instead would rank
- * whatever a bulk push filled the window with — hundreds of rows, one project.
- *
- * Fewer than `limit` rows is a legitimate answer, and it is never padded: a project the caller
- * cannot read, or whose row the redactor will not let be stated, is skipped and the walk continues.
+ * Rank projects by their newest readable upload, one aggregate row per project, so a bulk push
+ * cannot fill the list with one project. Fewer than `limit` rows is never padded.
  */
 async function rankRecentUploads(access, limit) {
   const candidates = (await documents.projectUploadMaxima(access))
@@ -519,9 +424,8 @@ async function rankRecentUploads(access, limit) {
     const project = await projects.getById(access, candidate.projectId);
     if (!project) continue;
 
-    // Single-partition, so this costs a few RU per candidate. A project the redactor will not let
-    // be stated is dropped one step later, inside the row builder, which is where both the project
-    // and its documents are redacted — one redaction site is worth one cheap query on a rare edge.
+    // Fetched before the row builder drops a withheld project: one redaction site is worth a
+    // cheap single-partition query on a rare edge.
     const rows = await documents.newestUploads(access, candidate.projectId);
     if (rows.length === 0) continue;
 
@@ -535,19 +439,15 @@ async function rankRecentUploads(access, limit) {
 }
 
 /**
- * The projects that most recently received a document this caller may read.
- *
- * The document ACL runs in the query and the project ACL runs on a point read, so a restricted
- * document never ranks its project and an unreadable project is skipped while the scan continues —
- * neither one shortens the list on its own.
+ * The projects that most recently received a document this caller may read. The document ACL runs
+ * in the query and the project ACL on a point read, so neither shortens the list on its own.
  */
 exports.getRecentUploads = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
-    // The rows vary by caller, and a credential can arrive in either header — a shared cache keyed
-    // on the URL alone would hand one caller's ranking to the next visitor. Private until a success
-    // body is sent, so neither a 400 nor a 500 is ever stored.
+    // Rows vary by caller and a credential can come in either header. Private until a success
+    // body is sent, so no error answer is ever stored.
     res.setHeader('Vary', 'Authorization, X-Api-Key');
     res.setHeader('Cache-Control', 'private, no-store');
 
@@ -596,11 +496,8 @@ exports.getDocument = async (req, res) => {
 };
 
 /**
- * The visibility gate both download verbs share. `getById` applies the caller's access, so null is
- * "hidden from you" as well as "no such id".
- *
- * `record` is what this caller may see of the row; `fileName` is the document's own name, the key's
- * last segment only when the row names nothing.
+ * The visibility gate both download verbs share; a hidden row answers 404 like a missing one.
+ * `record` is what this caller may see of the row.
  *
  * @returns {Promise<{status: number, body: object}|{doc: object, record: object, fileName: string}>}
  */
@@ -623,15 +520,8 @@ function downloadFailed(err) {
 }
 
 /**
- * Short-lived presigned download URL, gated by the same visibility rule as the metadata — a
- * caller who cannot see the document must not be able to fetch its bytes.
- *
- * Returns the answer rather than sending it, because POST /bulk-downloads serves a one-document
- * request from here too: the ACL check, the analytics event, the audit row and the presign are one
- * implementation, so the two routes cannot drift apart on any of them.
- *
- * `inline` asks for a URL the browser shows rather than saves; only safe types get one, and the
- * body's `inline` says whether this file did.
+ * Short-lived presigned download URL, gated like the metadata. Returns the answer rather than
+ * sending it, so POST /bulk-downloads serves a one-document request through the same checks.
  *
  * @returns {Promise<{status: number, body: object}>}
  */
@@ -650,9 +540,6 @@ exports.resolveDownload = resolveDownload;
 
 /** The presigned answer for a file `findStoredFile` already cleared. Throws on a failed presign. */
 async function presignDownload(req, { doc, record, fileName }, signedType) {
-  // The storage layer owns key resolution and expiry. It used to be done here, with the
-  // client borrowed from the extraction script — which is how extract.js came to read keys
-  // without the environment prefix while this path applied it.
   const url = await storage.getDownloadUrl(doc.s3Key, {
     expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
     fileName,
@@ -687,9 +574,8 @@ function recordDownload(req, doc, inline, { view = true } = {}) {
     });
   }
 
-  // A download of a document the public cannot see is an access to restricted material, which
-  // is an audit question and not a usage statistic. Public downloads stay in the analytics
-  // table only — recording every one of those for seven years is neither useful nor cheap.
+  // Restricted bytes are an audit question; public downloads stay in analytics only, as
+  // keeping every one for seven years is neither useful nor cheap.
   if (!doc.isPublished) {
     auditEvent(req, {
       action: 'document.download',
@@ -780,9 +666,8 @@ function statBounded(key) {
 }
 
 /**
- * HEAD is answered here, never redirected: the presigned URL is signed for GET, so a link checker
- * that follows a 302 with HEAD gets a 403 from the store. No presign, so no analytics or audit
- * event either — nobody received the bytes.
+ * HEAD is answered here, never redirected: the presigned URL is signed for GET, so a HEAD that
+ * follows a 302 gets a 403. No bytes are sent, so no analytics or audit event.
  */
 async function headDownload(req, res) {
   let found;
@@ -1082,8 +967,7 @@ exports.extractDocument = async (req, res) => {
     const randomizedName = crypto.randomBytes(16).toString('hex') + (fileExtension ? '.' + fileExtension : '');
     const objectPath = path.posix.join(project.toString(), randomizedName);
 
-    // `objectPath` is recorded as-is: the storage layer may store it under an environment
-    // prefix, but the metadata must stay environment-independent or the record breaks when
+    // Recorded without the storage layer's environment prefix, so the record still works when
     // copied between environments.
     await storage.putFile(objectPath, file.path, file.mimetype);
 
@@ -1104,9 +988,8 @@ exports.extractDocument = async (req, res) => {
       orcsClassification: orcsClassification || '',
       read: acl.read,
       isPublished: acl.published,
-      // Written as explicit defaults so downstream filters are equalities. Mongo's
-      // {$ne: true} matched missing fields; SQL `!= true` does not, and translating that
-      // literally would make the extractor silently process nothing.
+      // Explicit defaults: SQL `!= true` does not match a missing field, so the extractor's
+      // filters need these set.
       isDeleted: false,
       contentExtracted: false,
       createdAt: now,
@@ -1114,9 +997,8 @@ exports.extractDocument = async (req, res) => {
     });
     await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
 
-    // Same action as createDocument, not a `document.upload` of its own: this is the same thing
-    // happening through a second door, and two action names would make "who created documents"
-    // two queries that a reader has to remember to union. `via` is what separates them.
+    // Same action as createDocument, so "who created documents" stays one query; `via` tells
+    // the two doors apart.
     auditEvent(req, {
       action: 'document.create',
       targetType: 'document',
@@ -1142,20 +1024,8 @@ exports.updateDocument = async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    // projectId is the partition key — reassigning it would be a delete-and-reinsert.
-    //
-    // `read` and `isPublished` are stripped too, and that is the security half: spreading the body
-    // straight into the upsert let a writer set an arbitrary ACL, bypassing resolveDocumentAcl and
-    // the 409 on PUT /documents/:id/published that stops a document being published under a
-    // private project. Visibility changes go through that route, which enforces the parent.
-    // `ownRead` goes with them: it is the pre-cascade ACL, so setting it by hand widens the
-    // document the next time setAclForProject re-derives `read` from it. `isDeleted` is the same
-    // authority by a shorter route — clearing it lets the next project publish republish a
-    // document Eagle deleted — and only an eagle-api push writes it.
-    //
-    // The Cosmos bookkeeping keys are dropped for a different reason, the same one as project.js:
-    // a caller who GETs a document and PUTs the response back sends them, and they are catalogued
-    // at maxVis 0 (or 2 for `_etag`), so the guard below would 400 an otherwise ordinary edit.
+    // The ACL keys and `isDeleted` change only through PUT /documents/:id/published or a push,
+    // which enforce the parent. Cosmos keys are dropped so a GET body PUT back is not refused.
     const {
       id: _ignoredId, projectId: _ignoredPk,
       read: _ignoredRead, ownRead: _ignoredOwnRead, isPublished: _ignoredPublished,
@@ -1171,10 +1041,8 @@ exports.updateDocument = async (req, res) => {
       ...changes
     } = req.body;
 
-    // A field the caller cannot SEE is a field they cannot set: the response is redacted, so
-    // accepting a hidden key back would overwrite a value they were never shown
-    // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level — the dial map is
-    // policy rather than content, and no route sets it yet.
+    // A field the caller cannot SEE they cannot set (docs/rbac-architecture.md §2 item 1).
+    // `vis` is refused at every level: the dial map is policy, not content.
     const refused = refusedWriteKeys('documents', changes, access, existing);
     if (refused.length) {
       return res.status(400).json({
@@ -1203,9 +1071,8 @@ exports.updateDocument = async (req, res) => {
       }
     }
 
-    // Built per try, not once: a lost etag race means the stored row moved, and merging the same
-    // changes onto the revision that landed is what keeps the other writer's values instead of
-    // reverting them. The write itself is refused unless the row is still what this built from.
+    // Built per try: after a lost etag race the changes merge onto the revision that won, so the
+    // other writer's values are kept.
     const buildRow = (current) => current && ({
       ...current,
       ...changes,
@@ -1265,10 +1132,8 @@ exports.updateDocument = async (req, res) => {
 };
 
 /**
- * Move a document to a ladder level (docs/rbac-architecture.md §1, "Widening is an act").
- *
- * The ONLY route that raises a document's level, and the only place a document is hidden from the
- * public — deletion is for genuine removal, not for hiding.
+ * Move a document to a ladder level (docs/rbac-architecture.md §1). The ONLY route that raises a
+ * level, and the only way to hide a document from the public: deletion is not for hiding.
  */
 exports.setLevel = async (req, res) => {
   try {
@@ -1315,9 +1180,8 @@ exports.setLevel = async (req, res) => {
     const updated = await documents.setPublished(existing.id, existing.projectId, level,
       { levelHeldAt: documents.levelHoldAfter(existing, level, null) });
 
-    // The highest-value row in the table: this is the call that changes who can see a document.
-    // Before the chunk patch below, not after — the change is already applied by here and the
-    // patch can return 500.
+    // Before the chunk patch: the change is already applied by here, and the patch can return
+    // 500.
     auditEvent(req, {
       action: takedown ? 'record.takedown' : (level > from ? 'record.widen' : 'record.narrow'),
       targetType: 'document',
@@ -1336,22 +1200,14 @@ exports.setLevel = async (req, res) => {
       ? updated.read
       : readForLevel(level);
 
-    // No document LIST is a live read any more (#148), so without this the row stayed listed and
-    // keyword-searchable under its old ACL until the indexer's next PT5M pass — the file was
-    // hidden at once by the point read, its metadata was not. Best-effort and never fatal: the
-    // Cosmos write is authoritative and has already landed.
+    // Document lists read the index, so without this the row stays listed under its old ACL until
+    // the next indexer pass. Best-effort: the Cosmos write has already landed.
     await aiSearch.writeAcls(aiSearch.indexes().documents, [
       { id: existing.id, read: acl, isPublished: published }
     ]);
 
-    // The chunks carry a SNAPSHOT of this ACL, taken at ingest, and nothing else refreshes it.
-    // Without this the extracted text of a document just made private stays readable — in Cosmos,
-    // and in the AI Search index indefinitely, because unpublishing never advanced the chunks'
-    // `_ts` and the indexer is a high-water mark. Patching them advances it.
-    //
-    // AFTER the document patch, deliberately: a failure here leaves the document private and its
-    // chunks over-permissive, which the search gate now covers. The reverse order could leave the
-    // document public while its chunks were locked down, which nothing covers.
+    // Chunks hold an ACL snapshot nothing else refreshes; patching also advances `_ts` for the
+    // indexer. After the document patch, since the search gate covers over-permissive chunks.
     try {
       const chunkAcl = await chunks.setAclForDocument(systemAccess(), existing.id, acl);
       if (chunkAcl.failed > 0) {
@@ -1382,14 +1238,8 @@ exports.setLevel = async (req, res) => {
 };
 
 /**
- * Publish or unpublish. DEPRECATED — a thin alias for `setLevel`, kept because
- * eagle-admin-console still sends `{ isPublished }`. It goes through the same guards on purpose:
- * an alias that skipped them would be the way around the ladder.
- *
- * The `confirm` it synthesises satisfies the level-4 guard and nothing else: the marker on `req`
- * makes the audit row say `confirmed: false`, so a legacy publish is never filed as a confirmed
- * one. A body key would not do — the caller controls the body and could mislabel a real
- * confirmation.
+ * DEPRECATED alias for `setLevel`, for callers that send `{ isPublished }`. The marker on `req`, not
+ * a body key the caller controls, makes its audit row say `confirmed: false`.
  */
 exports.setDocumentPublished = (req, res) => {
   const body = req.body || {};
@@ -1404,15 +1254,6 @@ exports.setDocumentPublished = (req, res) => {
   return exports.setLevel(req, res);
 };
 
-/**
- * Permanently remove the document record and its search-index entry.
- *
- * The stored file is deliberately left in place — no request path may destroy a source
- * document. Orphaned blobs are reclaimed by a separate audited job.
- *
- * The index entry is removed explicitly rather than through the change feed, which emits no
- * deletes in latest-version mode. That is also why no soft-delete marker is needed.
- */
 // The four Eagle fields that are List ObjectId refs. eagle-api resolves the labels on its side
 // and sends them by FIELD; transformDocument resolves by ObjectId, so the two are joined here.
 const LIST_LABEL_FIELDS = ['type', 'milestone', 'projectPhase', 'documentAuthorType'];
@@ -1426,19 +1267,8 @@ function listLookupFrom(doc, labels) {
 }
 
 /**
- * Receive one document pushed by eagle-api, keyed by its Eagle `_id`.
- *
- * The body carries the RAW Eagle record and `transformDocument` is the seed's own transform, so a
- * push and a re-seed produce the same row. Two things are NOT taken from the push: extraction
- * state, which is carried off the row already in Cosmos (an upsert replaces the item, and losing
- * it would orphan the chunks and re-queue the document through the GPU), and the ACL, which is
- * narrowed against the parent project's — unless that parent is a `ProjectNotification`,
- * which carries no ACL to narrow against.
- *
- * A DELETE is a push like any other, the same convention the comment-period mirror follows:
- * eagle-api hard-deletes the record and pushes what it removed with `isDeleted: true`. DEMI narrows
- * the row to level 2 and flags it rather than dropping it, so staff and the reconcile still see
- * what Eagle no longer holds, and `documents.setAclForProject` refuses to widen it again.
+ * Receive one raw Eagle document pushed by eagle-api, through the seed's own transform. A delete
+ * push narrows the row to level 2 and flags it rather than dropping it.
  */
 exports.upsertFromEagle = async (req, res) => {
   try {
@@ -1448,9 +1278,8 @@ exports.upsertFromEagle = async (req, res) => {
     }
     const { eagleId, doc, pushedAt } = push;
 
-    // A ProjectNotification is a parent here too — prod publishes documents under 17 of them —
-    // and it carries no ACL to narrow against, so those keep their own read[]. Same admission the
-    // seed makes (`seed-nosql.js:documentAdmission`) and the period mirror makes.
+    // A ProjectNotification can be the parent; it has no ACL to narrow against, so those keep
+    // their own read[], as in `seed-nosql.js:documentAdmission`.
     const parent = await admitParent(doc.project, { childId: eagleId });
     if (!parent) {
       return res.status(404).json({
@@ -1469,9 +1298,8 @@ exports.upsertFromEagle = async (req, res) => {
       existing = await readExisting();
     }
     let sealed = null;
-    // Built from whatever is STORED at the moment of the write: extraction state and the pending
-    // flag are carried off the row, so building once and replacing the item resurrected a clear
-    // that landed meanwhile and reverted a parent field another writer had just moved.
+    // Built from the row STORED at write time: extraction state and the pending flag are carried
+    // off it, so a stale build would undo another writer.
     const buildRow = (current) => {
       // Eagle knows nothing of a seal, so no push may write over one DEMI made.
       if (heldSealed(current)) {
@@ -1491,16 +1319,15 @@ exports.upsertFromEagle = async (req, res) => {
         doc, parent.id, listLookupFrom(doc, req.body.labels),
         { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
       );
-      // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
-      // what hides it, this is what says why, and it is what stops a cascade widening it again.
+      // Eagle dropped this record. Not an ACL: `read` below hides it, this says why and stops a
+      // cascade widening it again.
       row.isDeleted = doc.isDeleted === true;
       if (row.isDeleted) {
         row.read = documents.constrainToProject(row.read, documents.DELETED_CEILING);
         row.isPublished = row.read.includes('public');
       }
-      // The old partition's copy is owed a delete until one lands. Carried on the row, because a
-      // retry after a failed delete point-reads the new partition and no longer sees the move.
-      // The etag goes with it: the delete lands only on the copy this move read.
+      // The old partition's copy is owed a delete, carried on the row since a retry reads only the
+      // new partition. The etag limits that delete to the copy this move read.
       const moved = current && String(current.projectId) !== String(row.projectId);
       const movedFrom = moved ? String(current.projectId) : current && current.movedFromProjectId;
       if (movedFrom && movedFrom !== String(row.projectId)) {
@@ -1534,10 +1361,8 @@ exports.upsertFromEagle = async (req, res) => {
       }
     }
 
-    // A document that moved project lands in a NEW partition and Cosmos leaves the old row behind,
-    // still listable under the old project's ACL. The index key is the same id, so the next
-    // indexer pass replaces that entry — only the stale Cosmos row needs removing. Chunks are
-    // partitioned by documentId and do not move.
+    // A moved document lands in a NEW partition and Cosmos keeps the old row. The index entry
+    // shares the id and chunks are partitioned by documentId, so only that row needs removing.
     if (saved.movedFromProjectId) {
       const kept = await settleMove(saved);
       if (heldSealed(kept)) return ignoreSealedPush(req, res, kept, pushedAt);
@@ -1564,14 +1389,8 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    // Same rule as setDocumentPublished: no document list is a live read (#148), so a row whose
-    // visibility just changed stays listed under its old ACL until the indexer's next PT5M pass.
-    // Only on a change, and only against an existing row — a document DEMI has never seen has no
-    // index row to correct, and a metadata edit does not move the ACL.
-    //
-    // The LEVEL, not `isPublished`: a delete push narrows an idir document from 3 to 2 without
-    // touching `isPublished`, and comparing the flags alone would leave that row idir-readable in
-    // the index until something else moved it.
+    // As in setLevel, the index is corrected here. Compares the LEVEL: a delete push narrows level
+    // 3 to 2 without touching `isPublished`.
     if (from && levelOfRead(saved.read) !== levelOfRead(from.read)) {
       await aiSearch.writeAcls(aiSearch.indexes().documents, [
         { id: saved.id, read: saved.read, isPublished: saved.isPublished }
@@ -1587,10 +1406,8 @@ exports.upsertFromEagle = async (req, res) => {
 };
 
 /**
- * Delete the copy a move left in the old partition, but only at the revision the move read.
- * A 412 means something wrote that copy since. The copy with the newer `eaglePushedAt` is the
- * live one, and a copy DEMI sealed always wins: when the old copy wins, this push's copy is deleted
- * instead and the old row is returned; otherwise the old copy is deleted at its new revision.
+ * Delete the old partition's copy at the revision the move read. On a 412 the newer push or a seal
+ * wins; when the old copy wins, this push's copy is deleted instead and the old row returned.
  */
 async function settleMove(saved) {
   const { id, projectId, movedFromProjectId: from, movedFromEtag: etag } = saved;
@@ -1682,9 +1499,8 @@ exports.deleteDocument = async (req, res) => {
       });
     }
 
-    // Recorded after the cleanup calls so the row carries what actually happened to the search
-    // index and the chunks, not what was intended. The stored file survives the record, and the
-    // audit row says so — that asymmetry is the thing someone will ask about later.
+    // After the cleanup, so the row records what actually happened. The stored file is never
+    // deleted by a request, and the row says so.
     auditEvent(req, {
       action: 'document.delete',
       targetType: 'document',
@@ -1717,15 +1533,8 @@ exports.deleteDocument = async (req, res) => {
 const EXTRACTION_PATHS = ['ocr', 'text'];
 
 /**
- * Normalise the optional `extraction` provenance from the extraction host.
- *
- * Whitelisted and length-capped for the same reason the ACL is never taken from this payload: the
- * host is a separate, externally-run process, and this object is written verbatim onto a document
- * that the API then serves. An unbounded `options` blob would also be an unbounded write — Cosmos
- * bills by document size, and a runaway field would be paid for on every read of that document.
- *
- * Returns null when there is nothing usable, so callers can omit the field entirely rather than
- * writing an empty object that later reads as "provenance recorded".
+ * The extraction host's optional provenance, allow-listed and length-capped: it comes from an
+ * external process and is served back verbatim. Null when nothing is usable.
  */
 function sanitizeExtraction(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -1749,31 +1558,18 @@ function sanitizeExtraction(raw) {
   return out;
 }
 
-/**
- * Chunks per bulk call on the streaming path. The whole point is that peak memory follows chunk
- * size, not document size, so this is what actually bounds it: ~200 chunks of ~2500 characters is
- * roughly half a megabyte in flight regardless of whether the document is 1 MB or 600 MB.
- */
+/** Chunks per bulk call on the streaming path; bounds peak memory to about half a megabyte. */
 const STREAM_BATCH_CHUNKS = 200;
 
 /**
- * When a marker-free hold has grown big enough to be worth a log line.
- *
- * Blocks are held until the first page marker (see `ingestChunksStreaming`), so a stream carrying
- * no markers at all is held whole. 10 MB is the JSON door's body limit: past it this stream holds
- * more than the buffering door would ever have been handed, which is the only case where this
- * door's memory follows document size. Diagnostic only — nothing branches on it.
+ * Log once a marker-free hold passes the JSON door's 10 MB body limit, the only case where stream
+ * memory follows document size. Diagnostic only.
  */
 const HOLD_WARN_CHARS = 10 * 1024 * 1024;
 
 /**
- * How many flushed batches a stream stamps from one read of the document row.
- *
- * Re-reading per batch would be one point read per 200 chunks — cheap each, but a 6k-chunk document
- * pays 30 of them for a field that moves on almost no ingest. 25 batches is 5,000 chunks between
- * reads, which bounds how much of a long stream can carry values an edit already replaced without
- * putting a read on the hot path. It is a NARROWING, not the guarantee: the guarantee is the
- * end-of-ingest check (`reStampParentFieldDrift`), which is what a re-stamp is owed from.
+ * Flushed batches a stream stamps from one read of the document row. A narrowing only: the
+ * guarantee is the end-of-ingest check in `reStampParentFieldDrift`.
  */
 const PARENT_FIELD_REFRESH_BATCHES = 25;
 
@@ -1852,10 +1648,8 @@ function failIndexDelete(res, document, detail) {
 }
 
 /**
- * The success patch, sent as two: what the ingest found, then the fields that call it done. Cosmos
- * takes at most ten operations per patch and the two together sit near that. The done half goes
- * last, so a failed second patch leaves the document on the work list. `ingest.recorded` tells the
- * caller's catch that a later throw is not an ingest failure.
+ * The success patch as two, since Cosmos caps a patch at ten operations. The done half goes last, so
+ * a failed second patch leaves the document on the work list.
  */
 async function recordIngested(ingest, document, found, done) {
   await documents.patchExtraction(document.id, document.projectId, found);
@@ -1884,11 +1678,8 @@ async function drainRequest(stream) {
 }
 
 /**
- * Undo an over-cap stream's written batches: the document's AI Search rows, which the indexer's
- * `_ts` high-water mark never removes on its own, then every Cosmos chunk. Index first, like
- * `chunks.deleteSurplus`: a search side that stops short keeps the Cosmos chunks for the retry to
- * find, and answers `{ indexIncomplete }` for the caller's 503. Otherwise returns the patch that
- * stops the document claiming chunks, plus any shortfall for the stored error.
+ * Undo an over-cap stream's batches, index rows first so a short index delete keeps the Cosmos
+ * chunks for the retry to find (`{ indexIncomplete }`). Else returns the patch and any shortfall.
  */
 async function removeOverCapChunks(document) {
   try {
@@ -1921,13 +1712,8 @@ async function removeOverCapChunks(document) {
 }
 
 /**
- * How new the parent values a NEW chunk is born with are, so a walk running behind this ingest
- * cannot overwrite them with the values it set out with.
- *
- * A chunk written without the token is older than every walk (`chunks.stampCondition`), which is
- * exactly the row a stale re-stamp overwrites. The row's own pending token where there is one —
- * the values came off that row, so a walk serving that token has nothing to add — and the instant
- * the ingest started otherwise.
+ * The token a NEW chunk's parent values carry, so a walk running behind this ingest cannot overwrite
+ * them: the row's pending token when it has one, else the ingest's start.
  */
 function parentStampedAt(document, startedAt) {
   const token = document && document.parentFieldsPendingAt;
@@ -1935,28 +1721,8 @@ function parentStampedAt(document, startedAt) {
 }
 
 /**
- * Ingest extracted text as an NDJSON stream: POST /documents/:id/chunks
- * with `Content-Type: application/x-ndjson`.
- *
- *   {"extraction": {...}}          <- line 1, the same provenance object the JSON path takes
- *   "first markdown block\n..."    <- lines 2..n, JSON-ENCODED markdown blocks
- *
- * WHY THIS EXISTS. The JSON path buffers the whole document: a 63 MB markdown parses to a 63 MB JS
- * string plus parser buffer on a B1 Basic instance with 1.75 GB and a single worker, so
- * `express.json`'s 10 MB limit 413s it and raising that limit only moves the ceiling. Measured on
- * this corpus, 15 documents already exceed it — docling renders them as one enormous table, the
- * largest 2,198 lines averaging 28,817 characters — and the roadmap is ~300K documents, so this is
- * a class rather than an outlier. Here nothing larger than one batch is ever held.
- *
- * Blocks are JSON-encoded per line because a markdown paragraph contains newlines and an NDJSON
- * line cannot. The host splits on the SAME `/\n{2,}/` boundary `chunkMarkdown` uses, and both
- * paths share `createChunkAccumulator`, so a document chunks identically whichever door it came
- * through.
- *
- * Failure is deliberately not partial-success: a batch that fails records the error and 500s
- * WITHOUT patching `contentExtracted`, so the work list still offers the document. `bulkVerified`
- * reports partial failure rather than throwing — ignoring `failed` is the bug that once reported
- * 60,578 documents written when 56,317 landed — so it is checked per batch, not once at the end.
+ * NDJSON ingest, POST /documents/:id/chunks: line 1 `{"extraction": {...}}`, then one JSON-encoded
+ * markdown block per line. Holds one batch, not the document; a failed batch leaves it on the work list.
  */
 async function ingestChunksStreaming(req, res, doc, ingest) {
   const readline = require('readline');
@@ -1964,22 +1730,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
   // Created only once the page-marker question is settled — see `held` and `feed`.
   let acc = null;
-  // Blocks held while that question is open. NOTHING is emitted until it is settled, because the
-  // accumulator has to be told whether the document is paged before its first chunk and a stream
-  // cannot be read ahead.
-  //
-  // THE HOLD RUNS TO THE FIRST MARKER OR TO END OF STREAM. There used to be a 20,000-character
-  // probe cap, and it was wrong: a first page longer than the cap settled "no page markers" for
-  // good, so a document the JSON door chunks by page came through here numbered by passage with
-  // every later page's form feed left inside chunk content — the two doors disagreeing about the
-  // same text, silently. No cap is safe, because the marker a cap misses is the marker that
-  // matters, and the question cannot be reopened once chunks have been written.
-  //
-  // What dropping it costs: a paged stream holds ONE PAGE, since the host writes a marker between
-  // every pair of pages. Only a stream with no markers anywhere is held whole, and that is what
-  // the JSON door does with the same text — so this door still bounds memory by batch size for
-  // every document the current extraction host produces. HOLD_WARN_CHARS makes the exception
-  // visible instead of leaving it to be discovered as an out-of-memory kill.
+  // Blocks held until the first page marker or end of stream; no size cap, since a missed marker
+  // would chunk the document unlike the JSON door. A paged stream holds one page.
   let held = [];
   let heldChars = 0;
   let heldWarned = false;
@@ -1998,12 +1750,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   let parentFieldsMoved = false;
   let flushed = 0;
 
-  // Flushes INSIDE the loop, not after it. One markdown block can be megabytes — measured on this
-  // corpus, a 30 MB document with only 5 blank lines splits into ~6 blocks of ~5 MB, and each one
-  // emits well over a thousand chunks in a single call. Checking the batch bound between blocks
-  // instead of between chunks made the bound follow BLOCK size, which is exactly the thing that
-  // cannot be relied on, and the worker died on that document six times before this was found.
-  // Returns an error string on partial failure, null on success.
+  // Flushes INSIDE the loop: one block can be megabytes and emit thousands of chunks. Returns an
+  // error string on partial failure, null on success.
   const collect = async (emitted) => {
     for (const { pageNumber, chunkIndex, content } of emitted) {
       // Checked per chunk so the batch holding chunk cap+1 is never flushed.
@@ -2080,8 +1828,7 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
     return null;
   };
 
-  // Swallows: the stamp it refreshes is a best-effort narrowing, and a read that failed must not
-  // fail an ingest whose chunks are landing. The batches keep the values they have, and the
+  // Swallows: a failed read must not fail an ingest whose chunks are landing, and the
   // end-of-ingest check still sees the drift.
   const refreshParentFields = async () => {
     try {
@@ -2105,9 +1852,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
     return res.status(status).json({ error: message });
   };
 
-  // For the error strings collect() and flush() return. Earlier batches of an over-cap stream are
-  // already written; they are removed whole, because their ids overwrote any previous extraction's
-  // rows of the same id, so what is left of that extraction would be a partial, mixed document.
+  // An over-cap stream's written batches are removed whole: their ids overwrote the previous
+  // extraction's rows, so what is left would be a mixed document.
   const failWrite = async (message) => {
     if (!message.startsWith(CAP_REJECTED)) return fail(500, message);
     const detail = { streamed: true, flushedBatches: flushed };
@@ -2173,9 +1919,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const err = await flush();
   if (err) return failWrite(err);
 
-  // Only now is the surviving set knowable. Without this a re-extraction yielding fewer chunks
-  // leaves orphans, and AI Search never sees deletes. A chunk the index would not let go stays in
-  // Cosmos and fails the request, so the retry finds it again.
+  // A re-extraction with fewer chunks leaves orphans that AI Search never sees deleted. A chunk the
+  // index keeps stays in Cosmos and fails the request, so the retry finds it.
   const surplus = await chunks.deleteSurplus(systemAccess(), doc.id, keepIds,
     { unindex: aiSearch.deleteChunksByIds });
   if (surplus && chunks.onlyIndexKept(surplus)) {
@@ -2188,9 +1933,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
 
   await recordIngested(ingest, doc, {
     extractionMethod: 'docling',
-    // Only when the markers were there, so a document extracted before page provenance keeps the
-    // shape it has. `contentPageCount` is the CHUNK count and has always been; `pageCount` is the
-    // document's real pages, which is a different number and now a knowable one.
+    // Only when markers were there. `contentPageCount` is the CHUNK count; `pageCount` is the
+    // document's real pages.
     ...(pageNumbered ? { pageNumbered: true, pageCount: acc.pageCount() } : {}),
     ...(provenance ? { extraction: provenance } : {})
   }, { contentPageCount: keepIds.length });
@@ -2199,11 +1943,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   // anything that moved meanwhile is put back on the reconcile line.
   await reStampParentFieldDrift(doc, { moved: parentFieldsMoved });
 
-  // One row per document, never per chunk: a full corpus re-extraction is ~60k documents against
-  // ~1.13M chunks, and the audit question is "who replaced this document's content", not "which
-  // chunk". Duplicated in the JSON path rather than hoisted into ingestChunks — this function and
-  // its fail() both hand the same `res` back to the caller, so the caller cannot tell a completed
-  // stream from a 500.
+  // One row per document, never per chunk. Repeated in the JSON path, since the caller cannot tell
+  // a completed stream from a 500 by the `res` it gets back.
   auditEvent(req, {
     action: 'document.ingest',
     targetType: 'document',
@@ -2217,25 +1958,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
 }
 
 /**
- * Ingest extracted text for a document: POST /documents/:id/chunks  { markdown }
- *
- * The extraction host sends MARKDOWN, not chunks. Splitting stays here so `src/chunker.js` remains
- * the single implementation — an external worker never decides how text is divided, and the
- * payload is the same size either way.
- *
- * It also never supplies an ACL. `read[]` is copied from the LIVE document on every call, so a
- * compromised or buggy extraction host cannot widen a document's visibility, and a chunk cannot
- * out-rank its parent. This is why the route takes a document id rather than chunk objects.
- *
- * Idempotent: chunk ids are deterministic and replaceForDocument reconciles, so re-posting the
- * same markdown is a no-op and a killed backfill can simply be restarted.
- *
- * `extraction` is OPTIONAL provenance describing how the text was produced. It exists because the
- * extraction host routes each document — a `pypdfium2` text-layer probe keeps digital PDFs on a
- * CPU path and only sends text-poor ones to OCR (wiki: Extraction-Pipeline) — and that decision used to be
- * discarded. Without it, a text-layer artefact and an OCR error are indistinguishable after the
- * fact, so "the OCR is bad" cannot be evidenced or disproved. Absent on every row written before
- * this existed, which is itself the honest signal for "unknown path".
+ * POST /documents/:id/chunks { markdown }: the host sends markdown, never chunks or an ACL, so
+ * splitting stays in `src/chunker.js` and `read[]` comes from the live document. Idempotent.
  */
 exports.ingestChunks = async (req, res) => {
   let doc;
@@ -2253,12 +1977,8 @@ exports.ingestChunks = async (req, res) => {
       return res.status(409).json({ error: 'Images uploaded through the Update form are not extracted' });
     }
 
-    // `express.json` only parses `application/json`, so an NDJSON body arrives here with the
-    // request stream unread. That is what makes this a content-type switch rather than a new route.
-    //
-    // Guarded on `req.is` existing rather than called bare: Express always supplies it, but the
-    // outer catch turns a bare TypeError here into a 500 that reads as a database fault, and it
-    // would fire on every JSON ingest. Cheaper to ask than to debug.
+    // Only JSON bodies are parsed, so an NDJSON body arrives with its stream unread. `req.is` is
+    // checked first: a bare TypeError here would 500 as if the database failed.
     streaming = typeof req.is === 'function' && req.is('application/x-ndjson');
     const { markdown, error, extraction } = (!streaming && req.body) || {};
 
@@ -2282,9 +2002,8 @@ exports.ingestChunks = async (req, res) => {
 
     const provenance = sanitizeExtraction(extraction);
 
-    // A failed extraction reports itself rather than going silent, so --retry-failed can find it.
-    // Provenance is recorded for failures too: which path failed is exactly what a retry policy
-    // needs to know.
+    // A failed extraction is recorded, with its provenance, so --retry-failed can find it and see
+    // which path failed.
     if (error) {
       await documents.patchExtraction(doc.id, doc.projectId, {
         contentExtracted: true,
@@ -2295,10 +2014,8 @@ exports.ingestChunks = async (req, res) => {
         ...(provenance ? { extraction: provenance } : {})
       });
       ingest.recorded = true;
-      // Audited like the two success paths below, because this one succeeds: it answers 200 and
-      // leaves the document marked extracted with zero chunks. `outcome: 'failure'` is about the
-      // extraction the caller reported, not about the request, and it is the state someone later
-      // has to attribute — a document that looks processed and has no text.
+      // Audited: it answers 200 and leaves the document extracted with no text. `outcome` is the
+      // reported extraction's, not the request's.
       auditEvent(req, {
         action: 'document.ingest',
         outcome: 'failure',
@@ -2341,17 +2058,13 @@ exports.ingestChunks = async (req, res) => {
       return rejectOverCap(res, doc, { chunks: items.length, streamed: false });
     }
 
-    // systemAccess() so reconciliation sees every pre-existing chunk. A caller-scoped read could
-    // miss chunks it may not see and then leave them orphaned behind the new set.
-    // `unindex`: dropped chunks leave the search index first; see the streaming path. `indexed`:
-    // an unchanged chunk the index lost is rewritten, not skipped.
+    // systemAccess() so no hidden chunk is orphaned. `unindex` drops chunks from the index first;
+    // `indexed` rewrites an unchanged chunk the index lost.
     const result = await chunks.replaceForDocument(systemAccess(), doc.id, items,
       { unindex: aiSearch.deleteChunksByIds, indexed: aiSearch.indexedChunkIds });
 
-    // bulkVerified REPORTS partial failure, it does not throw. Ignoring `failed` is exactly the bug
-    // that once reported 60,578 documents written when 56,317 landed — here it would mark a
-    // document extracted while part of its text is missing, and the work list would never offer it
-    // again. Record the failure and 500 so the worker retries the whole document.
+    // bulkVerified REPORTS partial failure, it does not throw. Ignored, a document missing text would
+    // leave the work list; the 500 makes the host retry it whole.
     if (result && chunks.onlyIndexKept(result)) {
       return failIndexDelete(res, doc, result.statusCounts);
     }
@@ -2361,9 +2074,8 @@ exports.ingestChunks = async (req, res) => {
       return failIngest(res, doc, detail);
     }
 
-    // RU is the variable cost on a serverless account and nothing in the app was reading it, against
-    // ~1.13M chunks. One line per ingested document is the cheapest baseline that can be read back
-    // out of the log later; `ru` includes retries, because a retried write is billed twice.
+    // RU is the variable cost on a serverless account. `ru` includes retries, since a retried
+    // write is billed twice.
     logger.info(`[chunk-ingest] doc=${doc.id} chunks=${items.length} ` +
       `ru=${Math.round(result.requestCharge || 0)}`);
 
@@ -2389,9 +2101,8 @@ exports.ingestChunks = async (req, res) => {
     return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });
   } catch (err) {
     logger.error(`[Document Controller] Chunk ingest failed: ${err.message}`);
-    // A thrown fault (a query still throttled after SDK retries) is retried by the host like any
-    // other 500, so it counts toward the guard. Generic text: the stored error can be read back.
-    // Not once the outcome is recorded: the chunks landed, and a throw after that is not the ingest.
+    // The host retries a thrown fault like any 500, so it counts toward the guard, unless the
+    // outcome was already recorded. Generic text: the stored error can be read back.
     if (doc && !ingest.recorded) await tryRecordIngestFailure(doc, 'chunk ingest failed: internal error');
     return serverError(res, err, 'document controller failed');
   } finally {

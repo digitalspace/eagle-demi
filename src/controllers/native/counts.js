@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * `GET /counts?kind=<kind>[,<kind>...]&<filters>&q=`: how many rows each kind's list would hold for
- * this caller, as a plain object `{ <kind>: <count> }`.
- *
- * Each count is the kind's own list spec read through `count`, so it takes the list's filters,
- * `q` and `ids`, the same visibility predicate, and the same refusal of a filter on a field the
- * caller cannot see. A count may never answer what its list would hide.
- *
- * No `kind` counts every registered kind; a filter then has to be one every kind declares.
+ * `GET /counts?kind=<kind>[,...]`: `{ <kind>: <count> }` through each kind's own list spec, so a count
+ * never answers what its list would hide. No `kind` counts all; a filter must then fit every kind.
  */
 
 const { resolveAccess } = require('../../helpers/access-sql');
