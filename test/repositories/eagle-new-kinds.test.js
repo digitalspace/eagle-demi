@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The users and inspections repositories (groups reads: test/controllers/nosql/native-users-groups.test.js). What is asserted is the SQL and the partition
- * each read sends, and the ACL a cascade writes: a dropped predicate or a wrong partition answers
- * 200 with rows the caller may not see.
- */
+// Users and inspections repositories; groups reads live in test/controllers/nosql/native-users-groups.test.js.
+// A dropped predicate or wrong partition answers 200 with rows the caller may not see.
 
 process.env.NODE_ENV = 'test';
 

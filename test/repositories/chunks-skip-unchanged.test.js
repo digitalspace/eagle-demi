@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * A re-post of chunks already stored must not upsert them again: every upsert is billed on the
- * serverless account, and one client retried the same document 553 times. Driven through the
- * controller, so each post carries the fresh `parentStampedAt` a real ingest stamps.
- */
+// Re-posting stored chunks must not upsert them again: serverless bills every upsert.
+// Driven through the controller so each post carries a real ingest's fresh `parentStampedAt`.
 
 process.env.NODE_ENV = 'test';
 
@@ -507,9 +504,8 @@ for (const [name, post] of [['JSON ingest', postJson], ['NDJSON ingest', postNdj
     await t.test('a Cosmos write failure beside a kept id is still a counted 500', async (tt) => {
       const { dropped } = await seeded(tt);
       tt.mock.method(aiSearch, 'deleteChunksByIds', async () => ({ ...NONE_KEPT, stillIndexed: [dropped[0]] }));
-      // Swapped on the harness's own mock: a second mock of the same method leaks past the test.
-      // Only a write carrying a Delete fails: the JSON path's one write, the NDJSON path's surplus
-      // delete once its batches have landed.
+      // Swap the harness's own mock; a second mock of the same method leaks past the test.
+      // Only writes carrying a Delete fail: the JSON write, or the NDJSON surplus delete.
       cosmos.bulkVerified.mock.mockImplementation(async (container, operations) => {
         const failed = operations.some(op => op.operationType === 'Delete') ? 1 : 0;
         return { succeeded: operations.length - failed, failed, skippedIds: [],

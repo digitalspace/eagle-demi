@@ -8,11 +8,8 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { logger } = require('../../src/utils/logger');
 
-// The previous data layer accepted a Cosmos-SQL-shaped string and "translated" it by
-// substring matching, silently discarding any predicate it did not recognise — so
-// `WHERE c.isPublished = true` became `{}` and every gated read served the whole collection.
-// These tests pin the replacement behaviour: anything that cannot be run as a parameterised
-// query THROWS. An unrunnable query must never degrade into an unfiltered read.
+// Anything that cannot run as a parameterised query THROWS: a dropped predicate such as
+// `WHERE c.isPublished = true` would otherwise serve the whole collection.
 
 test('assertQuerySpec rejects everything that is not a parameterised spec', async (t) => {
   const bad = [
@@ -62,9 +59,7 @@ test('assertQuerySpec rejects everything that is not a parameterised spec', asyn
 });
 
 test('query() validates before touching the database', async (t) => {
-  // No COSMOS_ENDPOINT is configured in tests, so getContainer() yields null and a valid spec
-  // resolves to an empty result. The point is that validation happens FIRST: a bad spec
-  // throws even when there is no connection to fail against.
+  // Tests have no COSMOS_ENDPOINT, so a bad spec must throw before any connection is tried.
   await t.test('throws on a bad spec even with no connection', async () => {
     await assert.rejects(
       () => cosmos.query('projects', 'c.isPublished = true'),
@@ -108,13 +103,8 @@ test('unconfigured client degrades safely rather than throwing', async (t) => {
   });
 });
 
-/**
- * A fresh copy of the module with the Cosmos SDK replaced by a recorder.
- *
- * The client and database handles are memoised at module scope on first use, so the stub has to be
- * in the require cache before this copy loads — the same reason `restamp-chunks.test.js` re-requires
- * its subject instead of mocking one in place.
- */
+// A fresh module copy over a recording SDK stub. The client is memoised at module scope, so the
+// stub must sit in the require cache before this copy loads.
 function loadWithSdkStub(t) {
   const MODULE = require.resolve('../../src/db/cosmos-nosql');
   const SDK = require.resolve('@azure/cosmos');
@@ -125,10 +115,8 @@ function loadWithSdkStub(t) {
   const patches = [];
   const upserts = [];
   const deletes = [];
-  // Pages `items.query` hands back, in order, one per fetchNext(); the feed options of each call
-  // land in `queries` so a test can see what the iterator was opened with. `hasMoreResults()`
-  // mirrors the real iterator: true while pages remain, which is what a drain loop reads — the SDK
-  // does NOT hand a usable continuation token back on the cross-partition path.
+  // One page per fetchNext(); `hasMoreResults()` is true while pages remain, as on the real
+  // iterator. `queries` records the feed options each iterator was opened with.
   const pages = [];
   const queries = [];
   require.cache[SDK] = {
@@ -220,14 +208,8 @@ test('patch() carries optimistic concurrency to the SDK', async (t) => {
   });
 });
 
-/**
- * `queryFirst` — the lookup that answers "does this row exist" across partitions.
- *
- * The failure it exists for is not an error: a page of a cross-partition query legitimately comes
- * back EMPTY with a continuation token, because Cosmos returns whatever the partitions it reached
- * within the page budget held. A caller that read one page reported live documents as deleted, and
- * the re-stamp then dropped their messages.
- */
+// A cross-partition page can come back EMPTY while the row exists; reading one page would report
+// live documents as deleted.
 test('queryFirst drains pages instead of trusting the first one', async (t) => {
   const { module: db, pages, queries } = loadWithSdkStub(t);
   const spec = {
@@ -245,10 +227,8 @@ test('queryFirst drains pages instead of trusting the first one', async (t) => {
   });
 
   await t.test('the drain holds ONE iterator, at a page size of 1', async () => {
-    // Not a new iterator per page fed a continuation token: on the cross-partition path the SDK
-    // hands NO token back (LegacyFetchImplementation never sets `x-ms-continuation`, and
-    // mergeHeaders does not copy it), so a token-driven drain stopped at page one — which is the
-    // exact failure this function exists to prevent.
+    // Not a new iterator per page: on the cross-partition path the SDK hands back no continuation
+    // token, so a token-driven drain stops at page one.
     const before = queries.length;
     pages.push({ resources: [] }, { resources: [] }, { resources: [{ id: '5d0d' }] });
 
@@ -272,10 +252,8 @@ test('queryFirst drains pages instead of trusting the first one', async (t) => {
   });
 
   await t.test('running out of pages THROWS rather than reporting the row absent', async () => {
-    // Callers act destructively on null — the re-stamp drops its message, the seeder writes a
-    // duplicate. A drain that stopped early has not answered the question, so it must not return
-    // the answer that means "no such row". An unbounded drain is also not an option: that is the
-    // cross-partition scan the partition key exists to avoid.
+    // Callers act destructively on null, so an early stop must not return it; an unbounded drain
+    // would be the cross-partition scan the partition key exists to avoid.
     const before = queries.length;
     for (let i = 0; i < db.LOOKUP_MAX_PAGES + 5; i++) pages.push({ resources: [] });
 
@@ -381,13 +359,8 @@ test('queryPage drains one iterator until the page is full', async (t) => {
   });
 });
 
-/**
- * Paged reads — every list endpoint, and the purge scan.
- *
- * Without query control the SDK's legacy fetch path drops the continuation header on a
- * cross-partition ORDER BY, so `/api/documents?pageSize=100` served page one and reported no
- * next page. The purge scan stopped at "200 of 200 scanned" on a corpus of tens of thousands.
- */
+// Every list endpoint and the purge scan page this way. Without query control a cross-partition
+// ORDER BY loses its continuation token, so paging stops after page one.
 test('query() asks for query control only when it is paging', async (t) => {
   const { module: db, pages, queries } = loadWithSdkStub(t);
   const spec = { query: 'SELECT * FROM c ORDER BY c._ts DESC', parameters: [] };
@@ -417,13 +390,8 @@ test('query() asks for query control only when it is paging', async (t) => {
   });
 });
 
-/**
- * `upsert` with an etag.
- *
- * An upsert replaces the whole item, so it has no stored value left for a patch `condition` to
- * test: the item's revision is the only concurrency control it can have. Without it two writers
- * that read the same row both write, and the loser's change is gone with nothing logged.
- */
+// The etag is an upsert's only concurrency guard: without it, of two writers that read the same
+// row, one loses its change with nothing logged.
 test('upsert carries optimistic concurrency to the SDK', async (t) => {
   const { module: db, upserts } = loadWithSdkStub(t);
   const row = { id: '5d0d', projectId: '207' };
@@ -460,16 +428,8 @@ test('remove carries optimistic concurrency to the SDK', async (t) => {
   });
 });
 
-/**
- * A guarded PATCH inside a BULK request.
- *
- * The chunk re-stamp orders concurrent walks with a SQL `condition` on every patch, and it sends
- * one request per hundred chunks rather than one per chunk — a corpus walk is 400k+ of them. Two
- * things have to hold for that: the condition must reach the SDK on each operation, and a rejected
- * condition must be reported as the ANSWER it is. A 412 retried four times pays four requests for
- * a decision Cosmos already made and then hands the caller a skipped chunk counted as a lost one,
- * which is what sends the repair after rows that are already current.
- */
+// The chunk re-stamp guards each bulk patch with a SQL `condition`: it must reach the SDK, and a
+// 412 is an answer, not a loss, or the repair chases rows that are already current.
 test('bulk carries a per-operation Patch condition to the SDK', async () => {
   const sent = [];
   const container = {
@@ -490,10 +450,8 @@ test('bulk carries a per-operation Patch condition to the SDK', async () => {
     { operationType: 'Patch', partitionKey: 'docA', id: 'c1', resourceBody: body }
   ], { containerFn: () => container });
 
-  // Handed over verbatim: @azure/cosmos 4.10 types a Patch operation's resourceBody as
-  // `PatchRequestBody` — `{operations, condition?}` — and the executor puts the prepared operations
-  // straight in the request body. Dropping the condition here turns every guarded walk into the
-  // last-writer-wins overwrite it replaced, under a 200.
+  // Handed over verbatim. A dropped condition turns every guarded walk into last-writer-wins,
+  // under a 200.
   assert.strictEqual(sent.length, 1, 'two operations in one partition are one request');
   assert.deepStrictEqual(sent[0].map(op => op.resourceBody), [body, body]);
 });

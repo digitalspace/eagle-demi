@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * Selected Credentials repository — what a project close writes.
- *
- * The dangerous direction is a close that takes access it was not asked to take: a grant naming
- * three projects must lose the closed one and keep the other two, so every assertion below is on
- * the patch operation and the audit row, not on a return value.
- */
+// A project close must remove only the closed project from a grant, so assertions read the
+// patch operation and audit row, not the return value.
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: the audit writer is inert without these, and a batch of 1

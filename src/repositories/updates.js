@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Updates repository — Cosmos NoSQL.
- *
- * Container `updates` (Eagle `RecentActivity`), partitioned by `/id` (the Eagle `_id`). Rows are
- * small, read whole and written whole, by the Eagle mirror or by domain/updates.js, so every write
- * is a point write.
- *
- * `notifiedAt` is the publish-notify claim: it is set by a CONDITIONAL patch, so two concurrent
- * pushes of the same newly published update produce one notification, not two.
+ * Container `updates` (Eagle `RecentActivity`), partitioned by `/id` (the Eagle `_id`). `notifiedAt`
+ * is set by a conditional patch, so two concurrent pushes of one publish send one notification.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -29,10 +23,8 @@ const {
 const CONTAINER = 'updates';
 const PARTITION_FIELD = 'id';
 /**
- * The project axis a SCOPED caller is confined to. Holds the EAGLE project id — `doc.project` as
- * eagle-api pushed it — unlike `commentPeriods.projectId`, which holds the DEMI one. Callers
- * filtering this container must not translate the id first; the caller's own ACCESS scope, which is
- * in DEMI ids, is translated the other way by `inEagleIdSpace` below.
+ * Holds the Eagle project id as eagle-api pushed it, not the DEMI one: never translate a filter id.
+ * The caller's access scope, in DEMI ids, is translated the other way by `inEagleIdSpace`.
  */
 const SCOPE_FIELD = 'projectId';
 
@@ -52,9 +44,8 @@ const orderDial = (access, publishSorted) => (publishSorted && config.updatesPub
   ? [{ clause: dialAllows('dateAdded', levelOf(access)), params: [] }] : []);
 
 /**
- * The three states `pinned` can be stored in. The mirror now writes a boolean, but a row written
- * before that holds `doc.pinned` as sent, undefined when Eagle never set it. Cosmos drops a row from
- * `c.pinned != true` when the property is absent, so "not pinned" is spelled out rather than negated.
+ * Older rows hold `pinned` as Eagle sent it, or not at all, and Cosmos drops a row lacking the
+ * property from `c.pinned != true`, so "not pinned" is spelled out rather than negated.
  */
 const PINNED = { clause: '(IS_DEFINED(c.pinned) AND c.pinned = true)', params: [] };
 const UNPINNED = {
@@ -69,9 +60,8 @@ const TOP_ROWS = 4;
 const PUBLISHED = 'published';
 
 /**
- * Does the publish gate apply to this caller? Staff level and narrower see drafts and scheduled
- * rows; idir and public see `status === 'published' && publishDate <= now`. A row with no `status`
- * predates the field and is governed by `read[]` alone, as before.
+ * Staff level and narrower see drafts and scheduled rows; idir and public see only live ones.
+ * A row with no `status` goes by `read[]` alone.
  */
 function isLiveGated(access) {
   return levelOf(access) > ROLE_LEVELS.staff;
@@ -86,9 +76,8 @@ function publishedAt(item) {
 }
 
 /**
- * The gate's predicate, with the status and the time as whatever references the caller binds.
- * On `publishDate` alone, so the range filter can use its index: a gated row without one stays
- * hidden, and mirrorItem never writes a row without one.
+ * On `publishDate` alone, so the range filter can use its index. A gated row without one stays
+ * hidden, and mirrorItem always writes one.
  */
 function liveClause(statusRef, nowRef) {
   return '(NOT IS_DEFINED(c.status) OR IS_NULL(c.status) OR ' +
@@ -162,9 +151,8 @@ function staleLeaseClause(now) {
 }
 
 /**
- * The row may be announced at `now`: published, through the public gate, inside the notify window,
- * and either unclaimed or holding a dead lease. Checked IN the claim, so a row archived or
- * rescheduled after the timer listed it fails the claim instead of being announced from a stale read.
+ * Checked inside the claim, so a row archived or rescheduled after the timer listed it fails the
+ * claim instead of being announced from a stale read.
  */
 function announceableClause(now) {
   const at = instantLiteral(now);
@@ -188,17 +176,8 @@ function demiProjectIds(access) {
 }
 
 /**
- * The same access, with every project axis rewritten into THIS container's id space.
- *
- * `projectScope`, `teams` and credential scopes all carry DEMI project ids, while `projectId` here
- * holds the EAGLE one — so binding them straight in matches nothing and a scoped credential reads
- * zero updates of its own project. Translated on read rather than stored as a second id on the row,
- * because a second id would need every mirrored update backfilled before it meant anything.
- *
- * ONE query, and only for a caller that carries such an id — an anonymous or privileged read is
- * untouched. Read under systemAccess(): this maps ids the credential was ISSUED with, so it must
- * not turn on whether the caller may read the project record itself. An id with no Eagle
- * counterpart drops out, which empties the scope rather than widening it.
+ * Access with every DEMI project id rewritten to the Eagle id `projectId` holds here. Read under
+ * systemAccess(), as it maps ids the credential was issued with; an id with no Eagle match drops out.
  */
 async function inEagleIdSpace(access) {
   const demiIds = demiProjectIds(access);
@@ -221,12 +200,8 @@ async function inEagleIdSpace(access) {
 }
 
 /**
- * Eagle ids of the parents, projects and notifications, this caller cannot read. An Update under
- * one is hidden whatever its own `read[]` says, as eagle-api's `parentReadMatch` hides it: rows
- * stored before the push capped by parent still carry Eagle's ACL. A notification wins an id a
- * Track project also carries (`parent-admit:pickParent`); a parent DEMI does not hold hides nothing.
- *
- * Once per access object, so a page, its count and its labels share one lookup.
+ * Eagle ids of parents this caller cannot read: an Update under one is hidden whatever its own
+ * `read[]`, as eagle-api's `parentReadMatch` does. Per access object, so a page and its count share it.
  */
 const hiddenParentsByAccess = new WeakMap();
 
@@ -237,10 +212,8 @@ function hiddenParentIds(access) {
 }
 
 /**
- * The parent rows behind the gate, cached per process. The rows, not each caller's hidden set:
- * one entry serves every caller, and no access field can be left out of a cache key. A write in
- * this process that moves a parent's `read[]` calls `forgetParents`; one in another instance shows
- * here within the TTL.
+ * Parent rows cached per process, not each caller's hidden set, so no access field can be missed in
+ * a cache key. A local write calls `forgetParents`; another instance's write shows within the TTL.
  */
 const PARENT_ROWS_TTL_MS = 60 * 1000;
 let parentRows = null;
@@ -282,7 +255,8 @@ async function loadHiddenParents(access) {
   const notificationIds = new Set(notificationRows.map(n => String(n.id)));
   const hidden = new Set(notificationRows
     .filter(n => !canRead(n, access, notifications.SCOPE_FIELD)).map(n => String(n.id)));
-  // Hidden only when no row carrying the id is readable: the label lookup answers the same way.
+  // Hidden only when no row carrying the id is readable, as the label lookup answers. A notification
+  // wins an id a Track project also carries (`parent-admit:pickParent`).
   const readable = new Set(projectRows.filter(p => canRead(p, access, projects.PARTITION_FIELD))
     .map(p => String(p.eagleId)));
   for (const p of projectRows) {
@@ -327,9 +301,8 @@ const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagle
 const listSyncPending = () => listDemiSyncPending(CONTAINER);
 
 /**
- * DEMI-created Updates owed a send that name `id` as their parent, comment period, notification, image or
- * attachment: sync-out holds them until that record is in Eagle. Not a stray, and not one whose send already
- * failed at its current version: only a new write or `--repair` sends those again.
+ * DEMI-created Updates owed a send that name `id` in any ref field: sync-out holds them until that
+ * record is in Eagle. A row failed at its version waits for a new write or `--repair`.
  */
 function listSyncPendingNaming(id) {
   const named = ['c.projectId = @id', 'c.pcp = @id', 'c.projectNotification = @id', 'c.featuredImage.document = @id',
@@ -342,9 +315,8 @@ function listSyncPendingNaming(id) {
 }
 
 /**
- * The keyword criterion: the text fields the `activities` index searches, less `notificationName`,
- * so a news search that matched there matches here. `true` is CONTAINS' case-insensitive
- * flag — without it a search for "site c" misses "Site C".
+ * The `activities` index text fields less `notificationName`, so a news search matches the same
+ * rows here. `true` makes CONTAINS case-insensitive.
  */
 function keywordCriteria(keywords) {
   const text = String(keywords || '').trim();
@@ -357,12 +329,8 @@ function keywordCriteria(keywords) {
 }
 
 /**
- * `and[type]` as an IN over the stored `type`.
- *
- * No `types` key, and an emptied one (`and[type]=`), both add no clause — an empty `and[type]=` has
- * to read the same way here as it does on the index path, where `eagleQuery.buildFilter` drops a
- * key that produced zero terms instead of narrowing to none. A cleared filter-panel checkbox means
- * "show everything", not "show nothing".
+ * No or empty `and[type]` adds no clause, as `eagleQuery.buildFilter` does on the index path: a
+ * cleared filter checkbox means show everything.
  */
 function typeCriteria(types) {
   if (!types || !types.length) return [];
@@ -370,27 +338,16 @@ function typeCriteria(types) {
 }
 
 /**
- * "Documents attached" — `and[documentUrl]`, which asks whether the field is FILLED rather than
- * what it holds. `presenceClause` names both spellings of "no attachment" (the mirror's null and
- * older rows' ''), and its two answers are exact complements, because the index path answers the
- * same key with a complementary pair (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must
- * not mean two different things depending on whether keywords are on.
+ * `and[documentUrl]` asks whether the field is filled. Its two answers are exact complements, as on
+ * the index path (`presenceTerm`), so one URL means the same with keywords on or off.
  */
 function documentCriteria(hasDocument) {
   return typeof hasDocument === 'boolean' ? [presenceClause('documentUrl', hasDocument)] : [];
 }
 
 /**
- * The posted-on window: `dateAddedFrom` inclusive, `dateAddedBefore` exclusive.
- *
- * Both arrive as ISO instants already rounded to whole UTC days by the caller
- * (`controllers/search.js` `activityWindow`), which is what makes `and[dateAddedEnd]` cover its own
- * day — the same arithmetic `eagle-query`'s `rangeTerm` does for the index path.
- *
- * A STRING compare, like `comment-periods.js` listOpen: `dateAdded` is stored as the ISO text
- * eagle-api pushed, Cosmos has no date type, and ISO-8601 in UTC sorts as text the way it sorts as
- * time — which is also why `DEFAULT_ORDER` can order by it. A row with no `dateAdded` at all
- * compares as undefined and drops out, which is the fail-closed direction for a dated window.
+ * Whole UTC days from `activityWindow`, `dateAddedBefore` exclusive. A string compare: ISO UTC text
+ * sorts as time, and a row with no `dateAdded` drops out, which fails closed.
  */
 function dateCriteria(dateAddedFrom, dateAddedBefore) {
   return [
@@ -453,12 +410,8 @@ async function listEvery(access) {
 }
 
 /**
- * A named set of updates, whole rows, in ONE query — how the keyword search reads back what the
- * index ranked. The index carries ids and no text, so the row a caller receives is always the
- * stored one, under the caller's own ACL: a row the index still holds and Cosmos no longer admits
- * simply drops out, which is the fail-closed direction.
- *
- * Cosmos answers in its own order; the caller re-imposes the ranking it asked for.
+ * Stored rows for the ids the keyword index ranked, under the caller's ACL: an id Cosmos does not
+ * admit drops out. Cosmos answers in its own order; the caller re-ranks.
  */
 async function listByIds(access, ids) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -492,11 +445,8 @@ async function count(access, {
 }
 
 /**
- * The home-page strip: pinned updates newest first, topped up with unpinned ones to `limit`.
- *
- * `limit` ROWS IN TOTAL, not of each — what eagle-api's `/api/public/recentActivity?top=true` answers
- * at its fixed four (`api/controllers/recentActivity.js:75-81`). `types` narrows only the unpinned
- * top-up: a pinned row is an editor's choice and leads whatever its type.
+ * Pinned rows topped up with unpinned ones to `limit` in total, as eagle-api's `?top=true` answers.
+ * `types` narrows only the top-up: a pinned row leads whatever its type.
  */
 async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   // Translated once for both halves of the strip, not per query.
@@ -591,14 +541,8 @@ function dueSpec(criteria, orderBy) {
 }
 
 /**
- * The scheduled announce's work list, at most `limit` rows, retries first:
- *   1. withdrawn rows DEMI announced whose cancellation has not gone out;
- *   2. DEMI claims whose lease ran out without a send, a refusal, or its last attempt;
- *   3. unclaimed published rows whose `publishDate` has passed, oldest first, less those the
- *      parent gate skipped (`markNotifySkipped`).
- * A claimed row's window runs from `notifyClaimedAt`, an unclaimed one's from `publishDate`. A row
- * without `status` is listed only to retry a DEMI send: the push announces those, and one pushed
- * while eagle-notify was dark stays unannounced. System access: it runs from a timer.
+ * Retries first: unsent DEMI cancellations, then dead DEMI leases, then due unclaimed rows oldest
+ * first. A row without `status` is listed only to retry a DEMI send; the push announces those.
  */
 async function listDueForNotify(now, limit) {
   const since = notifyWindowStart(now);
@@ -632,11 +576,8 @@ async function listDueForNotify(now, limit) {
 }
 
 /**
- * Whole-item write, guarded by what the caller read.
- *
- * A plain upsert would carry a `notifiedAt` read before a concurrent push claimed it, handing the
- * claim back and announcing the same publication twice. Create when the row is absent, etag-guarded
- * replace when it is not: either way a racing writer gets 409/412 instead of a silent overwrite.
+ * Not a plain upsert: that could write back a `notifiedAt` read before a concurrent push claimed it
+ * and announce twice. A racing writer gets 409 or 412 instead.
  */
 async function upsert(item, existing) {
   if (!existing) return cosmos.create(CONTAINER, item);
@@ -654,7 +595,7 @@ async function patchIf(id, operations, condition) {
 }
 
 /**
- * Take the notification claim as a lease, or find it taken or the row no longer announceable.
+ * Take the notification claim as a lease; null when it is taken or the row is not announceable.
  * The caller sends the row this returns, never the one it listed: that one may be stale.
  * @returns {Promise<object|null>} the patched row, or null.
  */
@@ -681,9 +622,8 @@ async function claimForBackfill(id, now) {
 }
 
 /**
- * The announce skipped an unclaimed row (its parent is not public), so the due list stops listing
- * it: oldest first, 20 such rows would hold back every newer one. A push rewrites the row without
- * the mark, and a project cascade clears it (`update-acl`). Unclaimed rows only: a claim decides.
+ * Drops an unclaimed row with a non-public parent from the oldest-first due list, where it would
+ * hold back newer rows. A push or a project cascade (`update-acl`) clears the mark.
  */
 async function markNotifySkipped(id, at, reason) {
   return patchIf(id, [
@@ -719,9 +659,8 @@ async function fillPublishDate(id, value) {
 }
 
 /**
- * The image and attachment refs of every published update the public may read that shows one of
- * `docIds`, for domain/update-images.js. A row with no status goes by `active`, as eagle-api's
- * `shownIds` does; one capped below public by its parent keeps no image public.
+ * Image and attachment refs of public, published updates showing one of `docIds`. A row with no
+ * status goes by `active`, as eagle-api's `shownIds` does.
  */
 async function listShowingDocuments(docIds) {
   if (!docIds.length) return [];
@@ -756,9 +695,7 @@ module.exports = {
   isLive,
   isInNotifyWindow,
   publishedAt,
-  // Exported for the keyword-search path in controllers/search.js: the index holds EAGLE project
-  // ids while a caller's scope is in DEMI ones, so the OData ACL has to be built from the same
-  // translated access this container's own reads use.
+  // The keyword index holds Eagle project ids, so controllers/search.js builds its OData ACL from this.
   inEagleIdSpace,
   hiddenParentIds,
   forgetParents,

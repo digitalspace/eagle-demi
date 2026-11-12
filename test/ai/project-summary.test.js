@@ -76,10 +76,8 @@ const chunk = (n, content, documentId = 'docB') => ({
 });
 
 /**
- * A sources adapter over fixtures, plus a record of what was asked for.
- *
- * `save` throws: nothing in this file is a live run, and a generator that wrote would say so here
- * rather than in a review.
+ * A sources adapter over fixtures, plus a record of what was asked for. `save` throws so a
+ * generator that writes fails here.
  */
 function fakeSources({ project, documents = [], chunks = {}, organizations = [],
   chunkHits = [], trace = [] } = {}) {
@@ -116,12 +114,8 @@ function fakeSources({ project, documents = [], chunks = {}, organizations = [],
 }
 
 /**
- * An Ollama that answers every call with the same JSON, counting how often it was asked.
- *
- * Stubbed at `http.request`, which is the transport the generator reaches Ollama on: `fetch` gives
- * up on a reply that takes more than five minutes to start. A reply is either the content string,
- * or `{content, doneReason, status}` for a run that has to see how Ollama ended the completion, or
- * what status it answered with.
+ * An Ollama stub at `http.request`, answering every call the same and counting calls. A reply is
+ * the content string or `{content, doneReason, status}`.
  */
 function stubModel(t, replies, trace = []) {
   const calls = [];
@@ -156,10 +150,8 @@ function stubModel(t, replies, trace = []) {
 }
 
 /**
- * The Foundry provider's wire shape, and the token seam the generator reaches it through.
- *
- * Foundry is the deployed default, so its own reply fields — `finish_reason` above all — are worth
- * pinning apart from Ollama's. A reply is the content string, or `{content, finishReason}`.
+ * The Foundry wire shape and token seam. Foundry is the deployed default, so its `finish_reason` is
+ * pinned apart from Ollama's. A reply is the content string or `{content, finishReason}`.
  */
 function stubFoundry(t, replies) {
   const calls = [];
@@ -226,9 +218,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('never calls the model for a section whose source document is missing', async () => {
-    // The grounding guarantee. A model handed no sources answers from its own knowledge, and on a
-    // registry page that answer is indistinguishable from a real one. `summaryEnabled` is ON so the
-    // missing document is what short-circuits, not the feature flag.
+    // The grounding guarantee. `summaryEnabled` is ON so the missing document short-circuits, not
+    // the feature flag.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, '{"sentence":"x","citations":[1]}');
@@ -247,10 +238,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('finishes every API read before the first model call', async () => {
-    // The generator runs from a workstation on a staff token that expires five minutes after it is
-    // issued, and one call over a full document takes minutes. A read that waits behind a model
-    // call is a 401 partway through the run, which is what ended the 2026-09-09 Site C run and cost
-    // everything generated up to it.
+    // The staff token expires five minutes after issue and one model call takes minutes, so a read
+    // waiting behind a model call gets a 401 partway through the run.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const trace = [];
@@ -324,9 +313,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('reports a reply cut off at the completion budget as truncation', async () => {
-    // Ollama constrains decoding to JSON, so a reply that fails to parse is almost always a reply
-    // that stopped at `num_predict` mid-object. "Not JSON" would send whoever reads the record
-    // looking at the prompt; the budget is what actually has to move.
+    // Ollama constrains decoding to JSON, so an unparseable reply almost always stopped at
+    // `num_predict` mid-object: the budget has to move, not the prompt.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const cutOff = { content: '{"items": [{"category": "Water", "title": "Water qual',
@@ -370,9 +358,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('splits a conditions document too large for one window into batches', async () => {
-    // The completion budget comes out of the same num_ctx the prompt is measured against, so a full
-    // Schedule B does not fit beside an 8000-token reply. It is a list, so it splits: refusing it
-    // would drop the one section the big budget exists for.
+    // The completion budget shares num_ctx with the prompt, so a full Schedule B does not fit beside
+    // an 8000-token reply. It is a list, so it splits rather than being refused.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({
@@ -494,9 +481,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('gives the Ollama call no timeout, so a long generation is not cut off', async () => {
-    // `fetch` is undici, which abandons a request after 300 s without response headers — and Ollama
-    // sends none until the whole reply is generated. A batch of conditions takes longer than that,
-    // and the run died mid-generation with `TypeError: fetch failed` until this moved to node:http.
+    // undici `fetch` abandons a request after 300 s without response headers, and Ollama sends none
+    // until the whole reply is generated; a batch of conditions takes longer than that.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({ sentence: 'A sentence.', citations: [1] }));
@@ -665,9 +651,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('grounds each amendment in its own document, not another amendment\'s', async () => {
-    // One call per amendment exists so a sentence about one cannot cite another's chunks. Pairing
-    // is by document id, and a pairing that slipped would still produce a full, plausible section —
-    // where each sentence's citations land is the only thing that shows it.
+    // One call per amendment, paired by document id. A slipped pairing still reads as a plausible
+    // section; only where each sentence's citations land shows it.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const AMENDMENT_TWO = {
@@ -723,9 +708,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('asks Ollama on its native endpoint with a context large enough for the prompt', async () => {
-    // Ollama's default context is 4k and it TRUNCATES A LONGER PROMPT SILENTLY. Schedule B alone is
-    // around 20k tokens, so a run without num_ctx would summarise the first fifth of the document
-    // and report success. Asserted on the wire because there is no other symptom.
+    // Ollama's default context is 4k and it TRUNCATES A LONGER PROMPT SILENTLY; Schedule B alone is
+    // about 20k tokens. Asserted on the wire because there is no other symptom.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({ sentence: 'A sentence.', citations: [1] }));
@@ -762,9 +746,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('does not call the model when the prompt cannot fit the context window', async () => {
-    // Over num_ctx, Ollama drops the front of the prompt without a word: the reply still parses and
-    // still cites, drawn from the tail of a document the model saw a fraction of. There is no other
-    // symptom, so not calling is the only way that run is distinguishable from a good one.
+    // Over num_ctx, Ollama silently drops the front of the prompt and the reply still parses and
+    // cites, so not calling is the only way to tell that run from a good one.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     // A window with room for the reply and about ten tokens of prompt.
@@ -810,8 +793,7 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('reports a Foundry reply that stopped at max_tokens as truncation', async () => {
-    // `finish_reason: length` is the only thing that tells the two apart: what comes back is a JSON
-    // prefix either way, and "not JSON" would send whoever reads the record at the prompt when the
+    // Only `finish_reason: length` tells the two apart: a JSON prefix comes back either way, and the
     // budget is what has to move.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'foundry';
@@ -857,10 +839,7 @@ test('generateProjectSummary', async (t) => {
 
   await t.test('skips an unpublished newest inspection and summarises the published one', async () => {
     // The read route gates on the PROJECT alone, so a document narrower than its project must never
-    // reach the record. The newest Inspection Record is the compliance section's source, and an
-    // unpublished one is exactly what a reader who 404s on that document would otherwise be told
-    // about. The API strips `read[]` at the response boundary and returns `isPublished` derived
-    // from it, so these rows carry the mirror and no ACL.
+    // reach the record. The API returns `isPublished`, not `read[]`, so these rows carry only that.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     stubModel(t, JSON.stringify({
@@ -894,9 +873,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('never cites a document whose read[] is not public', async () => {
-    // `read[]` is authoritative and `isPublished` only mirrors it, so a row where the two disagree
-    // is judged on `read[]`. This one is a Schedule B, the conditions section's only source: with
-    // it dropped there is nothing to summarise and no model call to make.
+    // `read[]` wins when it disagrees with `isPublished`. This Schedule B is the conditions
+    // section's only source, so with it dropped no model call is made.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({
@@ -917,8 +895,7 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('names the reason a section with no source document is null', async () => {
-    // A null with no reason is what the 2026-09-09 Site C run stored, and it reads as "the model
-    // had nothing to say" whatever the cause was.
+    // A null with no reason reads as "the model had nothing to say" whatever the cause was.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     stubModel(t, '{"paragraph":"No non-compliance.","citations":[1]}');
@@ -994,9 +971,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('names the amendments it could not summarise, keeping the ones it could', async () => {
-    // 8 of Site C's 21 amendment packages have no extracted text. Their sentences are missing and
-    // nothing on the record said which ones or why. It is not a fault — the extractor has nothing
-    // to give — so it is named apart from `no_chunks` and logged quietly.
+    // Some amendment packages have no extracted text. That is not a fault, so it is named apart
+    // from `no_chunks` and logged quietly.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t,
@@ -1178,9 +1154,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('builds no federal section from EAO advice to a joint review panel', async () => {
-    // "Recommendations of the Executive Director to the Joint Review Panel" is a provincial
-    // document. Site C's federal section was built from it, so provincial advice was published as
-    // Canada's decision.
+    // "Recommendations of the Executive Director to the Joint Review Panel" is provincial advice and
+    // must never stand in as Canada's decision.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({
@@ -1204,9 +1179,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('builds no federal section from EAO advice about a decision statement', async () => {
-    // The title names a decision statement, so the federal pattern matches it. It is still the
-    // Executive Director's advice, and the advice guard is the only thing keeping provincial
-    // recommendations off the page as Canada's decision.
+    // The title matches the federal pattern but is still the Executive Director's advice; only the
+    // advice guard keeps it off the page as Canada's decision.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({
@@ -1252,14 +1226,8 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Fish habitat']);
   });
 
-  // -------------------------------------------------------------------------------------------
-  // Federal decisions from the IAAC registry
-  //
-  // DEMI holds five Decision Statements in the whole corpus and every project that had a federal
-  // assessment has one on the public registry, so the fallback is the normal path and the DEMI one
-  // is the exception. Everything below stubs the adapter: what is under test here is the WIRING —
-  // which source wins, what the section stores, and what a failure stores instead.
-  // -------------------------------------------------------------------------------------------
+  // Federal decisions from the IAAC registry, the normal path since DEMI holds few. The adapter is
+  // stubbed: this tests which source wins and what the section stores on success and failure.
 
   /** A registry answer, with as much or as little of it as a test needs. */
   const federalSource = (over = {}) => ({
@@ -1499,9 +1467,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('keeps the decision facts when it lists no conditions', async () => {
-    // A CEAA 2012 comprehensive-study decision carries no numbered conditions. The decision read
-    // fine and the model answered honestly, so the run has a citable outcome to store; a null
-    // section here loses the status, the CEAR link and the decision itself.
+    // A CEAA 2012 comprehensive-study decision has no numbered conditions; a null section would lose
+    // the status, the CEAR link and the decision itself.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.federalSource = 'iaac';
@@ -1578,9 +1545,8 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(calls.length, 0, 'a document with no text is never handed to the model');
   });
 
-  // Every cause below is a decision statement the registry LISTS and this run could not read. The
-  // stored record must say so: `no_federal_decision` here would publish the claim that Canada
-  // issued no decision for a project whose statement is sitting on the registry.
+  // Each cause is a decision the registry LISTS but this run could not read; `no_federal_decision`
+  // would falsely claim Canada issued none.
   for (const error of ['no_pdf_extractor', 'pdf_fetch_failed:404', 'no_text', 'no_pdf_link',
     'request_budget_spent']) {
     await t.test(`stores an unread decision (${error}) as unreadable`, async () => {
@@ -1681,9 +1647,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('takes a reply the model wrapped in a code fence', async () => {
-    // `format: 'json'` constrains decoding and still does not stop every model fencing the object.
-    // Site C's nations reply came back fenced, was rejected as `not_json`, and the retry it paid
-    // for came back fenced too.
+    // `format: 'json'` does not stop every model fencing the object, and the retry comes back
+    // fenced too.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, '```json\n' +
@@ -1703,9 +1668,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('spreads the nations sources over documents instead of draining the first', async () => {
-    // The search ranked a 2021 province-wide workshop roster first, its chunks took the whole
-    // budget, and 69 other documents contributed nothing — so nations that appear on a provincial
-    // roster and nowhere near this project were cited for it.
+    // A top-ranked province-wide roster must not take the whole chunk budget, or nations unrelated
+    // to this project get cited for it.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryNationChunks = 8;
@@ -1740,10 +1704,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('asks for the nations list on one call, with room for the whole list', async () => {
-    // An honest list for Site C is around 2,600 tokens and the default budget is 1,500, so the
-    // list stopped mid-item and parsed as nothing. The budget is what has to move: nations cannot
-    // be batched like the conditions list, because its builder returns a bare array and the merge
-    // that joins batches reads one as empty.
+    // A full nations list overruns the default budget, so the budget moves instead: the builder
+    // returns a bare array, which the batch merge reads as empty.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryNationChunks = 40;
@@ -1767,10 +1729,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('asks the timeline for milestones, with room for the reply', async () => {
-    // Project 302's assessment report dates hundreds of letters, meetings and comment periods, so
-    // an uncapped ask ran past the 1500-token default on every batch, even halved. The budget and
-    // the ask move together: either one alone still stops the list mid-item, and a stopped list
-    // parses as nothing.
+    // The budget and the event cap move together: either alone still stops a long timeline
+    // mid-item, and a stopped list parses as nothing.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, JSON.stringify({
@@ -1789,9 +1749,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('keeps a timeline event the source dates in long form', async () => {
-    // The timeline shape forces an ISO date and the documents write "October 14, 2014", so a
-    // literal comparison dropped every event Site C produced — a 100% failure that read on the
-    // record as a model that had invented all of them.
+    // The shape forces an ISO date while documents write "October 14, 2014"; a literal comparison
+    // would reject every event as invented.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     stubModel(t, JSON.stringify({
@@ -1857,9 +1816,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('names the document a section is waiting on extraction for', async () => {
-    // "No Schedule B" and "the Schedule B has no extracted text yet" are different states and only
-    // one of them is permanent. Told apart, the page can link the document and the operator knows
-    // the fix is an extraction run, not a registry that holds nothing.
+    // "No Schedule B" is permanent; "Schedule B has no extracted text yet" is fixed by an extraction
+    // run, and the page can still link the document.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, '{"items":[]}');
@@ -1922,9 +1880,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('grounds a claim on the whole document, not only the pages the model saw', async () => {
-    // The model is shown a window of a long document and cites within it, while the date it quotes
-    // is printed on a page outside the window. Checked against the window alone, a true claim reads
-    // as an invention and the section stores a null.
+    // The quoted date can sit on a page outside the window the model saw; checked against the window
+    // alone, a true claim reads as invented.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryMaxChunks = 1;
@@ -1948,9 +1905,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('reads a long document for the timeline in batches and merges the events', async () => {
-    // A chronology runs to the last page of an assessment report, and the first window of it holds
-    // the application dates and nothing else. Batched, the whole document is read; the batches
-    // restate the same event, so the merge deduplicates and orders what comes back.
+    // A chronology runs to the report's last page, so the whole document is batched; batches
+    // restate events, so the merge deduplicates and orders them.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryMaxChunks = 2;
@@ -2019,10 +1975,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('reads only the pages that carry a full date for the timeline', async () => {
-    // Project 302's English assessment report is 680k tokens over 12 window-sized batches, at about
-    // twelve minutes a batch on a host that evaluates the prompt on CPU. Most of those pages carry
-    // no date at all, and the instruction only allows an event the source dates in full, so an
-    // undated page can never contribute one — sending it buys nothing and costs a batch.
+    // Only fully dated events are allowed, so an undated page can never contribute one; sending it
+    // costs a slow batch for nothing.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     // One dated page per batch, so the filter and the merge are both visible in the calls.
@@ -2094,10 +2048,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('sends no Foundry call for a document whose pages carry no date', async () => {
-    // Foundry is the deployed provider and sizes its batches by count, so an empty page list is
-    // still one batch — a prompt with zero sources, asking the model to date events it was shown
-    // none of. Ollama's fitBatches returns no batch at all, which is why the guard needs pinning
-    // here rather than there.
+    // Foundry batches by count, so an empty page list is still one zero-source batch. Ollama's
+    // fitBatches returns none, so the guard is pinned on Foundry.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'foundry';
     config.foundryEndpoint = 'https://foundry.example';
@@ -2126,9 +2078,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('splits the timeline into count-sized batches off Ollama too', async () => {
-    // Foundry is the deployed provider and has no fixed window to size against, so the count cap
-    // is the whole bound there: `projectSummaryMaxChunks` chunks per call, over the whole document.
-    // One call carrying everything would drop the events on the pages past the first window.
+    // Foundry has no fixed window, so `projectSummaryMaxChunks` per call is the whole bound, over
+    // the whole document.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'foundry';
     config.foundryEndpoint = 'https://foundry.example';
@@ -2174,10 +2125,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('sizes the timeline batches to the window, not to a fixed chunk count', async () => {
-    // Project 302: split into fixed runs of `projectSummaryMaxChunks`, batch 1 of the assessment
-    // report alone came 25,825 tokens over the window. `context_overflow` is not a timeline
-    // fallback reason, so the section died there rather than moving on. Batches sized the way a
-    // list section's are fit, and the whole document is still read.
+    // Fixed runs of `projectSummaryMaxChunks` can overflow the window, and `context_overflow` is not
+    // a fallback reason. Batches sized like a list section's fit and still cover the document.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     // Room for the 1500-token reply and about 8500 tokens of prompt.
@@ -2228,9 +2177,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('asks a truncated timeline batch again as two halves', async () => {
-    // Project 302: a batch sized to fit the PROMPT window still held more dated events than the
-    // 1500-token reply carries, so batch 1 came back a fragment and the whole section died. The
-    // same pages asked as two halves each get the budget to themselves.
+    // A batch that fits the PROMPT window can hold more dated events than the reply budget carries;
+    // asked as two halves, each half gets the budget to itself.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryMaxChunks = 4;
@@ -2276,9 +2224,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('stops halving a truncated timeline batch at the depth bound', async () => {
-    // A document that truncates at every size would cost one call per chunk if the halving ran to
-    // the floor. `MAX_BATCH_HALVINGS` stops it at eight pieces of the batch; the first piece to
-    // reach that depth fails the section, so the descent is what the call count shows.
+    // `MAX_BATCH_HALVINGS` stops at eight pieces so a document that truncates at every size does not
+    // cost one call per chunk; the first piece at that depth fails the section.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     config.projectSummaryMaxChunks = 16;
@@ -2330,9 +2277,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('reads the next document when the timeline\'s first source yields nothing', async () => {
-    // Project 302 stored `no_grounded_content` for its timeline: the section was read from an
-    // executive summary that produced one event the gates dropped, while the certificate sat
-    // extracted and full of dates. One emptied reply is not the project having no chronology.
+    // One emptied reply is not the project having no chronology: a later candidate, such as the
+    // certificate, may be full of dates.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t, [
@@ -2374,9 +2320,8 @@ test('generateProjectSummary', async (t) => {
 
   await t.test('reads the next document when the timeline\'s first source declares zero events',
     async () => {
-      // `empty` (the model saw the document and declared no events) is a different reason than
-      // `no_grounded_content` (the model declared events the gates then dropped), but both are an
-      // honest "not here" that the next candidate deserves a turn on.
+      // `empty` (no events declared) and `no_grounded_content` (events dropped by the gates) differ,
+      // but both are an honest "not here" that passes to the next candidate.
       config.summaryEnabled = true;
       config.projectSummaryProvider = 'ollama';
       const calls = stubModel(t, [
@@ -2427,9 +2372,8 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('stops the timeline chain at three documents and keeps the last reason', async () => {
-    // Four candidates are filed and the French copy of the report is the last of them. The cap is
-    // what keeps a project whose documents hold no chronology from spending four full reads to
-    // find that out.
+    // Four candidates are filed, the French copy last. The cap stops a project with no chronology
+    // from spending four full reads to find that out.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const ungrounded = JSON.stringify({
@@ -2702,9 +2646,8 @@ test('federal decision picker', async (t) => {
 
 test('key document pickers', async (t) => {
   await t.test('prefers the project\'s own report and application over an amendment\'s', () => {
-    // Site C files an assessment report and an application for each amendment, and they are newer
-    // than the originals. Picked by date alone, the timeline covers one amendment rather than the
-    // project's own assessment.
+    // Each amendment files its own, newer assessment report and application; picked by date alone,
+    // the timeline would cover one amendment instead of the project's own assessment.
     const roles = buildFacts([
       { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-01-15',
         displayName: 'Site C Clean Energy Project Assessment Report' },
@@ -2721,10 +2664,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('drops the role rather than link an amendment\'s report when every match is one', () => {
-    // A registry holding only amendments' reports holds none of the project's own: Site C's actual
-    // newest "assessment report" is "85th Ave Hauling Plan - The EAO's Amendment Assessment Report",
-    // an amendment's paperwork, and linking it beside prose drawn from the certificate would name a
-    // document the timeline was never built from.
+    // Amendment reports are not the project's own; linking one beside prose drawn from the
+    // certificate would name a document the timeline was never built from.
     const roles = buildFacts([
       { id: 'docAR2', type: 'Assessment Report', datePosted: '2019-06-02',
         displayName: 'Assessment Report for Amendment #3' },
@@ -2769,9 +2710,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('trusts a typed assessment report over a dated or appended title', () => {
-    // Site C's own report is "EAO Assessment Report - Site C Clean Energy Project - dated October
-    // 14, 2014": the registry type is trusted ahead of the derivative reject, which exists for
-    // titles ABOUT a report, not a typed report's own date or appendix suffix.
+    // The registry type is trusted ahead of the derivative reject, which is for titles ABOUT a
+    // report, not a typed report's own date or appendix suffix.
     const dated = { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-10-14',
       displayName: 'EAO Assessment Report - Site C Clean Energy Project - dated October 14, 2014' };
     const appended = { id: 'docAR2', type: 'Assessment Report', datePosted: '2014-10-14',
@@ -2781,9 +2721,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('trusts a typed assessment report even over a genuine derivative word', () => {
-    // The type gate must run BEFORE the derivative reject, not merely avoid the words the reject
-    // no longer carries: a typed report titled with a real derivative word (an addendum to the
-    // report itself, not a comment ABOUT it) still keeps its role.
+    // The type gate runs BEFORE the derivative reject: a typed report titled with a real derivative
+    // word (an addendum to the report itself) still keeps its role.
     const withAddendum = { id: 'docAR3', type: 'Assessment Report', datePosted: '2014-10-14',
       displayName: 'Assessment Report Addendum' };
     assert.strictEqual(PICK.assessmentReport([withAddendum]).id, 'docAR3');
@@ -2814,9 +2753,7 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('does not read a memo about the EIS as the application', () => {
-    // Site C's application picker returned "Technical Memo - Response to Working Group and Public
-    // Comments on the Site C Clean Energy Project ECT Environmental Impact Statement - dated May 8,
-    // 2013 - Agriculture": it names the EIS to say what it is ABOUT, never itself.
+    // A memo that names the EIS says what it is ABOUT; it is never the application itself.
     const memo = { id: 'docM', type: 'Scientific Memo', datePosted: '2013-06-06',
       displayName: 'Technical Memo - Response to Working Group and Public Comments on the Site C ' +
         'Clean Energy Project ECT Environmental Impact Statement - dated May 8, 2013 - Agriculture' };
@@ -2832,9 +2769,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('still rejects the EIS phrase mid-sentence in a derivative title', () => {
-    // A long prefix widens what counts as the project's own name, not what counts as the
-    // application: a memo that only mentions the EIS is rejected by the derivative check first,
-    // whatever comes before it.
+    // A long prefix widens the project's own name, not the application: the derivative check rejects
+    // a memo that only mentions the EIS first.
     const memo = { id: 'docM2', type: 'Scientific Memo', datePosted: '2013-06-06',
       displayName: 'Technical Memo - Response to Comments on the Environmental Impact Statement' };
     assert.strictEqual(PICK.application([memo]), null);
@@ -2905,9 +2841,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('flags the English-marker forms the registry files a French copy under', () => {
-    // Tilbury Marine Jetty's French documents are titled in English: "(French)", a trailing
-    // "- French", and "French version". Missed, the newest of them won the assessment report role
-    // and the timeline was read from a translated executive summary.
+    // French documents are often titled in English: "(French)", a trailing "- French", "French
+    // version". Missed, a translated summary would win the assessment report role.
     assert.strictEqual(isFrenchTitle({
       displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty' }), true);
     assert.strictEqual(isFrenchTitle({
@@ -2960,9 +2895,8 @@ test('key document pickers', async (t) => {
   });
 
   await t.test('links the assessment report the sections were written from', () => {
-    // The picker runs over the documents that HAVE text to choose a source and over the whole
-    // registry for the link, so a newer unextracted report would name one document on the page
-    // beside prose drawn from another.
+    // The source is picked from documents that HAVE text and the link from the whole registry, so a
+    // newer unextracted report would name one document beside prose from another.
     const withText = { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-01-15',
       displayName: 'Assessment Report', contentExtracted: true };
     const withoutText = { id: 'docAR9', type: 'Assessment Report', datePosted: '2021-04-04',

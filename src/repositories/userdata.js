@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Per-user data, Cosmos NoSQL. Partitioned by `/userId` (the owner's IDIR username), id is
- * `<type>:<key>` — so every read and write is single-partition and a new stored type is a new id
- * prefix rather than a new container.
+ * Partitioned by `/userId` (IDIR username), id `<type>:<key>`, so a new stored type is a new id
+ * prefix, not a new container.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -36,9 +35,8 @@ async function countByType(userId, type) {
 }
 
 /**
- * Upsert. `userId` is stamped here from the caller's argument, so a record body can never carry
- * its own owner. Null (no container configured) is thrown so an unsaved row never looks stored —
- * same fail-soft as `links.create`.
+ * `userId` comes from the argument, so a record body never carries its own owner. Throws when no
+ * container is configured, so an unsaved row never looks stored.
  */
 async function put(userId, record) {
   const saved = await cosmos.upsert(CONTAINER, { ...record, userId: String(userId) });

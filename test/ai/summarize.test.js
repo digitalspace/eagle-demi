@@ -25,10 +25,8 @@ test('summarize', async (t) => {
   });
 
   await t.test('never calls the model when there is nothing to summarise', async () => {
-    // The grounding guarantee, and the reason the nonsense-term probe discriminates. If this
-    // returned prose it would be answering from model knowledge rather than from the corpus.
-    // `summaryEnabled` is deliberately ON here so the empty check is what short-circuits, not the
-    // feature flag — otherwise this test would pass for the wrong reason.
+    // The grounding guarantee. `summaryEnabled` is ON so the empty check short-circuits, not the
+    // feature flag.
     config.summaryEnabled = true;
 
     for (const input of [[], null, undefined]) {
@@ -94,10 +92,8 @@ test('buildPrompt', async (t) => {
   });
 
   await t.test('summarize reads no project or document field', () => {
-    // The controller hands this module chunks and nothing else. A row carrying a document's and a
-    // project's fields beside the chunk keys goes through a recording proxy, so a future edit that
-    // reads `displayName`, `s3Key` or a project name off it fails here rather than shipping the
-    // field to the model.
+    // A recording proxy over a row with document and project fields beside the chunk keys: reading
+    // `displayName`, `s3Key` or a project name off it fails here instead of reaching the model.
     const CHUNK_KEYS = ['chunkId', 'documentId', 'projectId', 'pageNumber', 'content'];
     const reads = [];
     const decorated = {
@@ -172,11 +168,8 @@ test('parseCitations', async (t) => {
 
 test('estimateCostCad', async (t) => {
   await t.test('prices the measured dev query against the configured rates', () => {
-    // 2,835 prompt / 124 completion tokens, measured on dev 2026-08-05. Pinned because the rates
-    // in config are model-, sku- AND currency-specific: they carried 4o-mini USD values against a
-    // gpt-4.1-mini deployment and understated every query by 3.2x, and nothing else in the suite
-    // would notice. The band is what makes this test able to fail — asserting only that the result
-    // equals the formula would pass against any rates at all, including the wrong ones.
+    // Token counts from a measured dev query. Config rates are model-, sku- and currency-specific;
+    // the band catches wrong rates, which a formula-only assertion would pass.
     const cad = estimateCostCad({ prompt_tokens: 2835, completion_tokens: 124 });
     const expected = (2835 / 1e6) * config.summaryCostPerMTokIn
                    + (124 / 1e6) * config.summaryCostPerMTokOut;
