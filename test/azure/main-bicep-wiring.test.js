@@ -27,34 +27,28 @@ const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-searc
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
-// The availability probe has two ways to be green through a real outage, and `az bicep build`
-// catches neither — it is a URL string either way. Both are text-structural, with the same honest
-// limits as the guards above.
+// Two ways for the probe to stay green through a real outage; `az bicep build` sees a URL string
+// either way.
 test('the prod availability probe goes through rproxy and reaches AI Search', () => {
   const match = /^param availabilityUrl = '([^']+)'$/m.exec(PROD_PARAMS);
   assert.ok(match, 'prod must set availabilityUrl, or the module gate deploys no test at all');
   const url = new URL(match[1]);
 
-  // rproxy resolves the Front Door address ONCE at config load, so a moved edge breaks the public
-  // path while demi-api-fc-prod.azurewebsites.net keeps answering. Probing the app directly would
-  // stay green through exactly the outage this test exists to catch (TODO 4.6).
+  // A broken edge leaves the app hostname answering, so a probe aimed at the app stays green
+  // through the outage this test exists to catch.
   assert.strictEqual(url.hostname, 'projects.eao.gov.bc.ca',
     'the probe must take the public path visitors take, not the app hostname behind it');
   assert.ok(url.pathname.startsWith('/demi-search/'),
     'that public path is what rproxy routes to demi-api-fc-prod');
 
-  // `hasCriteria` is FALSE for a bare project list, and src/controllers/search.js then answers it
-  // from Cosmos — an AI Search outage would not move a `dataset=Project&pageSize=1` probe. Every
-  // document read goes to the index, so this is the parameter that makes the probe meaningful.
+  // A bare project list has no criteria, so src/controllers/search.js answers it from Cosmos and an
+  // AI Search outage would not move it. Every document read goes to the index.
   assert.strictEqual(url.searchParams.get('dataset'), 'Document',
     'only a document read is guaranteed to reach aiSearch.searchDocuments');
 });
 
-// The prod parameters turn features OFF through switches, and every one of them has the same blind
-// spot: delete the line that wires it and `az bicep build` still exits 0 with only a
-// `no-unused-params` warning, so the param file reads one thing and the deployment does another —
-// silently reverting to the module default, which is ON in every case.
-// Text-structural, with the same honest limits as the guard below.
+// Delete a wiring line and `az bicep build` only warns `no-unused-params`; the deploy then falls
+// back to the module default, which is ON in every case.
 const WIRED = [
   ['deployEnrichment', /^\s+deployEnrichment: deployEnrichment$/m,
     'the cosmos module call — without it prod declares the wildfires container'],
@@ -124,9 +118,7 @@ const WIRED = [
   // it is an environment that looks configured and writes its audit rows to the old table anyway.
   ['analyticsBackendUrl', /^\s+analyticsBackendUrl: analyticsBackendUrl$/m,
     'the apim module call — without it no param file can publish the /analytics API'],
-  // The two analytics header VALUES are no longer parameters — they are vault secrets APIM reads
-  // by identifier, asserted below. What stays a parameter is the list of optional names and the
-  // sync's namespaces.
+  // The analytics header values are vault secrets APIM reads by identifier, asserted below.
   ['optionalSecretNames', /^\s+optionalSecretNames: optionalSecretNames$/m,
     'the key-vault module call — without it no environment can declare the optional secrets it ' +
     'holds, and every optional app setting reads empty'],
@@ -163,11 +155,8 @@ for (const [name, wiring, why] of WIRED) {
   });
 }
 
-// The devbox module's own parameters, which the WIRED entry above cannot cover: four of the six are
-// module outputs and expressions rather than main.bicep params, so `^param <name>` does not apply.
-// Every one is baked into demi-run at deploy time, and a blanked value is not a failed deploy — it
-// is a VM whose scripts warn and no-op (an unset COSMOS_ENDPOINT returns a null container) or delete
-// from Cosmos while silently skipping the index. `az bicep build` compiles all of them.
+// Most of these are expressions, not params, so WIRED cannot cover them. A blanked one deploys a VM
+// whose scripts no-op, or delete from Cosmos while skipping the index.
 test('the devbox is fed the same endpoints the API app gets', () => {
   const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/devbox.bicep'"));
   assert.ok(block, 'main.bicep must call the devbox module');
@@ -189,9 +178,8 @@ test('the devbox is fed the same endpoints the API app gets', () => {
   }
 });
 
-// The landing-zone identity is deliberately absent: listing it needs assign/action on an identity in
-// a management subscription this deployer cannot see, so an apply would fail LinkedAuthorizationFailed.
-// Policy Deploy-VM-Monitoring re-attaches it after every write, so the template only carries our own.
+// Listing the landing-zone identity fails LinkedAuthorizationFailed for this deployer, and policy
+// Deploy-VM-Monitoring re-attaches it after every write anyway.
 test('the devbox lists only the identity we own', () => {
   const identityBlock = /identity: \{[\s\S]*?\n {2}\}\n/.exec(DEVBOX_MODULE);
   assert.ok(identityBlock, 'devbox.bicep must declare an identity block');
@@ -217,9 +205,8 @@ test('the devbox lists only the identity we own', () => {
     'the os disk size must come from the image, not from the template');
 });
 
-// customData is immutable once the VM exists, and it is base64(cloudInit) — a comment edit inside the
-// template is a property change to Microsoft.Compute, which is how #325 broke the prod apply. This
-// pins the text so an edit fails here instead of half way through a deploy.
+// customData is immutable once the VM exists, so even a comment edit inside the template fails the
+// apply. Pinned so the edit fails here instead.
 test('the devbox cloud-init text is frozen', () => {
   const block = /var cloudInitTemplate = '''\n([\s\S]*?)\n'''\n/.exec(DEVBOX_MODULE);
   assert.ok(block, 'devbox.bicep must declare cloudInitTemplate as a multi-line string');
@@ -231,11 +218,8 @@ test('the devbox cloud-init text is frozen', () => {
     + 'bicep // comment outside the string, or recreate the VM and repin this hash.');
 });
 
-// That pin is not enough on its own: customData is base64(cloudInit), not of the template, so the
-// deployed text also moves when a substituted value or the substitution chain moves — changing
-// `param adminUsername string = 'demi'` or dropping one replace() leaves the template byte-identical
-// and still ships different customData. The span covers every param declared between that default
-// and the end of the chain, because each one is a module-local default that feeds the same string.
+// customData also moves when a substituted default or a replace() in the chain changes, with the
+// template byte-identical. The span covers every param feeding that chain.
 test('the devbox cloud-init inputs are frozen', () => {
   const span = /^param adminUsername string[\s\S]*?^var cloudInit = replace\([\s\S]*?^\)$/m
     .exec(DEVBOX_MODULE);
@@ -294,9 +278,8 @@ test('the devbox Entra SSH extension and login role render only when enabled', (
   }
 });
 
-// The two new params must sit BELOW the substitution chain the test above pins. Declared between
-// `param adminUsername` and `var cloudInit = replace(`, they land inside that span, its hash moves,
-// and the frozen-inputs test fails for a reason that has nothing to do with cloud-init.
+// Declared inside the pinned span, these params would move its hash and fail the frozen-inputs test
+// for a reason unrelated to cloud-init.
 test('the Entra SSH params stay outside the frozen cloud-init span', () => {
   const chainEnd = DEVBOX_MODULE.indexOf('\nvar cloudInit = replace(');
   assert.ok(chainEnd > 0, 'devbox.bicep must build cloudInit through a replace() chain');
@@ -347,8 +330,8 @@ test('every vault mails the action group when a secret nears expiry', () => {
     'secret-sync.bicep looks up a topic name key-vault.bicep does not create');
 });
 
-// Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
-// default is Enabled, so every apply proposes switching the deprecated portal back on.
+// Both live gateways run it Disabled. Omitted, the API version's default is Enabled, so every apply
+// proposes switching the deprecated portal back on.
 test('the gateway pins the legacy developer portal off', () => {
   assert.match(APIM_MODULE, /^\s+legacyPortalStatus: 'Disabled'$/m,
     'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
@@ -363,9 +346,8 @@ test('the test param file admits the admin console and the test agent, and no on
   assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-test']);
 });
 
-// src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
-// deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
-// but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.
+// src/config.js throws on an empty allowlist in test and prod, so the app boot-loops. A
+// `param allowedClients = ''` line satisfies the compiler.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   test(`the ${envName} param file sets a non-empty allowlist`, () => {
     const match = /^param allowedClients = '([^']+)'$/m.exec(params);
@@ -375,7 +357,7 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
 }
 
 // A value the realm does not put in `aud` rejects every caller, so a realm ships '' until its
-// client carries the demi-api audience mapper. Test and prod both have it (2026-10-16).
+// client carries the demi-api audience mapper. Test and prod both have it.
 const EXPECTED_SSO_AUDIENCE = [['test', TEST_PARAMS, 'demi-api'], ['prod', PROD_PARAMS, 'demi-api']];
 for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
   test(`the ${envName} param file sets ssoAudience to '${expected}'`, () => {
@@ -394,9 +376,8 @@ test('the prod param file admits the admin console and the prod agent, and no on
   assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-prod']);
 });
 
-// The Track sync's five plain settings. Every one is a whole-collection-PUT app setting, so a
-// param file that omits one takes main.bicep's empty default and the live value is deleted on the
-// next deploy — `az bicep build` says nothing, because an empty default compiles.
+// Whole-collection-PUT app settings: a param file that omits one takes the empty default, and the
+// live value is deleted on the next deploy.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule',
     'syncProjectsSchedule']) {
@@ -432,10 +413,8 @@ test('the API app carries both Track sync schedules from their params', () => {
   }
 });
 
-// The four plain eagle-analytics settings. Empty is the correct value until that estate exists, but
-// the LINE has to be there: these are whole-collection-PUT app settings, so a param file that stops
-// naming one takes main.bicep's empty default and a live value is deleted on the next deploy —
-// silently repointing audit rows back at the old table. `az bicep build` says nothing either way.
+// Empty is a valid value, but the line must exist: an omitted one takes the empty default on the
+// next deploy and silently repoints audit rows back at the old table.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   for (const name of ['analyticsBackendUrl', 'analyticsDcrEndpoint', 'analyticsDcrImmutableId',
     'analyticsWorkspaceCustomerId']) {
@@ -446,10 +425,8 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   }
 }
 
-// The audit stream has to travel with the DCR it is sent to. Each rule declares one of the two
-// tables and rejects the other, so a deploy that takes the endpoint from one side and the stream
-// name from the other loses every audit row to a 400 the app can only log. Nothing in
-// `az bicep build` or a what-if diff pairs them; both branches were mutable with the suite green.
+// Each DCR accepts one of the two tables, so an endpoint and stream name from different sides lose
+// every audit row to a 400 the app can only log.
 test('the audit stream name is decided by the same gate as the audit DCR endpoint', () => {
   const setting = (name) => new RegExp(`name: '${name}'\\n\\s+value: ([^\\n]+)`).exec(API_MODULE);
 
@@ -474,10 +451,8 @@ test('the audit stream name is decided by the same gate as the audit DCR endpoin
     'a half-set pair must read as OFF, not as a rule with no id');
 });
 
-// Which analytics routes need a subscription key. A browser cannot hold one, so moving a read route
-// under the keyed API breaks the DEMI admin screens with a 401 the gateway issues before any policy
-// runs — and moving `/audit` the other way opens a write path to anyone. `az bicep build` compiles
-// both arrangements. Text-structural, with the same honest limits as the guards above.
+// A browser cannot hold a key, so a keyed read route 401s the admin screens, and an anonymous
+// `/audit` opens a write path to anyone.
 test('the analytics read routes are anonymous and only /audit takes a key', () => {
   const blocks = APIM_MODULE.split(/^resource /m);
   const block = (name) => blocks.find((b) => b.startsWith(`${name} `));
@@ -546,9 +521,8 @@ test('the analytics read routes allow the admin origins and the Authorization he
     'declared but unwired means every browser request is refused at the gateway');
 });
 
-// The shape of the trusted-proxy list, which nothing else guards: a typo passes lint,
-// `az bicep build-params` and the whole suite, and only surfaces as a config.js throw when the app
-// next starts. Fed through the real validator rather than a copy of its regex.
+// A typo here passes lint and `az bicep build-params`, and only throws in config.js at the next app
+// start. Fed through the real validator, not a copy of its regex.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   test(`the ${envName} param file's trustedProxyIps is a value the app can boot on`, () => {
     const match = /^param trustedProxyIps = '([^']*)'$/m.exec(params);
@@ -570,9 +544,8 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// deploySearch=false means ai-search.bicep never runs, so the ONE thing that gives the indexer a
-// route to a publicNetworkAccess: Disabled Cosmos account has to come from search-existing.bicep
-// instead. Missing, the deployment succeeds and every indexer then fails with a connection error.
+// With deploySearch=false only search-existing.bicep gives the indexer a route to the private
+// Cosmos account. Missing, the deploy succeeds and every indexer fails to connect.
 test('the not-ours search path still creates the shared private link to Cosmos', () => {
   assert.match(SEARCH_EXISTING, /sharedPrivateLinkResources@/,
     'search-existing.bicep must declare the shared private link');
@@ -585,13 +558,8 @@ test('the not-ours search path still creates the shared private link to Cosmos',
     'without cosmosAccountId the module\'s own !empty() gate skips the link silently');
 });
 
-// `deployEnrichment` decides ONE container. Prod skips `wildfires` and keeps `boundaries`, which is
-// reference data `GET /boundaries` and `GET /db/stats` read unconditionally — gate it too and prod
-// answers those from a container that does not exist. Nothing else in the suite reads this module,
-// so both halves of the switch were mutable with the whole suite staying green.
-//
-// Text-structural, same honest limits as the guards above: it fails on the gate moving and proves
-// nothing about what Azure applied.
+// `GET /boundaries` and `GET /db/stats` read `boundaries` unconditionally, so gating it too would
+// leave prod reading a container that does not exist.
 test('deployEnrichment gates the wildfires container and only that one', () => {
   const container = (name) => COSMOS_MODULE
     .split(/^resource /m)
@@ -609,12 +577,8 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
     'boundaries must NOT be gated — every environment serves it, empty in prod');
 });
 
-// eagle-notify is two settings and the key is OPTIONAL, which is a shape three files have to agree
-// on: a vault that was never given the secret must produce no URI, an empty URI must leave the app
-// setting empty rather than pointing at nothing, and an environment that names a host must name the
-// secret. Break any one and either the app setting carries an unresolvable
-// `@Microsoft.KeyVault(...)` literal, or a test environment goes dark while looking configured.
-// `az bicep build` says nothing about either.
+// Three files must agree: no secret gives no URI, and no URI gives an empty setting. Otherwise the
+// setting holds an unresolvable `@Microsoft.KeyVault(...)` literal.
 test('the eagle-notify key is optional in the vault and empty where it was never set', () => {
   assert.match(KEY_VAULT,
     /^output notifyApiKeySecretUri string = contains\(optionalSecretNames, 'notify-api-key'\) \? '\$\{secretUriBase\}notify-api-key' : ''$/m,
@@ -632,9 +596,8 @@ test('the eagle-notify key is optional in the vault and empty where it was never
     'the key must not be a parameter again — a parameter is a value in ARM deployment history');
 });
 
-// The host and the secret name are set in the same file and mean nothing apart: a named host with
-// no secret is an environment that looks configured and pushes nothing, and a named secret with no
-// host is a credential nobody reads.
+// A host with no secret looks configured and pushes nothing; a secret with no host is a credential
+// nobody reads.
 test('test names both the eagle-notify host and its vault secret', () => {
   const base = /^param notifyApiBase = '([^']*)'$/m.exec(TEST_PARAMS);
   assert.ok(base, 'test must state notifyApiBase');
@@ -724,9 +687,8 @@ test('test runs no reconcile and no drift alert while eagleApiBase is eagle-test
     `test schedules a reconcile against ${base}`);
 });
 
-// The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
-// refuses every PDF title lease when either is empty. Both settings must always be written, so an
-// environment with no backup reads empty rather than keeping a stale value.
+// src/helpers/backup-check.js refuses every PDF title lease when either is empty. Always written, so
+// an environment with no backup reads empty, not a stale value.
 test('the API app always carries BACKUP_ACCOUNT and BACKUP_CONTAINER from its params', () => {
   assert.match(API_MODULE, /^param backupAccountName string = ''$/m,
     'the module default must be empty, which keeps the gate closed');
@@ -774,16 +736,13 @@ test('update reader links reach the app setting and are on only where the link b
     'projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
 });
 
-// Two params, one feature, and each is useless alone: the schedule is what writes the drift line,
-// the bool is what watches for it. An environment with the alert and no run has an alarm that can
-// never fire; one with the run and no alert writes a line nobody reads. Nothing in `az bicep build`
-// or in a what-if diff would say either.
+// Each is useless alone: an alert with no run can never fire, and a run with no alert writes a line
+// nobody reads.
 test('prod runs the nightly reconcile and alerts on its drift', () => {
   const cron = /^param reconcileSchedule = '([^']+)'$/m.exec(PROD_PARAMS);
   assert.ok(cron, 'prod must set reconcileSchedule, or no timer is registered at all');
-  // SIX fields. NCRONTAB leads with seconds, and a five-field crontab pasted in here is accepted
-  // by bicep, deployed, and then read by the host as `minute hour day month weekday` shifted one
-  // place — `0 9 * * *` is 09:00 every minute of the hour, not once a day.
+  // NCRONTAB leads with seconds, so a five-field crontab deploys shifted one place: `0 9 * * *`
+  // fires every minute of hour 9, not once a day.
   assert.strictEqual(cron[1].trim().split(/\s+/).length, 6,
     `${cron[1]} is not NCRONTAB — six fields, seconds first`);
   assert.match(cron[1], /^0 0 ([01]?\d|2[0-3]) \* \* \*$/,
@@ -792,11 +751,8 @@ test('prod runs the nightly reconcile and alerts on its drift', () => {
     'the run without the alert is a log line nobody reads');
 });
 
-// The alert reads a number out of a log line this repo formats. Both halves are strings in
-// different languages in different files, and every way of getting it wrong is silent: `traces` is
-// the classic-schema table name and does not exist in a workspace-based component, `has` tokenises
-// on brackets, and any change to summaryLine's wording stops the match. The rule would keep
-// evaluating and keep finding nothing, which reads exactly like no drift.
+// Every mismatch is silent: `traces` does not exist in a workspace-based component, `has` tokenises
+// on brackets, and a summaryLine wording change stops the match. Finding nothing reads as no drift.
 test('the drift alert query matches the line the reconcile actually logs', () => {
   const block = OBSERVABILITY
     .split(/^resource /m)
@@ -892,10 +848,8 @@ for (const { name, param, lineOf, fatal, span, why } of [
   });
 }
 
-// ADMIN_API_KEY is the break-glass credential. As a plain app setting its value sat in the template
-// parameters and in ARM deployment history; a revert to that is invisible to `az bicep build` and to
-// a what-if diff, which masks @secure() values on both sides. Text-structural, same honest limits as
-// the guards above.
+// A plain app setting puts the break-glass key in template parameters and ARM history, and neither
+// `az bicep build` nor what-if, which masks @secure() on both sides, shows the revert.
 test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
   const setting = API_MODULE
     .split(/^\s+\{$/m)
@@ -912,9 +866,8 @@ test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
     'and the vault module must be instantiated');
 });
 
-// Without the grant the reference resolves to nothing, App Service leaves the literal
-// `@Microsoft.KeyVault(...)` string in the setting, and every admin call 401s against a credential
-// that looks configured. `az bicep build` exits 0 with the assignment deleted.
+// Without the grant the setting keeps the literal `@Microsoft.KeyVault(...)` string, and every admin
+// call 401s against a credential that looks configured.
 test('the app identity is granted Key Vault Secrets User', () => {
   assert.match(KEY_VAULT, /'4633458b-17de-408a-b874-0445c86b69e6'/,
     'Key Vault Secrets User is the role that reads secret VALUES; no other built-in role does');
@@ -929,9 +882,7 @@ test('the app identity is granted Key Vault Secrets User', () => {
     'the app must resolve references as the identity that holds the grant');
 });
 
-// The team sync's two credentials, same reasoning as ADMIN_API_KEY above: as plain app settings
-// their values would sit in the template parameters and in ARM deployment history, and a revert to
-// that is invisible to both `az bicep build` and a what-if diff.
+// Same reason as ADMIN_API_KEY above.
 test('the API app reads both team-sync secrets through Key Vault references', () => {
   const cases = [
     ['TRACK_CLIENT_SECRET', 'trackClientSecret', 'track-client-secret'],
@@ -962,11 +913,8 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
   }
 });
 
-// The edge secret is what makes the app believe X-Azure-SocketIP, and it is optional in the same
-// three-file shape the notify key is: an empty value writes no Key Vault secret, an empty URI
-// leaves the app setting empty, and the deploy script sources it without demanding it. Delete the
-// app-setting block or rename the variable and `az bicep build` still exits 0 — the app would then
-// silently key every Front Door visitor on one shared anonymous quota row.
+// The edge secret makes the app believe X-Azure-SocketIP. Lose the setting and every Front Door
+// visitor silently shares one anonymous quota row.
 test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
   const setting = API_MODULE
     .split(/^\s+\{$/m)
@@ -989,9 +937,8 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
     'an environment that did not name the secret must get an empty URI, and the URI must be the ' +
     'VERSIONLESS one, so a rotation is a new secret version plus a recycle');
 
-  // Both environments have a Front Door in front of them, so both must name the secret. Dropping
-  // the name from either param file blanks EDGE_SECRET on the next infrastructure deploy, and the
-  // app stops trusting the edge's forwarded caller address.
+  // Both environments sit behind Front Door; dropping the name blanks EDGE_SECRET on the next
+  // infrastructure deploy.
   assert.match(TEST_PARAMS, /^\s+'edge-secret'$/m,
     'test sits behind eagle-edge-test, so an unnamed edge-secret puts every visitor arriving ' +
     'through Front Door on one shared anonymous quota key');
@@ -1004,10 +951,8 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
     'script checks names only');
 });
 
-// The object-store pair and the extraction host key, the three credentials that used to arrive as
-// @secure() parameters and land in app settings verbatim. A revert is invisible twice over: `az
-// bicep build` compiles a plain value, and what-if masks a @secure() one in BOTH before and after,
-// so a deploy that blanked a live credential renders as no change at all.
+// As @secure() parameters these could be blanked by a deploy that what-if shows as no change, since
+// it masks both sides.
 const VAULT_SETTINGS = [
   ['MINIO_ACCESS_KEY', 'minioAccessKeySecretUri', 'minio-access-key'],
   ['MINIO_SECRET_KEY', 'minioSecretKeySecretUri', 'minio-secret-key'],
@@ -1034,10 +979,8 @@ for (const [settingName, paramName, secretName] of VAULT_SETTINGS) {
   });
 }
 
-// The single statement that makes the whole estate safe: with no @secure() parameter left, there is
-// no credential a deploy can carry, and therefore none it can blank. Every one is set by hand in the
-// vault and read by reference. A re-added parameter compiles, deploys, and reads as no change in
-// what-if — which is exactly the failure this change exists to remove.
+// With no @secure() parameter, a deploy carries no credential and so cannot blank one. A re-added
+// one compiles, deploys, and reads as no change in what-if.
 test('main.bicep carries no credential values at all', () => {
   assert.doesNotMatch(MAIN, /^@secure\(\)$/m,
     'a @secure() parameter is a credential in the deployment inputs and in ARM history — the vault ' +
@@ -1052,10 +995,8 @@ test('main.bicep carries no credential values at all', () => {
     'deploy instead of a recycle');
 });
 
-// The sync app is what copies vault secrets into OpenShift, and every part of its gate matters: the
-// environment has to ask for it, it needs the namespaces it owns, and it needs a subnet to reach the
-// vault's private endpoint from. Deployed with an empty namespace list it runs and writes nowhere;
-// `az bicep build` compiles that.
+// Every part of the gate matters: with an empty namespace list the sync app runs and writes
+// nowhere, and without the subnet it cannot reach the vault.
 test('the secret sync is deployed only where it is asked for and namespaces are named', () => {
   const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/secret-sync.bicep'"));
   assert.ok(block, 'main.bicep must call the secret-sync module');
@@ -1080,9 +1021,6 @@ test('the secret sync is deployed only where it is asked for and namespaces are 
   assert.match(TEST_PARAMS, /^param syncNamespaces = '6cdc9e-dev,6cdc9e-test'$/m,
     'the nonprod vault serves both nonprod namespaces, and neither is prod');
 
-  // The output that names the sync app to the caller must gate on the exact same condition as the
-  // module itself — a looser output would report an app name for an environment the module never
-  // deployed.
   assert.match(MAIN, /^output secretSyncAppName string = \(deploySecretSync && /m,
     'the output must gate on deploySecretSync too, or a caller reads a sync app name for an ' +
     'environment that asked for none');
@@ -1204,10 +1142,8 @@ for (const [env, params, sub, rg, profile, host] of [
   });
 }
 
-// The access curtain's password, same shape as EDGE_SECRET above and the same reason for a
-// text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure is
-// silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404, so
-// an environment that means to be gated would serve the whole site to anyone who asked.
+// Fails open: an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404, so a gated
+// environment serves the whole site to anyone.
 test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () => {
   const setting = API_MODULE
     .split(/^\s+\{$/m)
@@ -1244,12 +1180,8 @@ test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () 
     'script checks names only');
 });
 
-// The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
-// that trust are text-structural: a plain-value app setting would put the secret in the template
-// and in ARM history, and a global policy that sets the two headers without deleting the client's
-// copies first would let anyone reach the app directly and assert any subscription they like — the
-// Function App host stays public, because Consumption APIM has no VNet. `az bicep build` exits 0
-// either way. Same honest limits as the guards above. APIM_MODULE is read at the top of this file.
+// The Function host is public (Consumption APIM has no VNet), so the policy must delete client
+// copies of the trust headers before setting them, or anyone can assert any subscription.
 
 test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () => {
   const setting = API_MODULE
@@ -1289,15 +1221,8 @@ test('the gateway strips client-supplied trust headers before setting its own', 
     'and the subscription name from APIM itself, which is the only party that verified the key');
 });
 
-// The analytics APIs get their own trust header, and the same ordering rule applies: a client copy
-// left in place would let anyone reach that Function's public host directly. DEMI's own gateway
-// secret has to come OFF, too — it proves nothing to another app's backend and would otherwise sit
-// in its request logs. `az bicep build` compiles every arrangement of these lines.
-//
-// The policies are composed from fragments, so the test resolves them the way apim.bicep does and
-// asserts on the finished XML — asserting on a fragment would pass a stamp that moved to the wrong
-// API. `analytics` is anonymous, so a client-sent X-Analytics-Audit reaching the backend there is
-// the whole attack; only `analytics-machine` may ever stamp one.
+// Resolved like apim.bicep does: a fragment-level assert would pass a stamp moved to the wrong API.
+// `analytics` is anonymous, so only `analytics-machine` may stamp X-Analytics-Audit.
 function analyticsPolicies() {
   const fragment = (name) => {
     const hit = new RegExp(`var ${name} = '''([\\s\\S]*?)'''`).exec(APIM_MODULE);
@@ -1379,10 +1304,8 @@ test('the analytics APIs strip every client-sent trust header before stamping th
     'a half-set trio must read as not deployed');
 });
 
-// The two header values APIM stamps are the same pair eagle-analytics reads, and the vault is the
-// one copy either side sees. A named value carrying a literal `value:` compiles just as well, puts
-// the secret in this repository's deploy inputs and in ARM history, and makes a rotation a redeploy
-// of two repositories instead of a new secret version.
+// A literal `value:` puts the secret in deploy inputs and ARM history, and turns a rotation into a
+// redeploy of two repositories instead of a new secret version.
 test('the analytics named values are Key Vault-backed, not literals', () => {
   const named = (name) => {
     const hit = APIM_MODULE.split(/^resource /m).find((b) => new RegExp(`\\n  name: '${name}'\\n`).test(b));
@@ -1420,8 +1343,7 @@ test('the analytics named values are Key Vault-backed, not literals', () => {
   assert.doesNotMatch(MAIN, /^param analyticsAuditHeaderValue /m,
     'the value must not be a parameter again');
 
-  // Required, not optional: both environments that deploy this vault publish the analytics API, and
-  // deploy-infra.sh only checks the names these lists carry. A gateway stamping an unresolved named
+  // Required: deploy-infra.sh checks only listed names, and a gateway stamping an unresolved named
   // value deploys clean and 401s everything it forwards.
   assert.match(KEY_VAULT, /^\s+'analytics-shared-header'$/m,
     'analytics-shared-header must be a required vault name');
@@ -1838,9 +1760,8 @@ test('every foundation lookup names what the owning module declares', () => {
   }
 });
 
-// The three optional secrets are the one place the two modes could legitimately disagree: the vault
-// module decides them from `optionalSecretNames`, and main.bicep has to make the same decision the
-// same way. A live reference where prod wants '' goes straight into the whole-collection PUT.
+// main.bicep must decide these exactly as the vault module does; a live reference where prod wants
+// '' goes straight into the whole-collection PUT.
 test('the optional secret URIs are decided identically in both modes', () => {
   const OPTIONAL = [
     ['notifyApiKeySecretUri', 'notify-api-key'],
@@ -1913,10 +1834,8 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// The currency check is the only thing standing between an application-only apply and a foundation
-// edit that is never PUT, so what it can SEE is the whole guard. `az` deploys the working tree;
-// git history is a different set of facts, and main.bicep plus the param files are foundation
-// inputs the module list does not name.
+// The only guard against an application-only apply skipping a foundation edit. `az` deploys the
+// working tree, and main.bicep plus the param files are foundation inputs too.
 test('the currency check reads the working tree, not just the commit history', () => {
   assert.match(DEPLOY, /dirty=\$\(git -C "\$REPO_ROOT" status --porcelain -- "\$\{FOUNDATION_MODULES\[@\]\}"/,
     'an uncommitted edit to a foundation module is as unapplied as a committed one — git log ' +

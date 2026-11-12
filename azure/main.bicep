@@ -1,27 +1,5 @@
-// Root Bicep orchestrator for the DEMI Azure environment.
-//
-// WHAT THIS FILE IS. A description of what is actually deployed in `c4b0a8-dev-rg`, verified
-// against the live resource group on 2026-08-04. It is not deployable today and is not deployed by
-// CI: `azure-deploy-dev.yaml`'s infra job was reduced to `az bicep build` on 2026-08-04, and there
-// is no federated credential for it to use in any case. Its job is to make the environment
-// REBUILDABLE and to make drift visible, which the previous version could not do — it deployed a
-// VNet, a Key Vault and a Static Web App, none of which exist here, and instantiated none of the
-// five modules that describe what does.
-//
-// THE NETWORK IS NOT OURS. There is no VNet in this resource group and there must not be. The
-// landing zone provides one in `c4b0a8-dev-networking` (`c4b0a8-dev-vwan-spoke`), and both the
-// private endpoints and the app's VNet integration point into its subnets. So subnet IDs are
-// PARAMETERS here.
-//
-// WHAT IS DELIBERATELY ABSENT.
-//   - Static Web App. The frontend is a Storage static website (module 8) fronted by the Front
-//     Door profile that lives in eagle-search.
-//   - Cosmos DB for MongoDB. Cut loose at Phase 8; nothing speaks Mongo.
-//   - Document storage. Phase 3b, written but never deployed — see `deployDocumentStorage`.
-//
-// NOT DESCRIBED HERE, because Azure creates them rather than us: the Log Analytics workspace
-// (`workspace-c4b0a8devrgYb8e`, Defender/diagnostics) and the Event Grid system topic on the API
-// storage account. Both exist in the group; neither is ours to declare.
+// Root template for one DEMI environment. Never deployed by CI. The VNet belongs to the landing
+// zone in another resource group, so no VNet is declared here and subnet ids are parameters.
 
 targetScope = 'resourceGroup'
 
@@ -36,11 +14,8 @@ param environmentName string = 'dev'
 @description('OpenShift MinIO Endpoint URL')
 param minioHost string = 'minio-6cdc9e-dev.apps.silver.devops.gov.bc.ca'
 
-// NO CREDENTIAL PARAMETERS. The object-store pair and the extraction host key used to arrive here
-// as @secure() values and land in app settings verbatim, which is how a deploy could blank a live
-// credential invisibly — what-if masks a @secure() value in BOTH before and after. They live in the
-// vault now as minio-access-key, minio-secret-key and docling-api-key, beside admin-api-key, and
-// the app resolves each by reference — see modules/key-vault.bicep.
+// No credential parameters: what-if masks a @secure() value before and after, so a deploy could
+// blank one unseen. Credentials live in the vault, read by reference; see modules/key-vault.bicep.
 
 @description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
 param eagleApiBase string
@@ -60,8 +35,7 @@ param updatesPublishDateFallback bool = true
 @description('NCRONTAB schedule for the scheduled-Update announce timer. Empty means every 5 minutes wherever notifyApiBase is set, and no timer where it is not.')
 param announceUpdatesSchedule string = ''
 
-// Bucket and prefix were previously set out of band, so every template deploy silently reset them
-// to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
+// Declared here so a template deploy cannot reset them to the module defaults.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
 param minioBucketName string = 'eagle-demi'
 
@@ -80,26 +54,16 @@ param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
-// Subnets in the landing zone's VNet, which lives in another resource group and is not managed
-// here. Empty values skip the private endpoints and VNet integration, which is only ever right for
-// a scratch deployment — in this landing zone public network access is denied by policy, so an
-// account without its private endpoint is unreachable rather than merely public.
+// Empty skips private endpoints and VNet integration, which only suits a scratch deploy: policy
+// denies public access here, so an account without its private endpoint is unreachable.
 @description('Existing landing-zone subnet for inbound private endpoints (c4b0a8-dev-networking).')
 param privateEndpointSubnetId string = ''
 
 @description('Object ID of a human principal granted read access to data planes. Empty grants none.')
 param readerPrincipalId string = ''
 
-// AN AFD ENDPOINT HOSTNAME IS NOT PREDICTABLE. It is `<name>-<hash>.<zone>.azurefd.net`, and Azure
-// assigns both the hash and the zone code — so this cannot be derived, only observed. Fill it in
-// from the eagle-search Front Door deployment's output, then redeploy this template.
-//
-// AN ARRAY, because during a cutover there are two. Publishing the new frontend while this named
-// only the old one left every API call from the new origin CORS-blocked — the app loaded, then
-// failed on /api/config and every /api/search. List both until the old one is decommissioned.
-//
-// Empty is the pre-Front-Door state and fails CLOSED rather than open: `CORS_ORIGIN` is then unset
-// on the API, and src/app.js falls back to an allowlist holding only http://localhost:4200.
+// An array because a cutover has two hosts: list both, or the new origin is CORS-blocked. Empty
+// fails closed: CORS_ORIGIN is unset and src/app.js allows only http://localhost:4200.
 @description('Frontend hostnames (no scheme) allowed as browser origins against the API. Filled in after the AFD deployment in eagle-search — the hostname carries a deploy-time hash and cannot be guessed.')
 param frontendHostNames array = []
 
@@ -164,14 +128,8 @@ param edgeLogWorkspaceId string = ''
 @description('Resource id of the eagle-edge `rulesdemidocs/banauto` rule. Empty skips every edgeBan tick.')
 param edgeBanRuleId string = ''
 
-// Which OPTIONAL secrets this environment's vault already holds. Values are set by hand on the
-// devbox, so this template cannot see whether one exists — naming it here is the statement that it
-// does, and an unnamed one leaves its app setting empty rather than pointing at nothing.
-// `edge-secret` unnamed means X-Edge-Secret is ignored and every visitor arriving through Front
-// Door shares its egress address as one anonymous quota key; `notify-api-key` unnamed leaves the
-// eagle-notify push dark; `access-gate-password` unnamed leaves POST /api/gate answering 404, which
-// is what prod runs. The flag the browser sees is the boolean ACCESS_GATE in the `public` config
-// document, not the secret, so the curtain's two halves are set in different places on purpose.
+// The template cannot see the vault, so naming a secret here states that it exists. An unnamed one
+// leaves its app setting empty rather than pointing at nothing.
 @description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key, edge-ban-policy.')
 param optionalSecretNames array = []
 
@@ -180,9 +138,8 @@ param optionalSecretNames array = []
 @description('OpenShift namespaces the secret sync owns, e.g. 6cdc9e-dev,6cdc9e-test. Empty deploys no sync app.')
 param syncNamespaces string = ''
 
-// False where the environment cannot reach the OpenShift API at all, so naming namespaces is not
-// enough on its own: the prod spoke has no route table and policy forbids creating one, so a prod
-// sync app would sit there failing every run.
+// False where OpenShift is unreachable: the prod spoke has no route table and policy forbids one,
+// so a prod sync app would fail every run.
 @description('Deploy the OpenShift secret sync app. False leaves that environment\'s OpenShift secrets to be set by hand.')
 param deploySecretSync bool = true
 
@@ -227,10 +184,8 @@ param pdfTitleSchedule string = '0 */10 * * * *'
 @description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
 param apiFlexSubnetId string = ''
 
-// Phase 3b. The module is written and the argument for it is per-environment isolation rather than
-// cost, but nothing is deployed and nothing is copied — and turning it on needs `Storage Blob
-// Delegator` on the identity or every download link fails to sign, which is NOT implied by
-// `Storage Blob Data Contributor`. Off, so that this file keeps describing what exists.
+// Turning this on also needs `Storage Blob Delegator` on the identity, which `Storage Blob Data
+// Contributor` does not imply; without it every download link fails to sign.
 @description('Deploy the Phase 3b document storage account. Off: dev still reads MinIO.')
 param deployDocumentStorage bool = false
 
@@ -244,17 +199,13 @@ param intakeCapGBPerMonth int = 5
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
 
-// Containers, not app behaviour: `enrichmentSources` above decides what the API publishes, this
-// decides whether the container behind it is declared at all. Prod publishes none.
-// `boundaries` is reference data and is declared everywhere — see cosmos-nosql.bicep.
+// Declares the container; `enrichmentSources` decides what the API publishes. `boundaries` is
+// reference data, declared everywhere; see cosmos-nosql.bicep.
 @description('Declare the Cosmos wildfires container.')
 param deployEnrichment bool = true
 
-// Prod's AI Search service was stood up ahead of the rest of the estate, from
-// azure/ai-search.prod.bicepparam, and it also serves eagle-search-api-prod. Re-PUTting it from
-// here would re-assert `semanticSearch` and the identity list against a live service this template
-// is not the owner of. False points the API at the existing endpoint instead and grants only the
-// one role the API needs on it.
+// Prod's search service is deployed from azure/ai-search.prod.bicepparam, not here; a re-PUT from
+// here would overwrite its `semanticSearch` and identity list.
 @description('Deploy the AI Search service. False consumes `existingSearchEndpoint` and grants Search Index Data Contributor on the service already standing.')
 param deploySearch bool = true
 
@@ -269,10 +220,8 @@ param existingSearchIndexerPrincipalId string = ''
 @description('Resource id of that same identity. Used only when `deploySearch` is false: a data source PUT names the identity by resource id, not principal.')
 param existingSearchIndexerIdentityId string = ''
 
-// The kill switch for the two id-only indexes, per environment. Empty answers those datasets from
-// Cosmos with CONTAINS; the index name turns keyword ranking on. It lives here rather than only in
-// the module because `appSettings` is a whole-collection PUT — a value set by hand on the app is
-// deleted by the next deploy, so the turn-on is an edit to `main.<env>.bicepparam`.
+// Set in `main.<env>.bicepparam`, never by hand: `appSettings` is a whole-collection PUT, so a
+// hand-set value dies on the next deploy.
 @description('Azure AI Search index holding recent activity. Empty falls back to Cosmos.')
 param searchIndexActivities string = ''
 
@@ -284,41 +233,26 @@ param searchIndexProjectNotifications string = ''
 @description('Deploy the Foundry account and model deployment. False leaves FOUNDRY_ENDPOINT empty, which is the same state summaryEnabled=false already produces.')
 param deployFoundry bool = true
 
-// The kill switch for the summariser, and the only one that costs nothing to leave on. The Foundry
-// account below bills PER TOKEN rather than per hour, so an idle deployment is free; what scales
-// with use is queries, and `GET /api/search/summary` is privileged-only for exactly that reason.
-// False leaves the account standing and makes the endpoint answer `{summary: null, reason:
-// 'disabled'}` — retrieval is untouched either way.
+// Foundry bills per token, so an idle account is free; `GET /api/search/summary` is privileged-only
+// to bound that cost. False makes it answer `{summary: null, reason: 'disabled'}`.
 @description('Turn the AI summariser on. The Foundry account is deployed regardless; this is the app-side switch.')
 param summaryEnabled bool = true
 
-// The Foundry private endpoint races its own account on every deploy. ARM PUTs the account, the
-// Cognitive Services RP leaves it in state `Accepted` while it reconciles, and the PE — which
-// depends on the account id — is then rejected with AccountProvisioningStateInvalid. It is
-// deterministic, not flaky: three consecutive runs failed identically on 2026-08-13.
-//
-// A Failed foundry module means `foundry.outputs.foundryEndpoint` never resolves, so
-// `deploy-api-function-flex` never runs at all — the failure is not safe to read past.
-//
-// So: false once the PE exists and is Approved, which reuses the module's existing
-// `if (!empty(peSubnetId))` gate to skip re-PUTting a resource that is already correct. Leave it
-// true for a fresh environment, where the PE has to be created and one failed run is the price.
+// The PE PUT always fails with AccountProvisioningStateInvalid while the account sits in `Accepted`.
+// Set false once the PE exists and is Approved; a fresh environment pays one failed run.
 @description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
 param deployFoundryPrivateEndpoint bool = true
 
-// The nightly Eagle drift report, a Functions timer trigger in the API app (api/index.js). Two
-// halves of one feature and both default off: the schedule is what makes the job run, the bool is
-// what makes the alert exist. Set both together — an alert with no run is silent, a run with no
-// alert is a log line nobody reads.
+// Nightly Eagle drift report (api/index.js). Set both this and the alert: an alert with no run is
+// silent, a run with no alert is a log line nobody reads.
 @description('NCRONTAB schedule for the Eagle reconcile timer, e.g. `0 0 9 * * *`. Empty runs it never.')
 param reconcileSchedule string = ''
 
 @description('Deploy the log alert that fires when that run reports drift.')
 param deployReconcileDriftAlert bool = false
 
-// The nightly Track team sync, a second Functions timer (api/index.js) that mints `project:<id>`
-// realm roles from Track's team-members endpoint. Four settings and a schedule, and the schedule
-// is the switch: empty registers no timer, which is where every environment starts.
+// Nightly Track team sync (api/index.js), which mints `project:<id>` realm roles from Track team
+// members. The schedule is the switch: empty registers no timer.
 @description('Base URL of the Track API the team sync reads, e.g. https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca. Empty runs no sync.')
 param trackApiBase string = ''
 
@@ -338,7 +272,7 @@ param worksRead bool = false
 param assessmentPass bool = false
 
 // The Track and role-sync client secrets are vault-only: `track-client-secret` and
-// `role-sync-client-secret`, resolved by reference. Neither is a parameter any more.
+// `role-sync-client-secret`, resolved by reference.
 @description('Keycloak client id of the realm-management service account the sync grants roles with.')
 param roleSyncClientId string = ''
 
@@ -348,18 +282,16 @@ param syncTeamsSchedule string = ''
 @description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty runs it never.')
 param syncProjectsSchedule string = ''
 
-// Bulk document download. Three switches and a set of caps; the switches default off, so an
-// environment gets the queue and the container without the feature running. The caps are the same
-// everywhere until measurement says otherwise — a .bicepparam sets one only to override it.
+// Bulk download. The switches default off, so an environment gets the queue and container without
+// the feature running. A .bicepparam sets a cap only to override it.
 @description('Storage queue the bulk-download worker triggers on, e.g. `bulk-downloads`. Empty runs no worker.')
 param bulkDownloadsQueue string = ''
 
 @description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty runs it never.')
 param bulkCleanupSchedule string = ''
 
-// Chunk parent-field re-stamping. Off by default like the switches above, and off means SKIPPED:
-// the inline walk it replaced is a local-development opt-in (CHUNK_RESTAMP_INLINE), not a fallback
-// a deployed environment can arrive at by losing a setting.
+// Off means skipped: the inline walk is a local-development opt-in (CHUNK_RESTAMP_INLINE), never a
+// fallback a deployed environment reaches by losing a setting.
 @description('Storage queue the chunk parent-field re-stamp worker triggers on, e.g. `chunk-restamp`. Empty skips the re-stamp and flags the document `parentFieldsPending` — it does NOT patch inline; repair with backfill-chunk-parent-fields.js --pending.')
 param chunkRestampQueue string = ''
 
@@ -421,9 +353,8 @@ param deployTrackDriftAlert bool = false
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
-// Serverless Cosmos in canadacentral lists at 0.3812 CAD per million RU (Azure retail prices API,
-// meter `1M RUs`, 2026-09-21). 3M RU/h is ~1.1 CAD an hour, ~27 a day. Test idles at a few hundred
-// RU an hour; a runaway ingest loop ran 4-8M. Each .bicepparam sets its own.
+// At 0.3812 CAD per million RU, 3M RU/h is about 27 CAD a day. Test idles at a few hundred RU an
+// hour; a runaway ingest loop ran 4-8M. Each .bicepparam sets its own.
 @description('Request units in one hour above which the Cosmos spend alert fires.')
 param cosmosRuPerHourAlert int = 3000000
 
@@ -463,9 +394,8 @@ param bulkMaxPerDay int = 20
 @description('Milliseconds a queued job may wait before the worker refuses it as too old to trust its access snapshot.')
 param bulkMaxJobAgeMs int = 7200000
 
-// THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
-// config load, so a probe aimed straight at the app stays green through a moved edge — the failure
-// this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
+// The public URL, not the app's own host: a probe aimed at the app stays green when the edge in
+// front of it breaks. Not composable, for the same reason as `frontendHostNames`.
 @description('Absolute URL the availability web test GETs. Empty deploys no test.')
 param availabilityUrl string = ''
 
@@ -474,21 +404,16 @@ param availabilityUrl string = ''
 @description('Deploy the API Management gateway. Requires apiFlexSubnetId, since it fronts that app.')
 param deployApim bool = false
 
-// eagle-analytics rides this gateway instead of paying a second Consumption instance's fixed cost.
-// Everything below is empty until that estate exists, and empty means the analytics API, its
-// products and the audit repoint are all skipped — so this template still deploys on its own.
+// eagle-analytics shares this gateway to avoid a second Consumption fixed cost. Empty values below
+// skip the analytics API, its products and the audit repoint.
 @description('Absolute base URL of analytics-api-fc-<env>, read from the eagle-analytics deployment `apiHostName` output. NEVER composed: a Function App host name can carry a regional suffix. Empty deploys no analytics API.')
 param analyticsBackendUrl string = ''
 
-// The two header values are not parameters either: APIM reads them from the vault as
-// `analytics-shared-header` and `analytics-audit-header`, which is the same pair eagle-analytics
-// reads as APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE.
+// APIM reads the header values from the vault as `analytics-shared-header` and
+// `analytics-audit-header`; eagle-analytics reads them as APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE.
 
-// The audit repoint. Privileged actions move to EagleAudit_CL in the eagle-analytics pipeline, which
-// is EPIC-wide; usage counters stay on DEMI's own DCR. Both empty keeps audit rows where they are.
-// The seven years of DemiAudit_CL rows already written are not migrated and not deleted — the
-// ingestion API overwrites a TimeGenerated older than two days, so they age out where they lie and
-// GET /admin/audit unions them.
+// Audit repoint: privileged actions go to EagleAudit_CL in eagle-analytics, usage stays on DEMI's
+// DCR. DemiAudit_CL rows are not migrated; they age out and GET /admin/audit unions both.
 @description('Logs Ingestion endpoint of analytics-dcr-<env>, from the eagle-analytics `eventsDcrEndpoint` output. Empty keeps audit rows on DEMI\'s own DCR.')
 param analyticsDcrEndpoint string = ''
 
@@ -498,16 +423,8 @@ param analyticsDcrImmutableId string = ''
 @description('Workspace GUID of analytics-logs-<env>, from the eagle-analytics `analyticsWorkspaceCustomerId` output. Empty keeps GET /admin/audit reading DemiAudit_CL alone.')
 param analyticsWorkspaceCustomerId string = ''
 
-// The browser origins the analytics read routes accept. Derived from frontendHostNames rather than
-// listed again: those hostnames carry a deploy-time AFD hash, and CORS_ORIGIN already reads them, so
-// a second copy would drift the first time an endpoint moves. Narrowed by the `demi-admin` prefix
-// because the admin app is the only frontend that builds a query — the public DEMI UI never does.
-//
-// localhost is for running that admin app against a deployed gateway, and NEVER in prod: prod's
-// frontendHostNames holds the admin console's own AFD host (demi-admin-prod-*.azurefd.net), and
-// appending localhost there would make a developer's machine an origin the deployed gateway accepts.
-// That one prod entry is also what arms the analytics bearer policies in apim.bicep — this filter
-// yielding zero origins is what disarms them, not the environment name.
+// Derived from frontendHostNames so the AFD hosts are not listed twice; only the admin app queries.
+// Never localhost in prod. Zero origins, not the environment name, disarms apim.bicep's bearer policies.
 var analyticsAdminOrigins = concat(
   map(filter(frontendHostNames, host => startsWith(host, 'demi-admin')), host => 'https://${host}'),
   environmentName == 'prod' ? [] : [ 'http://localhost:4200' ]
@@ -521,9 +438,8 @@ param deployDevbox bool = false
 @description('Non-delegated landing-zone subnet for the devbox NIC. Empty deploys no VM.')
 param devboxSubnetId string = ''
 
-// A PUBLIC key, so no @secure(): masking it would only hide it from what-if. Nothing SSHes in, but
-// the Compute API refuses a Linux VM with no credential at all — the param file reads it from the
-// environment rather than committing one.
+// A public key, so no @secure(). Nothing SSHes in, but Compute refuses a Linux VM with no
+// credential; the param file reads it from the environment.
 @description('SSH public key for the devbox admin user.')
 param devboxSshPublicKey string = ''
 
@@ -534,14 +450,11 @@ param devboxEnableEntraSsh bool = false
 @description('Object id of the Entra user or group that gets Virtual Machine User Login on the devbox.')
 param devboxEntraSshPrincipalId string = ''
 
-// The resources below never change between releases, and ARM re-PUTs every one of them on every
-// run — about 293 s of the 317 s a full deploy takes. False deploys only the application layer and
-// reads the rest by name; true deploys everything. Foundation edits need a run with it on, which
-// `scripts/deploy-infra.sh --foundation` sets through DEPLOY_FOUNDATION.
+// Re-PUTting the unchanging foundation is about 293 s of a 317 s deploy. False reads it by name;
+// foundation edits need `scripts/deploy-infra.sh --foundation`, which sets DEPLOY_FOUNDATION.
 @description('Deploy the foundation layer: identity, vault, Cosmos, observability, audit logs, Foundry, search, APIM, static site, document storage, document intake, budget.')
 param deployFoundation bool = false
 
-// Mandatory Cost Management Tags applied across ALL resources
 // Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
 var apimGatewaySecretName = 'apim-gateway-secret'
 
@@ -553,16 +466,8 @@ var defaultTags = {
   CostCenter: 'c4b0a8'
 }
 
-// ── Foundation lookups ────────────────────────────────────────────────────────────────────────
-//
-// What the application layer borrows from the foundation when this run does not deploy it. Each
-// name and apiVersion below is the one the owning module declares — a mismatch here reads a
-// different resource, or a different property shape, and the app settings drift silently.
-//
-// ARM reads every unconditional `existing` resource a module uses, whichever ternary branch wins,
-// so a lookup for something only some environments have carries the same `if` as its use. A missing
-// resource in application mode fails the deployment with ResourceNotFound, which is the correct loud
-// failure: the environment has no foundation yet.
+// Foundation lookups: name and apiVersion must match the owning module, or settings drift silently.
+// ARM reads every unconditional `existing` whichever branch wins, so a partial one carries its use's `if`.
 
 resource identityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'demi-identity-${environmentName}'
@@ -616,10 +521,8 @@ var cosmosAccountId = deployFoundation ? cosmos!.outputs.cosmosAccountId : cosmo
 var vaultName = deployFoundation ? keyVault!.outputs.vaultName : vaultExisting.name
 var vaultUri = deployFoundation ? keyVault!.outputs.vaultUri : vaultExisting.properties.vaultUri
 
-// Both branches of every secret URI below compose from the same vault URI — key-vault.bicep builds
-// its outputs as `${vault.properties.vaultUri}secrets/<name>`, and so does this. They have to stay
-// character-identical: `appSettings` is a whole-collection PUT, so a URI that differs by so much as
-// a trailing slash rewrites a live Key Vault reference on the next application deploy.
+// Must stay character-identical to key-vault.bicep's outputs: `appSettings` is a whole-collection
+// PUT, so even a trailing-slash difference rewrites a live Key Vault reference.
 var secretUriBase = '${vaultUri}secrets/'
 var adminApiKeySecretUri = deployFoundation ? keyVault!.outputs.adminApiKeySecretUri : '${secretUriBase}admin-api-key'
 var doclingApiKeySecretUri = deployFoundation ? keyVault!.outputs.doclingApiKeySecretUri : '${secretUriBase}docling-api-key'
@@ -628,9 +531,8 @@ var minioSecretKeySecretUri = deployFoundation ? keyVault!.outputs.minioSecretKe
 var trackClientSecretUri = deployFoundation ? keyVault!.outputs.trackClientSecretUri : '${secretUriBase}track-client-secret'
 var roleSyncClientSecretUri = deployFoundation ? keyVault!.outputs.roleSyncClientSecretUri : '${secretUriBase}role-sync-client-secret'
 
-// The three OPTIONAL secrets. An environment that does not name one gets an EMPTY app setting, not
-// a reference to a secret nobody created — same `contains` test key-vault.bicep applies, kept here
-// so an application-only run cannot hand prod a live reference where a full run hands it ''.
+// Optional secrets: same `contains` test as key-vault.bicep, so an application-only run cannot hand
+// prod a live reference where a full run hands it ''.
 var notifyApiKeySecretUri = deployFoundation
   ? keyVault!.outputs.notifyApiKeySecretUri
   : (contains(optionalSecretNames, 'notify-api-key') ? '${secretUriBase}notify-api-key' : '')
@@ -667,10 +569,8 @@ var foundryEndpoint = deployFoundry
   ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting!.properties.endpoint)
   : ''
 
-// Composed rather than borrowed, because the NAME is the value: each of these is built from
-// `environmentName` inside its own module too, so reading it back would only add a lookup that can
-// fail. The model name is declared here and passed DOWN to foundry.bicep for the same reason — the
-// app setting has to be right in a run that deploys no Foundry account to read it from.
+// Composed, not borrowed: each module builds the same name from environmentName. The model name is
+// passed down to foundry.bicep so the app setting is right in a run with no Foundry account.
 var foundryModelName = 'gpt-4.1-mini'
 var foundryDeployment = deployFoundry ? foundryModelName : ''
 var searchEndpoint = deploySearch ? 'https://demi-search-${environmentName}.search.windows.net' : existingSearchEndpoint
@@ -679,12 +579,8 @@ var intakeStorageAccountName = take('demiin${environmentName}${uniqueString(reso
 var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting!.id)
 var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting!.properties.clientId)
 
-// 1. User-assigned managed identity — the principal for EVERY data plane.
-//
-// User-assigned rather than system-assigned, and the distinction is load-bearing: the identity
-// outlives the app, so a redeploy does not invalidate the role assignments below, and the app can
-// name it with AZURE_CLIENT_ID. `demi-identity-dev`, principal c2de07f1-…, is the identity the
-// live API actually runs as.
+// 1. User-assigned identity, the principal for every data plane. It outlives the app, so a redeploy
+// keeps its role assignments, and the app names it with AZURE_CLIENT_ID.
 module identity './modules/identity.bicep' = if (deployFoundation) {
   name: 'deploy-identity'
   params: {
@@ -709,9 +605,8 @@ module keyVault './modules/key-vault.bicep' = if (deployFoundation) {
   }
 }
 
-// 2. Cosmos DB for NoSQL — the system of record. Serverless, keyless (`disableLocalAuth`), reached
-// only through a private endpoint. The module also carries the SQL role assignment that lets the
-// identity read and write it.
+// 2. Cosmos DB for NoSQL, the system of record: serverless, keyless, private endpoint only. The
+// module also grants the identity SQL data access.
 module cosmos './modules/cosmos-nosql.bicep' = if (deployFoundation) {
   name: 'deploy-cosmos-nosql'
   params: {
@@ -722,9 +617,8 @@ module cosmos './modules/cosmos-nosql.bicep' = if (deployFoundation) {
     apiPrincipalId: identityPrincipalId
     readerPrincipalId: readerPrincipalId
     deployEnrichment: deployEnrichment
-    // Control-plane auditing. This reverses the usual reading order — cosmos is module 2 and
-    // auditLogs is module 6 — but Bicep orders on output references, not declaration, and
-    // auditLogs depends only on identity and observability, so there is no cycle.
+    // Bicep orders on output references, not declaration, and auditLogs depends only on identity
+    // and observability, so there is no cycle.
     auditWorkspaceId: auditWorkspaceId
   }
 }
@@ -745,10 +639,8 @@ module search './modules/ai-search.bicep' = if (deployFoundation && deploySearch
   }
 }
 
-// 3b. What the API needs when the search service is not ours to deploy: the data-plane grant, and
-// the shared private link to OUR Cosmos account — the indexer has no other route to it, since the
-// account is publicNetworkAccess: Disabled. Nothing else about the service is touched: no identity,
-// no `semanticSearch`, no private endpoint — a re-PUT of any of those would fight whoever owns it.
+// 3b. Search service not ours: only the data-plane grant and the shared private link to our Cosmos,
+// the indexer's one route in. Re-PUTting anything else would fight the service's owner.
 module existingSearchRole './modules/search-existing.bicep' = if (deployFoundation && !deploySearch) {
   name: 'grant-existing-search'
   params: {
@@ -814,9 +706,8 @@ module observability './modules/observability.bicep' = if (deployFoundation) {
   }
 }
 
-// 5b. Audit and usage-analytics store. A SECOND Log Analytics workspace, deliberately: the one
-// above is capped with `dailyQuotaGb` and stops collecting once the cap is hit, which is correct
-// for application logs and unacceptable for a compliance record. See modules/audit-logs.bicep.
+// 5b. A second workspace on purpose: the app one stops collecting at its `dailyQuotaGb` cap, which
+// a compliance record cannot do. See modules/audit-logs.bicep.
 module auditLogs './modules/audit-logs.bicep' = if (deployFoundation) {
   name: 'deploy-audit-logs'
   params: {
@@ -851,9 +742,8 @@ module foundry './modules/foundry.bicep' = if (deployFoundation && deployFoundry
   name: 'deploy-foundry'
   params: {
     modelName: foundryModelName
-    // `location` is deliberately NOT passed: the module defaults to canadaeast, the only Canadian
-    // region offering a Standard (in-country) deployment. `peLocation` is where the private endpoint
-    // goes, and a PE is a NIC in its subnet — so it stays canadacentral with everything else.
+    // No `location`: the module defaults to canadaeast, the only Canadian region with a Standard
+    // deployment. The PE is a NIC in our subnet, so `peLocation` stays with everything else.
     environmentName: environmentName
     tags: defaultTags
     identityPrincipalId: identityPrincipalId
@@ -976,17 +866,15 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     intakeIdentityId: intakeIdentityId
     intakeIdentityClientId: intakeIdentityClientId
     intakeCapGBPerMonth: intakeCapGBPerMonth
-    // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
-    // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
-    // gateway trust branch entirely.
+    // VaultName/SecretName: the secret is created out of band, so no module outputs its URI. Empty
+    // until APIM is deployed, which turns off the app's gateway trust branch.
     apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${apimGatewaySecretName})' : ''
     apimGatewaySecretUri: apimGatewaySecretUri
   }
 }
 
-// 7d. The OpenShift secret sync. Its own Flex app on the API's subnet, so a bad deploy of it
-// cannot take the API down, and it reads the vault through the same private endpoint. Off unless
-// the environment both asks for it and names the namespaces it owns.
+// 7d. OpenShift secret sync: its own Flex app on the API subnet, so a bad deploy of it cannot take
+// the API down. Needs both deploySecretSync and syncNamespaces.
 module secretSync './modules/secret-sync.bicep' = if (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) {
   name: 'deploy-secret-sync'
   params: {
@@ -1108,10 +996,8 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
   }
 }
 
-// 8. Frontend — a Storage static website, no App Service and no plan. TLS, the hostname,
-// the security headers and the routing rules are supplied by the Front Door profile in
-// eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
-// data-plane command ARM cannot express.
+// 8. Frontend origin, a Storage static website. Front Door supplies TLS, host, headers and routing;
+// see modules/static-site.bicep for the one data-plane step ARM cannot express.
 module staticSite './modules/static-site.bicep' = if (deployFoundation && deployStaticSite) {
   name: 'deploy-static-site'
   params: {
@@ -1122,8 +1008,7 @@ module staticSite './modules/static-site.bicep' = if (deployFoundation && deploy
   }
 }
 
-// 9. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
-// is what moved the ceiling to 100.
+// 9. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle.
 module costBudget './modules/cost-budget.bicep' = if (deployFoundation) {
   name: 'deploy-cost-budget'
   params: {
@@ -1134,11 +1019,8 @@ module costBudget './modules/cost-budget.bicep' = if (deployFoundation) {
   }
 }
 
-// Cost Management Reader for the API identity, at this resource group — the scope GET /admin/cost
-// queries and the scope the budget above is defined on. Read-only, and it sees this group only.
-//
-// The name is built from the identity's NAME, not its principal id: a resource name cannot contain
-// a runtime value, and `identityPrincipalId` is one. The properties may, and do.
+// Cost Management Reader at this group, the scope GET /admin/cost queries. The name uses the
+// identity's name, not its principal id: a resource name cannot hold a runtime value.
 var costManagementReaderRoleId = '72fafb9e-0641-4937-9268-a91bfd8191a3'
 
 resource costReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -1153,13 +1035,8 @@ resource costReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 // Outputs
 // Empty when no Flex subnet is supplied, which is the only way to deploy no API app.
 output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
-// The three below report resources the foundation owns, so an application-only run leaves them
-// EMPTY rather than looking them up: each carries a value ARM assigns (a storage suffix, a web
-// endpoint zone code, a gateway host), and none of them is read except right after a foundation
-// deploy.
-//
-// COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
-// origin, so it needs this hostname to add one; it is stable for the life of the storage account.
+// The three below are empty in an application-only run: each is an ARM-assigned value read only
+// right after a foundation deploy. This host is the Front Door origin, stable for the account's life.
 output frontendStaticSiteHostName string = (deployFoundation && deployStaticSite) ? staticSite!.outputs.staticSiteHostName : ''
 // The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
 // goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
@@ -1181,6 +1058,5 @@ output cosmosEndpoint string = cosmosEndpoint
 output identityClientId string = identityClientId
 output logAnalyticsWorkspaceName string = appLogsWorkspaceName
 output auditWorkspaceName string = auditWorkspaceName
-// The query API addresses a workspace by this GUID, not by name or resource ID — so the future
-// audit read endpoint needs it, and it is otherwise a portal lookup.
+// The query API addresses a workspace by this GUID, not by name or resource ID.
 output auditWorkspaceCustomerId string = auditWorkspaceCustomerId
