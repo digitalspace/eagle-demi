@@ -59,8 +59,8 @@ const catalog = {
   // Eagle-only EA process record.
   eaStatus: { defaultVis: 4, maxVis: 4 },
   eacDecision: { defaultVis: 4, maxVis: 4 },
-  // `eacDecision.name`, copied for the decision sort (`repositories/projects.js` SORTABLE).
-  eacDecisionSort: { defaultVis: 4, maxVis: 4 },
+  // `eacDecision.name`, copied for the decision sort (`repositories/projects.js` SORTABLE); hidden under its dial too.
+  eacDecisionSort: { defaultVis: 4, maxVis: 4, dialOf: 'eacDecision' },
   decisionDate: { defaultVis: 4, maxVis: 4 },
   currentPhaseName: { defaultVis: 4, maxVis: 4 },
   phaseHistory: { defaultVis: 4, maxVis: 4 },

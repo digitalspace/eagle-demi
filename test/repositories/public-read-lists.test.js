@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * The list reads the `/search` branches will be built on. What is asserted is the SQL each one
- * emits, because every one of these failures is silent: a missing visibility fragment answers 200
- * with rows the caller may not see, a count built from a different predicate advertises the size of
- * a set they cannot open, and an offset page that is never sliced repeats page 1 forever.
- */
+// The SQL each list read emits is asserted, because its failures are silent: a missing visibility
+// fragment, a count on another predicate, or an unsliced page all still answer 200.
 
 process.env.NODE_ENV = 'test';
 
@@ -22,16 +18,11 @@ const notifications = require('../../src/repositories/notifications');
 const lists = require('../../src/repositories/lists');
 const updates = require('../../src/repositories/updates');
 const { TIER } = require('../../src/helpers/access-sql');
+const { parseNativeQuery, nativeCriteria } = require('../../src/helpers/native-query');
 
 const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [], level: 4 };
 
-/**
- * The fields one container's indexing policy includes, as the bicep writes them.
- *
- * A path is reduced to its dotted field name, so `/read/[]/?` reads as `read` and
- * `/currentPhaseName/name/?` as `currentPhaseName.name` — the allow-lists these tests pair the
- * policy with are field names as the SQL writes them.
- */
+/** Included paths of one container's indexing policy as dotted field names: `/read/[]/?` is `read`. */
 function indexedFields(container) {
   const bicep = readFileSync(
     join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
@@ -157,9 +148,8 @@ test('comments list by period', async (t) => {
     await comments.listByPeriod('p1', ANON);
 
     assert.ok(seen.spec.query.includes('c["comment"]'));
-    // `author` IS fetched: its ceiling is 4 and `commentAttributed` can widen it at the response
-    // boundary, which a projection cannot decide because it has not read the row yet. `sources`
-    // has a ceiling of 0, so nothing can ever widen it and it must not leave Cosmos.
+    // `author` is fetched since `commentAttributed` may widen it after the read; `sources` has
+    // ceiling 0, so nothing widens it and it must not leave Cosmos.
     assert.ok(seen.spec.query.includes('c["author"]'));
     assert.ok(!/c(\.sources\b|\["sources"\])/.test(seen.spec.query));
   });
@@ -432,6 +422,7 @@ test('updates publish gate', async (t) => {
 
 test('updates publishDate ordering', async (t) => {
   const config = require('../../src/config');
+  const { SPEC } = require('../../src/controllers/native/updates');
   const flag = config.updatesPublishDateFallback;
   t.afterEach(() => {
     t.mock.restoreAll();
@@ -469,6 +460,33 @@ test('updates publishDate ordering', async (t) => {
     await updates.list(ANON, { sortBy: '+publishDate' });
     assert.deepStrictEqual(seen.map(q => /ORDER BY (.+)$/.exec(q)[1]),
       ['c.dateAdded DESC', 'c.dateAdded DESC', 'c.dateAdded ASC']);
+  });
+
+  await t.test('before it, a native publishDate sort is gated by the dateAdded dial in list, count and re-read', async () => {
+    config.updatesPublishDateFallback = true;
+    const seen = serve();
+    const parsed = parseNativeQuery(SPEC, { sort: 'publishDate', count: 'true' }, ANON);
+    const { criteria, orderBy } = nativeCriteria(SPEC, parsed, ANON);
+    await updates.nativeRepository.list(ANON, { criteria, orderBy, pageNum: 0, pageSize: 10, parsed });
+    await updates.nativeRepository.count(ANON, { criteria, parsed });
+    await updates.nativeRepository.readAll(ANON, { criteria, orderBy });
+    const reads = seen.filter(q => q.includes('c.vis["publishDate"]'));
+    assert.strictEqual(reads.length, 3);
+    for (const query of reads) assert.ok(query.includes('c.vis["dateAdded"]'), query);
+  });
+
+  await t.test('another sort, or a publishDate sort after the backfill, adds no dateAdded dial', async () => {
+    const seen = serve();
+    for (const [sort, fallback] of [['headline', true], ['publishDate', false]]) {
+      config.updatesPublishDateFallback = fallback;
+      const parsed = parseNativeQuery(SPEC, { sort, count: 'true' }, ANON);
+      const { criteria, orderBy } = nativeCriteria(SPEC, parsed, ANON);
+      await updates.nativeRepository.list(ANON, { criteria, orderBy, pageNum: 0, pageSize: 10, parsed });
+      await updates.nativeRepository.count(ANON, { criteria, parsed });
+    }
+    const reads = seen.filter(q => /c\.vis\["(headline|publishDate)"\]/.test(q));
+    assert.strictEqual(reads.length, 4);
+    for (const query of reads) assert.ok(!query.includes('c.vis["dateAdded"]'), query);
   });
 });
 

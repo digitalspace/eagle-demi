@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The field redactor. One loop, one comparison, applied at the response boundary — never inside a
- * repository read, because eight controller paths read with the caller's access and spread the
- * result back into an upsert (docs/rbac-architecture.md §2 item 1).
- */
+// The field redactor, run at the response boundary and never in a repository read: controllers spread
+// what they read back into an upsert (docs/rbac-architecture.md §2 item 1).
 
 const { catalogFor, CATALOGS } = require('./catalog');
 const { LEVELS, levelOf } = require('./level');
@@ -17,6 +14,14 @@ for (const [entity, catalog] of Object.entries(CATALOGS)) {
   for (const [field, entry] of Object.entries(catalog)) {
     if (entry && entry.when !== undefined && !Object.hasOwn(PREDICATES, entry.when)) {
       throw new Error(`[vis] unknown predicate "${entry.when}" on ${entity}.${field}`);
+    }
+    // A broken `dialOf` chain would throw on every response holding the key.
+    const seen = new Set([field]);
+    for (let next = entry && entry.dialOf; next !== undefined; next = catalog[next].dialOf) {
+      if (!Object.hasOwn(catalog, next) || seen.has(next)) {
+        throw new Error(`[vis] dialOf on ${entity}.${field} names no field or loops`);
+      }
+      seen.add(next);
     }
   }
 }
@@ -44,16 +49,17 @@ function derivePublished(doc) {
   return doc.isPublished === true;
 }
 
-/**
- * A child's level under every dial that reaches it, the strictest winning: its own, its parent's,
- * and that of the top-level field it stands in for (`dialOf`).
- */
+/** A key's level under its own dial and those of the fields it stands in for (`dialOf`, followed down). */
+function fieldVis(catalog, dials, key, record) {
+  const entry = catalog[key];
+  const own = effectiveVis(entry, dials[key], record);
+  return entry.dialOf ? Math.min(own, fieldVis(catalog, dials, entry.dialOf, record)) : own;
+}
+
+/** A child's level under every dial that reaches it, the strictest winning, its parent's included. */
 function childVis(catalog, dials, key, catalogKey, record) {
-  const entry = catalog[catalogKey];
-  const levels = [effectiveVis(entry, dials[catalogKey], record)];
-  if (LEVELS.includes(dials[key])) levels.push(dials[key]);
-  if (entry.dialOf) levels.push(effectiveVis(catalog[entry.dialOf], dials[entry.dialOf], record));
-  return Math.min(...levels);
+  const own = fieldVis(catalog, dials, catalogKey, record);
+  return LEVELS.includes(dials[key]) ? Math.min(own, dials[key]) : own;
 }
 
 /** The listed children of a dotted catalog key, for a parent the caller cannot see whole. */
@@ -94,7 +100,7 @@ function redactForAccess(entity, doc, access) {
     const entry = Object.hasOwn(catalog, key) ? catalog[key] : undefined;
     if (!entry) continue;
 
-    if (visible(level, effectiveVis(entry, dials[key], doc))) {
+    if (visible(level, fieldVis(catalog, dials, key, doc))) {
       out[key] = value;
       continue;
     }
@@ -103,9 +109,8 @@ function redactForAccess(entity, doc, access) {
     if (children) out[key] = children;
   }
 
-  // `highlighted` is a marked-up COPY of the fields it names, so it must never be wider than the
-  // row it came from: `markedField` falls back to the WHOLE raw value when the analyzer produced
-  // no fragment, which shipped a withheld field back verbatim under its highlight key.
+  // `highlighted` copies the fields it names, and `markedField` falls back to the whole raw value
+  // when there is no fragment, so it keeps only fields the row still holds.
   if (out.highlighted && typeof out.highlighted === 'object') {
     out.highlighted = Object.fromEntries(
       Object.entries(out.highlighted).filter(([field]) => Object.hasOwn(out, field)));
@@ -135,7 +140,7 @@ function refusedWriteKeys(entity, changes, access, existing) {
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
   const level = levelOf(access);
   return Object.keys(changes).filter(key => key === 'vis' || !Object.hasOwn(catalog, key) ||
-    !visible(level, effectiveVis(catalog[key], dials[key], existing)));
+    !visible(level, fieldVis(catalog, dials, key, existing)));
 }
 
 module.exports = { visible, effectiveVis, redactForAccess, redactAllForAccess, refusedWriteKeys };

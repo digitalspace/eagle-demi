@@ -13,6 +13,7 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const notifications = require('../../src/repositories/notifications');
 const updateParent = require('../../src/helpers/update-parent');
+const images = require('../../src/domain/update-images');
 const { setAclForProject } = require('../../src/helpers/update-acl');
 const { fakeImages } = require('./update-images-store');
 const { PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT } = require('./eagle-mirror-fixtures');
@@ -214,6 +215,24 @@ test('setAclForProject — updates follow their project', async (t) => {
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
     assert.strictEqual(store.level(image), 4);
+  });
+
+  await t.test('one update whose images fail to publish does not stop the next', async () => {
+    const row = {
+      read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['public', 'staff', 'sysadmin'],
+      demiStatus: 'published', featuredImage: { document: '5c1f7a3e9b1d2c0012370001', alt: 'A creek' }
+    };
+    stub(t, [{ ...row, id: 'u1' }, { ...row, id: 'u2' }]);
+    t.mock.method(updateParent, 'readParent', async () => ({ id: 'p-1', kind: 'project', read: PUBLIC_PARENT }));
+    const published = [];
+    t.mock.method(images, 'publishFor', async (_ctx, update) => {
+      published.push(update.id);
+      if (published.length === 1) throw new Error('storage down');
+    });
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(published, ['u1', 'u2']);
   });
 
   await t.test('an update the project keeps private leaves its upload private', async () => {

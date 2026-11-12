@@ -51,9 +51,8 @@ test('redactForAccess', async (t) => {
   });
 
   await t.test('level 0 runs the same loop', () => {
-    // `0 <= effVis` holds for every field, so level 0 sees them all (doc §2 item 4) — the loop is
-    // still what puts them there. An `if (level === 0) return record` shortcut fails on the
-    // uncatalogued key and on the derived isPublished below.
+    // Level 0 sees every field, but through the loop: an `if (level === 0) return record`
+    // shortcut fails on the uncatalogued key and the derived isPublished below.
     const row = storedRow({ notInTheCatalog: 'x', read: ['staff'], isPublished: true });
     const out = redactForAccess('projects', row, { level: 0 });
     assert.strictEqual('notInTheCatalog' in out, false);
@@ -86,6 +85,21 @@ test('redactForAccess', async (t) => {
     assert.strictEqual('projectLead' in redactForAccess('projects', row, { level: 2 }), false);
     assert.strictEqual(redactForAccess('projects', row, { level: 1 }).projectLead, 'Alex Lead');
     assert.strictEqual(redactForAccess('projects', row, { level: 0 }).projectLead, 'Alex Lead');
+  });
+
+  await t.test('a stored copy is hidden under the dial of the field it copies', () => {
+    const row = storedRow({ eacDecision: { _id: 'd1', name: 'Approved' }, eacDecisionSort: 'Approved', vis: { eacDecision: 1 } });
+    assert.strictEqual('eacDecisionSort' in redactForAccess('projects', row, { level: 4 }), false);
+    assert.strictEqual('eacDecisionSort' in redactForAccess('projects', row, { level: 2 }), false);
+    assert.strictEqual(redactForAccess('projects', row, { level: 1 }).eacDecisionSort, 'Approved');
+    assert.strictEqual(redactForAccess('projects', storedRow({ eacDecisionSort: 'Approved' }), { level: 4 }).eacDecisionSort, 'Approved');
+  });
+
+  await t.test('a block child of a stored copy is hidden under the dial of the field it copies', () => {
+    const row = storedRow({ legislation_2018: { name: 'Coal Mountain', eacDecisionSort: 'Approved' }, vis: { eacDecision: 1 } });
+    const block = redactForAccess('projects', row, { level: 4 }).legislation_2018;
+    assert.strictEqual(block.name, 'Coal Mountain');
+    assert.strictEqual('eacDecisionSort' in block, false);
   });
 
   await t.test('a dial cannot exceed maxVis', () => {
@@ -223,6 +237,42 @@ test('effectiveVis and visible', async (t) => {
     }
   });
 
+  await t.test('a `dialOf` naming no field, or looping, refuses to load', () => {
+    const catalog = require('../../src/vis/catalog/projects');
+    const modulePath = require.resolve('../../src/vis/redact');
+    const load = () => {
+      delete require.cache[modulePath];
+      return require('../../src/vis/redact');
+    };
+    try {
+      catalog.eacDecisionSort.dialOf = 'noSuchField';
+      assert.throws(load, /dialOf on projects\.eacDecisionSort names no field or loops/);
+      catalog.eacDecisionSort.dialOf = 'eacDecision';
+      catalog.eacDecision.dialOf = 'eacDecisionSort';
+      assert.throws(load, /dialOf on projects\.eacDecision names no field or loops/);
+    } finally {
+      catalog.eacDecisionSort.dialOf = 'eacDecision';
+      delete catalog.eacDecision.dialOf;
+      load();
+    }
+  });
+
+  await t.test('one field copying two different sources refuses to load', () => {
+    const catalog = require('../../src/vis/catalog/updates');
+    const modulePath = require.resolve('../../src/helpers/dial');
+    const load = () => {
+      delete require.cache[modulePath];
+      return require('../../src/helpers/dial');
+    };
+    try {
+      catalog.eacDecisionSort = { defaultVis: 4, maxVis: 4, dialOf: 'headline' };
+      assert.throws(load, /eacDecisionSort copies both eacDecision and headline/);
+    } finally {
+      delete catalog.eacDecisionSort;
+      load();
+    }
+  });
+
   await t.test('visible() is the only comparison', () => {
     // Inlining a second `level <= effVis` anywhere in the redactor fails this.
     const source = code(fs.readFileSync(REDACT_PATH, 'utf8'));
@@ -238,4 +288,11 @@ test('prototype names are never catalogued', () => {
   );
   const out = redactForAccess('projects', { id: '1', name: 'n', constructor: 'x', read: ['public'] }, { level: 4 });
   assert.strictEqual(Object.hasOwn(out, 'constructor'), false);
+});
+
+test('a writer cannot name a stored copy its source dial hides', () => {
+  const { refusedWriteKeys } = require('../../src/vis/redact');
+  const existing = { read: ['staff'], vis: { eacDecision: 1 } };
+  assert.deepStrictEqual(refusedWriteKeys('projects', { eacDecisionSort: 'x', name: 'ok' }, { level: 2 }, existing),
+    ['eacDecisionSort']);
 });

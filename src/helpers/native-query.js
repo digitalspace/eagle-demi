@@ -157,8 +157,8 @@ function parseNativeQuery(spec, query, access) {
   const multi = spec.multiValueFilters || [];
 
   for (const [key, value] of Object.entries(query || {})) {
-    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !(spec.ranges || {})[key] &&
-        !(spec.contains || {})[key] && !(spec.presence || {})[key] && !(spec.flags || {})[key]) {
+    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !Object.hasOwn(spec.ranges || {}, key) &&
+        !Object.hasOwn(spec.contains || {}, key) && !Object.hasOwn(spec.presence || {}, key) && !Object.hasOwn(spec.flags || {}, key)) {
       return { error: `unknown parameter: ${key}` };
     }
     if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
@@ -325,8 +325,8 @@ function nativeCriteria(spec, parsed, access) {
     criteria.push({ clause: `(${any.join(' OR ')})`, params: [{ name: '@nq', value: parsed.q }] });
   }
 
-  const orderBy = parsed.sort ? `c.${parsed.sort.field} ${parsed.sort.desc ? 'DESC' : 'ASC'}` : undefined;
-  return { criteria, orderBy };
+  if (parsed.sort) criteria.push({ clause: dialAllows(parsed.sort.field, level), params: [] });
+  return { criteria, orderBy: parsed.sort ? `c.${parsed.sort.field} ${parsed.sort.desc ? 'DESC' : 'ASC'}` : undefined };
 }
 
 /** A 24-hex Eagle id, which a by-id read also accepts. */

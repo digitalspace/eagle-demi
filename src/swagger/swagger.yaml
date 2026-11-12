@@ -836,7 +836,10 @@ paths:
           description: >-
             Sort key, `-` prefix for descending. Default is by name. `currentPhaseName.name` sorts
             by the name of the project's current phase, `eacDecisionSort` by the name of its EAC
-            decision. Each row carries `eacDecisionSort`, null when there is no decision.
+            decision. Each row carries `eacDecisionSort`, null when there is no decision, unless
+            a dial on `eacDecision` hides it from the caller. A row whose own dial hides the sort
+            field from the caller is left out of the list and the count; for `eacDecisionSort`
+            that is the dial on `eacDecision` too.
           schema:
             type: string
             enum: [name, -name, dateUpdated, -dateUpdated, proponentName, -proponentName, projectType,
@@ -1050,7 +1053,9 @@ paths:
             Sort key, `-` prefix for descending. Default is by name, also with `q`. By name,
             projects and notifications are interleaved; a notification with no name comes first
             ascending and last descending. Any other key sorts the projects and puts every
-            notification after them, by name.
+            notification after them, by name. A row whose own dial hides the sort field from the
+            caller is left out of the list and the count; for `eacDecisionSort` that is the dial
+            on `eacDecision` too.
           schema:
             type: string
             enum: [name, -name, dateUpdated, -dateUpdated, proponentName, -proponentName, projectType,

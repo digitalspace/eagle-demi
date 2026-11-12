@@ -1,8 +1,7 @@
 'use strict';
 
-// Keyword lists over the index (search/native-index.js), driven through the real native list
-// handler. The index is faked at `searchProjects` and Cosmos at `query`, so the OData filter the
-// index is asked with and the SQL the rows are read back with are both observed.
+// The index is faked at `searchProjects` and Cosmos at `query`, so both the OData filter sent to
+// the index and the SQL that reads rows back are observed.
 
 process.env.NODE_ENV = 'test';
 
@@ -575,6 +574,13 @@ test('documents list over the paged index', async (t) => {
     await callDocs('typeId=t1');
     assert.ok(queries[0].query.includes('c.vis["documentFileName"]'), queries[0].query);
     assert.ok(!queries[1].query.includes('c.vis["documentFileName"]'), queries[1].query);
+  });
+
+  await t.test('re-read checks the dial of the sort field', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    await callDocs('typeId=t1&sort=displayName');
+    assert.strictEqual(searches[0].orderby, 'displayNameSort asc, id');
+    assert.ok(queries[0].query.includes('c.vis["displayName"]'), queries[0].query);
   });
 
   await t.test('baseCriteria narrow the re-read', async (t) => {

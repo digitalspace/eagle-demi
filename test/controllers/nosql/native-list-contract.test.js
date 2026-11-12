@@ -1,9 +1,7 @@
 'use strict';
 
-// The native list contract every `/api/<kind>` read is built from (helpers/native-query.js through
-// mirror-reads.js). Driven through the real handler, the real `cosmosKind` repository and a fake
-// Cosmos that serves a fixed container, so paging, counting and redaction are observed in the
-// response rather than in calls.
+// The native list contract behind every `/api/<kind>` read, through the real handler and `cosmosKind`
+// over a fake Cosmos, so paging, counting and redaction are observed in the response.
 
 process.env.NODE_ENV = 'test';
 
@@ -22,6 +20,7 @@ const { recordEvents } = require('../../helpers/record-events');
 const projects = require('../../../src/repositories/projects');
 const { makeRes } = require('../../../src/http/router');
 const { listHandler, getHandler } = require('../../../src/controllers/nosql/mirror-reads');
+const { projectsKind } = require('../../../src/controllers/nosql/project');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -112,6 +111,18 @@ test('native list contract', async (t) => {
     assert.strictEqual(specs.length, 0);
   });
 
+  await t.test('a parameter named after an Object property is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const ctor = await call(list, 'constructor=x');
+    const str = await call(list, 'toString=x');
+    const proto = await call(list, '__proto__=x');
+    assert.deepStrictEqual([ctor.status, str.status, proto.status], [400, 400, 400]);
+    assert.match(ctor.body.error, /unknown parameter: constructor/);
+    assert.match(str.body.error, /unknown parameter: toString/);
+    assert.match(proto.body.error, /unknown parameter: __proto__/);
+    assert.strictEqual(specs.length, 0);
+  });
+
   await t.test('a repeated control parameter is refused', async (t) => {
     fakeCosmos(t);
     const res = await call(list, 'page=1&page=2');
@@ -160,6 +171,24 @@ test('native list contract', async (t) => {
   await t.test('only one sort key is taken', async (t) => {
     fakeCosmos(t);
     assert.strictEqual((await call(list, 'sort=dateAdded,-author', { user: STAFF })).status, 400);
+  });
+
+  await t.test('a row whose own dial hides the sort field is left out', () => {
+    const access = { authenticated: true, roles: ['staff'], level: 2 };
+    const parsed = parseNativeQuery(SPEC, { sort: 'author' }, access);
+    const clauses = nativeCriteria(SPEC, parsed, access).criteria.map(c => c.clause).join(' AND ');
+    const rows = [{ id: 'hid', author: 'A', vis: { author: 1 } }, { id: 'shown', author: 'B' }];
+    assert.deepStrictEqual(rows.filter(row => !clauses || evaluate(clauses, row, {})).map(row => row.id), ['shown']);
+  });
+
+  await t.test('a sort on a stored copy leaves out a row whose dial hides the field it copies', () => {
+    const access = { authenticated: false, roles: [], level: 4 };
+    const parsed = parseNativeQuery(projectsKind, { sort: 'eacDecisionSort', count: 'true' }, access);
+    // list and count read under the same criteria
+    const clauses = nativeCriteria(projectsKind, parsed, access).criteria.map(c => c.clause).join(' AND ');
+    const decided = { eacDecision: { _id: 'd1', name: 'Approved' }, eacDecisionSort: 'Approved' };
+    const rows = [{ id: 'hid', ...decided, vis: { eacDecision: 1 } }, { id: 'shown', ...decided }];
+    assert.deepStrictEqual(rows.filter(row => evaluate(clauses, row, {})).map(row => row.id), ['shown']);
   });
 
   await t.test(`ids above ${MAX_IDS} are refused`, async (t) => {

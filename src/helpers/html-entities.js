@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * HTML entities to the characters they stand for, and markup to plain text. Shared by the federal
- * registry reader, the eagle-notify sender and the Updates mirror: each turns markup into plain
- * text a person reads.
+ * HTML entities to characters and markup to plain text, for the federal registry reader, the
+ * eagle-notify sender and the Updates mirror.
  */
 
 /** The punctuation entities that show up in registry markup and in editor-written Update content. */
@@ -14,9 +13,8 @@ const NAMED_ENTITIES = {
 };
 
 /**
- * Accented letters, written by name. BC is bilingual and Nations are named in their own
- * orthography — "Stk'eml&uacute;psemc te Secw&eacute;pemc" — so leaving these escaped quotes the
- * escape back at a reader.
+ * Accented letters by name: BC is bilingual and Nations are named in their own orthography
+ * ("Stk'eml&uacute;psemc te Secw&eacute;pemc"), so an escape left in place reaches a reader.
  */
 const LOWER_LETTERS = {
   agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å', ccedil: 'ç',
@@ -32,6 +30,17 @@ const NAMED_LETTERS = Object.entries(LOWER_LETTERS).reduce((all, [name, letter])
   return all;
 }, {});
 
+/**
+ * Controls other than tab, LF and CR, surrogates and noncharacters are not text; fromCodePoint
+ * throws past U+10FFFF. A numeric entity for any of them stays as written.
+ */
+function isText(code) {
+  if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return false;
+  if (code < 0x20) return code === 0x09 || code === 0x0A || code === 0x0D;
+  if (code >= 0x7F && code <= 0x9F) return false;
+  return !(code >= 0xFDD0 && code <= 0xFDEF) && (code & 0xFFFE) !== 0xFFFE;
+}
+
 /** Numeric and named entities decoded; an entity this table does not know is left as written. */
 function decodeEntities(text) {
   return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body) => {
@@ -39,14 +48,12 @@ function decodeEntities(text) {
       const code = body[1] === 'x' || body[1] === 'X'
         ? parseInt(body.slice(2), 16)
         : parseInt(body.slice(1), 10);
-      // fromCodePoint throws past U+10FFFF, and one bad entity must not fail the whole text.
-      return Number.isFinite(code) && code <= 0x10FFFF ? String.fromCodePoint(code) : whole;
+      return isText(code) ? String.fromCodePoint(code) : whole;
     }
     // Letters are matched as written; the punctuation entities are not case-sensitive.
-    const named = NAMED_LETTERS[body] !== undefined
-      ? NAMED_LETTERS[body]
-      : NAMED_ENTITIES[body.toLowerCase()];
-    return named === undefined ? whole : named;
+    if (Object.hasOwn(NAMED_LETTERS, body)) return NAMED_LETTERS[body];
+    const lower = body.toLowerCase();
+    return Object.hasOwn(NAMED_ENTITIES, lower) ? NAMED_ENTITIES[lower] : whole;
   });
 }
 
