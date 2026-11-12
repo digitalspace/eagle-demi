@@ -30,10 +30,10 @@ const RESULT = Object.freeze({
 const storedFields = (doc) => Object.fromEntries(Object.entries(doc || {})
   .filter(([key]) => !key.startsWith('_') && key !== 'updatedAt'));
 
-/** What a reader sees of a document: a tombstone and an absent work show nothing, and stamps are not shown. */
+/** What a reader sees: nothing of a tombstone or absent work, and no push stamps or owner stamp. */
 function visible(doc) {
   if (!doc || doc.deleted === true) return null;
-  const { pushStamps: _stamps, ...fields } = storedFields(doc);
+  const { pushStamps: _stamps, source: _source, owner: _owner, ...fields } = storedFields(doc);
   return fields;
 }
 
@@ -79,6 +79,8 @@ async function saveWork(projectId, workId, step) {
     existing: await read(),
     reread: read,
     attempt: async (doc) => {
+      // Before the step, so an adopted work answers the same whatever the record or its stamp.
+      if (doc && works.ownerOf(doc) !== TRACK_OWNED.owner) return { status: RESULT.ADOPTED };
       const { status, doc: next } = step.apply(doc);
       if (status !== RESULT.APPLIED) return { status };
       const changed = !isDeepStrictEqual(visible(doc), visible(next));

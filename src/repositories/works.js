@@ -27,15 +27,14 @@ function ownerOf(doc) {
 }
 
 const mayWrite = (owner) => typeof owner === 'string' && owner !== '';
-const prefixOf = (id) => String(id).split('-', 1)[0];
 
 /** A create: the id prefix, `source` and `owner` all name the writer. */
-const mayCreate = (doc, owner) =>
-  mayWrite(owner) && prefixOf(doc.id) === owner && doc.source === owner && doc.owner === owner;
+const mayCreate = (doc, owner) => mayWrite(owner) && String(doc.id).startsWith(`${owner}-`) &&
+  doc.source === owner && doc.owner === owner;
 
-/** An update: the stored document is the writer's, and `existing` is the revision the etag names. */
-const mayUpdate = (existing, etag, owner) =>
-  mayWrite(owner) && Boolean(existing) && existing._etag === etag && ownerOf(existing) === owner;
+/** An update: `doc` replaces the writer's own `existing`, the revision the etag names. */
+const mayUpdate = (doc, existing, etag, owner) => mayWrite(owner) && existing._etag === etag &&
+  ownerOf(existing) === owner && doc.id === existing.id && String(doc.projectId) === String(existing.projectId);
 
 /** `provenance` with its adopt fields as `existing` holds them, so no rebuild can adopt or release a document. */
 function withAdoptOf(provenance, existing) {
@@ -109,6 +108,9 @@ async function get(projectId, workId) {
 
 /** The one document of the project holding `sourceKey`, tombstone included; null when none. */
 async function findBySourceKey(projectId, sourceKey) {
+  if (sourceKey === undefined || sourceKey === null || sourceKey === '') {
+    throw new TypeError(`[works] findBySourceKey needs a sourceKey, got ${JSON.stringify(sourceKey)}`);
+  }
   const partition = eq(PARTITION_FIELD, String(projectId), '@projectId');
   const key = eq('sourceKey', String(sourceKey), '@sourceKey');
   const rows = await fetchAll(CONTAINER, {
@@ -132,7 +134,8 @@ async function save(doc, { owner, etag, existing } = {}) {
     await createItem(CONTAINER, doc, LABEL);
     return { status: WRITTEN };
   }
-  if (!mayUpdate(existing, etag, owner)) return FOREIGN;
+  if (!existing) throw new TypeError(`[works] save of ${doc.id} with an etag needs the existing document`);
+  if (!mayUpdate(doc, existing, etag, owner)) return FOREIGN;
   await upsertWithEtag(CONTAINER, keptFrom(doc, existing, owner), { etag, label: LABEL });
   return { status: WRITTEN };
 }

@@ -66,6 +66,17 @@ test('track record writer', async (t) => {
     assert.deepStrictEqual({ source, owner, trackWorkId }, { source: 'track', owner: 'track', trackWorkId: 2001 });
   });
 
+  await t.test('a push that only adds the owner stamp to a legacy document is unchanged', async (t) => {
+    const store = await seeded(t);
+    const { source: _source, owner: _owner, ...legacy } = storedWork(store);
+    await cosmos.upsert('works', { ...legacy, updatedAt: '2026-01-01T00:00:00.000Z' });
+
+    const result = await writeTrackRecord('work', 'POST', PROJECT, fixture('new_work'));
+
+    assert.strictEqual(result.status, 'unchanged');
+    assert.strictEqual(storedWork(store).updatedAt, '2026-01-01T00:00:00.000Z');
+  });
+
   await t.test('a phase PUT that moves no derived value writes the work document and not the row', async (t) => {
     const store = await seeded(t);
     const { events: _events, ...phase } = fixture('new_work').work.phases[0];

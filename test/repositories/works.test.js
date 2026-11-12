@@ -97,10 +97,10 @@ test('works repository', async (t) => {
   });
 
   await t.test('a Track document with no owner field is found by the owner track filter', async (t) => {
-    store(t, [TRACK, LEGACY_TRACK, SHEET, ADOPTED]);
+    store(t, [TRACK, LEGACY_TRACK, SHEET, ADOPTED, { id: 'sheet-b', projectId: 'p1', source: 'sheet' }]);
 
     assert.deepStrictEqual(ids(await works.listByProject('p1', { owner: 'track' })), ['track-1', 'track-2']);
-    assert.deepStrictEqual(ids(await works.listByProject('p1', { owner: 'sheet' })), ['sheet-a']);
+    assert.deepStrictEqual(ids(await works.listByProject('p1', { owner: 'sheet' })), ['sheet-a', 'sheet-b']);
   });
 
   await t.test('the nightly and workIdOf queries return no sheet document', async (t) => {
@@ -134,15 +134,34 @@ test('works repository', async (t) => {
     const adopted = cosmosStore.read('track-3');
     const sheet = cosmosStore.read('sheet-a');
 
+    // The Track-owned revision a writer read before the work was adopted, paired with the adopted revision's etag.
+    const readBefore = { ...adopted, owner: 'track', _etag: '"older"' };
+
     const answers = [
       await works.save({ ...adopted, simpleTitle: 'Track' }, { owner: 'track', etag: adopted._etag, existing: adopted }),
       await works.save({ ...sheet, title: 'Track' }, { owner: 'track', etag: sheet._etag, existing: sheet }),
-      await works.tombstone(sheet, { owner: 'track', etag: sheet._etag })
+      await works.tombstone(sheet, { owner: 'track', etag: sheet._etag }),
+      await works.save({ ...adopted, simpleTitle: 'Track' }, { owner: 'track', etag: adopted._etag, existing: readBefore })
     ];
 
-    assert.deepStrictEqual(answers, [{ status: 'foreign' }, { status: 'foreign' }, { status: 'foreign' }]);
+    assert.deepStrictEqual(answers.map(a => a.status), ['foreign', 'foreign', 'foreign', 'foreign']);
     assert.deepStrictEqual([cosmosStore.read('track-3').simpleTitle, cosmosStore.read('sheet-a').deleted],
       ['North Pit', undefined]);
+  });
+
+  await t.test('save refuses a document whose id or project differs from the one it read', async (t) => {
+    const cosmosStore = store(t, [TRACK]);
+    const current = cosmosStore.read('track-1');
+    const guard = { owner: 'track', etag: current._etag, existing: current };
+
+    const answers = [
+      await works.save({ ...current, id: 'track-9' }, guard),
+      await works.save({ ...current, projectId: 'p2' }, guard)
+    ];
+
+    assert.deepStrictEqual(answers.map(a => a.status), ['foreign', 'foreign']);
+    assert.deepStrictEqual(cosmosStore.rows().map(row => [row.id, row.projectId]), [['track-1', 'p1']]);
+    await assert.rejects(works.save(current, { owner: 'track', etag: current._etag }), /needs the existing document/);
   });
 
   await t.test('sheet owner cannot create track-1', async (t) => {
@@ -151,10 +170,11 @@ test('works repository', async (t) => {
     const answers = [
       await works.save({ ...TRACK, source: 'sheet', owner: 'sheet' }, { owner: 'sheet' }),
       await works.save({ ...TRACK }, { owner: 'sheet' }),
-      await works.save({ ...SHEET, owner: 'track' }, { owner: 'track' })
+      await works.save({ ...SHEET, owner: 'track' }, { owner: 'track' }),
+      await works.save({ ...TRACK, id: 'track' }, { owner: 'track' })
     ];
 
-    assert.deepStrictEqual(answers.map(a => a.status), ['foreign', 'foreign', 'foreign']);
+    assert.deepStrictEqual(answers.map(a => a.status), ['foreign', 'foreign', 'foreign', 'foreign']);
     assert.deepStrictEqual(cosmosStore.rows(), []);
   });
 
@@ -218,11 +238,12 @@ test('works repository', async (t) => {
     assert.strictEqual(cosmosStore.read('sheet-a'), undefined);
   });
 
-  await t.test('findBySourceKey finds a tombstone and refuses a key held twice', async (t) => {
+  await t.test('findBySourceKey finds a tombstone and refuses a missing key or one held twice', async (t) => {
     const cosmosStore = store(t, [{ ...SHEET, deleted: true }, TRACK]);
 
     assert.strictEqual((await works.findBySourceKey('p1', '8:assessment:x')).id, 'sheet-a');
     assert.strictEqual(await works.findBySourceKey('p1', 'none'), null);
+    for (const missing of [undefined, null, '']) await assert.rejects(works.findBySourceKey('p1', missing), TypeError);
     await cosmos.create('works', { ...SHEET, id: 'sheet-b' });
     await assert.rejects(works.findBySourceKey('p1', '8:assessment:x'), { code: 'DUPLICATE_SOURCE_KEY' });
   });
