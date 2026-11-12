@@ -3324,15 +3324,27 @@ paths:
         (stream mode, below). Only a 200 redirects: a 404 or 500 answers JSON in every mode.
 
         STREAM MODE serves the bytes from this URL, so the link never expires and an edge cache can
-        hold it. It applies when the file may open in the browser (see `inline`) and the bytes this
-        answer would send, the whole file or the requested range, are no more than
-        `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB; 0 turns the mode off), so a range of a larger
-        file still streams. The instance must also be serving fewer than
-        `DOWNLOAD_STREAM_MAX_CONCURRENT` streams (default 8; 0 = no limit); a ranged request
-        stamped by the edge (`X-Edge-Secret`) takes no stream slot. Any other case, including a
-        store that cannot be read or sends no bytes within 10 seconds, gets the 302 above, never
-        JSON, except that a ranged request stamped by the edge and starting past byte 0 answers 503
-        with `Retry-After: 5` instead of that 302. A single byte range answers 206;
+        hold it. Every answer sends `Content-Length`. A closed range of 8 MiB or less stamped by the
+        edge (`X-Edge-Secret`) is a Front Door piece and takes no stream slot; any other stream
+        takes one from a per-instance pool.
+
+        An anonymous request stamped by the edge never gets a 302. Its file streams at any size:
+        `inline` when it may open in the browser (see `inline`), else as an `attachment` with
+        `Content-Type: application/octet-stream`. Its pool is `DOWNLOAD_STREAM_EDGE_MAX_CONCURRENT`
+        (default 6; 0 = no limit). A missing stored object answers 404. A full pool, a store stat
+        or read that fails or sends no bytes within 10 seconds, or an object without an ETag and a
+        modification date answers 503 with `Retry-After: 5`, `Cache-Control: no-store` and a
+        one-line text body.
+
+        Any other caller (no edge stamp, or a credential) streams only a file that may open in the
+        browser, and only when the bytes this answer would send, the whole file or the requested
+        range, are no more than `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB), so a range of a
+        larger file still streams. Its pool is `DOWNLOAD_STREAM_MAX_CONCURRENT` (default 2; 0 = no
+        limit). Any other case gets the 302 above, never JSON, except that a ranged request stamped
+        by the edge and starting past byte 0 answers the 503 instead of that 302.
+        `DOWNLOAD_STREAM_MAX_BYTES=0` turns stream mode off and sends the 302 to every caller.
+
+        A single byte range answers 206;
         a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
         range starting past the end answers 416 with `Content-Range: bytes */<size>`. A matching
         `If-None-Match`, or an `If-Modified-Since` at or after `Last-Modified` and not in the
@@ -3413,7 +3425,8 @@ paths:
             listed here.
           headers:
             Content-Type:
-              description: Stream mode. The inline type, e.g. `application/pdf`.
+              description: >-
+                Stream mode. The inline type, e.g. `application/pdf`, else `application/octet-stream`.
               schema:
                 type: string
             Content-Length:
@@ -3421,7 +3434,9 @@ paths:
               schema:
                 type: integer
             Content-Disposition:
-              description: Stream mode. `inline` with the same file name the presigned URL is signed with.
+              description: >-
+                Stream mode. `inline`, or `attachment` for a type not shown inline, with the same
+                file name the presigned URL is signed with.
               schema:
                 type: string
             Accept-Ranges:
@@ -3464,6 +3479,8 @@ paths:
               schema: { type: string, format: binary }
             image/*:
               schema: { type: string, format: binary }
+            application/octet-stream:
+              schema: { type: string, format: binary }
         '206':
           description: >-
             Stream mode, one byte range. `Content-Range: bytes a-b/<size>` and a matching
@@ -3475,8 +3492,8 @@ paths:
             Stream mode. The range starts past the end; `Content-Range: bytes */<size>`.
         '302':
           description: >-
-            Redirect mode, or stream mode for a file it cannot stream. The presigned URL is the
-            `Location`.
+            Redirect mode, or stream mode for a file it cannot stream to a caller that is not
+            anonymous and edge-stamped. The presigned URL is the `Location`.
           headers:
             Location:
               description: The presigned URL. Expires with the same TTL the JSON mode reports.
@@ -3494,6 +3511,15 @@ paths:
           description: No document with this id the caller may read, or it has no stored file.
         '500':
           description: '`{ "error": "Failed to generate download link." }` — the presign failed.'
+        '503':
+          description: >-
+            Stream mode, instead of the 302: to an anonymous edge-stamped request that cannot be
+            streamed now, or to an edge piece past byte 0. `Retry-After: 5`,
+            `Cache-Control: no-store`, a one-line `text/plain` body.
+          headers:
+            Retry-After:
+              schema:
+                type: string
     head:
       summary: Headers of a document's stored file, without a redirect
       description: >-
