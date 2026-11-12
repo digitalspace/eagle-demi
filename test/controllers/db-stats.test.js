@@ -83,6 +83,8 @@ test('GET /db/stats', async (t) => {
     mockCounts(t, {
       projects: 1, eagleOnly: 0, centroid: 0, documents: 2, extracted: 0, errors: 0, boundaries: 3
     });
+    const percent = { chunks: 40, documents: 70, projects: 100 };
+    t.mock.method(cosmosNoSql, 'indexProgress', async (name) => percent[name]);
 
     const res = mockRes();
     await dbController.getDbStats({}, res);
@@ -92,6 +94,7 @@ test('GET /db/stats', async (t) => {
     assert.strictEqual(res.body.driver, 'azure-cosmos-nosql');
     assert.strictEqual(res.body.stats.documents, 2);
     assert.strictEqual(res.body.stats.boundaries, 3);
+    assert.deepStrictEqual(res.body.indexProgress, percent);
   });
 
   await t.test('the ingest counts surface under their own keys', async () => {
