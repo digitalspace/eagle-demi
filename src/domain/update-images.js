@@ -41,9 +41,9 @@ async function publishable(row, parentId) {
 }
 
 /** Move one image and everything that copies its read: the search index and any chunks. */
-async function moveImage(ctx, doc, level, updateId) {
+async function moveImage(ctx, doc, level, updateId, etag) {
   const saved = await documents.setPublished(doc.id, doc.projectId, level,
-    { levelHeldAt: documents.levelHoldAfter(doc, level, null) });
+    { levelHeldAt: documents.levelHoldAfter(doc, level, null), etag });
   const read = saved && Array.isArray(saved.read) && saved.read.length ? saved.read : readForLevel(level);
   await aiSearch.writeAcls(aiSearch.indexes().documents, [{ id: doc.id, read, isPublished: level === PUBLIC_LEVEL }]);
   await chunks.setAclForDocument(systemAccess(), doc.id, read);
@@ -103,9 +103,10 @@ const revert = (ctx, docs, updateId) => release(ctx, docs.map(doc => String(doc.
  * Publish the update's own private uploads before it is saved, so it is never live with a private
  * image. On a failure, reverts what it published and throws.
  *
+ * @param {() => Promise<boolean>} [parentOpen] parent re-check after the image read; given, each move is etag-guarded
  * @returns {Promise<object[]>} the documents it published, for `revert`
  */
-async function publishFor(ctx, row, parentId) {
+async function publishFor(ctx, row, parentId, parentOpen) {
   const published = [];
   // The update's read is already capped by its parent, so an image never rises above the parent's
   // level, the rule setLevel enforces with its 409. eagle-api had no such cap.
@@ -114,8 +115,18 @@ async function publishFor(ctx, row, parentId) {
     return published;
   }
   try {
-    for (const doc of await publishable(row, parentId)) {
-      published.push(await moveImage(ctx, doc, PUBLIC_LEVEL, row.id));
+    const docs = await publishable(row, parentId);
+    if (parentOpen && docs.length && !(await parentOpen())) {
+      logger.info('[Update Images] parent no longer public, images left as they are', { updateId: row.id });
+      return published;
+    }
+    for (const doc of docs) {
+      try {
+        published.push(await moveImage(ctx, doc, PUBLIC_LEVEL, row.id, parentOpen ? doc._etag : undefined));
+      } catch (err) {
+        if (err.code !== 412) throw err;
+        logger.warn('[Update Images] image changed during publish, left as is', { documentId: doc.id, updateId: row.id });
+      }
     }
   } catch (err) {
     logger.error('[Update Images] publishing images failed', { updateId: row.id, error: err.message, stack: err.stack });

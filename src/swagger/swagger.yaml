@@ -804,6 +804,8 @@ paths:
         filter, sort or `q` on a field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
         authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
         a `search` analytics event. Each row's `pins` has the shape `GET /api/projects/{id}` returns.
+        With no `sort`, rows are in name order, and a project whose name the caller may not see is
+        left out of the list and of `x-total-count`.
       parameters:
         - name: page
           in: query

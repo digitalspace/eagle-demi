@@ -6,6 +6,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const updates = require('../repositories/updates');
 const notifications = require('../repositories/notifications');
+const projects = require('../repositories/projects');
 const updateParent = require('./update-parent');
 const images = require('../domain/update-images');
 const { heldSealed } = require('./access-sql');
@@ -90,10 +91,15 @@ async function publishOpenedImages(projectEagleId, items, derived, result) {
     logger.error('[update-acl] images of an opened update not published', { projectEagleId, error: err.message, stack: err.stack });
     return;
   }
+  // The project may close after `parent` was read; re-read it after the image read, per update.
+  const parentOpen = async () => {
+    const row = parent && await projects.readForWrite(parent.id);
+    return Boolean(row) && Array.isArray(row.read) && row.read.includes('public');
+  };
   for (const item of opened) {
     const id = String(item.id);
     try {
-      await images.publishFor({ req: null }, { ...item, id, read: readOf.get(id) }, parent && parent.id);
+      await images.publishFor({ req: null }, { ...item, id, read: readOf.get(id) }, parent && parent.id, parentOpen);
     } catch (err) {
       // publishFor already logged the stack.
       logger.error('[update-acl] images of an opened update not published', { projectEagleId, id, error: err.message });
