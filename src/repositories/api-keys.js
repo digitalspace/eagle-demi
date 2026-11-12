@@ -1,20 +1,8 @@
 'use strict';
 
 /**
- * Registry API keys — Cosmos NoSQL.
- *
- * Container `apikeys`, partitioned by `/id` where the id IS the public keyId. That makes every
- * verification a point read in a single partition, on the hot path of every API-key request. It
- * also means the container never needs a cross-partition query for auth — only the admin listing
- * does, and that is rare and small.
- *
- * NO read ACL applies here, and unlike `boundaries` that is not because the data is public — it is
- * because this container is never exposed through the ACL-driven read paths at all. It is reachable
- * only from `helpers/auth.js` (by id, internally) and the admin routes (which authMiddleware has
- * already gated). Deliberately stated so nobody later "fixes" the missing visibility predicate by
- * wiring this into a public read.
- *
- * `hash` never leaves this module in a caller-facing shape — see `redact`.
+ * Container `apikeys`, partitioned by `/id` = public keyId, so each verification is a point read.
+ * No read ACL: only `helpers/auth.js` and gated admin routes reach it; never wire it into a public read.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -38,9 +26,8 @@ async function upsert(record) {
 }
 
 /**
- * Every key, secret digests removed. Cross-partition by necessity; the container holds one item
- * per consumer, so this stays tiny. Revoked keys are included on purpose — an operator needs to
- * see that a key existed and was revoked, not have it silently vanish.
+ * Cross-partition, but one item per consumer keeps it tiny. Revoked keys stay listed on purpose, so
+ * an operator sees that a key existed.
  */
 async function listRedacted() {
   const { items } = await cosmos.query(CONTAINER, {
@@ -51,12 +38,8 @@ async function listRedacted() {
 }
 
 /**
- * Revoke by stamping `revokedAt`, never by deleting.
- *
- * The row is the only record that the key existed; deleting it would erase the audit trail and
- * make a leaked-key investigation impossible. `helpers/api-key.js:verify` treats any `revokedAt`
- * as fatal. Returns null for an unknown key, else `{ key, revoked }`; `revoked` is false when the
- * key was already revoked and nothing was written.
+ * Stamps `revokedAt`, never deletes: the row is the audit trail for a leaked key. Null for an
+ * unknown key; `revoked` is false when the key was already revoked.
  */
 async function revoke(keyId, at = new Date().toISOString()) {
   const existing = await getById(keyId);
@@ -68,12 +51,8 @@ async function revoke(keyId, at = new Date().toISOString()) {
 }
 
 /**
- * Best-effort usage stamp. Never let a bookkeeping failure break an authenticated request.
- *
- * `patch`, NEVER `upsert`. An upsert here writes the WHOLE record, and the record it would write
- * is the one held in the auth cache — which on any instance other than the one that served the
- * revocation is the PRE-revoke copy. That put `revokedAt: null` back permanently: a revoked key
- * un-revoked by its own next request. A patch cannot erase a field it does not name.
+ * Best effort. `patch`, never `upsert`: an upsert writes the auth-cache copy, which on another
+ * instance is pre-revoke, so the key's next request would un-revoke it.
  */
 async function touchLastUsed(keyId, at = new Date().toISOString()) {
   try {

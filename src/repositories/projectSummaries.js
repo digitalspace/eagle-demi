@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Stored per-project AI summaries, Cosmos NoSQL. Partitioned by `/id` (id IS the project id): the
- * page read is a single-partition point read, and there is exactly one row per project.
- *
- * No visibility predicate and no `access` argument, unlike the mirrored data repositories. The row
- * is DERIVED from documents that were already ACL-filtered when it was generated, and the route
- * that serves it gates on the PROJECT the caller can read (controllers/project-summary.js) before
- * it gets here. Adding an ACL here would be a second, weaker copy of that gate.
+ * One summary row per project, id = project id. No ACL: the row derives from ACL-filtered documents,
+ * and controllers/project-summary.js gates on the project first; a copy here would be weaker.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -20,11 +15,8 @@ async function getById(projectId) {
 }
 
 /**
- * Whole-record write. Upsert, not patch: a regeneration REPLACES the record, and a partial write
- * would leave one section's citations pointing at another section's sources.
- *
- * Null (no container configured) is thrown rather than returned, so a script that reports success
- * cannot have written nothing.
+ * Upsert, not patch: a partial write could leave citations pointing at another section's sources.
+ * Throws when no container is configured, so a script cannot report success for nothing.
  */
 async function upsert(record) {
   const saved = await cosmos.upsert(CONTAINER, record);

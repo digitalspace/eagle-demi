@@ -1,17 +1,8 @@
 'use strict';
 
 /**
- * Inspections repository — Cosmos NoSQL.
- *
- * Container `inspections` holds three Eagle kinds, told apart by `kind`: `Inspection`,
- * `InspectionElement` and `InspectionItem`. Partitioned by `/inspection`, the DEMI id of the
- * inspection a row belongs to (its own id on an `Inspection` row), so one inspection with all its
- * elements and items is one partition: the parent a child is capped by is read in-partition, and an
- * ACL cascade is one single-partition batch. `projectId` rides on every row as the scope axis, as
- * on `comments`; an inspection Eagle filed without a project carries null and no scoped caller reads it.
- *
- * Eagle's own `inspectionId`, `elementId` and `itemId` are the inspector app's client ids and are
- * stored as Eagle sends them; the parent links are `inspection` and `element`.
+ * Eagle `Inspection`, `InspectionElement` and `InspectionItem` rows by `kind`, partitioned by `/inspection`, so
+ * an inspection and its children share a partition. `projectId` is the scope axis; null hides it from scoped callers.
  */
 
 const cosmos = require('../db/cosmos-nosql');
