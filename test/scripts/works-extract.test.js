@@ -11,7 +11,7 @@ const {
   fingerprintOf, openEnvelope, openExtract, sealEnvelope, sign, sha256Hex
 } = require('../../src/utils/import-envelope');
 const {
-  buildWorkbooks, STAFF_VALUES, BI_SECRET_VALUES, PROJECT_NAMES, REAL_IDS
+  buildWorkbooks, STAFF_VALUES, NEVER_READ_VALUES, PROJECT_NAMES, REAL_IDS
 } = require('../fixtures/works-import/build-workbooks');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'works-extract-'));
@@ -72,34 +72,42 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   const { records, flags, counts } = await readFolder(sheetsDir);
   const first = records.projects.find(r => r.id === 45);
   assert.equal(first.name, PROJECT_NAMES[0], 'cached formula result, not an evaluated formula');
-  assert.equal(first.region, null);
+  assert.equal(first.regionEnv, null);
   assert.equal(first.ceaa, null);
   assert.equal(first.intakeDate, '1995-06-30');
-  assert.deepEqual(first.ref, { file: '01 Projects.xlsx', sheet: '1996', row: 2 });
-  assert.equal(records.projects.find(r => r.id === 7).substantiallyStartedDate, '2004-02-02');
+  assert.equal(first.status, 'Active');
+  assert.deepEqual(first.ref, { file: '01 - Project Business Intelligence Data 4.xlsx', sheet: 'Projects', row: 5 });
+  assert.equal(records.projects.find(r => r.id === 7).substantialStartDate, '2004-02-02');
   assert.equal(records.amendments.find(r => r.id === 45 && r.ref.slot === 2).endDate, null);
+  assert.deepEqual(records.suspensions.map(r => [r.ref.slot, r.appliedTo, r.endDate]),
+    [[1, 'Application Review', null], [2, 'Pre-Application', '1998-04-01']]);
+  assert.deepEqual(records.timeline2002.map(r => [r.name, r.decision, r.decisionDate]),
+    [[PROJECT_NAMES[2], 'Incomplete/Inactive', null]]);
 
   const kinds = flags.map(f => `${f.sheet}:${f.row}:${f.slot || 0}:${f.field}:${f.kind}`).sort();
   assert.deepEqual(kinds, [
-    '1996:2:0:intakeDate:sentinel',
-    '1996:4:0:decisionDate:endBeforeStart',
-    'Amendments:2:1:endDate:endBeforeStart'
+    'Amendments:5:1:endDate:endBeforeStart',
+    'Projects:5:0:intakeDate:sentinel',
+    'Projects:6:0:decisionDate:endBeforeStart',
+    'Projects:8:0:id:badId',
+    'Suspensions:5:1:endDate:nowFormula'
   ]);
   assert.deepEqual(counts, {
-    projects: 3, amendments: 3, suspensions: 1, extensions: 1, orderVariations: 2,
+    projects: 3, amendments: 3, suspensions: 2, extensions: 1, orderVariations: 2,
     commentPeriods: 2, timeline2002: 1, transitions: 2, transitionsDated: 1
   });
 });
 
-test('a workbook whose header moved is refused before any row is read', async () => {
+test('a block whose band label moved is refused before any row is read', async () => {
   const dir = fresh('moved');
   await buildWorkbooks(dir);
   const ExcelJS = require('exceljs');
+  const file = path.join(dir, '03 - Project Suspension Data.xlsx');
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(path.join(dir, '03 Suspensions.xlsx'));
-  workbook.worksheets[0].spliceColumns(3, 0, ['Region']);
-  await workbook.xlsx.writeFile(path.join(dir, '03 Suspensions.xlsx'));
-  await assert.rejects(readFolder(dir), /column C header is not "Applied To"/);
+  await workbook.xlsx.readFile(file);
+  workbook.getWorksheet('Suspensions').getCell('E3').value = 'Suspension 02';
+  await workbook.xlsx.writeFile(file);
+  await assert.rejects(readFolder(dir), /column E is not "Suspension 01" \/ "No\."/);
 });
 
 test('real-folder counts', { skip: !process.env.WORKS_REAL_DIR && 'set WORKS_REAL_DIR on the laptop' }, async () => {
@@ -120,6 +128,7 @@ test('test extract holds no staff column, no investment and no real number witho
     assert.equal(['epd', 'lead', 'notes', 'investment'].some(f => f in row), false);
     assert.equal(REAL_IDS.includes(row.id), false);
   }
+  assert.equal(plain.extract.records.timeline2002.some(row => 'id' in row), false);
 
   const kept = await extractTo(['--env', 'test', '--keep-staff-on-test', 'SIGNOFF-1', '--keep-numbers-on-test', 'SIGNOFF-2']);
   assert.deepEqual(kept.signoffRefs, { keepStaff: 'SIGNOFF-1', keepNumbers: 'SIGNOFF-2' });
@@ -149,7 +158,7 @@ test('surrogate passphrase is read from the keyring, not a file', async () => {
 
 test('transition read holds no EPD or Notes value', async () => {
   const { plaintext, extract } = await extractTo(['--env', 'prod']);
-  for (const value of BI_SECRET_VALUES) assert.equal(plaintext.toString('utf8').includes(value), false);
+  for (const value of NEVER_READ_VALUES) assert.equal(plaintext.toString('utf8').includes(value), false);
   assert.deepEqual(extract.records.transitions.map(r => Object.keys(r).sort()), [
     ['date', 'id', 'process', 'ref'], ['date', 'id', 'process', 'ref']
   ]);
@@ -160,7 +169,7 @@ test('extract writes no plaintext file', async () => {
   const { out, sealed, lines } = await extractTo(['--env', 'prod']);
   assert.deepEqual(fs.readdirSync(path.dirname(out)), ['extract.json']);
   assert.deepEqual(fs.readdirSync(sheetsDir).sort(), before);
-  for (const value of [...PROJECT_NAMES, ...STAFF_VALUES]) assert.equal(sealed.includes(value), false);
+  for (const value of [...PROJECT_NAMES, ...STAFF_VALUES]) assert.equal(sealed.includes(String(value)), false);
   assert.match(lines.at(-1), /^plaintextSha256=[0-9a-f]{64}$/);
   assert.equal(lines.some(line => PROJECT_NAMES.some(name => line.includes(name))), false);
 });

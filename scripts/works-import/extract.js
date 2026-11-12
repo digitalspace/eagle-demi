@@ -17,8 +17,7 @@ const SENTINEL_DATE = '1995-06-30';
 const NULL_TEXT = new Set(['', '---', 'n/a']);
 const MIN_PASSPHRASE = 20;
 const KEYRING_SERVICE = 'eagle-demi-works-import';
-const HEADER_ROW = 1;
-const SKIP_SHEETS = /\bbi\b|2018/i;
+const NOW_FORMULA = /\b(NOW|TODAY)\s*\(/i;
 const TRANSITION_PROCESS = 'transition order (2018)';
 const SEAL_PURPOSES = ['crosswalk', 'manual-match'];
 const OPEN_PURPOSES = ['crosswalk', 'report'];
@@ -27,55 +26,59 @@ const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
 const D = 'date';
 const T = 'text';
-const ID_NAME = [['A', 'id', 'ID', 'id'], ['B', 'name', 'Project Name', T]];
-const DATED = [['C', 'appliedTo', 'Applied To', T], ['D', 'startDate', 'Start Date', D], ['E', 'endDate', 'End Date', D]];
+const pad = n => String(n).padStart(2, '0');
+const fileNamed = name => new RegExp(`^${name}( \\d+)?\\.xlsx$`, 'i');
+// Entry: [letter, field (null: label checked, value never read), band label on the row above, header label, type].
+const under = (band, cols) => cols.map(([col, field, header, type = T]) => [col, field, band, header, type]);
+const blocks = (from, count, band, columns) => ({ from, count, band: s => `${band} ${pad(s)}`, columns });
+const ID_NAME = [...under('ID', [['A', 'id', 'ID', 'id']]), ...under('Project Information', [['B', 'name', 'Name']])];
+const INTERRUPTION = [[0, null, 'No.'], [1, 'type', 'Type'], [2, 'appliedTo', 'Applied To'],
+  [3, 'startDate', 'Start Date', D], [4, 'endDate', 'End Date', D], [5, null, 'Days']];
 const START_END = [['startDate', 'endDate']];
+const MAIN = { bandRow: 3, headerRow: 4 };
 
-// The only columns read: [letter, field, header the workbook must show, type]. Every header is
-// checked before any row is read, so a moved column stops the run instead of shifting values.
+// The only workbooks, tabs and columns read; every other tab (For BI, Lookups, TEMP, ...) is never opened.
 const SOURCES = [
-  {
-    key: 'projects', file: /^01\s.*project.*\.xlsx$/i, ranges: [['intakeDate', 'decisionDate']],
-    columns: [...ID_NAME,
-      ['C', 'status', 'Status', T], ['D', 'region', 'Region', T], ['E', 'subsector', 'Sub-Sector', T],
-      ['F', 'ceaa', 'CEAA', T], ['G', 'intakeType', 'Intake Type', T], ['H', 'intakeDate', 'Intake Date', D],
-      ['I', 'determinationType', 'Determination Type', T], ['J', 'determinationDate', 'Determination Date', D],
-      ['K', 's11Order', 's.11/14 Order', D], ['L', 'draftAir', 'Draft AIR', D], ['M', 'airAccepted', 'AIR Accepted', D],
-      ['N', 'start30', 'Start (30)', D], ['O', 'start180', 'Start (180)', D], ['P', 'start45', 'Start (45)', D],
-      ['Q', 'decision', 'Decision', T], ['R', 'decisionDate', 'Decision Date', D], ['S', 'far', 'F.A.R.', T],
-      ['T', 'epd', 'EPD', T], ['U', 'lead', 'Lead', T], ['V', 'investment', 'Investment', T], ['W', 'notes', 'Notes', T],
-      ['AE', 'substantiallyStarted', 'Substantially Started', T], ['AF', 'substantiallyStartedDate', 'Date', D],
-      ['AG', 'expiry', 'Expiry', D], ['AI', 'extensionDate', 'Extension Date', D],
-      ['AJ', 'extensionExpiry', 'Extension Expiry', D]]
-  },
-  {
-    key: 'amendments', file: /^02\s.*\.xlsx$/i, columns: ID_NAME, ranges: START_END,
-    bands: { from: 'D', width: 5, columns: [[0, 'title', 'Amendment', T], [1, 'complexity', 'Complexity', T],
-      [2, 'status', 'Status', T], [3, 'startDate', 'Start Date', D], [4, 'endDate', 'End Date', D]] }
-  },
-  { key: 'suspensions', file: /^03\s.*\.xlsx$/i, columns: [...ID_NAME, ...DATED], ranges: START_END },
-  { key: 'extensions', file: /^04\s.*\.xlsx$/i, columns: [...ID_NAME, ...DATED], ranges: START_END },
-  {
-    key: 'orderVariations', file: /^05\s.*\.xlsx$/i, columns: ID_NAME,
-    bands: { from: 'C', width: 2, columns: [[0, 'section', 'Section', T], [1, 'date', 'Date', D]] }
-  },
-  {
-    key: 'commentPeriods', file: /^06\s.*\.xlsx$/i, ranges: START_END,
-    columns: [...ID_NAME, ['C', 'type', 'Type', T], ['D', 'startDate', 'Start Date', D], ['E', 'endDate', 'End Date', D]]
-  },
-  {
-    key: 'timeline2002', file: /2002.*\.xlsx$/i,
-    columns: [...ID_NAME, ['C', 'determinationDate', 'Determination Date', D], ['D', 's11Order', 's.11/14 Order', D],
-      ['E', 'draftAir', 'Draft AIR', D], ['F', 'airAccepted', 'AIR Accepted', D], ['G', 'start30', 'Start (30)', D],
-      ['H', 'start180', 'Start (180)', D], ['I', 'start45', 'Start (45)', D], ['J', 'decision', 'Decision', T],
-      ['K', 'decisionDate', 'Decision Date', D]]
-  },
-  {
-    // Columns A, G and H only: the sheet's EPD (F) and Notes (E) columns are never read.
-    key: 'transitions', file: /assess\s*bi.*\.xlsx$/i, sheet: /^ea process data$/i,
-    columns: [['A', 'id', 'ID', 'id'], ['G', 'process', 'Process', T], ['H', 'date', 'Date', D]],
-    keep: row => String(row.process || '').toLowerCase() === TRANSITION_PROCESS
-  }
+  { key: 'projects', file: fileNamed('01 - Project Business Intelligence Data'), tab: 'Projects', ...MAIN,
+    ranges: [['intakeDate', 'decisionDate']], columns: [...ID_NAME,
+      ...under('Project Information', [['C', 'proponent', 'Proponent/Certificate Holder'], ['D', 'status', 'Status'],
+        ['E', null, 'Work'], ['F', 'ceaa', 'CEAA'], ['G', 'subsector', 'Subsector'], ['H', 'regionEnv', 'Region (ENV)'],
+        ['I', 'regionFlnro', 'Region (FLNRO)'], ['J', 'investment', 'Investment $'], ['K', 'notes', 'Notes']]),
+      ...under('Team Information', [['L', 'epd', 'EPD'], ['M', 'lead', 'Lead']]),
+      ...under('Intake (Start)', [['Q', 'intakeType', 'Type'], ['R', 'intakeDate', 'Date', D]]),
+      ...under('Determination', [['S', 'determinationType', 'Type'], ['T', 'determinationDate', 'Date', D]]),
+      ...under('Scope', [['U', 's11Order', 's.11/14 Order', D], ['V', 'draftAir', 'Draft AIR', D], ['W', 'airAccepted', 'AIR', D]]),
+      ...under('Evaluation', [['X', 'start30', 'Start (30)', D]]), ...under('Review', [['Y', 'start180', 'Start (180)', D]]),
+      ...under('Decision', [['Z', 'start45', 'Start (45)', D], ['AA', 'decision', 'Decision'],
+        ['AB', 'decisionDate', 'Date', D], ['AC', 'far', 'F.A.R.']]),
+      ...under('Substantially Started', [['AE', 'substantialStartStatus', 'Status'],
+        ['AF', 'substantialStartDate', 'Date', D], ['AG', 'substantialStartFlag', 'SS?']]),
+      ...under('Certificate Information', [['AH', 'expiryDate', 'Expiry Date', D],
+        ['AI', 'extensionDate', 'Extension Date', D], ['AJ', 'extensionExpiry', 'Extension Expiry', D]])] },
+  { key: 'amendments', file: fileNamed('02 - Project Amendment Data'), tab: 'Amendments', ...MAIN, columns: ID_NAME,
+    ranges: START_END, blocks: blocks('D', 15, 'Amendment', [[0, null, 'No.'], [1, 'complexity', 'Complexity'],
+      [2, 'status', 'Status'], [3, 'startDate', 'Start Date', D], [4, 'endDate', 'End Date', D]]) },
+  { key: 'suspensions', file: fileNamed('03 - Project Suspension Data'), tab: 'Suspensions', ...MAIN, columns: ID_NAME,
+    ranges: START_END, blocks: blocks('E', 10, 'Suspension', INTERRUPTION) },
+  { key: 'extensions', file: fileNamed('04 - Project Extension Data'), tab: 'Extensions', ...MAIN, columns: ID_NAME,
+    ranges: START_END, blocks: blocks('E', 10, 'Extension', INTERRUPTION) },
+  { key: 'orderVariations', file: fileNamed('05 - Project Section 13 Data'), tab: 'Section 13', ...MAIN, columns: ID_NAME,
+    blocks: blocks('D', 10, 'Variation', [[0, null, 'No.'], [1, 'date', 'Date', D]]) },
+  { key: 'commentPeriods', file: fileNamed('06 - Project PCP Data'), tab: 'PCPs', ...MAIN, columns: ID_NAME,
+    ranges: START_END, blocks: blocks('D', 10, 'Public Comment Period',
+      [[0, 'type', 'Type'], [1, 'startDate', 'Start Date', D], [2, 'endDate', 'End Date', D]]) },
+  // No ID column: these rows join to the register by project name.
+  { key: 'timeline2002', file: fileNamed('Calculating Timelines for the 2002 Act'), tab: '2002', bandRow: 8, headerRow: 9,
+    columns: [...under('Project Information', [['A', 'name', 'Project Name']]),
+      ...under('Intake (A)', [['B', 'intakeDate', 'Intake (A)', D]]), ...under('s.10 / Det (B)', [['D', 'determinationDate', 'Determination', D]]),
+      ...under('Scope (C)', [['F', 's11Order', 's.11/14 Order', D]]), ...under('AIR (D)', [['H', 'airAccepted', 'AIR Accepted', D]]),
+      ...under('Evaluation (F)', [['N', 'start30', 'Start (30)', D]]), ...under('Review (H)', [['Q', 'start180', 'Start (180)', D]]),
+      ...under('Referral (I)', [['S', 'start45', 'Start (45)', D]]),
+      ...under('Decision (J)', [['U', 'decisionDate', 'Date', D], ['V', 'decision', 'Decision']])] },
+  // Columns A, G and H only: the sheet's Notes (E) and EPD (F) columns are never read.
+  { key: 'transitions', file: fileNamed('01 - Project Assessment BI Sheet'), tab: 'EA Process Data', ...MAIN,
+    columns: [...under('ID', [['A', 'id', 'No.', 'id']]), ...under('Intake', [['G', 'process', 'Type'], ['H', 'date', 'Date', D]])],
+    keep: row => String(row.process || '').toLowerCase() === TRANSITION_PROCESS }
 ];
 
 function cached(value) {
@@ -86,8 +89,10 @@ function cached(value) {
   return null;
 }
 
-function typed(raw, type) {
-  const value = cached(raw);
+function typed(cell, type) {
+  // A =NOW() date is "still open" in the sheet; its cached value is only the day it was saved.
+  if (type === D && NOW_FORMULA.test(cell.formula || '')) return { value: null, flag: 'nowFormula' };
+  const value = cached(cell.value);
   if (typeof value === 'string' && NULL_TEXT.has(value.trim().toLowerCase())) return { value: null };
   if (value == null) return { value: null };
   if (type === 'id') {
@@ -103,36 +108,32 @@ function typed(raw, type) {
   return { value: typeof value === 'string' ? value.trim() : value };
 }
 
-function headerText(ws, col) {
-  return String(cached(ws.getRow(HEADER_ROW).getCell(col).value) ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+const label = (ws, rowNo, col) =>
+  String(cached(ws.getRow(rowNo).getCell(col).value) ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+const columnNumber = letters => [...letters].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+
+/** [base columns, then one column list per block slot], each entry [column, field, band, header, type]. */
+function columnsOf(source) {
+  const b = source.blocks;
+  const slot = s => b.columns.map(([offset, field, header, type = T]) =>
+    [columnNumber(b.from) + (s - 1) * b.columns.length + offset, field, b.band(s), header, type]);
+  return [source.columns, ...Array.from({ length: b ? b.count : 0 }, (_, i) => slot(i + 1))];
 }
 
-function bandColumns(bands, slot) {
-  const start = ws => ws.getColumn(bands.from).number + (slot - 1) * bands.width;
-  return ws => bands.columns.map(([offset, field, header, type]) => [start(ws) + offset, field, header, type]);
-}
-
-/** Refuses a sheet whose headers differ from the map; returns how many bands it holds. */
+/** Refuses a sheet whose band or header labels differ from the map, before any row is read. */
 function checkHeaders(ws, source, file) {
-  const expect = (col, header) => {
-    if (headerText(ws, col) !== header.toLowerCase()) {
-      throw new Error(`${file} / ${ws.name}: column ${ws.getColumn(col).letter} header is not "${header}"`);
+  for (const [col, , band, header] of columnsOf(source).flat()) {
+    if (label(ws, source.bandRow, col) !== band.toLowerCase() || label(ws, source.headerRow, col) !== header.toLowerCase()) {
+      throw new Error(`${file} / ${ws.name}: column ${ws.getColumn(col).letter} is not "${band}" / "${header}"`);
     }
-  };
-  source.columns.forEach(([col, , header]) => expect(col, header));
-  if (!source.bands) return 0;
-  let slots = 0;
-  while (headerText(ws, ws.getColumn(source.bands.from).number + slots * source.bands.width)) {
-    slots += 1;
-    bandColumns(source.bands, slots)(ws).forEach(([col, , header]) => expect(col, header));
   }
-  return slots;
 }
 
 function pick(row, columns, ref, flags) {
   const out = {};
-  for (const [col, field, , type] of columns) {
-    const { value, flag } = typed(row.getCell(col).value, type);
+  for (const [col, field, , , type] of columns) {
+    if (!field) continue;
+    const { value, flag } = typed(row.getCell(col), type);
     out[field] = value;
     if (flag) flags.push({ ...ref, field, kind: flag });
     if (type === D && value === SENTINEL_DATE) flags.push({ ...ref, field, kind: 'sentinel' });
@@ -140,7 +141,7 @@ function pick(row, columns, ref, flags) {
   return out;
 }
 
-const blank = (rec, skip = []) => Object.entries(rec).every(([k, v]) => skip.includes(k) || v == null);
+const blank = rec => Object.values(rec).every(v => v == null);
 
 function rangeFlags(source, rec, ref, flags) {
   for (const [start, end] of source.ranges || []) {
@@ -149,28 +150,32 @@ function rangeFlags(source, rec, ref, flags) {
 }
 
 function readSheet(ws, source, file, out) {
-  const slots = checkHeaders(ws, source, file);
-  for (let r = HEADER_ROW + 1; r <= ws.rowCount; r += 1) {
+  checkHeaders(ws, source, file);
+  const [, ...slots] = columnsOf(source);
+  for (let r = source.headerRow + 1; r <= ws.rowCount; r += 1) {
     const row = ws.getRow(r);
     const ref = { file, sheet: ws.name, row: r };
     const flags = [];
     const base = pick(row, source.columns, ref, flags);
-    if (blank(base) || (source.keep && !source.keep(base))) continue;
-    if (base.id == null) {
+    // Ids and slot numbers are pre-filled far below the data, so only a named project is a row.
+    if (source.keep ? !source.keep(base) : base.name == null) continue;
+    if ('id' in base && base.id == null) {
       out.flags.push({ ...ref, field: 'id', kind: 'badId' });
       continue;
     }
-    if (!source.bands) {
+    if (!source.blocks) {
       rangeFlags(source, base, ref, flags);
       out.records[source.key].push({ ref, ...base });
     }
-    for (let slot = 1; slot <= slots; slot += 1) {
-      const slotRef = { ...ref, slot };
-      const fields = pick(row, bandColumns(source.bands, slot)(ws), slotRef, flags);
-      if (blank(fields)) continue;
-      rangeFlags(source, fields, slotRef, flags);
+    slots.forEach((columns, i) => {
+      const slotRef = { ...ref, slot: i + 1 };
+      const slotFlags = [];
+      const fields = pick(row, columns, slotRef, slotFlags);
+      if (blank(fields)) return;
+      rangeFlags(source, fields, slotRef, slotFlags);
+      flags.push(...slotFlags);
       out.records[source.key].push({ ref: slotRef, id: base.id, name: base.name, ...fields });
-    }
+    });
     out.flags.push(...flags);
   }
 }
@@ -184,17 +189,17 @@ function countsOf(records) {
 
 /** Reads the mapped columns of every workbook in `dir`, in memory. */
 async function readFolder(dir) {
-  const files = fs.readdirSync(dir).filter(f => /\.xlsx$/i.test(f) && !f.startsWith('~$'));
+  const files = fs.readdirSync(dir);
   const out = { records: {}, flags: [] };
   for (const source of SOURCES) {
     const matches = files.filter(f => source.file.test(f));
     if (matches.length !== 1) throw new Error(`${source.key}: expected one workbook, found ${matches.length}`);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(path.join(dir, matches[0]));
+    const ws = workbook.getWorksheet(source.tab);
+    if (!ws) throw new Error(`${matches[0]}: no tab "${source.tab}"`);
     out.records[source.key] = [];
-    for (const ws of workbook.worksheets) {
-      if (source.sheet ? source.sheet.test(ws.name) : !SKIP_SHEETS.test(ws.name)) readSheet(ws, source, matches[0], out);
-    }
+    readSheet(ws, source, matches[0], out);
   }
   return { ...out, counts: countsOf(out.records) };
 }
@@ -220,13 +225,8 @@ function passphraseFrom(ref, env) {
   return secret;
 }
 
-function writeNew(file, data) {
-  fs.writeFileSync(file, data, { mode: 0o600, flag: 'wx' });
-}
-
-function surrogateKey(passphrase, salt) {
-  return crypto.scryptSync(passphrase, salt, 32, SCRYPT);
-}
+const writeNew = (file, data) => fs.writeFileSync(file, data, { mode: 0o600, flag: 'wx' });
+const surrogateKey = (passphrase, salt) => crypto.scryptSync(passphrase, salt, 32, SCRYPT);
 
 function loadSurrogates(file, passphrase) {
   if (!fs.existsSync(file)) return new Map();
@@ -321,7 +321,7 @@ async function extract(o, io) {
   const data = await readFolder(o.in);
   for (const row of Object.values(data.records).flat()) {
     if (!policy.staffIncluded) STAFF_FIELDS.forEach(f => delete row[f]);
-    if (surrogates) row.id = surrogateOf(surrogates.map, row.id);
+    if (surrogates && 'id' in row) row.id = surrogateOf(surrogates.map, row.id);
   }
   if (surrogates) saveSurrogates(o.surrogates, surrogates.map, surrogates.passphrase);
   const plaintext = Buffer.from(JSON.stringify({ schemaVersion: 1, env: o.env, ...policy, ...data }));
