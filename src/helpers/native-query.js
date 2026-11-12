@@ -118,7 +118,7 @@ function rangeBound(op, day) {
   return `${day}T${op === 'ge' ? '00:00:00.000' : '23:59:59.999'}Z`;
 }
 
-/** A real `YYYY-MM-DD` calendar day: `2026-02-30` passes the shape and fails the round trip. */
+/** A real `YYYY-MM-DD` calendar day: February 30 passes the shape and fails the round trip. */
 function isDay(value) {
   if (!DAY.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
@@ -139,18 +139,8 @@ function booleansOf(spec, kind, q, access) {
 }
 
 /**
- * Contract: `page` (1-based offset paging), `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the
- * kind's declared filters. Anything else in the query string, or a repeated control parameter, is a 400.
- * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
- * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]}, anyOf: {field: [values]},
- * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool}, flags: {field: bool} }`.
- * `filters`, `anyOf`, `contains`, `presence` and `flags` are keyed by row field, whatever name the query used, so
- * `nativeCriteria` renders them from `parsed` alone. `spec.anyOf` names filters on an array field: they
- * leave `filters` for `anyOf`, and match a row whose array holds any of the values. `spec.ranges` is query name ->
- * `{ field, op: 'ge'|'le' }`, one day each, for a bound with no row field of its own
- * (`datePostedStart` -> `datePosted ge`). `spec.contains` is query name -> field, a case-blind
- * substring; `spec.presence` is query name -> field, `true` when it holds a value other than null or '';
- * `spec.flags` is query name -> boolean field, `true` when it is true, `false` otherwise (missing included).
+ * Paging, one allow-listed `sort`, `count=true`, `ids=`, `q=` and `spec`'s filters; any other or repeated name is `{ error }`.
+ * Each filter kind in the answer is keyed by row field, whatever name the query used, so `nativeCriteria` needs `parsed` only.
  */
 function parseNativeQuery(spec, query, access) {
   const names = filterNames(spec);
