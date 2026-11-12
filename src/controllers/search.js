@@ -1347,13 +1347,8 @@ exports.search = async (req, res) => {
       droppedKeys[kind].push(...keys);
     };
 
-    // A FIELD THE LIVE INDEX COULD NOT ANSWER, told to the caller the same way `dropped` is. The
-    // search layer drops such a field and retries once rather than failing the whole page (see
-    // `send` in ai-search), which keeps the tab up — but a page quietly missing a column reads
-    // exactly like a page whose column is empty, and on 2026-09-08 that column was the only clue.
-    // ACCUMULATED, not replaced: one page can be degraded twice over — a column the live index
-    // could not answer AND a filter applied over half-stamped rows — and the second call to say so
-    // would otherwise erase the first.
+    // A field the live index could not answer (ai-search `send` drops it and retries), told like `dropped`.
+    // Accumulated, not replaced: one page can be degraded twice, and the second note must not erase the first.
     let degraded = null;
     const noteDegraded = (meta) => {
       if (!meta || !meta.degraded) return;
@@ -1538,12 +1533,8 @@ exports.search = async (req, res) => {
 
       // Bare list: a read, in the repository's own order.
       try {
-        // An offset page read through `readPage`, which follows continuation tokens past the
-        // 1,000 rows one fetch carries. `pageSize` is clamped to 1,000, and a page past
-        // MAX_PAGE_DEPTH rows is refused with 400 below.
-        //
-        // Only `project` can still be dropped here — anything else is criteria and went to the
-        // index — and it is genuinely inexpressible: `projects` has no project axis.
+        // `readPage` follows continuation tokens; `pageSize` is clamped and a page past MAX_PAGE_DEPTH is a 400.
+        // Only `project` can still drop here: other criteria went to the index, and `projects` has no project axis.
         noteDropped('filter', eagleQuery.filterKeysIn(req.query));
 
         const projects = await projectsRepo.listPage(access, { pageNum, pageSize });
@@ -1636,10 +1627,8 @@ exports.search = async (req, res) => {
           const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
           noteDropped('filter', dropped);
 
-          // `?docIds=a|b|c` — eagle-public's multi-id document fetch (api.ts getDocumentsByMultiId),
-          // pipe-joined because `buildValues` joins on `|`. ANDed onto the filter as one clause
-          // through the same `inClause` the ACL uses; `search.js:137` builds a similar scope over
-          // the CHUNKS index `documentId`, and this one is the DOCUMENTS index key `id`.
+          // `?docIds=a|b|c`, eagle-public's multi-id fetch (pipe-joined by `buildValues`), ANDed on as one
+          // `inClause` over the documents index key `id`.
           const docScope = documentIdScope(req.query.docIds);
           const scopedDocFilter = docScope
             ? (filter ? `(${filter}) and ${docScope}` : docScope)
@@ -1765,19 +1754,8 @@ exports.search = async (req, res) => {
           ? (filter ? `(${filter}) and ${scope}` : scope)
           : filter;
 
-        // THE SECOND DEGRADED STATE, and it is now the state with NOWHERE LEFT TO GO. A facet
-        // withheld because this scope is mid-backfill is answered through the documents index
-        // instead, which is correct and complete up to the scope cap — nothing to mark. Only when
-        // that recovery is over the cap as well does the caller get a short answer, and only then
-        // is there something to say. The REASON only, never the count: this route answers
-        // anonymously.
-        //
-        // THREE REASONS, because three different things clear them: the backfill finishing, the
-        // service answering again, and an operator applying the index definition. Any of them can
-        // be true at once. Without the third, a short page in a deploy window carried no reason at
-        // all, which on the wire is an ordinary over-cap drop — the one shape that tells the caller
-        // nothing is coming.
-        // See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
+        // Short only when the documents-index recovery is over the scope cap too; reasons only, never a count
+        // (anonymous route). Each clears differently: wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
         if (capped) {
           const reasons = chunkQuery.facetReasons(liveFacets);
           if (reasons.length) noteDegraded({ degraded: { reasons } });
