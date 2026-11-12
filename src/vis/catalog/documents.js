@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a stored document. Same contract as catalog/projects.js: `defaultVis`
- * is the baseline level a field is visible at, `maxVis` the ceiling a per-record dial may raise it
- * to, and a field absent from this table is removed from every response.
- *
- * Authored from `transformDocument` (src/seed/transform.js), the four keys `createDocument` adds and
- * the two `patchExtraction` adds. Day-one defaults reproduce the output of the `publicView` this
- * replaced (docs/rbac-architecture.md §2 item 3), so everything it let through is 4/4.
+ * Field visibility for a stored document: `defaultVis` is the baseline level, `maxVis` the ceiling
+ * a per-record dial may raise it to, and a field absent here is removed from every response.
  */
 module.exports = {
   // Structural / identity.
@@ -51,7 +46,7 @@ module.exports = {
   // SHA-256 of the file as uploaded to eagle-api. Not rendered anywhere, but not sensitive either.
   uploadSha256: { defaultVis: 4, maxVis: 4 },
 
-  // Records-management identifiers; public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
+  // Records-management identifiers; public by EAO policy (docs/rbac-architecture.md §3 question 2).
   orcsClassification: { defaultVis: 4, maxVis: 4 },
   edrmsRecordNumber: { defaultVis: 4, maxVis: 4 },
 
@@ -59,9 +54,7 @@ module.exports = {
   contentExtracted: { defaultVis: 4, maxVis: 4 },
   contentExtractedAt: { defaultVis: 4, maxVis: 4 },
   contentPageCount: { defaultVis: 4, maxVis: 4 },
-  // Page provenance. `pageNumbered` says the extraction carried page boundaries, `pageCount` is how
-  // many pages it described — NOT `contentPageCount`, which counts chunks and always has. Both are
-  // absent on every document extracted before this existed, which is the honest "unknown".
+  // `pageCount` counts PDF pages; `contentPageCount` above counts chunks. Absent = unknown.
   pageNumbered: { defaultVis: 4, maxVis: 4 },
   pageCount: { defaultVis: 4, maxVis: 4 },
   contentExtractionError: { defaultVis: 4, maxVis: 4 },
@@ -75,9 +68,8 @@ module.exports = {
   // never public, and 0/0 also refuses it as a body key — only the pdf-title endpoints write it.
   pdfTitle: { defaultVis: 0, maxVis: 0 },
 
-  // Never public. `s3Key` is the object-store key — the bytes are reached through
-  // GET /documents/:id/download, which reads it off the raw repository row. `ownRead` is the
-  // pre-cascade ACL, so it is the same role vocabulary as `read`.
+  // Never public. The download route reads `s3Key` off the raw row; `ownRead` is the
+  // pre-cascade ACL.
   s3Key: { defaultVis: 0, maxVis: 0 },
   read: { defaultVis: 0, maxVis: 0 },
   ownRead: { defaultVis: 0, maxVis: 0 },

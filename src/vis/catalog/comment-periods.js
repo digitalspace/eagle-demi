@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for a mirrored comment period. See catalog/projects.js for the rules.
- *
- * The public fields are what eagle-public renders on the engagement tab today, so they are 4/4.
- * The staff-side fields of the Eagle model are 2/2: staff read them in eagle-api, and nothing here
- * may publish them.
+ * Field visibility for a mirrored comment period (rules in catalog/projects.js). Fields the
+ * engagement tab renders are 4/4; Eagle staff-side fields are 2/2 and never published.
  */
 module.exports = {
   // Structural / identity.

@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * Two fields whose ACL says nothing about them, so only the redactor can withhold them.
- *
- * `comments.author` is the submitter's name on a PUBLISHED comment: the row is public, and whether
- * the name is depends on `isAnonymous`. `projects.pins` is the pinned-proponent list: eagle-api
- * ignores the organization's own `read` and governs it with the project's `pinsRead[]`
- * (api/controllers/pins.js), so a public project does not imply public pins.
+ * `comments.author` and `projects.pins` sit on public rows, but their visibility depends on
+ * `isAnonymous` and `pinsRead[]`, so only the redactor can withhold them.
  */
 
 process.env.NODE_ENV = 'test';

@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The mapping file, loaded and checked.
- *
- * mapping.json NEVER holds a value — only the vault secret name, where the copy goes, and which
- * workloads read it. One entry per KEY, because an OpenShift Secret with five keys is five vault
- * secrets: rotating one of them must not require re-writing the other four.
+ * mapping.json never holds a value. One entry per key, so rotating one key of a Secret does not
+ * rewrite the others.
  */
 
 const path = require('path');
@@ -16,10 +13,8 @@ function environmentOf(namespace) {
 }
 
 /**
- * Which vault secret holds the API token for a namespace.
- *
- * `demi-kv-test` is the nonprod vault and serves both nonprod namespaces, so the dev entries carry
- * a `dev-` prefix the way every other dev name in mapping.json does.
+ * `demi-kv-test` serves both nonprod namespaces, so dev names carry a `dev-` prefix like every
+ * other dev name in mapping.json.
  */
 function tokenSecretName(namespace) {
   const env = environmentOf(namespace);

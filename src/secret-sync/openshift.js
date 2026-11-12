@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * The bit of the Kubernetes API this sync needs, over `fetch`.
- *
- * No `oc` binary and no client library: a Flex Consumption worker has no shell to run one in, and
- * the three calls below (get, replace, patch) are the whole surface. Node 22 has `fetch`.
+ * Kubernetes API over `fetch`: a Flex Consumption worker has no shell for `oc`, and three calls
+ * do not justify a client library.
  */
 
 const SECRETS_PATH = (namespace) => `/api/v1/namespaces/${namespace}/secrets`;
@@ -15,11 +13,8 @@ const WORKLOAD_PATH = {
 };
 
 /**
- * Where a workload carries the annotation that makes its pods roll.
- *
- * The annotation goes on the POD TEMPLATE, not the workload: an annotation on the workload's own
- * metadata changes nothing about the pod spec, so the ReplicaSet stays as it is and no pod
- * restarts. A CronJob's template sits one level deeper, under its job template.
+ * The annotation goes on the pod template: on the workload's own metadata it changes no pod spec
+ * and nothing restarts.
  */
 function restartPatch(kind, timestamp) {
   const annotations = { 'secret-sync/restarted-at': timestamp };
@@ -64,11 +59,8 @@ function createClient({ apiServer, token, fetchImpl = fetch }) {
     getSecret: (namespace, name) => call('GET', `${SECRETS_PATH(namespace)}/${name}`),
 
     /**
-     * Whole-object PUT over a Secret that already exists.
-     *
-     * Replacing is the only write this app can make: its Role grants `update` on named Secrets and
-     * nothing else, because an unnamed `create` would let the ServiceAccount mint a Secret of any
-     * type — a service-account token for another account included.
+     * Whole-object PUT, the only write the Role allows: `create` would let the ServiceAccount mint
+     * any Secret, including another account's token.
      */
     replaceSecret: (namespace, name, secret) =>
       call('PUT', `${SECRETS_PATH(namespace)}/${name}`, secret),

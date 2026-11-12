@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * moveToQuarantine through a real `createBlobClientFor` client, with the SDK's network calls
- * replaced: the copy must land in the quarantine container of the intake account, read through a
- * read-only SAS on `incoming`, and the staging blob must go.
+ * A real `createBlobClientFor` client with the SDK's network calls replaced, so the copy source
+ * and SAS shape are asserted as sent.
  */
 
 process.env.NODE_ENV = 'test';

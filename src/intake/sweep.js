@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * `intakeScanSweep`, two passes per tick. The result pass reads Defender's scan result from each
- * pending upload's blob index tags, oldest first, and releases or rejects it; a link never used is
- * rejected `no-upload` once the link has expired. The timeout pass then rejects rows still pending
- * after INTAKE_PENDING_TIMEOUT_HOURS (`timeout`, or `no-upload`). Each tick also logs the month's
- * scanned bytes against Defender's monthly cap, for the cap alerts.
+ * Result pass reads each pending upload's Defender tags and settles it; timeout pass rejects rows
+ * pending past INTAKE_PENDING_TIMEOUT_HOURS. Each tick logs scanned bytes for the cap alerts.
  */
 
 const config = require('../config');

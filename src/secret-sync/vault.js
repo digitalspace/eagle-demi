@@ -1,15 +1,8 @@
 'use strict';
 
 /**
- * Key Vault reads for one run.
- *
- * The user-assigned client id picks the identity: the app carries exactly one user-assigned
- * identity (`demi-identity-<env>`, which already holds Key Vault Secrets User), and the credential
- * has no other way to choose between several. src/utils/azure-credential.js is the one file outside
- * src/secret-sync the package script copies in.
- *
- * A missing secret is `null`, not a throw — the caller decides what a missing name means, and for
- * this sync it means "leave the live copy alone and fail the run". Any other error still throws.
+ * A missing secret is `null`, not a throw, so the caller can keep the live copy and fail the run.
+ * src/utils/azure-credential.js is the one outside file the package script copies in.
  */
 
 const { SecretClient } = require('@azure/keyvault-secrets');

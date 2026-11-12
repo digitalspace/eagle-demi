@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The staff-side Eagle fields the comment, comment-period and organization mirrors promote: staff
- * read them, anonymous callers do not, and what anonymous callers already read does not move.
- *
- * Each row is captured from the real mirror and redacted with real resolved access, so a field the
- * mirror stops writing, or a catalog entry that widens, fails here.
+ * Rows come from the real mirror with real resolved access, so a field the mirror stops writing,
+ * or a catalog entry that widens, fails here.
  */
 
 process.env.NODE_ENV = 'test';

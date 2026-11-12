@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * What each Defender for Storage scan result does to an intake upload. Only the exact clean string
- * releases the file, because the release read's ABAC condition matches that string exactly; any
- * other result, including one this table does not know, rejects it.
+ * Only the exact clean string releases a file, because the release read's ABAC condition matches
+ * it exactly; any other result, known or not, rejects it.
  */
 
 const CLEAN = 'No threats found';

@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * Pure transforms from upstream shapes into the DEMI NoSQL model.
- *
- * No I/O, no clients — every function here takes plain objects and returns plain objects, so the
- * seed rules are unit-testable against real upstream payloads. Projects are handled separately
- * in src/merge/project.js because they are a MERGE of two sources; everything here has one
- * source each.
- *
- * The consistent rule across all of them: **never carry an upstream claim we cannot honour.**
- * A document's `isPublished` is derived rather than copied, `contentExtracted` is reset, and a
- * record with no resolvable project is dropped instead of given a fabricated parent.
+ * Pure upstream-to-DEMI transforms, no I/O. Never carry an upstream claim DEMI cannot honour:
+ * derive `isPublished`, reset `contentExtracted`, drop a record with no resolvable project.
  */
 
 const { readForLevel } = require('../helpers/access-sql');
@@ -30,14 +22,7 @@ function toIsoOrNull(value) {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-/**
- * Resolve a List ObjectId reference to its label.
- *
- * Eagle stores `type` and `milestone` as ObjectId refs into a 213-item `List` collection. DEMI
- * has no List container, so labels are resolved at seed time. An unresolvable ref keeps its raw
- * value rather than becoming null — losing the reference entirely would make the field
- * unrecoverable, while keeping it leaves a trail.
- */
+/** An unresolvable List ref keeps its raw value, not null, so the reference is not lost. */
 function resolveListLabel(ref, listLookup) {
   if (!ref) return null;
   const key = String(ref);
@@ -45,13 +30,8 @@ function resolveListLabel(ref, listLookup) {
 }
 
 /**
- * The raw List ObjectId, kept ALONGSIDE the label rather than instead of it.
- *
- * eagle-public's document filter panel sends List ObjectIds, never labels
- * (`documents-tab.component.ts:47`), so a row holding only the label has nothing for those values
- * to compare against: the filter matches zero rows under a 200, which reads as "no results" and
- * not as a broken filter. Resolving to a label and discarding the id is what made every one of
- * those filters inexpressible.
+ * Kept beside the label: eagle-public's filter panel sends List ObjectIds, and a label-only row
+ * silently matches zero rows.
  */
 function listRefId(ref) {
   return ref ? String(ref) : null;
@@ -67,20 +47,8 @@ function carriedDemiState(existing) {
 }
 
 /**
- * The pending-re-stamp flag, carried forward exactly like the extraction state beside it.
- *
- * A Cosmos upsert REPLACES the row and this transform builds it from upstream, so without this a
- * re-seed (or any Eagle push) clears DEMI's own "the chunks never got their new values" flag while
- * the chunks still hold the old ones — and a missed re-stamp is invisible again, because every
- * read still answers 200. Carried only when raised: `false` and absent mean the same thing, and
- * the handler clears the flag when a patch lands.
- *
- * BOTH fields, and the token VERBATIM. The token is what a clear is guarded on, so a re-seed that
- * kept the flag and re-minted the token would hand the in-flight re-stamp a value it cannot match:
- * its clear comes back `conflict` and the flag stays up on chunks that are already correct. A
- * re-seed that does not move the parent fields owes nothing here — it is passing the debt through,
- * not taking it on. The seed mints a fresh token only where it MOVED them (`scripts/seed-nosql.js`
- * flush), which is a new debt and needs a token of its own.
+ * An upsert replaces the row, so a raised re-stamp flag is carried or a push would clear it. The
+ * token is kept verbatim: an in-flight re-stamp's clear is guarded on it.
  */
 function carriedPending(existing) {
   if (!existing || existing.parentFieldsPending !== true) return {};
@@ -98,9 +66,7 @@ function carriedPending(existing) {
  * @param {Map}      listLookup       List `_id` -> name
  * @param {object}   [opts]
  * @param {string}   [opts.now]       ISO timestamp, injected for deterministic tests
- * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state,
- *                                    PDF title record and a raised pending-re-stamp flag are carried
- *                                    onto the result
+ * @param {object}   [opts.existing]  the stored row; its DEMI-owned state is carried over
  * @param {string[]} [opts.projectRead] the parent project's ACL, which this one is narrowed against
  */
 function transformDocument(doc, projectId, listLookup, opts = {}) {
@@ -167,14 +133,12 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     read,
     // Eagle's read before the project cap, which `documents.setAclForProject` re-derives from.
     ownRead: eagleBaseAcl(doc.read),
-    // DERIVED from read[], not copied. Upstream `isPublished` is true on only 66% of documents
-    // that are unambiguously public by their ACL, so copying it would hide a third of the
-    // corpus. read[] is authoritative and isPublished is its mirror (ADR-004).
+    // Derived, not copied: upstream `isPublished` is false on a third of documents whose ACL is
+    // public. read[] is authoritative (ADR-004).
     isPublished: read.includes('public'),
 
-    // Never carried from UPSTREAM — Eagle's `contentExtracted` is true on records with no chunks
-    // behind them. Carried from the EXISTING DEMI row, because a Cosmos upsert replaces the item
-    // and resetting these would orphan the chunks and re-queue the whole corpus for extraction.
+    // Eagle's `contentExtracted` lies, so these come from the stored DEMI row; resetting them would
+    // orphan the chunks and re-queue the corpus.
     contentExtracted: false,
     contentExtractedAt: null,
     contentPageCount: 0,
@@ -187,16 +151,8 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
 }
 
 /**
- * A static boundary export -> the DEMI `boundaries` model.
- *
- * **Simplified geometry only.** Full-resolution GeoJSON is already a build artifact under
- * frontend/public/assets/geojson/ that the frontend prefers anyway; keeping it here put the
- * largest districts near the 2 MB item cap and made every write expensive to index. Dropping it
- * takes the largest item to 57 KB.
- *
- * No `read[]`: this is public reference data and the boundaries repository deliberately applies
- * no ACL predicate. Adding an empty one would make the standard clause match nothing and blank
- * the map.
+ * Simplified geometry only: full-resolution districts near the 2 MB item cap, and the frontend
+ * ships its own full GeoJSON.
  */
 function transformBoundary(item, opts = {}) {
   if (!item || !item._id) {
@@ -211,9 +167,8 @@ function transformBoundary(item, opts = {}) {
     throw new TypeError(`[seed] boundary ${item._id} has no simplifiedGeometry`);
   }
 
-  // Reference geography is public by default — that is what every seeded row is. `eagleBaseAcl`
-  // preserves an upstream `read[]`, minus compliance, when the source supplies one, so a restricted
-  // shapefile keeps its restriction through a re-seed instead of being republished.
+  // Public by default, but an upstream `read[]` is kept so a restricted shapefile stays
+  // restricted through a re-seed.
   const read = Array.isArray(item.read) && item.read.length > 0
     ? eagleBaseAcl(item.read)
     : readForLevel(4);

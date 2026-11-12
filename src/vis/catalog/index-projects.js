@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * Field visibility policy for an AI Search PROJECT hit. Same contract as catalog/projects.js, but
- * keyed on INDEX field names: the data source renames columns on the way in
- * (`azure/search/datasources/demi-projects-ds.json` — `abbreviation AS displayName`,
- * `proponentName AS proponent`, `projectState AS status`, `eagleId AS legacyEagleId`,
- * `projectType AS type`), so a hit and a stored row do not share a vocabulary.
- *
- * Every field of `azure/search/indexes/projects.json` has an entry; test/vis/search-drift.test.js
- * holds that against the committed index definition.
+ * Field visibility for an AI Search project hit, keyed on index field names: the data source
+ * renames columns. test/vis/search-drift.test.js holds it to azure/search/indexes/projects.json.
  */
 module.exports = {
   id: { defaultVis: 4, maxVis: 4 },

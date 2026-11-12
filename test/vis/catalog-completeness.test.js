@@ -34,9 +34,8 @@ function assertBounds(catalog) {
   }
 }
 
-// Both fixtures are written out by hand rather than generated from TRACK_PRECEDENCE and
-// EAGLE_ONLY_FIELDS: a fixture derived from the constants would grow a new field at the same
-// moment the merge does, and the completeness assertion below would never fail.
+// Written by hand, not generated from TRACK_PRECEDENCE and EAGLE_ONLY_FIELDS: a derived fixture
+// grows with the merge, so the completeness assertion could never fail.
 
 const TRACK_FIXTURE = {
   track_project_id: 207,
@@ -278,9 +277,8 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.responsibleEPDPhone.defaultVis, 4);
   });
 
-  // They live at the top level of a Mongo project, so the merge picks them up through
-  // EAGLE_TOP_LEVEL_FIELDS rather than the legislation block. Their only other home is
-  // `sources.eagle`, which is maxVis 0 — without these entries they reach nobody.
+  // Merged through EAGLE_TOP_LEVEL_FIELDS; their only other home is `sources.eagle` at maxVis 0,
+  // so without these entries they reach nobody.
   await t.test('pins and featuredDocuments are catalogued in their own right', () => {
     assert.strictEqual(catalog.featuredDocuments.defaultVis, 4);
     assert.strictEqual(catalog.featuredDocuments.maxVis, 4);
@@ -414,9 +412,8 @@ test('chunks catalog covers the chunker output', async (t) => {
   });
 
   await t.test('the ingest-written fields are catalogued', () => {
-    // Both ingest paths in controllers/nosql/document.js add these five to the chunker's output,
-    // plus the parent document's filter columns — the list itself, so a field added there is
-    // classified here or this fails. `itemHash` is added by the chunks repository on write.
+    // Fields the ingest paths add to the chunker's output, plus the parent filter list itself, so
+    // a field added there must be classified here.
     const { CHUNK_PARENT_FIELDS, STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
     for (const key of ['id', 'documentId', 'projectId', 'read', 'extractedAt',
       ...CHUNK_PARENT_FIELDS, 'parentFieldsVersion', STAMPED_AT_FIELD, 'itemHash']) {
@@ -452,9 +449,8 @@ test('chunks catalog covers the chunker output', async (t) => {
 
 
 /**
- * The record mirrors (MIRRORS in the fixtures). Same rule as the project and document catalogs above: the row is
- * captured from the REAL controller, so a field a mirror grows is catalogued here or this fails —
- * and an uncatalogued field is dropped from every response, which is silent.
+ * Rows come from the real mirror controllers, so a new mirror field must be catalogued here;
+ * otherwise it is silently dropped from every response.
  */
 test('the public-read catalogs cover every field their mirror writes', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

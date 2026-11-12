@@ -166,10 +166,8 @@ test('transformDocument', async (t) => {
   });
 
   await t.test('projectRead narrows the ACL — a document may not out-rank its project', () => {
-    // The seed used to keep the Eagle ACL verbatim, so a public document under a project Track
-    // marks private was seeded public and stayed listable under a project nobody could see.
-    // The Eagle roles and `['sysadmin']` share nothing, so this is the fail-closed branch. It
-    // caps at the parent's own read: privileged-only, so not `team`, which team members can open.
+    // Eagle roles and `['sysadmin']` share nothing: the fail-closed branch caps at the parent's
+    // own read, not `team`, which team members can open.
     const priv = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, projectRead: ['sysadmin'] });
     assert.deepStrictEqual(priv.read, ['sysadmin']);
     assert.strictEqual(priv.isPublished, false);
@@ -235,9 +233,8 @@ test('transformDocument', async (t) => {
   });
 
   await t.test('the List ObjectId is kept ALONGSIDE the label', () => {
-    // eagle-public's document filters send List ObjectIds, never labels. A row carrying only the
-    // label has nothing for those values to compare against, so the filter matches zero rows
-    // under a 200 — indistinguishable from "no results" for whoever is looking at the screen.
+    // eagle-public's filters send List ObjectIds; a label-only row matches zero rows under a 200,
+    // which looks like "no results".
     assert.strictEqual(doc.typeId, EAGLE_DOC.type);
     assert.strictEqual(doc.milestoneId, EAGLE_DOC.milestone);
   });
@@ -249,8 +246,8 @@ test('transformDocument', async (t) => {
   });
 
   await t.test('projectPhase and documentAuthorType, present and absent', () => {
-    // The real eagle-api payload carries both as ObjectIds (measured on eagle-dev 2026-08-22);
-    // the shared fixture carries neither, which is the null case the index has to tolerate.
+    // The real eagle-api payload carries both as ObjectIds; the shared fixture carries neither,
+    // which is the null case the index has to tolerate.
     assert.strictEqual(EAGLE_DOC.projectPhase, undefined);
     assert.strictEqual(doc.projectPhase, null);
     assert.strictEqual(doc.projectPhaseId, null);
@@ -324,9 +321,6 @@ test('transformBoundary — simplified geometry only', async (t) => {
   });
 
   await t.test('public by default, but with an explicit ACL', () => {
-    // This used to assert the OPPOSITE — that boundaries carry no read[] at all — which is what
-    // made a staff-only shapefile inexpressible. Reference geography is still public by default;
-    // the difference is that "public" is now written down rather than assumed.
     // Literal level-4 tokens: a re-seed must write what a controller writes, and `includes` alone
     // let the two lists drift apart on the same row.
     const b = transformBoundary(RAW, OPTS);
@@ -406,9 +400,8 @@ test('extraction state survives a re-seed', async (t) => {
 
   await t.test('page provenance is carried too, so a re-seed cannot relabel pages as passages',
     () => {
-      // Named here rather than left to the loop above: that loop takes its field list from the
-      // code under test, so a field dropped from EXTRACTION_FIELDS disappears from its expectation
-      // at the same time and the loss stays green.
+      // Named here, not left to the loop above: that loop reads EXTRACTION_FIELDS from the code
+      // under test, so a dropped field would stay green.
       const out = transformDocument(EAGLE_DOC, '207', LIST, {
         ...OPTS,
         existing: { ...existing, pageNumbered: true, pageCount: 12 }
@@ -476,9 +469,8 @@ test('the PDF title record survives a re-seed', async (t) => {
 });
 
 test('a raised pending re-stamp survives a re-seed', async (t) => {
-  // The flag says "this document's chunks never got their new parent fields". A Cosmos upsert
-  // REPLACES the row, so a transform that drops it retires the only record of a re-stamp nothing
-  // has done — `reconcile-eagle.js` counts the flag and `--pending` walks it.
+  // An upsert replaces the row, so dropping the flag loses the only record of an undone re-stamp
+  // (`reconcile-eagle.js` counts it, `--pending` walks it).
   const pending = {
     id: EAGLE_DOC._id,
     parentFieldsPending: true,
@@ -486,9 +478,8 @@ test('a raised pending re-stamp survives a re-seed', async (t) => {
   };
 
   await t.test('the flag and its token come through untouched', () => {
-    // The token VERBATIM, because a clear is guarded on it: re-minting it here would hand the
-    // in-flight re-stamp a value it cannot match, and its clear would come back a conflict while
-    // the flag stayed up over chunks that are already correct.
+    // Verbatim token: a re-minted one makes the in-flight re-stamp's guarded clear conflict and
+    // leaves the flag up over correct chunks.
     const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: pending });
 
     assert.strictEqual(out.parentFieldsPending, true);
