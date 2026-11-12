@@ -1,12 +1,8 @@
 'use strict';
 
 /**
- * The request/response shim, on the paths no controller test can see.
- *
- * Everything here used to be Express's job — query parsing, multipart, the guard chain, redirects —
- * so it had no test in this repo at all. Each case below is a shape that silently degrades: a
- * multi-select filter that applies one option under a 200, an upload that arrives with no file, a
- * printed short link that stops redirecting.
+ * The request/response shim, on the paths no controller test can see: query parsing, multipart,
+ * the guard chain, redirects. Each case is a shape that would fail silently under a 200.
  */
 
 process.env.NODE_ENV = 'test';
@@ -44,9 +40,8 @@ function call(path, init = {}) {
 }
 
 test('repeated query keys stay arrays', async (t) => {
-  // `Object.fromEntries(searchParams)` keeps only the LAST value, and eagle-public emits one
-  // `and[key]=value` per selected facet option — so every multi-select filter quietly applied one
-  // option, under a 200, indistinguishable from a filter that matched few rows.
+  // eagle-public sends one `and[key]=value` per selected facet option; keeping only the last would
+  // apply one option under a 200.
   let seen;
   t.mock.method(configController, 'getConfig', (req, res) => { seen = req.query; res.json({}); });
 
@@ -118,8 +113,7 @@ function isolatedTmp(t) {
 }
 
 test('a multipart upload arrives as req.file and is deleted when the request ends', async (t) => {
-  // The dispatcher writes the part to os.tmpdir() and synthesises the four fields multer handed
-  // the handler; the handler no longer unlinks it, so the router must.
+  // The dispatcher writes the part to os.tmpdir(), and the router, not the handler, deletes it.
   let seen;
   t.mock.method(documentController, 'extractDocument', (req, res) => {
     seen = { file: req.file, body: req.body, onDisk: fs.readFileSync(req.file.path, 'utf8') };
@@ -306,9 +300,8 @@ test('a malformed JSON body is a 400, not a 500', async () => {
 });
 
 test('a null-body status is dispatched with no body and no content-length', async () => {
-  // The Functions worker (api/index.js) hands this straight to `new Response(body, ...)`, and
-  // undici throws `Invalid response status code 204` on any body — including the '' the shim's
-  // send('') leaves behind — which the host then serves as an empty 500.
+  // undici throws `Invalid response status code 204` on any body, even '', and the host then
+  // serves an empty 500.
   const res = await call('/api/anything', {
     method: 'OPTIONS',
     headers: { origin: 'http://127.0.0.1', 'access-control-request-method': 'POST' }

@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * The `Content-Disposition` a download URL is signed with — one implementation, because both
- * backends bake it into the signature and a header that differs between them is a bug only one
- * environment shows.
- *
- * Safari ignores `download` on a cross-origin <a>, so the URL itself has to say attachment.
+ * The `Content-Disposition` both backends sign into a download URL. Safari ignores `download` on a
+ * cross-origin <a>, so the URL itself has to say attachment.
  */
 
 // Quote and backslash break the quoted-string; control characters (CR and LF included) split the
@@ -26,9 +23,8 @@ function contentDisposition(fileName, { inline = false } = {}) {
   return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-// HTML or SVG shown from the store's origin would run script there, so neither is listed. PDF risk
-// is accepted: the signed `application/pdf` type means a PDF/HTML polyglot never renders as HTML,
-// and PDF script runs only inside the viewer's sandbox.
+// HTML and SVG would run script on the store's origin, so neither is listed. PDF is accepted: the
+// signed type stops a polyglot rendering as HTML, and PDF script stays in the viewer's sandbox.
 const INLINE_BY_EXT = new Map([
   ['pdf', 'application/pdf'],
   ['png', 'image/png'],

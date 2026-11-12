@@ -117,10 +117,8 @@ test('callerIp behind our own rproxy', async (t) => {
   t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
 
   await t.test('takes the rightmost hop that is not ours', () => {
-    // Every eagle-public visitor arrives through the rproxy, so keying on what APIM saw would put
-    // all of them in one anonymous quota bucket. The chain APIM hands us is
-    // `<browser>, <nginx egress>`: nginx passes the router's header through untouched and APIM
-    // appends its peer.
+    // Every eagle-public visitor arrives through the rproxy, so APIM's view is one shared bucket.
+    // The chain APIM hands us is `<browser>, <nginx egress>`.
     const throughRproxy = viaGateway({
       'x-client-ip': RPROXY,
       'x-forwarded-for': '198.51.100.7, 142.34.64.10'
@@ -228,9 +226,8 @@ test('callerIp behind Front Door', async (t) => {
   });
 
   await t.test('an empty EDGE_SECRET does not match an absent header', () => {
-    // The dangerous half of the off switch, and the one a length comparison cannot catch: two
-    // empty strings ARE equal, so without the explicit empty guard every caller sending no header
-    // at all would be believed and pick its own quota key.
+    // Two empty strings are equal, so without the empty guard every caller sending no header would
+    // be believed and pick its own quota key.
     const bothEmpty = viaEdge({ 'x-edge-secret': undefined, 'x-azure-socketip': '9.9.9.9' });
     assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(bothEmpty)), AFD_EGRESS);
   });
@@ -271,9 +268,8 @@ test('callerIp behind Front Door', async (t) => {
   const RPROXY_EGRESS = '142.34.194.121';
 
   /**
-   * The chain DEMI actually reads on the public path. Front Door appends its socket peer (the
-   * rproxy), then APIM appends Front Door — so the browser is TWO hops in from the right, and the
-   * two entries right of it are the same for every visitor alive.
+   * The public-path chain: Front Door appends the rproxy, then APIM appends Front Door, so the
+   * browser is two hops in from the right.
    */
   function publicPath(browser) {
     return viaEdge({

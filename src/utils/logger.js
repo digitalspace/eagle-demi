@@ -17,16 +17,8 @@ const requestIdFormat = format((info) => {
   return info;
 });
 
-// Logs go to stdout only — a database round trip per log line is not this module's job.
-//
-// Shipping is wired in `api/index.js`, which starts the Azure Monitor OpenTelemetry distro with
-// winston instrumentation enabled. That hooks this logger and forwards each line to Application
-// Insights, correlated with the request trace. No transport is added here, and none should be —
-// with no APPLICATIONINSIGHTS_CONNECTION_STRING (local development, tests, `yarn start`) nothing
-// starts and this stays a plain stdout logger.
-//
-// The `requestId` below predates that and still earns its place: it survives into the exported
-// telemetry as a log field, and it is what correlates lines written outside any OpenTelemetry span.
+// Stdout only. `api/index.js` starts the Azure Monitor OpenTelemetry distro, which forwards these
+// lines to Application Insights, so add no transport here.
 
 // Set up logger formats
 const isProduction = process.env.NODE_ENV === 'production';
@@ -65,10 +57,8 @@ const logger = winston.createLogger({
   exitOnError: false
 });
 
-// Key Vault references App Service failed to resolve, reported once per process. It happens here
-// because src/config.js records the names but cannot log them: this module reads that one, so a
-// logger require from there runs against a half-built module. Names only — the value is a secret
-// whenever the reference did resolve.
+// Logged here, not in src/config.js: config cannot require this module without a require cycle.
+// Names only, never values.
 if (config.unresolvedSecrets.length > 0) {
   logger.error(
     '[config] Key Vault reference did not resolve, treated as unset: ' +

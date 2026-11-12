@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * MinIO / S3 storage backend. Moved out of `extract.js`, which is a batch script that the HTTP
- * controllers were reaching into purely to borrow its client.
- *
- * This backend owns the object-key prefix. The prefix exists because the recorded `s3Key` is
- * relative to the PROD bucket, while non-prod buckets hold a copy of prod nested one level
- * deeper (dev's bucket `asnpnn` contains `ozwdez/etl/...`). Applying it here rather than at each
- * call site is the point: `extract.js` forgot to, so every extraction read a key that 404s in
- * dev — the same bug the download endpoint already had.
+ * MinIO / S3 storage backend. It applies the object-key prefix (see objectKey.js) on every call,
+ * so no caller has to.
  */
 
 const Minio = require('minio');
@@ -18,9 +12,8 @@ const config = require('../config');
 const { resolveObjectKey } = require('./objectKey');
 const { contentDisposition } = require('./content-disposition');
 
-// Multipart part size for a stream of unknown length. Without a hint the SDK falls back to the
-// size that lets a 5 TB object fit in 10,000 parts — 528 MiB — and BUFFERS each part in memory,
-// which a 2048 MB Functions instance cannot hold. host.json's queue budget assumes this number.
+// Unset, the SDK buffers 528 MiB parts in memory, too much for a 2048 MB instance. host.json's
+// queue budget assumes this number.
 const UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 
 let client;
@@ -143,10 +136,8 @@ async function putFile(key, filePath, contentType) {
 }
 
 /**
- * Store a readable stream of UNKNOWN length under `key`.
- *
- * The size argument is omitted deliberately: nobody has a byte count while a zip is still being
- * written, and a wrong one truncates the object. The client's `partSize` is what bounds memory.
+ * Store a stream of unknown length. No size is passed: a wrong one truncates the object, and the
+ * client's `partSize` bounds memory.
  */
 async function putObjectStream(key, stream, contentType) {
   const objectPath = resolveObjectKey(key);

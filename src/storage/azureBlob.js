@@ -1,24 +1,8 @@
 'use strict';
 
 /**
- * Azure Blob Storage backend — keyless, per-environment container.
- *
- * Two differences from the MinIO backend are deliberate, not incidental:
- *
- *   1. **No key prefix.** MinIO needs one because every environment's bucket contains a nested
- *      copy of prod. Here each environment gets its OWN container, so the recorded `s3Key` is
- *      the blob name verbatim. That is the actual safety improvement: dev is one env-var edit
- *      from prod storage today, and separate containers make that structurally impossible.
- *
- *   2. **The container is never created on demand.** A user delegation SAS requires the
- *      container to already exist, and auto-creating one would mean a typo in configuration
- *      silently produces a working-but-empty store instead of an error. Containers come from
- *      Bicep.
- *
- * Auth is Entra managed identity — `allowSharedKeyAccess: false` on the account, so there is no
- * key to leak or rotate. Download URLs are **user delegation SAS**, signed with a key obtained
- * from the identity rather than an account key. That requires the identity to hold both
- * `Storage Blob Data Contributor` and `Storage Blob Delegator`.
+ * Azure Blob backend: keyless, one container per environment, so `s3Key` is the blob name with no
+ * prefix. Containers come from Bicep, never created here, so a config typo fails loudly.
  */
 
 const {
@@ -32,10 +16,8 @@ const { createCredential } = require('../utils/azure-credential');
 const config = require('../config');
 const { contentDisposition } = require('./content-disposition');
 
-/** Delegation keys are valid up to 7 days. Re-fetching per request would add a round trip to
- *  every download, so it is cached — but well short of the maximum, because an expired key
- *  produces SAS URLs that fail authentication rather than an obvious error.
- *  ponytail: fixed 30 min. Only worth tuning if delegation-key calls show up in latency. */
+/** Cached well short of the 7-day maximum: an expired key yields SAS URLs that fail auth quietly.
+ *  ponytail: fixed 30 min; tune only if delegation-key calls show up in latency. */
 const DELEGATION_KEY_TTL_MS = 30 * 60 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 

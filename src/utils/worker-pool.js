@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Run `worker(item, index)` over an array or an async iterable, at most `concurrency` in flight.
- *
- * Runners share one iterator, so an iterable is consumed lazily rather than buffered. Results come
- * back in source order for an array, pull order for an iterable.
+ * Run `worker(item, index)` over an array or async iterable, at most `concurrency` in flight. Results
+ * keep source order for an array, pull order for an iterable, which is read lazily.
  */
 async function mapLimit(source, concurrency, worker) {
   const isArray = Array.isArray(source);
