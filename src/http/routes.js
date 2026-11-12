@@ -6,25 +6,15 @@ const path = require('path');
 const config = require('../config');
 const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
-// Layered on top of authMiddleware. `requireWrite` gates application data, so a read-only
-// credential (demi-service-read) can be issued without also granting the ability to delete.
-// `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
-// mirror data without being able to mint itself a wider credential.
 const {
   requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requirePdfTitleWorker
 } = require('../middleware/require-roles');
-// Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
-// grant can widen what one caller sees — see middleware/credentials.js.
 const { credentialsMiddleware } = require('../middleware/credentials');
 // The sealed compartment's own verifier. NOT authMiddleware — see middleware/sealed-auth.js.
 const sealedAuth = require('../middleware/sealed-auth');
 
-// One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
-// gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
-// to is decommissioned.
-//
-// Required LAZILY, one accessor per controller: the route table is loaded on every cold start and
-// `/health` must not pay for the Cosmos client, the search index definitions or pdf-lib.
+// Required lazily: the table loads on every cold start, and /health must not pay for the Cosmos
+// client, the search index definitions or pdf-lib.
 const healthController = () => require('../controllers/health');
 const configController = () => require('../controllers/config');
 const gateController = () => require('../controllers/gate');
@@ -59,90 +49,53 @@ const inspectionController = () => require('../controllers/nosql/inspection');
 const commentExportController = () => require('../controllers/nosql/comment-export');
 const reportController = () => require('../controllers/report');
 
-/**
- * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
- * once reported `db: true` unconditionally, so every probe stayed green with no database at all.
- * Inline because it is one line, and because it keeps a health probe's cold start free of requires.
- */
+// Liveness only: says nothing about the database, and stays inline so the probe requires nothing.
 const liveness = (req, res) => res.json({ status: 'ok' });
 
 /** The spec itself, not a UI: swagger-ui streamed its assets and could not be served here. */
 const openApiSpec = (req, res) =>
   res.type('yaml').send(fs.readFileSync(path.join(__dirname, '..', 'swagger', 'swagger.yaml'), 'utf8'));
 
-/**
- * Every route the API serves, in the order the dispatcher tries them. One leading `/api` is
- * stripped before matching, so each line covers both the `/api`-prefixed and root-mounted forms.
- */
+// Tried in order. One leading `/api` is stripped before matching, so each line serves both the
+// `/api`-prefixed and the root form.
 const routes = [
   { method: 'get', path: '/health', guards: [], load: () => liveness },
   { method: 'get', path: '/health/db', guards: [], load: () => healthController().db },
   { method: 'get', path: '/health/trust', guards: [], load: () => healthController().trust },
-  // Anonymous like the two above, and for the same reason: the prod deploy job and an operator with
-  // one curl both need it before anything holds a token. It discloses index field names the public
-  // repo already carries, and no row.
-  //
-  // POST is the SAME handler, not a second one: a body overrides the selects so CI can probe the
-  // incoming tag's committed index definitions through the currently deployed app, and a GET body
-  // is not read by the adapter (or by most clients).
-  //
-  // ANONYMOUS BY DESIGN, AND BOUNDED IN THE CONTROLLER BECAUSE NOTHING ELSE COUNTS THESE REQUESTS.
-  // The gateway applies `rate-limit` to the keyed product only — `rate-limit-by-key` and
-  // `quota-by-key` do not exist on this tier, so an anonymous product has no per-caller throttle
-  // at all (azure/modules/apim.bicep:473). The body names selects and orders that become live
-  // queries against the shared 1-SU search service the public site runs on, so
-  // `controllers/search-schema.js` caps the list lengths and the probes per request, and answers
-  // 400 before any of them is issued.
+  // Anonymous so a deploy job can probe before it holds a token; POST lets CI send its own selects.
+  // APIM cannot throttle anonymous callers, so controllers/search-schema.js caps each request.
   { method: 'get', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
   { method: 'post', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
 
-  // Guards against live index rows whose fields are empty. Anonymous like the probes above, and it
-  // reads nothing from the request, so it carries none of their request multiplier.
+  // Reads nothing from the request, so anonymous access adds no query load per request.
   { method: 'get', path: '/health/search-data', guards: [], load: () => searchSchemaController().searchData },
 
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
-  // The PUBLIC site's config, and a separate document rather than more keys on /config: the two
-  // answer different frontends, so neither key set can widen the other, and this one refuses to
-  // guess. Missing document = 503, never a defaulted payload — see getPublicConfig.
+  // A separate document from /config so neither frontend's keys can widen the other's.
+  // A missing document answers 503, never a defaulted payload.
   { method: 'get', path: '/config/public', guards: [], load: () => configController().getPublicConfig },
-  // The public site's access curtain, ported from eagle-api so eagle-public calls one API. NO
-  // GUARDS BY DESIGN — the caller is a visitor who holds nothing yet, and the password in the body
-  // is the only credential in play. Not passiveAuthMiddleware either: an access object would be
-  // read by nothing here. Guessing is bounded by the password's own entropy; the gateway cannot
-  // throttle it on the Consumption tier, and controllers/gate.js says why.
+  // No guards by design: the visitor holds nothing yet and the body's password is the only
+  // credential. The gateway cannot throttle it on this tier; see controllers/gate.js.
   { method: 'post', path: '/gate', guards: [], load: () => gateController().postGate },
-  // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401. `strict`
-  // because a rejected Bearer must 401 so the admin console refreshes instead of reading itself
-  // as public.
+  // Anonymous gets the public tier. `strict`: a rejected Bearer must 401 so the admin console
+  // refreshes instead of reading itself as public.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => meController().getMe },
-  // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no
-  // container: the answer is the whole field catalog plus a role-privilege oracle, the same
-  // disclosure /api-docs is gated for below. The Access Model screen is staff-gated anyway.
+  // Authenticated though it reads no container: the answer discloses the whole field catalog and
+  // what each role may see.
   { method: 'post', path: '/access/simulate', guards: [authMiddleware], load: () => accessSimulateController().simulate },
 
-  // Database Management Routes
-  // Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over
-  // any collection — nothing called them, and under the NoSQL API they would have to become a
-  // SQL passthrough). /db/seed-boundaries removed with the dead boundary seeder.
-  //
-  // Also removed: /db/seed, /sync, /admin/sync and /admin/seed-track. They drove the Mongo-era
-  // scripts; src/scripts/seed-nosql.js replaces them and runs inside the network, not behind a
-  // request that a 60k-document seed would outlive.
   { method: 'get', path: '/db/stats', guards: [authMiddleware], load: () => dbController().getDbStats },
-  // Issues no container query at all, so it still answers when the counts behind /db/stats are
-  // timing out. Ranked queries are only meaningful at progress 100, so this gates any bulk load.
+  // Issues no container query, so it answers while /db/stats times out. Ranked queries are only
+  // meaningful at progress 100, so this gates any bulk load.
   { method: 'get', path: '/admin/index-progress', guards: [authMiddleware], load: () => dbController().getIndexProgressHandler },
 
   { method: 'get', path: '/search', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => searchController().search },
-  // The record-type badges. Same guards as `/search` and for the same reason: the counts are
-  // ACL-scoped, so the caller's credentials have to be loaded before the filters are built.
+  // The counts are ACL-scoped, so credentials must load before the filters are built.
   { method: 'get', path: '/search/counts', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => searchController().counts },
-  // authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
-  // wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
+  // Privileged only while cost, abuse and the disclosure risk of a generated paraphrase are
+  // measured. See wiki ADR-006.
   { method: 'get', path: '/search/summary', guards: [authMiddleware, credentialsMiddleware], load: () => searchController().summarize },
 
-  // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
-  // project-level aggregate this sync writes is served with the project.
   { method: 'post', path: '/admin/sync/wildfires', guards: [authMiddleware, requireAdmin], load: () => wildfireController().syncWildfiresAdmin },
 
   // Reading Azure back for the admin panel. The panel holds a Keycloak token and Azure wants an
@@ -155,18 +108,15 @@ const routes = [
   // Written by the reconcileEngage timer.
   { method: 'get', path: '/admin/reconcile-engage', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileEngageReport },
 
-  // Projects Routes
-  // projects/project-records/counts: native list contract. `strict` answers a rejected Bearer with its 401, not the public view.
+  // `strict` answers a rejected Bearer with its 401, not the public view.
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProjects },
   { method: 'get', path: '/project-records', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/project-records').getProjectRecords },
   { method: 'get', path: '/counts', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/counts').counts },
   { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProject },
-  // The stored AI summary. Same guards as `/search/summary` and for the same reason — every AI
-  // surface is privileged-only while cost, abuse and the review workflow are unsettled. A point
-  // read of a record generated offline; nothing here calls a model.
+  // Every AI surface is privileged-only for now. A point read of a record generated offline;
+  // nothing here calls a model.
   { method: 'get', path: '/projects/:id/summary', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getProjectSummary },
-  // The generator's write. `requireWrite`, so a read-only credential cannot store prose that
-  // renders as EAO's account of a project.
+  // A read-only credential must not store prose that renders as EAO's account of a project.
   { method: 'put', path: '/projects/:id/summary', guards: [authMiddleware, requireWrite], load: () => projectSummaryController().putProjectSummary },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
   { method: 'put', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().updateProject },
@@ -176,65 +126,50 @@ const routes = [
   { method: 'put', path: '/projects/:id/short-code', guards: [authMiddleware, requireAdmin], load: () => projectController().setShortCode },
   { method: 'delete', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().deleteProject },
   { method: 'put', path: '/projects/:id/restore', guards: [authMiddleware, requireWrite], load: () => projectController().restoreProject },
-  // Classifying a field is narrower than writing one: `requireWrite` admits staff and the machine
-  // writer, `sysadmin` is who may change the policy itself.
+  // Classifying a field is narrower than writing one: only sysadmin may change the policy.
   { method: 'patch', path: '/projects/:id/visibility', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => projectController().setVisibility },
 
-  // Documents Routes
-  // Native list contract; `strict` for the same reason as `/projects`.
   { method: 'get', path: '/documents', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocuments },
-  // Literal paths sit BEFORE `/documents/:id`: the table is matched in order and `:id` is any
-  // single segment, so a literal route placed after it would be answered as a document lookup for
-  // the id "scan", "passages" or "recent-uploads".
-  // The token-paged walk for internal callers (summary sources, extraction host). Credential only,
-  // so an anonymous caller cannot scrape the corpus past the native list's offset cap.
+  // Literal paths sit before `/documents/:id`, or they would be read as a document id.
+  // Credential only, so an anonymous caller cannot scrape past the native list's offset cap.
   { method: 'get', path: '/documents/scan', guards: [authMiddleware, credentialsMiddleware], load: () => documentController().scanDocuments },
   { method: 'get', path: '/documents/passages', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/passages').getPassages },
   { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getRecentUploads },
-  // The PDF title worker's work list and lease sweep; before `/documents/:id` for the same reason.
   { method: 'get', path: '/documents/pdf-title/pending', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().listPending },
   { method: 'post', path: '/documents/pdf-title/sweep', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().sweep },
   { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocument },
-  // Presigned download link — ACL-gated inside the controller, same as the metadata read.
+  // ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
   { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
-  // The one multipart route. After the guards, the dispatcher writes the file part to os.tmpdir(),
-  // hands the handler `req.file`, and deletes it when the request ends.
+  // The dispatcher writes the file part to os.tmpdir() as `req.file`, deleted when the request ends.
   { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], multipart: true, load: () => documentController().extractDocument },
-  // Upload through the scanned intake account: answers a write-only link, the row stays hidden until clean.
+  // Answers a write-only link to the scanned intake account; the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
   { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },
   { method: 'put', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().updateDocument },
   { method: 'put', path: '/documents/:id/level', guards: [authMiddleware, requireWrite], load: () => documentController().setLevel },
   // Deprecated alias for the line above — eagle-admin-console still sends `{ isPublished }`.
   { method: 'put', path: '/documents/:id/published', guards: [authMiddleware, requireWrite], load: () => documentController().setDocumentPublished },
-  // Extracted-text ingest. The body is markdown for a whole document, or an NDJSON stream the
-  // handler reads off `req.stream`. The caller supplies text only — never an ACL: read[] is copied
-  // from the live document inside the controller, so an extraction host cannot widen visibility.
+  // The caller sends text only: read[] is copied from the live document, so an extraction host
+  // cannot widen visibility.
   { method: 'post', path: '/documents/:id/chunks', guards: [authMiddleware, requireWrite], load: () => documentController().ingestChunks },
-  // Read side of the line above, and the ONLY route that returns full chunk text. Same guards as
-  // `/search/summary`: it exists so the project-summary generator can read a document's text from
-  // outside the VNet, and the parent-document ACL is re-applied inside the controller.
+  // The only route that returns full chunk text, for the summary generator outside the VNet.
+  // The parent-document ACL is re-applied inside the controller.
   { method: 'get', path: '/documents/:id/chunks', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getDocumentChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
-  // PDF title lease, commit, report: the only routes that sign a write to a stored original, so
-  // only the named worker principal reaches them (requirePdfTitleWorker).
+  // The only routes that sign a write to a stored original.
   { method: 'post', path: '/documents/:id/pdf-title/lease', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().lease },
   { method: 'post', path: '/documents/:id/pdf-title/commit', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().commit },
   { method: 'put', path: '/documents/:id/pdf-title', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().report },
 
-  // Bulk download. Same chain as /documents/:id/download and for the same reason: the ACL runs
-  // inside the controller, so an anonymous caller gets the public tier rather than a 401. The
-  // status read is a capability check on the job id, not a role check.
+  // The ACL runs in the controller, so anonymous gets the public tier. The job id is the
+  // capability for status and cancel: a foreign or unknown id is a 404, never a 403.
   { method: 'post', path: '/bulk-downloads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().createBulkDownload },
   { method: 'get', path: '/bulk-downloads/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().getBulkDownload },
-  // Cancel. Same chain and the same owner check as the status read — the job id is the capability,
-  // so a foreign or unknown id is a 404 here too, never a 403.
   { method: 'delete', path: '/bulk-downloads/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().cancelBulkDownload },
 
-  // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all five routes,
-  // and it is not authMiddleware: that gate 403s `compliance`, which is the only role that belongs
-  // here. Every route audits, reads included.
+  // Sealed compartment, level 0. Not authMiddleware: it 403s `compliance`, the only role that
+  // belongs here. Every route audits, reads included.
   { method: 'post', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().createSealed },
   { method: 'get', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().listSealed },
   { method: 'get', path: '/sealed/:id', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().getSealed },
@@ -242,10 +177,8 @@ const routes = [
   // The only exit from level 0; PUT /documents/:id/level refuses it in both directions.
   { method: 'post', path: '/sealed/:id/release', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().releaseSealed },
 
-  // Eagle mirror. eagle-api pushes fire-and-forget on every write it makes, keyed by its own `_id`;
-  // DEMI holds the merge rules, so the body is the RAW Eagle record rather than a DEMI-shaped one.
-  // Write-gated, then pinned to the principals in DEMI_EAGLE_MIRROR_PRINCIPALS (eagle-api through
-  // APIM): the handlers write any project through systemAccess(), so no other writer may reach them.
+  // eagle-api pushes the raw Eagle record keyed by its `_id`; DEMI holds the merge rules.
+  // Pinned to DEMI_EAGLE_MIRROR_PRINCIPALS because the handlers write any project.
   { method: 'put', path: '/eagle/projects/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => projectController().upsertFromEagle },
   { method: 'put', path: '/eagle/documents/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => documentController().upsertFromEagle },
   { method: 'put', path: '/eagle/updates/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => updateController().upsertFromEagle },
@@ -258,23 +191,18 @@ const routes = [
   { method: 'put', path: '/eagle/inspections/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertInspectionFromEagle },
   { method: 'put', path: '/eagle/inspection-elements/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertElementFromEagle },
   { method: 'put', path: '/eagle/inspection-items/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertItemFromEagle },
-  // The config mirror. No `:eagleId` — there is one public config document and Eagle has no id for
-  // it — so the body is the payload itself rather than `{ doc }`, and only PUBLIC_KEYS are stored.
+  // One public config document with no Eagle id: the body is the payload, not `{ doc }`, and only
+  // PUBLIC_KEYS are stored.
   { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => configController().upsertPublicFromEagle },
-  // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
-  // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
+  // No PUT /eagle/lists: Eagle writes lists only in migrations, so the backfill fills `lists`.
 
-  // ENGAGE ingest. ENGAGE owns the comment periods it pushes and DEMI writes them on to Eagle
-  // (src/sync-out). Pinned to DEMI_ENGAGE_PRINCIPALS on the same terms as the Eagle mirror.
+  // ENGAGE owns these comment periods; DEMI writes them on to Eagle (src/sync-out).
   { method: 'put', path: '/engage/engagements/:engagementId', guards: [authMiddleware, requireWrite, requireEngageWriter], load: () => engageCommentPeriodController().upsertFromEngage },
 
   ...require('./routes-track'),
 
-  // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
-  // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
-  // public tier rather than getting a 401.
-  // users and groups: native list contract (helpers/native-query.js). Strict: a rejected Bearer is a
-  // 401, so a client refreshes instead of reading the public tier under a 200.
+  // The repository filters rows by access, so anonymous reads the public tier. `strict`: a
+  // rejected Bearer is a 401, so a client refreshes instead of reading the public tier.
   { method: 'get', path: '/users', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUsers },
   { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUser },
   { method: 'get', path: '/groups', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroups },
@@ -286,22 +214,17 @@ const routes = [
   { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
   { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
 
-  // Native kind reads: lists and organizations (helpers/native-query.js). `strict` answers a
-  // rejected Bearer with 401 so a client refreshes instead of reading the public view under a 200.
   { method: 'get', path: '/lists', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getLists },
   { method: 'get', path: '/lists/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getList },
   { method: 'get', path: '/organizations', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganizations },
   { method: 'get', path: '/organizations/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganization },
 
-  // Native reads: comment periods and comments (helpers/native-query.js). Strict passive auth: a
-  // rejected Bearer is a 401, so a client refreshes instead of reading the public view under a 200.
   { method: 'get', path: '/comment-periods', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriods },
   { method: 'get', path: '/comment-periods/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriod },
   { method: 'get', path: '/comment-periods/:id/summary', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriodSummary },
   { method: 'get', path: '/comments', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComments },
   { method: 'get', path: '/comments/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComment },
 
-  // Native reads: updates and project notifications (helpers/native-query.js), strict as above.
   // `/updates/feed` before `/updates/:id`, or `feed` would be read as an id.
   { method: 'get', path: '/updates', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getUpdates },
   { method: 'get', path: '/updates/feed', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getFeed },
@@ -310,37 +233,32 @@ const routes = [
   { method: 'get', path: '/notifications/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/notifications').getNotification },
   { method: 'get', path: '/suggest', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/suggest').getSuggestions },
 
-  // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
-  // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.
+  // Comment export is signed in only and the caller's level picks the columns. The BCGW feed
+  // reads as anonymous whoever asks.
   { method: 'get', path: '/commentperiods/:periodId/comments/export', guards: [authMiddleware, credentialsMiddleware], load: () => commentExportController().exportComments },
   { method: 'get', path: '/reports', guards: [passiveAuthMiddleware], load: () => reportController().getReport },
 
-  // Boundaries (Borders) Routes. Regions went with an empty collection nothing consumed.
   { method: 'get', path: '/boundaries', guards: [passiveAuthMiddleware], load: () => boundaryController().getBoundaries },
   { method: 'get', path: '/boundaries/:id', guards: [passiveAuthMiddleware], load: () => boundaryController().getBoundary },
   { method: 'post', path: '/boundaries', guards: [authMiddleware, requireWrite], load: () => boundaryController().createBoundary },
   { method: 'put', path: '/boundaries/:id', guards: [authMiddleware, requireWrite], load: () => boundaryController().updateBoundary },
   { method: 'delete', path: '/boundaries/:id', guards: [authMiddleware, requireWrite], load: () => boundaryController().deleteBoundary },
 
-  // API key administration. requireAdmin, NOT requireWrite: issuing a credential is the most
-  // consequential mutation in the service, so neither a read-only consumer nor a machine writer may
-  // mint itself a wider one. The plaintext key is returned by POST once and is unrecoverable after.
+  // requireAdmin, not requireWrite: a machine writer must not mint itself a wider key. POST returns
+  // the plaintext key once; it cannot be read again.
   { method: 'post', path: '/admin/api-keys', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().createApiKey },
   // Admin-gated too, though it only reads: the credential registry is not application data.
   { method: 'get', path: '/admin/api-keys', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().listApiKeys },
   { method: 'delete', path: '/admin/api-keys/:id', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().revokeApiKey },
 
-  // Search definition apply. The narrowest gate in the table and not by habit: a request here
-  // decides what the search service serves, and a live run rebuilds an index the app is querying.
-  // The work runs on a queue (src/jobs/search-definitions.js) because a chunks rebuild outlives
-  // the platform's ~230 s request cap by hours; this route only accepts it.
+  // Narrowest gate: a live run rebuilds an index the app queries. Work runs on a queue because a
+  // chunks rebuild outlives the ~230 s request cap by hours.
   { method: 'post', path: '/admin/search-definitions/apply', guards: [authMiddleware, requireAdmin, requireRole('sysadmin')], load: () => searchDefinitionsController().applySearchDefinitions },
   // Same gate on the read: the steps name what was PUT where, which is service configuration.
   { method: 'get', path: '/admin/search-definitions/jobs/:id', guards: [authMiddleware, requireAdmin, requireRole('sysadmin')], load: () => searchDefinitionsController().getSearchDefinitionJob },
 
-  // Selected Credentials. Same gate as the classify endpoint and for the same reason: a grant hands
-  // a named party sight of records nobody widened, which is access policy rather than data. Reading
-  // the registry is gated too — the rows name who may see what.
+  // A grant shows a named party records nobody widened: access policy, so sysadmin only. Reads
+  // too, since the rows name who may see what.
   { method: 'post', path: '/credentials', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().createCredential },
   { method: 'get', path: '/credentials', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().listCredentials },
   { method: 'post', path: '/credentials/revoke', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().revokeCredentials },
@@ -353,8 +271,7 @@ const routes = [
   { method: 'delete', path: '/links/:code', guards: [authMiddleware, requireWrite], load: () => linkController().deleteLink },
   { method: 'get', path: '/s/:code', guards: [], load: () => linkController().resolveLink },
 
-  // The caller's own data, partitioned by the caller's own token. authMiddleware only, no
-  // requireWrite: a read-only staff credential still gets to save its own scratch data.
+  // No requireWrite: a read-only staff credential may still save its own scratch data.
   { method: 'get', path: '/me/data', guards: [authMiddleware], load: () => userDataController().getMyData },
   { method: 'put', path: '/me/lassos', guards: [authMiddleware], load: () => userDataController().saveLasso },
   { method: 'delete', path: '/me/lassos/:slug', guards: [authMiddleware], load: () => userDataController().deleteLasso },
@@ -362,8 +279,7 @@ const routes = [
   { method: 'delete', path: '/me/queries/:slug', guards: [authMiddleware], load: () => userDataController().deleteQuery },
   { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs },
 
-  // Ported objects (docs/eagle-api-port-plan.md section 3). Each slice adds its routes only under
-  // its own anchor, guarded by `requireRole(<eagle-api x-security-scopes>)`.
+  // Ported routes go under their own `port:` anchor, guarded by requireRole(<x-security-scopes>).
 
   // port: organizations
   // eagle-api's auth admits sysadmin and staff on every route (api/helpers/auth.js:35-43), so both join the scopes.
@@ -427,9 +343,8 @@ const routes = [
   // port: document-feature
 ];
 
-// NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route
-// is unauthenticated. An allowlist, not `!== 'prod'`: a deployment that forgets ENVIRONMENT must
-// 404 the spec, not publish it.
+// Unauthenticated and names every route and role, so an allowlist: a deployment that forgets
+// ENVIRONMENT must 404 the spec, not publish it.
 if (['dev', 'test'].includes(config.environmentName)) {
   routes.push({ method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec });
 }
