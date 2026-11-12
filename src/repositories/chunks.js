@@ -1,19 +1,8 @@
 'use strict';
 
 /**
- * Document chunks — extracted document text, the data behind Deep Search.
- *
- * Container `chunks`, partitioned by `/documentId`. Every chunk of a document shares one logical
- * partition, so replacing a document's chunks is a single-partition operation and one bulk call.
- *
- * THE PARTITION KEY IS NOT THE PROJECT. This is the only container where those differ —
- * `documents` is the only other container partitioned by `/projectId`. That matters
- * because `visibilityFor(access, field)` uses its argument for BOTH the partition key and the
- * project-scope field. Passing 'documentId' would emit `c.documentId IN (@scope0)` filled with
- * PROJECT ids, so a scoped caller would silently match nothing — and no test would catch it today
- * because only systemAccess() reads chunks. Hence two constants, used for two different things:
- * SCOPE_FIELD builds the predicate, PARTITION_FIELD addresses Cosmos. `/projectId/?` is indexed,
- * so scoping on it is free.
+ * Extracted document text, container `chunks`, partitioned by `/documentId`. Scope with SCOPE_FIELD:
+ * PARTITION_FIELD in `visibilityFor` would test document ids against project ids and match nothing.
  */
 
 const crypto = require('crypto');
@@ -23,35 +12,21 @@ const { logger } = require('../utils/logger');
 const { eq, inList, selectWhere, pageOptions } = require('./_sql');
 
 /**
- * `chunks` is the only chunk container. A second one, `chunks_fts`, briefly existed because a
- * full-text policy is IMMUTABLE and could not be added to this one in place — that whole approach
- * was ruled out on 2026-07-31 (fuzzy is a silent no-op even enrolled, wiki ADR-005), and the
- * container is gone. Deep Search moves to Azure AI Search, which indexes this container from the
- * outside and needs no policy on it.
- *
- * This one constant addresses every read AND write in this file, and the ingest route decides
- * nothing, so pointing it at the wrong container splits the corpus silently.
+ * Every read and write here goes through this one constant, and the ingest route decides nothing,
+ * so pointing it at another container splits the corpus silently.
  */
 const CONTAINER = 'chunks';
 const PARTITION_FIELD = 'documentId'; // Cosmos partition key
 const SCOPE_FIELD = 'projectId';      // project scope rides this, NOT the partition key
 
-/**
- * Chunk ids are deterministic, so re-extracting a document upserts its chunks in place instead of
- * duplicating them. Nothing downstream synthesises an id — the AI Search indexer encodes this one
- * as the document key — so it has to be minted here.
- */
+/** Deterministic, so a re-extraction upserts in place; the AI Search indexer keys on this id. */
 function chunkId(documentId, pageNumber, chunkIndex) {
   return `${documentId}::p${pageNumber}::c${chunkIndex}`;
 }
 
 /**
- * The parent-document fields every chunk repeats, so a chunk query filters on them without a join.
- * The List refs are ObjectId STRINGS, never labels: the filter panel sends ids, and a label
- * changes when someone renames a List item.
- *
- * Adding a name here costs an index PUT, a data-source PUT and a backfill over ~1.1M rows, in that
- * order — `azure/search/README.md`.
+ * Parent fields every chunk repeats so a chunk query filters without a join; List refs are id strings,
+ * never labels. Adding one: index PUT, data-source PUT, then backfill (`azure/search/README.md`).
  */
 const CHUNK_PARENT_LIST_REFS = Object.freeze([
   'typeId', 'milestoneId', 'projectPhaseId', 'documentAuthorTypeId'
@@ -60,33 +35,19 @@ const CHUNK_PARENT_LIST_REFS = Object.freeze([
 const CHUNK_PARENT_FIELDS = Object.freeze(['projectId', ...CHUNK_PARENT_LIST_REFS]);
 
 /**
- * Which revision of the list above a chunk was stamped under, written as `parentFieldsVersion`.
- * The values themselves cannot answer "was this chunk ever stamped", because a document with no
- * List refs stamps nulls legitimately. Bump it when a NEW field joins, whose absence would read as
- * `null` and agree with the document.
- *
- * Not bumped for `projectId`: every ingest path has always written it, so a stale one fails the
- * plain value comparison already. It CAN be null — a handful of document rows carry no project at
- * all, and `documents.parentFieldRowsWithNoProject` is how the backfill reaches them.
+ * The list revision a chunk was stamped under (`parentFieldsVersion`). Bump it when a field joins:
+ * a missing field reads as `null` and would agree with a document that has none.
  */
 const CHUNK_PARENT_FIELDS_VERSION = 1;
 
 /**
- * The instant the re-stamp walk that last wrote a chunk was serving.
- *
- * Two walks over one document are last-writer-wins without it: an older walk still in flight
- * finishes after a newer one and puts the values the newer walk replaced back on the chunks, with
- * the pending flag already cleared, so nothing reports the drift. Every stamp is conditional on
- * this field instead — a chunk only accepts a walk newer than the one already on it.
- *
- * NOT projected by `demi-chunks-ds` and not declared by the chunks index: it orders writers, it
- * answers no query, and a new column on 1.1M rows is an index PUT plus a full indexer pass.
+ * The instant of the re-stamp walk that last wrote a chunk; stamps are conditional on it, so a late
+ * older walk cannot undo a newer one. Not in the search index: it orders writers, answers no query.
  */
 const STAMPED_AT_FIELD = 'parentStampedAt';
 
-/** Same shape as `documents.PENDING_AT_PATTERN` — on the pending path the token IS that flag's
- * value — and checked for the same reason: it is interpolated into a patch condition, which the
- * SDK takes as a raw string with no parameter binding. */
+/** Same shape as `documents.PENDING_AT_PATTERN` (a pending token can be the stamp), checked because
+ * it goes into a raw-string patch condition. */
 const STAMPED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 function assertStampedAt(stampedAt) {
@@ -104,11 +65,8 @@ function stampCondition(stampedAt) {
 }
 
 /**
- * What a document says its chunks' parent fields should be.
- *
- * Always every key, `null` where the document has none: a missing key leaves the previous value in
- * place on a PATCH, so a cleared milestone would keep answering the old milestone filter. Strings,
- * because the index declares `Edm.String` and an unstringified ObjectId indexes as null.
+ * A document's chunk parent fields. Every key, `null` when absent, since a PATCH keeps an omitted key;
+ * strings, since the index is `Edm.String` and a raw ObjectId indexes as null.
  */
 function parentFieldsOf(document) {
   const doc = document || {};
@@ -130,9 +88,8 @@ function parentStampFieldsOf(document, stampedAt) {
 }
 
 /**
- * Whether a document edit moved any parent field, so the caller can skip a patch that would pay
- * full RU to write back what is already there. Values only, never the version: a version bump is a
- * corpus-wide re-stamp and belongs to `backfill-chunk-parent-fields.js`.
+ * Whether an edit moved any parent field, so the caller can skip a no-op patch. Values only: a
+ * version bump is a corpus re-stamp for `backfill-chunk-parent-fields.js`.
  */
 function parentFieldsChanged(before, after) {
   const from = parentFieldsOf(before);
@@ -140,12 +97,7 @@ function parentFieldsChanged(before, after) {
   return CHUNK_PARENT_FIELDS.some(field => from[field] !== to[field]);
 }
 
-/**
- * Chunks visible to this caller.
- *
- * `listVisible(access, {pageSize, continuationToken})` keeps the paged signature every bulk reader
- * expects, so this doubles as the source for whole-corpus passes.
- */
+/** Chunks visible to this caller, paged like every bulk reader expects, so whole-corpus passes use it. */
 async function listVisible(access, opts = {}) {
   const { documentId } = opts;
 
@@ -164,17 +116,8 @@ async function listVisible(access, opts = {}) {
 }
 
 /**
- * Every chunk of ONE document, in page order.
- *
- * From COSMOS, not AI Search: chunk `content` is `maxVis 0` and never a select in `ai-search.js`
- * (test/vis/search-drift.test.js pins that), so the index cannot serve text. This is the same
- * source the summary endpoint reads its text from, and `listVisible` composes the same predicate.
- *
- * Sorted here because the container has no ORDER BY that survives paging, and a chunk id carries
- * its own order — `<docId>::p<page>::c<index>` — so page then index is deterministic.
- *
- * `max` is a real ceiling, not a formality: this drains a partition, and the caller is an offline
- * generator rather than a request path.
+ * Every chunk of one document, from Cosmos: the index never selects chunk `content`. Sorted here by
+ * page then index, since no ORDER BY survives paging; `max` caps the partition drain.
  */
 async function allForDocument(access, documentId, { max = 2000 } = {}) {
   const rows = [];
@@ -212,14 +155,8 @@ async function idsForDocument(access, documentId) {
 }
 
 /**
- * Hash of what a stored chunk holds, written as `itemHash` so a re-post of identical chunks skips
- * the upsert. On serverless every upsert is billed, and one retrying client re-posted a document
- * 553 times.
- *
- * Every field except the ones rewritten on each ingest: `extractedAt` is the call's clock and
- * `parentStampedAt` the walk's, so hashing either makes every re-post look changed. Leaving a field
- * OUT by name rather than listing the ones IN means a field added later is hashed by default: the
- * cost of forgetting it is one extra write, not a skipped change.
+ * `itemHash` lets an identical re-post skip its billed upsert. Per-ingest clocks are left out by name,
+ * so a new field is hashed by default: forgetting one costs a write, never a skipped change.
  */
 const HASH_FIELD = 'itemHash';
 const UNHASHED_FIELDS = new Set([HASH_FIELD, 'extractedAt', STAMPED_AT_FIELD]);
@@ -246,10 +183,8 @@ async function storedHashes(access, documentId, ids) {
 }
 
 /**
- * Whether a stored row already holds this item. The row keeps its older stamp: every patch nulls
- * `itemHash`, so a match means no walk has written the row since its ingest, and a walk stamped
- * between the two stamps with other values is outranked by the walk for the later change, which
- * has yet to reach this row. A row with no stamp accepts every walk, so it is rewritten.
+ * Whether a stored row already holds this item, keeping its older stamp: every patch nulls `itemHash`,
+ * so a match means no walk wrote it since ingest. An unstamped row accepts every walk, so it is rewritten.
  */
 function isUnchanged(row, item, hash) {
   if (!row || row.hash !== hash) return false;
@@ -257,9 +192,8 @@ function isUnchanged(row, item, hash) {
 }
 
 /**
- * Seconds a written chunk may be missing from the index before that counts as a gap, not lag. The
- * indexer runs PT5M; checking sooner would rewrite every chunk of a fast retry, the cost the hash
- * exists to avoid.
+ * Seconds a chunk may be missing from the index before that is a gap, not lag. The indexer runs PT5M;
+ * checking sooner would rewrite every chunk of a fast retry.
  */
 const INDEX_SETTLE_SECONDS = 30 * 60;
 
@@ -273,17 +207,8 @@ function healBudget() {
 }
 
 /**
- * The unchanged ids to rewrite because the index should hold them by now but does not. A delete or
- * purge that took a chunk out of the index and then failed in Cosmos leaves a row the `_ts`
- * high-water mark never re-reads, so only a rewrite puts it back. No `indexed` lookup, or one that
- * failed (`null`): none.
- *
- * Costs one index query per 1000 settled ids. A `$count` by documentId first is not a sound
- * shortcut: index rows Cosmos no longer holds can make the two counts match while a chunk is lost.
- *
- * More missing than the cap AND more than half of what was asked reads as indexer lag (an outage,
- * a halted run, a rebuilt index), not a gap, so nothing is rewritten: rewriting then would be the
- * blind re-upsert the hash exists to stop. A document that lost more than that stays for a purge.
+ * Unchanged ids the settled index lacks, to rewrite: the `_ts` high-water mark never re-reads them.
+ * Over the cap and over half missing reads as indexer lag, so none are rewritten.
  *
  * @param {Function} [indexed]  (chunkIds) => Set of those the index holds, or null
  */
@@ -339,14 +264,8 @@ function logSkipped(documentId, total, sent, healedIds) {
 }
 
 /**
- * `{id, …CHUNK_PARENT_FIELDS}` for every chunk of one document. Single-partition, and the
- * projection is the id plus four short strings — never `content`, which is why this is a read the
- * backfill can afford once per document.
- *
- * The backfill compares these against what the DOCUMENT says, so it can tell a chunk that is
- * already correct from one carrying a stale value — including a stale value whose correct
- * replacement is `null`, which is the case a "does the document have anything to copy" test can
- * never see.
+ * Id, parent fields and version of every chunk of one document, never `content`. The backfill
+ * compares them to the document, so it also catches a stale value whose fix is `null`.
  */
 async function parentFieldRowsForDocument(access, documentId) {
   const spec = selectWhere({
@@ -360,11 +279,8 @@ async function parentFieldRowsForDocument(access, documentId) {
 }
 
 /**
- * Whether a chunk row already holds exactly what the document says it should.
- *
- * The version counts as a field: a chunk stamped before `CHUNK_PARENT_FIELDS` grew agrees on every
- * field it knows about, so comparing values alone reads it as correct and the backfill skips
- * exactly the corpus it was run for.
+ * Whether a chunk holds exactly what the document says. The version counts: a chunk stamped before
+ * the list grew agrees on every field it knows, and the backfill would skip it.
  */
 function chunkMatchesParent(chunk, fields) {
   return (chunk.parentFieldsVersion ?? null) === (fields.parentFieldsVersion ?? null) &&
@@ -372,10 +288,7 @@ function chunkMatchesParent(chunk, fields) {
 }
 
 /**
- * Replace a document's chunks with `chunkItems`.
- *
- * Upsert-then-delete-surplus rather than delete-all-then-insert: there is no window in which a
- * live document has zero chunks, and a re-run with identical input is a no-op.
+ * Replace a document's chunks: upsert, then delete surplus, so a live document never has zero chunks.
  *
  * @param {string} documentId
  * @param {Array}  chunkItems  fully-formed items; each MUST carry a non-empty read[]
@@ -395,16 +308,8 @@ function assertAcl(chunkItems) {
 }
 
 /**
- * Upsert ONE batch of a document's chunks, leaving surplus alone.
- *
- * For the streaming ingest path, which cannot know the full chunk set up front — a 63 MB document
- * is chunked as it arrives, so the "what should survive" question can only be answered at the end.
- * Pair every streamed ingest with `deleteSurplus`, or a re-extraction that yields fewer chunks
- * leaves the old tail in place.
- *
- * Reads the stored hashes of THIS batch's ids only, one query per flush: a whole-document read per
- * flush would grow with every batch already written. `opts.indexed`: see `missingFromIndex`; pass
- * one `opts.healBudget` to every batch of an ingest, or each batch heals up to the cap.
+ * Upsert one batch of a streamed ingest, leaving surplus: pair every stream with `deleteSurplus`. Reads
+ * only this batch's hashes; pass one `opts.healBudget` to every batch, or each heals up to the cap.
  */
 async function upsertBatch(access, documentId, chunkItems, opts = {}) {
   assertAcl(chunkItems);
@@ -417,17 +322,8 @@ async function upsertBatch(access, documentId, chunkItems, opts = {}) {
 }
 
 /**
- * Rewrite the ACL on every chunk of one document.
- *
- * A chunk's `read[]` is a SNAPSHOT of its document's, copied at ingest. Nothing used to refresh it,
- * so unpublishing a document left its chunks carrying `public` — and because the AI Search indexer
- * is a `_ts` high-water mark, those rows were never re-read either, leaving the index copy stale
- * *indefinitely* rather than for the usual PT5M. Patching here advances `_ts`, so the next indexer
- * pass picks the change up and the lag becomes the ordinary one.
- *
- * A bulk PATCH, not an upsert: an upsert would have to read every chunk back first, and `content`
- * makes that a multi-megabyte round trip for a large document. All of a document's chunks share one
- * partition, and the average document holds ~19 of them, so this is normally a single request.
+ * Rewrite the ACL copied onto every chunk of one document at ingest. The bulk PATCH advances `_ts`,
+ * so the `_ts`-driven indexer sees it; an upsert would read back every chunk's `content` first.
  *
  * @param {string} documentId
  * @param {string[]} read  the document's new ACL — a chunk must never out-rank its document
@@ -439,23 +335,16 @@ async function setAclForDocument(access, documentId, read) {
 
   return setFieldsForDocument(access, documentId, {
     read,
-    // `read[]` is authoritative and `isPublished` mirrors it, here as everywhere else. Nothing
-    // reads a chunk's isPublished while its read[] is non-empty — assertAcl guarantees that —
-    // but leaving the mirror stale is how the two come to disagree, and `/isPublished` is an
-    // indexed path on this container.
+    // `isPublished` mirrors `read[]` here as everywhere; nothing reads it while `read[]` is set, but
+    // `/isPublished` is indexed, and a stale mirror is how the two come to disagree.
     isPublished: read.includes('public')
   });
 }
 
 /**
- * Set the same field map on every chunk of one document — the bulk PATCH `setAclForDocument` and
- * `setParentFieldsForDocument` both ride, for the reasons in the block above.
+ * Set one field map on every chunk of a document; `bulkVerified` splits at the 100-operation cap.
  *
- * `bulkVerified` splits at Cosmos's 100-operation cap on its own, so a document with thousands of
- * chunks needs no batching here.
- *
- * @param {object} fields  Cosmos property name -> value. Every key is `set`, so a key left out
- *                         keeps whatever the chunk already holds.
+ * @param {object} fields  Cosmos property name -> value; a key left out keeps the chunk's value
  * @param {{stampedAt?: string}} [opts]  see `setFieldsForChunks`
  */
 async function setFieldsForDocument(access, documentId, fields, opts = {}) {
@@ -464,16 +353,11 @@ async function setFieldsForDocument(access, documentId, fields, opts = {}) {
 }
 
 /**
- * The same PATCH against NAMED chunks of one document, for the backfill: it has already read which
- * rows disagree with the parent, so it patches those instead of the whole document. Request paths
- * keep `setFieldsForDocument` — they know a value moved but not which chunks lag.
+ * The same PATCH on named chunks, for the backfill. `opts.stampedAt` guards each write against a newer
+ * walk (`skippedNewer`), absent = unconditional; the other two override the bulk retry budget.
  *
  * @param {string[]} ids  chunk ids, all of `documentId`'s partition
- * @param {{stampedAt?: string, maxAttempts?: number, maxBackoffMs?: number}} [opts]  `stampedAt` is
- *   the instant this walk serves: it is written to `parentStampedAt` and guards every operation, so
- *   a chunk a newer walk already stamped comes back as `skippedNewer` instead of being overwritten.
- *   Absent: the patch is unconditional. `maxAttempts` and `maxBackoffMs` override the bulk retry
- *   budget and its per-wait ceiling, for a corpus walk long enough to sit out a sustained throttle.
+ * @param {{stampedAt?: string, maxAttempts?: number, maxBackoffMs?: number}} [opts]
  */
 async function setFieldsForChunks(
   access, documentId, ids, fields, { stampedAt, maxAttempts, maxBackoffMs } = {}
@@ -482,7 +366,7 @@ async function setFieldsForChunks(
     throw new TypeError('[chunks] a chunk patch requires at least one field');
   }
   const guarded = stampedAt !== undefined;
-  // The patched row no longer matches the hash its ingest wrote, so the next re-post must rewrite it.
+  // A patched row differs from the hash its ingest wrote, so the next re-post must rewrite it.
   const patchFields = {
     ...fields,
     [HASH_FIELD]: null,
@@ -495,9 +379,8 @@ async function setFieldsForChunks(
     return { succeeded: 0, failed: 0, skippedNewer: 0, statusCounts: {}, requestCharge: 0, chunks: 0 };
   }
 
-  // One bulk request per 100 chunks, guarded or not: the ordering condition rides on each Patch
-  // operation, and `bulkVerified` answers a rejected condition as `skippedIds` instead of retrying
-  // it. A per-chunk request would cost one round trip per chunk on a corpus walk of 400k+ of them.
+  // One bulk request per 100 chunks: the condition rides each Patch, and `bulkVerified` reports a
+  // rejected one as `skippedIds` without retrying. Per-chunk requests would cost a round trip each.
   const pk = String(documentId);
   const resourceBody = guarded
     ? { operations, condition: stampCondition(stampedAt) }
@@ -515,64 +398,29 @@ async function setFieldsForChunks(
 }
 
 /**
- * Re-stamp a document's filter metadata onto every one of its chunks.
+ * Re-stamp a document's filter fields onto its chunks; the patch advances `_ts` so the indexer sees
+ * it. Call only when a value moved (`parentFieldsChanged`): this walks every chunk.
  *
- * The chunk copy is a SNAPSHOT taken at ingest, exactly as `read[]` is, so nothing refreshes it
- * when the document's type or milestone changes upstream — and the AI Search indexer is a `_ts`
- * high-water mark, so a chunk nobody rewrites is never re-read either. The patch advances `_ts`,
- * which is what puts the new values in the index on the indexer's ordinary PT5M pass.
- *
- * Call it only when a value actually moved (`parentFieldsChanged`): this walks every chunk of the
- * document, and re-writing identical values would pay that RU on every metadata edit.
- *
- * @param {{stampedAt?: string}} [opts]  the instant this walk serves — the document's
- *   `parentFieldsPendingAt` token where there is one, the walk's own start instant otherwise.
- *   Without it the patch is unconditional, which is last-writer-wins across concurrent walks.
+ * @param {{stampedAt?: string}} [opts]  the walk's instant: the pending token, else its start; absent = unconditional
  */
 async function setParentFieldsForDocument(access, documentId, document, opts = {}) {
   return setFieldsForDocument(access, documentId, parentFieldsOf(document), opts);
 }
 
 /**
- * How many failing documents a caller's error log names before it goes quiet. A systematic fault
- * would otherwise write one record per document over a 60k-document corpus.
- *
- * It counts DOCUMENTS, which is why `onError` below fires once per document rather than once per
- * rejected chunk operation: the average document holds ~19 chunks, so a cap counted in operations
- * goes quiet after the first document or two.
+ * Failing documents an error log names before going quiet. Counted in documents, so `onError` fires
+ * once per document: a cap in chunk operations (~19 per document) would go quiet almost at once.
  */
 const MAX_LOGGED_RESTAMP_ERRORS = 20;
 
 /**
- * Re-stamp the parent fields of every document in `docs` whose row write LANDED.
- *
- * `failedIds` are the ids the document write rejected, and they are SKIPPED rather than stamped: a
- * re-stamp on the strength of a rejected write puts a value in the chunks that no document row
- * holds, so the chunk answers a filter its own document does not match — strictly worse than the
- * stale copy the run was fixing. The caller that writes no document rows passes none.
- *
- * A throw is counted and swallowed, never rethrown: the document rows are authoritative and have
- * already landed, a stale chunk copy makes a filter MISS rather than expose anything, and
- * `backfill-chunk-parent-fields.js --live` is the repair every caller's summary points at.
+ * Re-stamp each document whose row write landed, skipping `failedIds`; throws are counted, never
+ * rethrown. `chunks` and `failedChunks` count chunk operations, the rest count documents.
  *
  * @param {Array}    docs       documents whose parent fields moved; each must carry `id`
  * @param {string[]} failedIds  ids whose document-row write was rejected
- * @param {object}   [opts]     `onError(doc, err)` fires once per document that threw — a merely
- *                              rejected chunk operation arrives as a status count instead.
- *                              `stampedAt` guards every chunk write against a newer walk (see
- *                              `setFieldsForChunks`); one instant covers the whole batch, so a
- *                              caller serving per-document pending tokens stamps per document
- *                              instead. `stamp` is the test seam the scripts inject a double
- *                              through.
- * @returns {{stamped: number, failedDocuments: number, failedChunks: number, skipped: number,
- *           skippedNewer: number, chunks: number, requestCharge: number, statusCounts: object,
- *           stampedDocumentIds: string[], failedDocumentIds: string[]}}
- *          `stamped + failedDocuments + skipped === docs.length`; `chunks` and `failedChunks` count
- *          chunk OPERATIONS, the other three count DOCUMENTS — one document is ~19 operations, so
- *          a single mixed number could not be read either way. The two id lists name the documents
- *          behind the first two counts, which is what a caller needs to clear the pending flag on
- *          the ones that landed and leave it raised on the ones that did not — a count cannot say
- *          WHICH. Skipped ids are the `failedIds` the caller passed in and are in neither list.
+ * @param {object}   [opts]     `onError(doc, err)` once per throwing document; `stampedAt` (see `setFieldsForChunks`); `stamp` test seam
+ * @returns {{stamped: number, failedDocuments: number, failedChunks: number, skipped: number, skippedNewer: number, chunks: number, requestCharge: number, statusCounts: object, stampedDocumentIds: string[], failedDocumentIds: string[]}}
  */
 async function reStampAfterWrite(access, docs, failedIds = [], opts = {}) {
   const { onError, stamp = setParentFieldsForDocument, stampedAt } = opts;
@@ -606,9 +454,8 @@ async function reStampAfterWrite(access, docs, failedIds = [], opts = {}) {
     for (const [status, n] of Object.entries(result.statusCounts || {})) {
       totals.statusCounts[status] = (totals.statusCounts[status] || 0) + n;
     }
-    // A document is stamped or it is not: one rejected operation leaves it carrying a mix of old
-    // and new values on its chunks, which is the state the repair exists for. A chunk a NEWER walk
-    // already stamped is not a rejection — the value on it is at least as current as this walk's.
+    // One rejected operation leaves the chunks mixed, which is what the repair is for; a chunk a newer
+    // walk stamped is not a rejection.
     if (result.failed) {
       totals.failedDocuments++;
       totals.failedDocumentIds.push(String(doc.id));
@@ -633,17 +480,10 @@ async function bulkGoneIsDeleted(operations) {
 }
 
 /**
- * Take `surplusIds` out of the search index BEFORE they leave Cosmos, and keep in Cosmos every id
- * the index still holds.
+ * Unindex `surplusIds` before Cosmos deletes them, keeping any id the index still holds, so a request
+ * that dies between the two deletes leaves its retry something to find.
  *
- * The other order is not retry-safe: a request that dies between the two deletes (the HTTP cap, a
- * recycle) leaves a retry nothing in Cosmos to find, and the index rows stay searchable for good.
- * This way the next attempt finds those chunks again. A row gone from the index but still in
- * Cosmos is not re-added by the indexer, whose `_ts` high-water mark skips an unchanged row; the
- * next ingest that finds it missing rewrites it (`missingFromIndex`).
- *
- * @param {Function} [unindex]  (chunkIds) => { [reason]: chunk ids kept in the index }, reasons
- *   from INDEX_KEPT; absent = no index to clear
+ * @param {Function} [unindex]  (chunkIds) => { [reason]: chunk ids kept in the index }, reasons from INDEX_KEPT; absent = no index to clear
  */
 async function unindexFirst(surplusIds, unindex) {
   if (!unindex || surplusIds.length === 0) return { deletable: surplusIds, kept: {} };
@@ -660,8 +500,8 @@ const INDEX_KEPT = ['stillIndexed', 'indexUnconfigured'];
  * single `failed` check turns the request into a retry. Each reason gets its own status count.
  */
 async function writeVerified(operations, kept) {
-  // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
-  // is the bug that reported 60,578 documents written when 56,317 existed.
+  // bulkVerified, never bulk: bulk does not throw on partial failure, so counting what was sent
+  // over-reports what was written.
   let result = operations.length === 0
     ? noWrites()
     : await cosmos.bulkVerified(CONTAINER, operations, { bulkFn: bulkGoneIsDeleted });
@@ -687,12 +527,8 @@ function onlyIndexKept(result) {
 const deleteOp = (pk) => (id) => ({ operationType: 'Delete', partitionKey: pk, id });
 
 /**
- * Delete every chunk of this document whose id is NOT in `keepIds` — the tail half of a streamed
- * replace.
- *
- * Skipping this is not a cosmetic leak: AI Search indexers never see deletes (`_ts` high-water
- * mark only), so an orphaned chunk stays searchable forever and a document keeps answering queries
- * with text it no longer contains. Hence `opts.unindex`, run first — see `unindexFirst`.
+ * Delete every chunk of this document not in `keepIds`, the tail of a streamed replace. Indexers never
+ * see deletes, so `opts.unindex` runs first (`unindexFirst`), or the old text stays searchable.
  */
 async function deleteSurplus(access, documentId, keepIds, opts = {}) {
   const pk = String(documentId);
