@@ -60,6 +60,15 @@ test('the bulk download worker', async (t) => {
     assert.doesNotMatch(text, /\uff0e|\uff3c/);
   });
 
+  await t.test('a name written decomposed and one precomposed are one name to a Mac', async (tt) => {
+    const docs = [doc('d1', { documentFileName: 'r\u00e9port.pdf' }), doc('d2', { documentFileName: 're\u0301port.pdf' })];
+    const { uploads, zipText } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    assert.match(zipText([...uploads.keys()][0]), /port \(2\)\.pdf/);
+  });
+
   await t.test('a long project label cut short does not end in a dot or space', async (tt) => {
     const docs = [doc('d1')];
     const { patches } = harness(tt, { row: job(docs), docs });

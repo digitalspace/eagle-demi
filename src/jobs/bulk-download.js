@@ -52,17 +52,17 @@ const REASON = {
   truncated: 'truncated'
 };
 
-/** A name no other entry in the folder holds, ` (2)` before the extension; case-insensitive for Windows and macOS. */
+/** A name no other entry in the folder holds, ` (2)` before the extension; Windows and macOS ignore case, macOS composition. */
 function uniqueName(taken, folder, name) {
   const ext = path.extname(name);
   const base = name.slice(0, name.length - ext.length);
   let candidate = name;
   let n = 2;
-  while (taken.has(`${folder}/${candidate}`.toLowerCase())) {
+  while (taken.has(`${folder}/${candidate}`.normalize('NFC').toLowerCase())) {
     candidate = `${base} (${n})${ext}`;
     n += 1;
   }
-  taken.add(`${folder}/${candidate}`.toLowerCase());
+  taken.add(`${folder}/${candidate}`.normalize('NFC').toLowerCase());
   return candidate;
 }
 
