@@ -211,23 +211,23 @@ function readAmount(value) {
   return Number.isSafeInteger(rounded) ? rounded : undefined;
 }
 
-// `status` is `empty` (null, blank, 0), `unreadable`, `unchanged`, `full` or `append`; `append` carries
-// the new entry and the `close` of that source's open entry, to apply in one patch.
+// `empty` (cleared, nothing open), `unreadable`, `unchanged`, `full` or `append` (new entry plus close of the open one).
+// A clear appends a closed 0, so a later return of the old value differs from the latest entry and reopens.
 function observeInvestment(entries, source, value, runDate) {
   const list = Array.isArray(entries) ? entries : [];
-  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) return { status: 'empty' };
-  const amountCad = readAmount(value);
+  const blank = value === null || value === undefined || (typeof value === 'string' && !value.trim());
+  const amountCad = blank ? 0 : readAmount(value);
   if (amountCad === undefined) return { status: 'unreadable' };
-  if (amountCad === 0) return { status: 'empty' };
   const own = list.flatMap((entry, index) => (isObject(entry) && entry.source === source ? [{ entry, index }] : []));
   if (own.length && own.at(-1).entry.amountCad === amountCad) return { status: 'unchanged' };
-  if (list.length >= MAX_ENTRIES) return { status: 'full' };
   const open = own.filter(({ entry }) => isOpen(entry)).at(-1);
+  if (amountCad === 0 && !open) return { status: 'empty' };
+  if (list.length >= MAX_ENTRIES) return { status: 'full' };
   return {
     status: 'append',
     ...(open && { close: { index: open.index, id: open.entry.id, effectiveTo: runDate } }),
     append: {
-      id: randomUUID(), amountCad, effectiveFrom: own.length ? runDate : null, effectiveTo: null,
+      id: randomUUID(), amountCad, effectiveFrom: own.length ? runDate : null, effectiveTo: amountCad === 0 ? runDate : null,
       observedAt: runDate, workId: null, source, sheetKey: null, recordedAt: new Date().toISOString()
     }
   };
@@ -244,6 +244,7 @@ function currentInvestment(entries) {
 }
 
 module.exports = {
+  pacificDay,
   ENTRY_SCHEMAS,
   SERVER_KEYS,
   unwritableStaffFields,

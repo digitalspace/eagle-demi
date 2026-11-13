@@ -150,10 +150,10 @@ async function removeExternalId(id, { system, value }) {
 }
 
 /**
- * Append `entry`, and with `close` (`{id, effectiveTo}`) close that open entry in the same patch. `appended`,
- * `unchanged` (its id is stored), `changed` (the close target is gone, closed or staff's), `conflict` or `missing`.
+ * Append `entry` (and `close` that open entry) unless `stillDue(list)` of the patch's row is false. `appended`, `unchanged`
+ * (id stored, or not due), `full`, `changed` (close target gone, closed, staff's or later), `conflict` or `missing`.
  */
-async function appendHistory(id, field, entry, close) {
+async function appendHistory(id, field, entry, close, stillDue) {
   checkedField(field);
   if (close) checkedField(field, CLOSEABLE_FIELDS);
   if (!isObject(entry) || typeof entry.id !== 'string' || !entry.id) throw new TypeError('[project history] an entry needs an id');
@@ -162,11 +162,13 @@ async function appendHistory(id, field, entry, close) {
     const list = listOf(row, field);
     if (byId(list, entry.id) >= 0) return { status: 'unchanged' };
     if (list.length >= MAX_ENTRIES) return { status: 'full' };
+    if (stillDue && !stillDue(list)) return { status: 'unchanged' };
     const next = [...list, entry];
     if (close) {
       const index = byId(list, close.id);
       const target = list[index];
-      if (!target || target.source === 'demi' || (target.effectiveTo ?? null) !== null) return { status: 'changed' };
+      const early = typeof target?.effectiveFrom === 'string' && close.effectiveTo < target.effectiveFrom;
+      if (!target || target.source === 'demi' || (target.effectiveTo ?? null) !== null || early) return { status: 'changed' };
       next[index] = { ...target, effectiveTo: close.effectiveTo };
     }
     await set(field, next);

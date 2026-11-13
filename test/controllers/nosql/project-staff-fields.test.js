@@ -460,7 +460,7 @@ test('observeInvestment', async (t) => {
   const RUN = '2026-11-12';
   const entry = (source, amountCad, extra = {}) => ({ ...INVESTMENT, id: `${source}-${amountCad}`, source, amountCad, ...extra });
 
-  await t.test('observeInvestment writes nothing for an unchanged, null, 0 or unreadable value', () => {
+  await t.test('observeInvestment writes nothing for an unchanged value, a clear with no open entry, or an unreadable value', () => {
     const entries = [entry('track', 5000, { effectiveTo: '2026-01-01' })];
     assert.strictEqual(observeInvestment(entries, 'track', 5000, RUN).status, 'unchanged', 'same as a closed latest');
     assert.strictEqual(observeInvestment(entries, 'track', '$5,000', RUN).status, 'unchanged');
@@ -491,6 +491,16 @@ test('observeInvestment', async (t) => {
       id: 'x', amountCad: 7000, effectiveFrom: RUN, effectiveTo: null, observedAt: RUN,
       workId: null, source: 'track', sheetKey: null, recordedAt: 'x'
     });
+  });
+
+  await t.test('observeInvestment records a clear of an open entry as its close plus a closed 0, and a repeated clear as unchanged', () => {
+    const cleared = observeInvestment([entry('track', 5000)], 'track', null, RUN);
+    assert.deepStrictEqual(cleared.close, { index: 0, id: 'track-5000', effectiveTo: RUN });
+    assert.deepStrictEqual([cleared.status, cleared.append.amountCad, cleared.append.effectiveFrom, cleared.append.effectiveTo],
+      ['append', 0, RUN, RUN]);
+    const closedZero = [entry('track', 5000, { effectiveTo: RUN }), entry('track', 0, { effectiveFrom: RUN, effectiveTo: RUN })];
+    assert.strictEqual(observeInvestment(closedZero, 'track', 0, RUN).status, 'unchanged');
+    assert.strictEqual(currentInvestment(closedZero), null);
   });
 
   await t.test('observeInvestment writes nothing on a full list', () => {
