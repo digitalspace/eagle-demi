@@ -15,7 +15,7 @@ const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
-const { HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
+const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
 const { mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
@@ -27,6 +27,8 @@ const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
 const LIVE_REFUSED = '--live is refused until the rollback (W8b) can open the works-backup it writes; run the dry run';
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const DERIVED = new Set(['patched', 'unchanged']);
+// The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
+const ENVELOPE_HEADROOM = 16 * 1024;
 
 const refuse = (message) => { throw new Error(message); };
 
@@ -96,7 +98,9 @@ function backupOf(plan, stored, batchId) {
       const row = stored.rows.get(projectId) || {};
       const { externalIds, staffAssignments, capitalInvestments, staffNotes } = row;
       return { projectId, externalIds, staffAssignments, capitalInvestments, staffNotes };
-    })
+    }),
+    projectEntries: plan.entries.filter(entry => !entry.doc && !entry.current)
+      .map(({ action, projectId, pair, field, entry, close, entryId, effectiveTo }) => ({ action, projectId, pair, field, entry, close, entryId, effectiveTo }))
   }));
 }
 
@@ -117,7 +121,9 @@ async function startBatch(o, ctx, batchId, lease) {
     const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
     if (plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
     const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
-    const backup = writeSealed(o['out-dir'], backupOf(plan, stored, batchId), sealed);
+    const body = backupOf(plan, stored, batchId);
+    if (4 * Math.ceil(body.length / 3) + ENVELOPE_HEADROOM > MAX_BYTES.backup) refuse('the works-backup would be over the size a rollback reads; nothing was written');
+    const backup = writeSealed(o['out-dir'], body, sealed);
     batch = await batches.createBatch(batchId, {
       operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
       inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,

@@ -4,12 +4,15 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
 const { fakeLists } = require('../helpers/works-import-fakes');
 const { main } = require('../../src/scripts/load-business-works');
-const { T0, PROJECT, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
+const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
+const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
+const { ENV, T0, PROJECT, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
 
 const DAY = 24 * 60 * 60 * 1000;
 const entriesOf = store => store.all().filter(item => item.kind === KINDS.ENTRY).sort((a, b) => a.seq - b.seq);
@@ -38,6 +41,35 @@ test('a failed lock release keeps the first error', async (t) => {
   t.mock.method(cosmos, 'remove', async () => { throw new Error('release failed'); });
   await assert.rejects(load([...inputs().argv, ...liveArgs('0'.repeat(64))]), /planSha256 does not match/);
   assert.equal(store.get(LOCK_ID, KINDS.LOCK).kind, KINDS.LOCK);
+});
+
+test('a works-backup too big for a rollback to read refuses before the backup or the batch header is written', async (t) => {
+  const store = fakeLists(t);
+  const cap = MAX_BYTES.backup;
+  MAX_BYTES.backup = 16 * 1024;
+  t.after(() => { MAX_BYTES.backup = cap; });
+  const given = inputs();
+  const planSha256 = (await load(given.argv)).value('planSha256');
+  const files = fs.readdirSync(given.outDir);
+  await assert.rejects(load([...given.argv, ...liveArgs(planSha256)]), /works-backup would be over the size a rollback reads/);
+  assert.deepEqual(fs.readdirSync(given.outDir), files);
+  assert.deepEqual(store.all(), []);
+});
+
+test('the works-backup of a staff load holds the appended staff entry and the added external id', async (t) => {
+  const store = fakeLists(t);
+  const given = staffed();
+  await liveRun(given, fakeDemi(), { signoff: 'so-staff' });
+  const { backupBlob } = store.all().find(item => item.kind === KINDS.BATCH);
+  const backup = JSON.parse(openEnvelope(fs.readFileSync(path.join(given.outDir, backupBlob)), {
+    purpose: 'works-backup', env: ENV, keyFingerprint: fingerprintOf({ rsa: operator.publicKey }), privateKey: operator.privateKey
+  }).plaintext);
+  const appended = backup.projectEntries.find(entry => entry.action === 'appendHistory');
+  const added = backup.projectEntries.find(entry => entry.action === 'addExternalId');
+  assert.equal(appended.projectId, PROJECT);
+  assert.equal(typeof appended.entry.id, 'string');
+  assert.equal(added.projectId, PROJECT);
+  assert.equal(typeof added.pair.system, 'string');
 });
 
 test('a write that fails mid-run leaves the batch pending, its entry intent, the lock held and later entries unwritten', async (t) => {
