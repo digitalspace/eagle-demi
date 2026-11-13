@@ -2,8 +2,7 @@
 
 // No database settings: src/db/cosmos-nosql.js reads its own and uses a managed identity.
 
-// Throws at load: a cap that parsed to NaN compares false against every value, so a silent
-// parse would remove the limit.
+// Throws at load: a cap that parsed to NaN compares false against every value, so a silent parse removes the limit.
 function intFromEnv(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -78,12 +77,10 @@ const config = {
   minioSecret:  secretFromEnv('MINIO_SECRET_KEY'),
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
-  // Stored keys are the prod bucket's; a non-prod bucket may nest that copy under one more segment,
-  // which this prefix adds. Empty in prod.
+  // Stored keys are the prod bucket's; this adds the one more segment a non-prod copy may nest under. Empty in prod.
   minioKeyPrefix: process.env.MINIO_KEY_PREFIX || '',
 
-  // 'minio' or 'azure'. Explicit, never inferred from which credentials are present; src/storage/
-  // throws on an unknown value.
+  // 'minio' or 'azure', explicit, never inferred from credentials present; src/storage/ throws on an unknown value.
   storageBackend: process.env.STORAGE_BACKEND || 'minio',
 
   // Keyless (managed identity). Each environment has its own container, so no key prefix exists.
@@ -198,8 +195,7 @@ const config = {
   summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.70'),
   summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '2.70'),
 
-  // Stored project summaries read hundreds of chunks once per project, offline, so they get their
-  // own ceilings.
+  // Stored project summaries read hundreds of chunks once per project, offline, so they get their own ceilings.
   projectSummaryMaxChunks: parseInt(process.env.PROJECT_SUMMARY_MAX_CHUNKS || '120', 10),
   projectSummaryMaxTokens: parseInt(process.env.PROJECT_SUMMARY_MAX_TOKENS || '1500', 10),
   // Bounds the reply, not the prompt: a list the model stops midway parses as nothing.
@@ -323,6 +319,7 @@ const config = {
   trackWorksSync:            process.env.TRACK_WORKS_SYNC === 'true',
   worksWrite:                process.env.WORKS_WRITE === 'true',
   worksRead:                 process.env.WORKS_READ === 'true',
+  worksReadSources:          [...new Set((envTrim('WORKS_READ_SOURCES') || 'track').toLowerCase().split(/\s*,\s*/))],
   assessmentPass:            process.env.ASSESSMENT_PASS === 'true',
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
   keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),
@@ -399,8 +396,7 @@ config.sourceMinioSecret = secretFromEnv('SOURCE_MINIO_SECRET_KEY');
 config.sourceMinioHost = process.env.SOURCE_MINIO_HOST || config.minioHost;
 config.sourceMinioPort = intFromEnv('SOURCE_MINIO_PORT', config.minioPort);
 config.sourceMinioSsl = process.env.SOURCE_MINIO_USE_SSL
-  ? process.env.SOURCE_MINIO_USE_SSL === 'true'
-  : config.minioSsl;
+  ? process.env.SOURCE_MINIO_USE_SSL === 'true' : config.minioSsl;
 
 // Only dev and local may admit every client, so an unknown ENVIRONMENT name counts as deployed.
 if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
@@ -414,6 +410,10 @@ if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
 if (!EDGE_GATE_MODES.includes(config.edgeGate)) {
   throw new Error(`EDGE_GATE must be empty, 'log' or 'enforce', got '${config.edgeGate}'.`);
 }
+
+// A typo would otherwise hide that source's works without a word.
+const badSource = config.worksReadSources.find(source => !['track', 'sheet', 'demi'].includes(source));
+if (badSource !== undefined) throw new Error(`WORKS_READ_SOURCES: '${badSource}' is not track, sheet or demi.`);
 
 // With Keycloak off every Bearer token is refused, so a deployed API would serve no signed-in user.
 if ((config.environmentName === 'test' || config.environmentName === 'prod') && !config.keycloakEnabled) {

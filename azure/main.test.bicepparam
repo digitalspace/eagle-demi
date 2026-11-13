@@ -219,6 +219,7 @@ param trackWorksSync = true
 // Writes fill `works`; reads derive phase and milestone fields from it.
 param worksWrite = true
 param worksRead = true
+param worksReadSources = 'track'
 // On in test to prove the assessment dating before prod turns it on.
 param assessmentPass = true
 param roleSyncClientId = 'demi-role-sync'
