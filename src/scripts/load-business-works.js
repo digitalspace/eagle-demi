@@ -15,7 +15,7 @@ const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
-const { HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
+const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
 const { mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
@@ -27,6 +27,8 @@ const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
 const LIVE_REFUSED = '--live is refused until the rollback (W8b) can open the works-backup it writes; run the dry run';
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const DERIVED = new Set(['patched', 'unchanged']);
+// The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
+const ENVELOPE_HEADROOM = 16 * 1024;
 
 const refuse = (message) => { throw new Error(message); };
 
@@ -96,8 +98,17 @@ function backupOf(plan, stored, batchId) {
       const row = stored.rows.get(projectId) || {};
       const { externalIds, staffAssignments, capitalInvestments, staffNotes } = row;
       return { projectId, externalIds, staffAssignments, capitalInvestments, staffNotes };
-    })
+    }),
+    projectEntries: plan.entries.filter(entry => !entry.doc && !entry.current)
+      .map(({ action, projectId, pair, field, entry, close, entryId, effectiveTo }) => ({ action, projectId, pair, field, entry, close, entryId, effectiveTo }))
   }));
+}
+
+/** The backup, refused when its sealed envelope would be over what a rollback reads. */
+function backupBody(plan, stored, batchId) {
+  const body = backupOf(plan, stored, batchId);
+  if (4 * Math.ceil(body.length / 3) + ENVELOPE_HEADROOM > MAX_BYTES.backup) refuse('the works-backup would be over the size a rollback reads; nothing was written');
+  return body;
 }
 
 /** Frees the lock of a run that wrote no batch header; a failed release is logged so the first error stands. */
@@ -117,7 +128,7 @@ async function startBatch(o, ctx, batchId, lease) {
     const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
     if (plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
     const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
-    const backup = writeSealed(o['out-dir'], backupOf(plan, stored, batchId), sealed);
+    const backup = writeSealed(o['out-dir'], backupBody(plan, stored, batchId), sealed);
     batch = await batches.createBatch(batchId, {
       operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
       inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,
@@ -136,6 +147,10 @@ async function live(o, ctx) {
   const batchId = crypto.randomUUID();
   const lease = await batches.takeLock(batchId, now());
   const { plan, stored, backup, batch } = await startBatch(o, ctx, batchId, lease);
+  // Printed before any write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
+  write(`batchId=${batchId}`);
+  write(`backupBlob=${backup.name}`);
+  write(`backupSha256=${backup.sha256}`);
   const run = { batchId, lease, seq: 0 };
   const rowEtags = new Map([...stored.rows].map(([id, row]) => [id, row._etag ?? null]));
   let written = 0;
@@ -158,14 +173,14 @@ async function live(o, ctx) {
     }, now());
   }
   await batches.completeBatch(batch, lease, now());
-  write(`batchId=${batchId}`);
   write(`written=${written}`);
   write(`derived=${touched.length}`);
-  write(`backupSha256=${backup.sha256}`);
 }
 
 async function dryRun(o, { demi, inputs, env, runAt, write }) {
-  const { plan } = await planFor(demi, inputs, { batchId: crypto.randomUUID(), batchAt: runAt });
+  const batchId = crypto.randomUUID();
+  const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
+  backupBody(plan, stored, batchId);
   const body = Buffer.from(JSON.stringify({ planSha256: plan.planSha256, report: plan.report, lists: plan.lists }));
   const report = writeSealed(o['out-dir'], body, { purpose: 'works-report', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 });
   countLines(plan).forEach(write);

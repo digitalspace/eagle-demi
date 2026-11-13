@@ -371,3 +371,47 @@ test('seal refuses a crosswalk whose devbox signature does not verify', async ()
   assert.deepEqual(await cli(sealArgs('crosswalk', file, out, '--signature', path.join(dir, 'good.sig'))),
     [`crosswalkSha256=${sha256}`]);
 });
+
+test('open and seal refuse a works-backup, so no plain copy of it is written', async () => {
+  const dir = fresh('works-backup');
+  const out = path.join(dir, 'works-backup.json');
+  const open = openArgs({ keyFile: path.join(dir, 'key.pem') }, path.join(dir, 'in.sealed.json'), out, '0'.repeat(64))
+    .map(arg => (arg === 'crosswalk' ? 'works-backup' : arg));
+  await assert.rejects(cli(open), /--purpose must be one of/);
+  await assert.rejects(cli(sealArgs('works-backup', out, path.join(dir, 'out.sealed.json'))), /--purpose must be one of/);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test('seal refuses a crosswalk without --signature', async () => {
+  const dir = fresh('crosswalk');
+  const file = path.join(dir, 'crosswalk.csv');
+  fs.writeFileSync(file, 'row,state\n1,exact\n');
+  await assert.rejects(cli(sealArgs('crosswalk', file, path.join(dir, 'crosswalk.sealed.json'))), /missing --signature/);
+});
+
+test('a recipient key, signature or operator key that is a symbolic link is refused', async () => {
+  const dir = fresh('links');
+  const file = path.join(dir, 'crosswalk.csv');
+  fs.writeFileSync(file, 'row,state\n1,exact\n');
+  const sig = path.join(dir, 'good.sig');
+  fs.writeFileSync(sig, sign(devbox.ed.privateKey, { purpose: 'crosswalk', env: 'test', sha256: sha256Hex(fs.readFileSync(file)) }));
+  const link = (target, name) => {
+    fs.symlinkSync(target, path.join(dir, name));
+    return path.join(dir, name);
+  };
+  const out = path.join(dir, 'out.sealed.json');
+  const recipient = sealArgs('crosswalk', file, out, '--signature', sig).map(arg => (arg === devbox.pemFile ? link(devbox.pemFile, 'devbox.pem') : arg));
+  await assert.rejects(cli(recipient), /devbox\.pem is a symbolic link/);
+  await assert.rejects(cli(sealArgs('crosswalk', file, out, '--signature', link(sig, 'link.sig'))), /--signature is a symbolic link/);
+  const key = link(path.join(dir, 'absent-key.pem'), 'key.pem');
+  await assert.rejects(cli(openArgs({ keyFile: key }, path.join(dir, 'in.sealed.json'), path.join(dir, 'open.csv'), '0'.repeat(64))),
+    /--key is a symbolic link/);
+});
+
+test('seal refuses an --in that is a symbolic link', async () => {
+  const dir = fresh('manual');
+  fs.writeFileSync(path.join(dir, 'manual-match.csv'), 'sheetId,trackId\n1,2\n');
+  fs.symlinkSync(path.join(dir, 'manual-match.csv'), path.join(dir, 'link.csv'));
+  await assert.rejects(cli(sealArgs('manual-match', path.join(dir, 'link.csv'), path.join(dir, 'out.sealed.json'))),
+    /--in is a symbolic link/);
+});

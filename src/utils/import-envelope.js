@@ -6,6 +6,9 @@ const path = require('path');
 
 const ENVELOPE_VERSION = 1;
 const MIN_RSA_BITS = 3072;
+// What the works-backup reader and the laptop tool read at most: a sealed backup, and one key or signature file.
+const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
+const MAX_KEY_BYTES = 64 * 1024;
 const STAFF_FIELDS = Object.freeze(['epd', 'lead', 'notes', 'investment']);
 const PEM_BLOCK = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/g;
 const PRIVATE_PEM_BLOCK = /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/g;
@@ -79,8 +82,11 @@ function recipientFromPem(pemText, expectFingerprint, label) {
   return { keys, fingerprint };
 }
 
-/** Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap. */
-function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLOW } = {}) {
+/**
+ * Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap.
+ * `check` gets the fstat of the open file, so its checks and the read see the same file.
+ */
+function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLOW, check } = {}) {
   if (!noFollow && fs.lstatSync(file).isSymbolicLink()) throw new Error(`${label} is a symbolic link`);
   let fd;
   try {
@@ -90,7 +96,9 @@ function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLO
     throw new Error(err.code === 'ELOOP' ? `${label} is a symbolic link` : `${label} cannot be opened`, { cause: err });
   }
   try {
-    if (!fs.fstatSync(fd).isFile()) throw new Error(`${label} is not a regular file`);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`${label} is not a regular file`);
+    if (check) check(stat);
     const chunks = [];
     const chunk = Buffer.alloc(1024 * 1024);
     let total = 0;
@@ -253,6 +261,8 @@ function writeSealed(dir, plaintext, { purpose, env, recipient, signingKey }) {
 }
 
 module.exports = {
+  MAX_BACKUP_BYTES,
+  MAX_KEY_BYTES,
   STAFF_FIELDS,
   sha256Hex,
   fingerprintOf,
