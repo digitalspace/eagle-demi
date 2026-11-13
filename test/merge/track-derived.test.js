@@ -94,10 +94,32 @@ test('legislationTransitions with sheet transitionOut', async (t) => {
     ]);
   });
 
-  await t.test('two works holding one pair give one entry, dated by the first that has a date', () => {
-    const works = publicWorksOf([sheetDoc(1, handOver(null, 'none')), sheetDoc(2, handOver('2003-02-01', 'sheet'))], ROW);
+  await t.test('an Eagle pair inside one held pair\'s span gives way to it', () => {
+    const out = { actYear: 1996, transitionOut: { toActYear: 2018, dateSource: 'none' } };
+    const works = publicWorksOf([sheetDoc(1, out)], ROW);
 
-    assert.deepStrictEqual(legislationTransitions([], works), [{ fromYear: 1996, toYear: 2002, date: '2003-02-01' }]);
+    assert.deepStrictEqual(legislationTransitions([1996, 2002, 2018], works),
+      [{ fromYear: 1996, toYear: 2018, date: null }]);
+  });
+
+  await t.test('a held pair shorter than an Eagle pair, with no chain across it, keeps both', () => {
+    const works = publicWorksOf([sheetDoc(1, handOver('2003-02-01', 'sheet'))], ROW);
+
+    assert.deepStrictEqual(legislationTransitions([1996, 2018], works), [
+      { fromYear: 1996, toYear: 2002, date: '2003-02-01' },
+      { fromYear: 1996, toYear: 2018, date: null }
+    ]);
+  });
+
+  await t.test('two works holding one pair give one entry, dated by the first that has a date', () => {
+    const works = publicWorksOf([
+      sheetDoc(1, handOver(null, 'none')),
+      sheetDoc(2, handOver('2003-02-01', 'sheet')),
+      sheetDoc(3, handOver('2003-03-01', 'sheet'))
+    ], ROW);
+
+    assert.deepStrictEqual(legislationTransitions([], works),
+      [{ fromYear: 1996, toYear: 2002, date: '2003-02-01' }]);
   });
 
   const fallback = { transitionOut: { toActYear: 2018, date: '2025-05-21', dateSource: 'track' } };
@@ -112,7 +134,8 @@ test('legislationTransitions with sheet transitionOut', async (t) => {
     assert.strictEqual(date, publicDateOf(works));
   });
 
-  await t.test('with no Track milestone the 2025 sheet fallback is used, the same date as the public transitionOut', () => {
+  await t.test('with no Track milestone the 2025 sheet fallback is used, the same date as the public ' +
+    'transitionOut', () => {
     const works = publicWorksOf([sheetDoc(1, fallback)], ROW);
 
     const [{ date }] = legislationTransitions([2002, 2018], works);

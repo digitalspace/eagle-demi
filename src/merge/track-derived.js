@@ -21,8 +21,8 @@ function handOverOf(work) {
 }
 
 /**
- * One `{fromYear, toYear, date}` per change of Act in Eagle's year list or a work's `transitionOut`; a pair
- * a work holds takes its `publicWorksOf` date, any other Track's milestone naming `fromYear`, else null.
+ * One `{fromYear, toYear, date}` per held `transitionOut` and per Eagle pair no held pair covers; a held pair
+ * takes its `publicWorksOf` date, else Track's milestone naming `fromYear`, else null.
  */
 function legislationTransitions(yearList, works) {
   const listed = worksOf({ works });
@@ -31,11 +31,13 @@ function legislationTransitions(yearList, works) {
     .sort((a, b) => a - b);
   const handOvers = listed.map(handOverOf).filter(Boolean);
   const samePair = (a, b) => a.fromYear === b.fromYear && a.toYear === b.toYear;
-  // Held pairs chaining across an Eagle pair's span replace it, so no Act gets two starts.
+  // A work's record wins: an Eagle pair goes when held pairs chain from its fromYear to its toYear, or
+  // when it lies inside one held pair's span.
   const chained = (fromYear, toYear) => handOvers.some(held => held.fromYear === fromYear &&
     (held.toYear === toYear || (held.toYear < toYear && chained(held.toYear, toYear))));
+  const spanned = (pair) => handOvers.some(held => held.fromYear <= pair.fromYear && pair.toYear <= held.toYear);
   const pairs = years.slice(1).map((toYear, i) => ({ fromYear: years[i], toYear }))
-    .filter(pair => !chained(pair.fromYear, pair.toYear));
+    .filter(pair => !chained(pair.fromYear, pair.toYear) && !spanned(pair));
   for (const { fromYear, toYear } of handOvers) {
     if (!pairs.some(pair => samePair(pair, { fromYear, toYear }))) pairs.push({ fromYear, toYear });
   }

@@ -265,7 +265,8 @@ test('transitionDateOf', async (t) => {
     assert.strictEqual(transitionDateOf(out, [from1996], 2002), null);
   });
 
-  await t.test('Track\'s milestone counts only on an Assessment, by its exact name, with a date; the first wins', () => {
+  await t.test('Track\'s milestone counts only on an Assessment, by its name prefix and year, with a date; ' +
+    'the first wins', () => {
     const name = 'Project Transitioning FROM the EA Act (2002)';
     const dateOf = (works) => transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, works, 2002);
 

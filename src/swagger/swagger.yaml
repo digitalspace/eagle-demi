@@ -9477,10 +9477,12 @@ components:
           type: array
           description: >-
             One entry per change of Act, oldest first. Pairs come from `legislationYearList` and
-            from each work's `transitionOut`. When a work's pairs chain across a pair in the list
-            (1996 to 2002 and 2002 to 2018 against 1996 to 2018), the work's pairs replace it.
+            from each work's `transitionOut`. When pairs held by works chain across a pair in the
+            list (1996 to 2002 and 2002 to 2018 against 1996 to 2018), or one held pair spans it
+            (1996 to 2018 against 1996 to 2002), those pairs replace it.
             A pair a work holds takes that work's resolved `transitionOut.date`, which can be a
-            sheet date, as a date only (`2003-02-01`). Any other pair takes the actual date of the
+            sheet date, as a date only (`2003-02-01`). A held pair with no resolved date falls
+            back like any other pair. Any other pair takes the actual date of the
             Track milestone "Project Transitioning FROM ..." on the Assessment work, as Track
             sends it (a date-time), or null when Track has none. Both forms are valid. Present only
             once the Track works sync has run for the project.
