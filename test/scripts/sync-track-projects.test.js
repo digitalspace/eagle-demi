@@ -10,11 +10,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { HEAL_CAP, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, trackChanges, rowWriter, emptySummary } = require('../../src/scripts/sync-track-projects');
 const { run, syncProjects } = require('../../src/scripts/sync-track-run');
 const {
-  NOW, API_PROJECT, FLAT, storedProject, eagleOnlyProject, conflict, preconditionFailed, fakeLinks, fakeProjects
+  NOW, API_PROJECT, FLAT, storedProject, eagleOnlyProject, conflict, preconditionFailed, fakeLinks, fakeProjects,
+  fakeWorks, useWorks
 } = require('../helpers/track-sync-fakes');
+const phaseCatalog = require('../../src/domain/phase-catalog');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
@@ -360,6 +362,39 @@ test('a project the works pull reached is counted, one it skipped is not', async
   assert.strictEqual((await run(new Map([['208', [{ trackWorkId: 12 }]]]))).works, 0);
 });
 
+test('works on the nightly', async (t) => {
+  const flagOn = (t, name) => { const held = config[name]; config[name] = true; t.after(() => { config[name] = held; }); };
+  const nightly = (opts) => syncProjects([API_PROJECT],
+    { live: true, deps: { projects: fakeProjects([storedProject({ works: [{ trackWorkId: 11 }] })]), links: fakeLinks() },
+      now: NOW, ...opts });
+
+  await t.test('a night where only works re-derive counts as derivedDrift', async (t) => {
+    flagOn(t, 'worksRead');
+    t.mock.method(phaseCatalog, 'load', async () => ({}));
+    useWorks(t, fakeWorks());
+
+    const works = [{ trackWorkId: 11, workState: 'COMPLETED' }];
+    const repo = fakeProjects([storedProject({ works: [{ trackWorkId: 11 }] })]);
+
+    const summary = await nightly({ works: new Map([['207', works]]) });
+    const dry = await rowWriter({ repo, links: fakeLinks(), live: false, now: NOW, summary: emptySummary(1),
+      lookup: { stored: (id) => repo.getById(null, id) } }).write(API_PROJECT, { works });
+
+    assert.deepStrictEqual([summary.derivedDrift, summary.updated], [1, 0]);
+    assert.strictEqual(dry.action, 'updated', 'a dry run answers as the live run does');
+  });
+
+  await t.test('a work document another owner holds is counted adopted', async (t) => {
+    flagOn(t, 'worksWrite');
+    useWorks(t, { ...fakeWorks(), save: async () => ({ status: 'foreign' }) });
+    const work = structuredClone(require('../fixtures/track-records/new_work_two_phases.json').work);
+
+    const summary = await nightly({ nested: new Map([['207', [work]]]) });
+
+    assert.deepStrictEqual([summary.adopted, summary.failures], [1, 0]);
+  });
+});
+
 test('Track works on a project that changed Act', async (t) => {
   const certified = { ...API_PROJECT, eac_signed: '2023-10-10', eac_expires: '2028-10-10' };
   const twoActs = () => fakeProjects([storedProject({
@@ -608,41 +643,35 @@ test('a Track project naming a native project\'s Eagle id is not created beside 
 });
 
 test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated', async () => {
-  const projects = fakeProjects([eagleOnlyProject()]);
-  const links = fakeLinks();
+  const { written, projects, links, summary } = await relinked();
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
-
-  assert.strictEqual(summary.relinked, 1);
-  assert.strictEqual(summary.created, 0, 'a second row for a project DEMI already holds');
-  assert.strictEqual(projects.writes.length, 1);
-
-  const [written] = projects.writes;
-  assert.strictEqual(written.id, '207', 'the Track id wins, as buildRegistry keys a matched pair');
-  assert.strictEqual(written.eagleId, API_PROJECT.epic_guid);
-  assert.strictEqual(written.sourceSystem, 'track');
-  assert.deepStrictEqual(written.read, readForLevel(4), 'a re-key must not move a level');
-  assert.strictEqual(written.isPublished, true);
-  assert.deepStrictEqual(written.vis, { eacExpires: 3 });
-  assert.strictEqual(written.regionalDistrict, 'Thompson-Nicola');
+  assert.deepStrictEqual([summary.relinked, summary.created], [1, 0], 'a second row for a project DEMI already holds');
+  assert.deepStrictEqual(projects.writes.map(row => row.id), ['207', `eagle-${API_PROJECT.epic_guid}`],
+    'the Track id wins, as buildRegistry keys a matched pair; then the twin is folded');
+  assert.deepStrictEqual([written.eagleId, written.sourceSystem], [API_PROJECT.epic_guid, 'track']);
+  assert.deepStrictEqual([written.read, written.isPublished], [readForLevel(4), true], 'a re-key must not move a level');
+  assert.deepStrictEqual([written.vis, written.regionalDistrict], [{ eacExpires: 3 }, 'Thompson-Nicola']);
   assert.ok(written.sources.track, 'and it is a merge-produced Track row from now on');
-  assert.strictEqual(summary.shortLinks, 1);
-  assert.strictEqual(links.created.length, 1, 'the re-keyed row is minted its link');
-  assert.strictEqual(written.shortCode, links.created[0].id);
-  assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
+  assert.deepStrictEqual([summary.shortLinks, links.created.length], [1, 1], 'the re-keyed row is minted its link');
+  assert.deepStrictEqual([written.shortCode, links.created[0].id], ['nicomen-wind-energy', 'nicomen-wind-energy']);
 });
 
-test('a relink carries a staff code, its legacy codes and a custom target to the Track row', async () => {
-  const projects = fakeProjects([eagleOnlyProject({
-    shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm'],
-    shortLinkUrl: 'https://www.gov.bc.ca/site-c'
-  })]);
+/** The Track row a nightly relink of the Eagle-only row with {overrides} writes, the repositories and the summary. */
+async function relinked(overrides, midRun) {
+  const projects = fakeProjects([eagleOnlyProject(overrides)], { midRun });
   const links = fakeLinks();
-
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
-
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
   const [written] = projects.writes;
   assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  return { written, projects, links, summary };
+}
+
+test('a relink carries a staff code, its legacy codes and a custom target to the Track row', async () => {
+  const { written, links } = await relinked({
+    shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm'],
+    shortLinkUrl: 'https://www.gov.bc.ca/site-c'
+  });
+
   assert.strictEqual(written.shortCode, 'site-c');
   assert.strictEqual(written.shortCodeSource, 'staff');
   assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
@@ -651,33 +680,23 @@ test('a relink carries a staff code, its legacy codes and a custom target to the
 });
 
 test('a relink does not carry the Eagle-only row sync-out state to the Track row', async () => {
-  const projects = fakeProjects([eagleOnlyProject({ syncOut: { eagle: { status: 'sent' } }, syncVersion: 3 })]);
+  const { written } = await relinked({ syncOut: { eagle: { status: 'sent' } }, syncVersion: 3 });
 
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-  const [written] = projects.writes;
-  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
   assert.strictEqual(Object.hasOwn(written, 'syncOut'), false);
   assert.strictEqual(Object.hasOwn(written, 'syncVersion'), false);
 });
 
 test('a relink of an Eagle-only row DEMI owns keeps the Eagle-side fields DEMI holds', async () => {
-  const projects = fakeProjects([eagleOnlyProject({
+  const { written } = await relinked({
     demiOwnedAt: NOW, sector: 'Mines',
     sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy', sector: 'Energy' } }
-  })]);
+  });
 
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-  const [written] = projects.writes;
-  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
   assert.deepStrictEqual([written.sector, written.demiOwnedAt], ['Mines', NOW]);
 });
 
 test('a relink of an Eagle-only row DEMI owns hands the ownership to the Track row', async () => {
-  const projects = fakeProjects([eagleOnlyProject({ demiOwnedAt: NOW, syncVersion: 3, syncOut: { eagle: { status: 'sent' } } })]);
-
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+  const { projects } = await relinked({ demiOwnedAt: NOW, syncVersion: 3, syncOut: { eagle: { status: 'sent' } } });
 
   const twin = projects.items.find(p => p.id === `eagle-${API_PROJECT.epic_guid}`);
   assert.ok(twin, 'the twin row stays');
@@ -686,27 +705,19 @@ test('a relink of an Eagle-only row DEMI owns hands the ownership to the Track r
 });
 
 test('a relink of a live DEMI-owned row Eagle deleted writes a live Track row', async () => {
-  const projects = fakeProjects([eagleOnlyProject({
+  const { written } = await relinked({
     demiOwnedAt: NOW,
     sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy', isDeleted: true } }
-  })]);
+  });
 
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-  const [written] = projects.writes;
-  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
   assert.strictEqual(Object.hasOwn(written, 'isDeleted'), false);
   assert.strictEqual(Object.hasOwn(written.sources.eagle, 'isDeleted'), false);
   assert.deepStrictEqual(written.read, readForLevel(4));
 });
 
 test('a relink keeps a value staff saved on the Eagle-only row', async () => {
-  const projects = fakeProjects([eagleOnlyProject({ name: 'Nicomen Wind', staffEditedAt: { name: NOW } })]);
+  const { written } = await relinked({ name: 'Nicomen Wind', staffEditedAt: { name: NOW } });
 
-  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-  const [written] = projects.writes;
-  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
   assert.strictEqual(written.name, 'Nicomen Wind');
 });
 
@@ -740,23 +751,16 @@ test('the Track sync keeps the tags DEMI set', async (t) => {
   });
 
   await t.test('on a relink of an Eagle-only row to its Track id', async () => {
-    const projects = fakeProjects([eagleOnlyProject({ tags: ['Nicomen Wind'] })]);
+    const { written } = await relinked({ tags: ['Nicomen Wind'] });
 
-    await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-    assert.strictEqual(projects.writes[0].id, '207', 'the premise: this is the re-keyed row');
-    assert.deepStrictEqual(projects.writes[0].tags, ['Nicomen Wind']);
+    assert.deepStrictEqual(written.tags, ['Nicomen Wind']);
   });
 
   await t.test('on a relink, as the Eagle-only row stands after a tags PUT during the run', async () => {
-    const projects = fakeProjects([eagleOnlyProject({ tags: ['Nicomen Wind'] })], {
-      midRun: (store, find) => store({ ...find(eagleOnlyProject().id), tags: ['Wind', 'Thompson'] })
-    });
+    const { written } = await relinked({ tags: ['Nicomen Wind'] },
+      (store, find) => store({ ...find(eagleOnlyProject().id), tags: ['Wind', 'Thompson'] }));
 
-    await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
-
-    assert.strictEqual(projects.writes[0].id, '207', 'the premise: this is the re-keyed row');
-    assert.deepStrictEqual(projects.writes[0].tags, ['Wind', 'Thompson']);
+    assert.deepStrictEqual(written.tags, ['Wind', 'Thompson']);
   });
 });
 
@@ -831,7 +835,8 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, derivedDrift: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, adopted: 0, derivedDrift: 0,
+      failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 
