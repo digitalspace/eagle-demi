@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { HEAL_CAP, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, trackChanges, rowWriter, emptySummary } = require('../../src/scripts/sync-track-projects');
 const { run, syncProjects } = require('../../src/scripts/sync-track-run');
 const {
   NOW, API_PROJECT, FLAT, storedProject, eagleOnlyProject, conflict, preconditionFailed, fakeLinks, fakeProjects,
@@ -373,9 +373,15 @@ test('works on the nightly', async (t) => {
     t.mock.method(phaseCatalog, 'load', async () => ({}));
     useWorks(t, fakeWorks());
 
-    const summary = await nightly({ works: new Map([['207', [{ trackWorkId: 11, workState: 'COMPLETED' }]]]) });
+    const works = [{ trackWorkId: 11, workState: 'COMPLETED' }];
+    const repo = fakeProjects([storedProject({ works: [{ trackWorkId: 11 }] })]);
+
+    const summary = await nightly({ works: new Map([['207', works]]) });
+    const dry = await rowWriter({ repo, links: fakeLinks(), live: false, now: NOW, summary: emptySummary(1),
+      lookup: { stored: (id) => repo.getById(null, id) } }).write(API_PROJECT, { works });
 
     assert.deepStrictEqual([summary.derivedDrift, summary.updated], [1, 0]);
+    assert.strictEqual(dry.action, 'updated', 'a dry run answers as the live run does');
   });
 
   await t.test('a work document another owner holds is counted adopted', async (t) => {

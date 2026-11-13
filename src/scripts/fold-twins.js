@@ -30,7 +30,7 @@ function parseArgs(argv) {
     else throw new Error(`[fold-twins] unknown argument: ${a}`);
   }
   if (!args.pairs) throw new Error('[fold-twins] --pairs <trackId:eagleId,...> is required');
-  if (args.live !== SHA256.test(args.expect || '')) {
+  if (args.live ? !SHA256.test(args.expect || '') : args.expect !== null) {
     throw new Error('[fold-twins] --live and --expect-plan-sha256 <hex> from a dry run go together');
   }
   return args;

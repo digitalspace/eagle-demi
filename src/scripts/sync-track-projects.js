@@ -65,20 +65,21 @@ const drifted = (inputs, changes, row, stored) => Boolean(inputs.worksForDerive)
   Object.keys(changes).every(field => DRIFT_FIELDS.includes(field)) &&
   DRIFT_FIELDS.some(field => JSON.stringify(row[field] ?? null) !== JSON.stringify(stored[field] ?? null));
 
+/** The staff lists on the twin that differ from {carried}'s copy: saved or cleared after the carry. */
+const changedLists = (twin, carried = {}) => STAFF_ROLE_FIELDS.filter(k =>
+  !isDeepStrictEqual(twin[k], carried[k]) && (hasValue(twin[k]) || hasValue(carried[k])));
+
 /** The twin disowned; with {trackId}, stamped `foldedInto` without its staff lists unless one differs from {carried}'s. */
-function settleTwin(twin, trackId, carried = {}) {
+function settleTwin(twin, trackId, carried) {
   const owned = isDemiOwnedProject(twin);
-  const fold = trackId !== undefined &&
-    STAFF_ROLE_FIELDS.every(k => !hasValue(twin[k]) || isDeepStrictEqual(twin[k], carried[k]));
+  const fold = trackId !== undefined && changedLists(twin, carried).length === 0;
   const drop = (k) => (owned && (k === DEMI_OWNED_AT || SYNC_STATE_FIELDS.includes(k))) || (fold && STAFF_ROLE_FIELDS.includes(k));
   const row = Object.fromEntries(Object.entries(twin).filter(([k]) => !drop(k)));
   return fold ? { ...row, foldedInto: String(trackId) } : row;
 }
 
-/**
- * `{row, twin, clash}`: {trackRow} carrying the twin's DEMI fields and staff saves at the stricter level of the two,
- * the twin as `settleTwin` leaves it, and the fields both hold with different values, which a fold must not pick.
- */
+/** `{row, twin, clash}`: {trackRow} with the twin's DEMI fields and staff saves at the stricter level, the settled twin,
+ * and the fields both hold with different values, which a fold must not pick. */
 function foldTwin(trackRow, twin, derive = {}) {
   const fields = TWIN_CARRY_FIELDS.filter(field => hasValue(twin[field]));
   const clash = fields.filter(field => hasValue(trackRow[field]) && !isDeepStrictEqual(trackRow[field], twin[field]));
@@ -94,7 +95,11 @@ function foldTwin(trackRow, twin, derive = {}) {
 
 const unfolded = 'still owned or holding staff lists beside its Track row; fold-twins settles it';
 // A twin folded into another Track project is that project's: relinking would move it.
-const ownTwin = (twin, id) => (twin && [undefined, id].includes(twin.foldedInto) ? twin : null);
+const ownTwin = (twin, id) => (!twin || [undefined, id].includes(twin.foldedInto) ? twin : null);
+const foldedElsewhere = (id, twinId) => {
+  logger.warn('[track-projects] Eagle twin folded into another Track project, not relinked', { id, twinId });
+  return { action: 'skipped', reason: 'foldedElsewhere' };
+};
 
 /** A row with a public page and no code yet, or still on a pre-slug random one. */
 const owesLink = (row) => Boolean(row.eagleId) && (!row.shortCode || needsSlugMigration(row));
@@ -194,10 +199,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
    * `build` runs per live try, so a row built off another stored row sees that row as it stands.
    */
   const insert = async (id, build) => {
-    if (!live) {
-      if (await mint(await build())) summary.shortLinks++;
-      return;
-    }
+    if (!live) return mint(await build()).then((minted) => { if (minted) summary.shortLinks++; });
     const written = await writeMinting(id, null, async (current, mintRow) => {
       if (current) return { status: 'exists' };
       // A copy per try: a lost try's code is released before this one, so it must not ride along.
@@ -217,15 +219,16 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       reread: reread(twinId),
       attempt: async (twin) => {
         const row = twin && settleTwin(twin, trackId, carried);
-        if (!row || isDeepStrictEqual(row, twin)) return { status: 'none', row };
+        const kept = twin && trackId !== undefined ? changedLists(twin, carried) : [];
+        if (!row || isDeepStrictEqual(row, twin)) return { status: 'none', kept };
         await repo.upsert(row, { etag: twin._etag });
-        return { status: 'saved', row };
+        return { status: 'saved', kept };
       },
       onLost: lost(twinId)
     });
-    if (written.status === 'conflict' || (trackId !== undefined && written.row && !written.row.foldedInto)) {
+    if (written.status === 'conflict' || written.kept?.length) {
       summary.failures++;
-      logger.error(`[track-projects] project ${twinId} ${unfolded}`, { status: written.status });
+      logger.error(`[track-projects] project ${twinId} ${unfolded}`, { status: written.status, lists: (written.kept || []).join(',') });
     }
     return written.status;
   };
@@ -236,7 +239,6 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     try {
       if (await disownTwin(twinId, trackId, carried) !== 'conflict') return null;
     } catch (err) {
-      summary.failures++;
       logger.error(`[track-push] twin not disowned id=${twinId}, ${unfolded}`, { error: err.message, stack: err.stack });
     }
     return { action: 'failed', status: 'twinConflict' };
@@ -256,7 +258,9 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     const id = String(track.track_project_id);
     const existing = await lookup.stored(id);
     const guid = track.epic_guid ? String(track.epic_guid) : null;
-    const relink = ownTwin(!existing && guid ? await lookup.eagleOnly(guid) : null, id);
+    const unmatched = !existing && guid;
+    const twinRow = unmatched ? await lookup.eagleOnly(guid) : null;
+    const relink = ownTwin(twinRow, id);
     const mergeOpts = { now, phases, works };
     // Before the row, so its derived values read the documents this run wrote.
     const writeDocs = async () => {
@@ -280,8 +284,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     const stale = () => { summary.stale++; return { action: 'stale' }; };
 
     if (relink) {
-      // A re-key, not a new record: it keeps the level and stamps; the `eagle-<id>` row stays,
-      // as in the seed; only the seed's `--reconcile` retires one.
+      // A re-key, not a new record: it keeps the level and stamps; the folded twin stays until the seed's `--reconcile`.
       onRelink(relink);
       await heal(relink);
       await writeDocs();
@@ -303,7 +306,9 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       return failure ? { ...failure, written: true } : { action: 'relinked' };
     }
 
-    const native = !existing && guid ? await lookup.native(guid) : null;
+    // A new row beside a twin folded into another Track project would share its Eagle id.
+    if (twinRow !== relink) return foldedElsewhere(id, twinRow.id);
+    const native = unmatched ? await lookup.native(guid) : null;
     if (native) {
       summary.nativeClash++;
       return { action: 'skipped', reason: 'nativeClash', nativeId: String(native.id), eagleId: guid };
@@ -394,13 +399,8 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
 async function writeTrackProject(apiProject, { phases, works, pushedAt = null, deps = {} } = {}) {
   const repo = deps.projects || require('../repositories/projects');
   const writer = rowWriter({
-    repo,
-    links: deps.links || linksRepository,
-    live: true,
-    now: new Date().toISOString(),
-    skipLinkUpkeep: true,
-    push: true,
-    summary: emptySummary(0),
+    repo, links: deps.links || linksRepository, live: true, now: new Date().toISOString(),
+    skipLinkUpkeep: true, push: true, summary: emptySummary(0),
     lookup: {
       stored: (id) => repo.getById(systemAccess(), id),
       eagleOnly: (guid) => repo.readForWrite(eagleOnlyProjectId(guid)).then(row => (row?.sourceSystem === 'eagle' ? row : null)),
@@ -412,9 +412,8 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
   return result;
 }
 
-const emptySummary = (trackProjects) => ({
-  trackProjects, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
-  shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, adopted: 0, derivedDrift: 0, failures: 0
-});
+const emptySummary = (trackProjects) => ({ trackProjects, created: 0, updated: 0, relinked: 0, skippedApiRows: 0,
+  orphaned: 0, phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, adopted: 0,
+  derivedDrift: 0, failures: 0 });
 
 module.exports = { HEAL_CAP, trackChanges, writeTrackProject, rowWriter, emptySummary, owesLink, foldTwin, settleTwin };

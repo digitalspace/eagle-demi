@@ -117,18 +117,21 @@ test('a re-run after a fold carries nothing back onto the Track row', async (t) 
   const { tags: _tags, levelHeldAt: _held, ...cleared } = stored(projects, '207');
   projects.store(cleared);
 
-  await foldLive(projects);
+  const again = await foldLive(projects);
 
+  assert.strictEqual(again.refused, 0);
   assert.deepStrictEqual(['tags', 'levelHeldAt'].filter(field => field in stored(projects, '207')), []);
 });
 
 test('fold refuses while one row is deleted and the other is not', async (t) => {
   quiet(t);
-  const projects = fakeProjects([storedProject({ isDeleted: true }), ownedTwin()]);
+  for (const [trackRow, twin] of [[{ isDeleted: true }, {}], [{}, { isDeleted: true }]]) {
+    const projects = fakeProjects([storedProject(trackRow), ownedTwin(twin)]);
 
-  const summary = await foldLive(projects);
+    const summary = await foldLive(projects);
 
-  assert.deepStrictEqual([summary.refused, projects.writes.length], [1, 0]);
+    assert.deepStrictEqual([summary.refused, projects.writes.length], [1, 0], JSON.stringify({ trackRow, twin }));
+  }
 });
 
 test('fold keeps the level of a twin DEMI does not own when it is the narrower', async (t) => {
@@ -149,26 +152,29 @@ test('a twin folded into another Track project is neither relinked nor folded', 
   const synced = await syncProjects([API_PROJECT], { live: true, deps: { projects: relinkProjects, links: fakeLinks() }, now: NOW });
   const folded = await foldLive(foldProjects);
 
-  assert.deepStrictEqual([synced.relinked, stored(relinkProjects, TWIN_ID).foldedInto], [0, '999']);
+  assert.deepStrictEqual([synced.relinked, synced.created, stored(relinkProjects, TWIN_ID).foldedInto], [0, 0, '999']);
+  assert.strictEqual(stored(relinkProjects, '207'), undefined, 'a second row would share the Eagle id');
   assert.deepStrictEqual([folded.refused, foldProjects.writes.length], [1, 0]);
 });
 
-test('a staff list saved on the twin after the relink built its Track row stays on the twin', async (t) => {
+test('a staff list saved or cleared on the twin after the relink built its Track row stays on the twin', async (t) => {
   quiet(t);
-  const projects = fakeProjects([eagleOnlyProject(staffLists())]);
-  const late = [...staffLists().staffNotes, { id: 'n2', text: 'Saved during the relink', workId: null }];
-  const upsert = projects.upsert;
-  projects.upsert = async (row, opts) => {
-    const saved = await upsert(row, opts);
-    if (row.id === '207') projects.store({ ...stored(projects, TWIN_ID), staffNotes: late });
-    return saved;
-  };
+  const added = [...staffLists().staffNotes, { id: 'n2', text: 'Saved during the relink', workId: null }];
+  for (const late of [added, []]) {
+    const projects = fakeProjects([eagleOnlyProject(staffLists())]);
+    const upsert = projects.upsert;
+    projects.upsert = async (row, opts) => {
+      const saved = await upsert(row, opts);
+      if (row.id === '207') projects.store({ ...stored(projects, TWIN_ID), staffNotes: late });
+      return saved;
+    };
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
-  const twin = stored(projects, TWIN_ID);
-  assert.deepStrictEqual([twin.staffNotes, twin.externalIds, twin.foldedInto], [late, staffLists().externalIds, undefined]);
-  assert.strictEqual(summary.failures, 1, 'fold-twins settles it later');
+    const twin = stored(projects, TWIN_ID);
+    assert.deepStrictEqual([twin.staffNotes, twin.externalIds, twin.foldedInto], [late, staffLists().externalIds, undefined]);
+    assert.strictEqual(summary.failures, 1, 'fold-twins settles it later');
+  }
 });
 
 test('a twin write that fails after its Track row landed counts as partial', async (t) => {
@@ -181,14 +187,19 @@ test('a twin write that fails after its Track row landed counts as partial', asy
   };
 
   const summary = await foldLive(projects);
+  projects.upsert = upsert;
+  const settled = await foldLive(projects);
 
   assert.deepStrictEqual([summary.written, summary.partial, summary.failed, exitCodeFor(summary)], [0, 1, 0, 1]);
+  const twin = stored(projects, TWIN_ID);
+  assert.deepStrictEqual([twin.foldedInto, STAFF_ROLE_FIELDS.filter(field => field in twin), exitCodeFor(settled)], ['207', [], 0]);
 });
 
 test('the live switch and the plan hash go together, each given once', () => {
   const hash = ['--expect-plan-sha256', 'a'.repeat(64)];
   assert.throws(() => parseArgs([...PAIRS, '--live']), /go together/);
   assert.throws(() => parseArgs([...PAIRS, ...hash]), /go together/);
+  assert.throws(() => parseArgs([...PAIRS, '--expect-plan-sha256', 'not-a-hash']), /go together/);
   assert.throws(() => parseArgs([...PAIRS, ...PAIRS]), /pairs given twice/);
   assert.throws(() => parseArgs([...PAIRS, '--live', ...hash, ...hash]), /expect given twice/);
 });
