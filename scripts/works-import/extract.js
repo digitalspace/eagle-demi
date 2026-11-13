@@ -9,17 +9,19 @@ const { parseArgs } = require('util');
 const { readFolder } = require('./cells');
 const { openSurrogates, surrogateOf } = require('./surrogates');
 const {
-  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, sha256Hex, verify
+  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, readCapped, sha256Hex, verify
 } = require('../../src/utils/import-envelope');
 
 const ENVS = ['test', 'prod'];
 const MIN_PASSPHRASE = 20;
 const KEYRING_SERVICE = 'eagle-demi-works-import';
 const SEALED_SUFFIX = '.sealed.json';
-const SEAL_PURPOSES = ['crosswalk', 'manual-match', 'works-backup'];
-const OPEN_PURPOSES = ['crosswalk', 'works-parity', 'works-report', 'works-backup'];
-// Blobs the devbox wrote and gets back: seal refuses them unless the devbox signature from `open` still verifies.
-const DEVBOX_SIGNED = ['crosswalk', 'works-backup'];
+const SEAL_PURPOSES = ['crosswalk', 'manual-match'];
+const OPEN_PURPOSES = ['crosswalk', 'works-parity', 'works-report'];
+// The works-backup holds staff fields, so it is only resealed in memory, never opened to a file.
+const RESEAL_PURPOSES = ['works-backup'];
+// Same cap as MAX_BYTES.backup in src/scripts/works-import-inputs.js, which this laptop tool cannot load.
+const MAX_IN = 64 * 1024 * 1024;
 
 function keyringCommand(ref) {
   if (ref.startsWith('op://')) return ['op', ['read', '--no-newline', ref]];
@@ -64,6 +66,8 @@ function need(opts, ...names) {
   if (missing.length) throw new Error(`missing --${missing.join(', --')}`);
   if (opts.env && !ENVS.includes(opts.env)) throw new Error(`--env must be one of ${ENVS.join(', ')}`);
 }
+
+const readIn = file => readCapped(file, MAX_IN, { label: '--in' });
 
 const recipientOf = (pemFile, expectFingerprint) => recipientFromPem(fs.readFileSync(pemFile, 'utf8'), expectFingerprint, pemFile);
 
@@ -133,43 +137,64 @@ async function extract(o, io) {
 function seal(o, io) {
   need(o, 'env', 'purpose', 'in', 'recipient-key', 'expect-fingerprint', 'out');
   if (!SEAL_PURPOSES.includes(o.purpose)) throw new Error(`--purpose must be one of ${SEAL_PURPOSES.join(', ')}`);
-  if (DEVBOX_SIGNED.includes(o.purpose)) need(o, 'signature');
+  if (o.purpose === 'crosswalk') need(o, 'signature');
   refuseExisting(sealedOut(o.out));
   const { keys, fingerprint } = recipientOf(o['recipient-key'], o['expect-fingerprint']);
-  const plaintext = fs.readFileSync(o.in);
-  const statement = { purpose: o.purpose, env: o.env, sha256: sha256Hex(plaintext) };
+  const plaintext = readIn(o.in);
+  const sha256 = sha256Hex(plaintext);
   let signature;
-  if (DEVBOX_SIGNED.includes(o.purpose)) {
+  if (o.purpose === 'crosswalk') {
     signature = fs.readFileSync(o.signature, 'utf8').trim();
-    if (!keys.ed25519 || !verify(keys.ed25519, statement, signature)) throw new Error(`${o.purpose} signature does not verify`);
+    if (!keys.ed25519 || !verify(keys.ed25519, { purpose: o.purpose, env: o.env, sha256 }, signature)) {
+      throw new Error('crosswalk signature does not verify');
+    }
   }
   writeNew(o.out, sealEnvelope(plaintext, {
     purpose: o.purpose, env: o.env, keyFingerprint: fingerprint, recipientKey: keys.rsa, signature
   }));
-  io.write(`${shaLabel(o.purpose)}=${statement.sha256}`);
+  io.write(`${shaLabel(o.purpose)}=${sha256}`);
+}
+
+/** Opens a blob the devbox sealed to the operator; refused unless the devbox signature and --expect-sha256 hold. */
+function openFromDevbox(o, io, devbox) {
+  const privateKey = crypto.createPrivateKey({
+    key: fs.readFileSync(o.key), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
+  });
+  const keyFingerprint = fingerprintOf({ rsa: crypto.createPublicKey(privateKey) });
+  const opened = openEnvelope(readIn(o.in), { purpose: o.purpose, env: o.env, keyFingerprint, privateKey });
+  const sha256 = sha256Hex(opened.plaintext);
+  if (!devbox.ed25519 || !verify(devbox.ed25519, { purpose: o.purpose, env: o.env, sha256 }, opened.signature)) {
+    throw new Error('devbox signature does not verify');
+  }
+  if (sha256 !== String(o['expect-sha256']).toLowerCase()) throw new Error('SHA-256 does not match --expect-sha256');
+  return { ...opened, sha256 };
 }
 
 function open(o, io) {
   need(o, 'env', 'purpose', 'in', 'out', 'key', 'passphrase-ref', 'devbox-key', 'devbox-fingerprint', 'expect-sha256');
   if (!OPEN_PURPOSES.includes(o.purpose)) throw new Error(`--purpose must be one of ${OPEN_PURPOSES.join(', ')}`);
   refuseExisting(o.out, `${o.out}.sig`);
-  const devbox = recipientOf(o['devbox-key'], o['devbox-fingerprint']).keys;
-  const privateKey = crypto.createPrivateKey({
-    key: fs.readFileSync(o.key), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
-  });
-  const keyFingerprint = fingerprintOf({ rsa: crypto.createPublicKey(privateKey) });
-  const opened = openEnvelope(fs.readFileSync(o.in), { purpose: o.purpose, env: o.env, keyFingerprint, privateKey });
-  const sha256 = sha256Hex(opened.plaintext);
-  if (!devbox.ed25519 || !verify(devbox.ed25519, { purpose: o.purpose, env: o.env, sha256 }, opened.signature)) {
-    throw new Error('devbox signature does not verify');
-  }
-  if (sha256 !== String(o['expect-sha256']).toLowerCase()) throw new Error('SHA-256 does not match --expect-sha256');
+  const opened = openFromDevbox(o, io, recipientOf(o['devbox-key'], o['devbox-fingerprint']).keys);
+  const { sha256 } = opened;
   writeNew(o.out, opened.plaintext);
   writeNew(`${o.out}.sig`, `${opened.signature}\n`);
   io.write(`${shaLabel(o.purpose)}=${sha256}`);
 }
 
-const COMMANDS = { keygen, extract, seal, open };
+/** Opens a devbox blob and seals it back to the devbox in memory, with the devbox signature it came with. */
+function reseal(o, io) {
+  need(o, 'env', 'purpose', 'in', 'out', 'key', 'passphrase-ref', 'recipient-key', 'expect-fingerprint', 'expect-sha256');
+  if (!RESEAL_PURPOSES.includes(o.purpose)) throw new Error(`--purpose must be one of ${RESEAL_PURPOSES.join(', ')}`);
+  refuseExisting(sealedOut(o.out));
+  const { keys, fingerprint } = recipientOf(o['recipient-key'], o['expect-fingerprint']);
+  const opened = openFromDevbox(o, io, keys);
+  writeNew(o.out, sealEnvelope(opened.plaintext, {
+    purpose: o.purpose, env: o.env, keyFingerprint: fingerprint, recipientKey: keys.rsa, signature: opened.signature
+  }));
+  io.write(`${shaLabel(o.purpose)}=${opened.sha256}`);
+}
+
+const COMMANDS = { keygen, extract, seal, open, reseal };
 const OPTIONS = {
   ...Object.fromEntries([
     'env', 'in', 'out', 'out-dir', 'passphrase-ref', 'recipient-key', 'expect-fingerprint', 'keep-staff-on-test',

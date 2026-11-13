@@ -14,10 +14,10 @@ test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const PAYLOAD = {
   batchId: 'batch-1',
   documents: [{ id: 'work-1', projectId: 'p-1', _etag: 'etag-1' }],
-  projects: [{ projectId: 'p-1', externalIds: [{ system: 'track', value: '7' }], staffNotes: [] }]
+  projects: [{ projectId: 'p-1', externalIds: [{ system: 'track', value: '7' }], staffNotes: [] }],
+  projectEntries: [{ action: 'addExternalId', projectId: 'p-1', pair: { system: 'track', value: '7' } }]
 };
 const plaintext = Buffer.from(JSON.stringify(PAYLOAD));
-const sha256 = sha256Hex(plaintext);
 
 function devboxKeyFile() {
   const dir = fresh('devbox-key');
@@ -27,7 +27,10 @@ function devboxKeyFile() {
   return file;
 }
 
-// The loader seals the backup to the operator; the operator opens it and seals it back to the devbox.
+const devboxKeyPath = devboxKeyFile();
+const base = { devboxKeyPath, expectDevboxFingerprint: devbox.fingerprint, batchId: PAYLOAD.batchId };
+
+// The loader seals the backup to the operator; the operator reseals it to the devbox.
 async function roundTrip() {
   const keysDir = fresh('operator');
   await cli(['keygen', '--env', 'test', '--out-dir', keysDir, '--passphrase-ref', 'operator']);
@@ -37,20 +40,30 @@ async function roundTrip() {
   const written = writeSealed(outDir, plaintext, {
     purpose: 'works-backup', env: 'test', recipient: { rsa, fingerprint: fingerprintOf({ rsa }) }, signingKey: devbox.ed.privateKey
   });
-  const review = path.join(fresh('review'), 'works-backup.json');
-  await cli(['open', '--env', 'test', '--purpose', 'works-backup', '--in', path.join(outDir, written.name), '--out', review,
-    '--key', path.join(keysDir, 'operator-test.key.pem'), '--passphrase-ref', 'operator', '--devbox-key', devbox.pemFile,
-    '--devbox-fingerprint', devbox.fingerprint, '--expect-sha256', written.sha256]);
   const sealedPath = path.join(fresh('back'), 'works-backup.sealed.json');
-  await cli(['seal', '--env', 'test', '--purpose', 'works-backup', '--in', review, '--signature', `${review}.sig`,
-    '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint, '--out', sealedPath]);
-  return { sealedPath, expectSha256: written.sha256, devboxKeyPath: devboxKeyFile(), batchBackupSha256: written.sha256 };
+  await cli(['reseal', '--env', 'test', '--purpose', 'works-backup', '--in', path.join(outDir, written.name), '--out', sealedPath,
+    '--key', path.join(keysDir, 'operator-test.key.pem'), '--passphrase-ref', 'operator', '--recipient-key', devbox.pemFile,
+    '--expect-fingerprint', devbox.fingerprint, '--expect-sha256', written.sha256]);
+  return { ...base, sealedPath, expectSha256: written.sha256, batchBackupSha256: written.sha256 };
 }
+
+/** `body` sealed straight to the devbox and signed by `signingKey`, with both SHA-256 values matching. */
+function toDevbox(body, signingKey = devbox.ed.privateKey) {
+  const sealedPath = path.join(fresh('sealed'), 'works-backup.sealed.json');
+  const sha256 = sha256Hex(body);
+  fs.writeFileSync(sealedPath, sealEnvelope(Buffer.from(body), {
+    purpose: 'works-backup', env: 'test', keyFingerprint: devbox.fingerprint, recipientKey: devbox.rsa.publicKey,
+    signature: sign(signingKey, { purpose: 'works-backup', env: 'test', sha256 })
+  }));
+  return { ...base, sealedPath, expectSha256: sha256, batchBackupSha256: sha256 };
+}
+
+const withBody = changes => toDevbox(JSON.stringify({ ...PAYLOAD, ...changes }));
 
 let given;
 test.before(async () => { given = await roundTrip(); });
 
-test('a works-backup sealed back by the operator opens to the payload the loader sealed', () => {
+test('a works-backup resealed by the operator opens to the payload the loader sealed', () => {
   assert.deepEqual(openBackup(given), PAYLOAD);
 });
 
@@ -63,23 +76,44 @@ test('refuses a works-backup whose SHA-256 is not the batch header backupSha256'
 });
 
 test('refuses a works-backup another key signed', () => {
-  const other = crypto.generateKeyPairSync('ed25519');
-  const sealedPath = path.join(fresh('forged'), 'works-backup.sealed.json');
-  fs.writeFileSync(sealedPath, sealEnvelope(plaintext, {
-    purpose: 'works-backup', env: 'test', keyFingerprint: devbox.fingerprint, recipientKey: devbox.rsa.publicKey,
-    signature: sign(other.privateKey, { purpose: 'works-backup', env: 'test', sha256 })
-  }));
-  assert.throws(() => openBackup({ ...given, sealedPath }), /works-backup signature does not verify/);
+  const forged = toDevbox(plaintext, crypto.generateKeyPairSync('ed25519').privateKey);
+  assert.throws(() => openBackup(forged), /works-backup signature does not verify/);
+});
+
+test('refuses a devbox key whose fingerprint is not expectDevboxFingerprint', () => {
+  assert.throws(() => openBackup({ ...given, expectDevboxFingerprint: '0'.repeat(64) }), /fingerprint of the devbox key does not match/);
+});
+
+test('refuses a works-backup of another batch', () => {
+  assert.throws(() => openBackup({ ...given, batchId: 'batch-2' }), /works-backup is not for this batch/);
+});
+
+test('refuses a works-backup whose documents, projects or projectEntries are not arrays of objects', () => {
+  assert.throws(() => openBackup(withBody({ documents: {} })), /works-backup is malformed/);
+  assert.throws(() => openBackup(withBody({ projects: ['p-1'] })), /works-backup is malformed/);
+  assert.throws(() => openBackup(withBody({ projectEntries: null })), /works-backup is malformed/);
+});
+
+test('a works-backup that is not JSON is refused without quoting it', () => {
+  // An exact message match also proves the marker in the body is not quoted.
+  assert.throws(() => openBackup(toDevbox('{"batchId":"marker-6f1d2c"')), { message: 'works-backup is not JSON' });
 });
 
 test('refuses a devbox key file that group or others may read', () => {
-  const devboxKeyPath = devboxKeyFile();
-  fs.chmodSync(devboxKeyPath, 0o644);
-  assert.throws(() => openBackup({ ...given, devboxKeyPath }), /devbox key must be a 0600 file/);
+  const file = devboxKeyFile();
+  fs.chmodSync(file, 0o644);
+  assert.throws(() => openBackup({ ...given, devboxKeyPath: file }), /devbox key must be a 0600 file/);
 });
 
 test('refuses a devbox key that is a symbolic link', () => {
-  const devboxKeyPath = path.join(path.dirname(devboxKeyFile()), 'link.pem');
-  fs.symlinkSync(given.devboxKeyPath, devboxKeyPath);
-  assert.throws(() => openBackup({ ...given, devboxKeyPath }), /devbox key must be a 0600 file/);
+  const link = path.join(path.dirname(devboxKeyFile()), 'link.pem');
+  fs.symlinkSync(devboxKeyPath, link);
+  assert.throws(() => openBackup({ ...given, devboxKeyPath: link }), /the devbox key is a symbolic link/);
+});
+
+test('a missing devbox key is refused without its path', () => {
+  const missing = path.join(path.dirname(devboxKeyFile()), 'absent.pem');
+  assert.throws(() => openBackup({ ...given, devboxKeyPath: missing }), { message: 'the devbox key cannot be opened' });
+  assert.throws(() => openBackup({ ...given, devboxKeyPath: path.join(missing, 'key.pem') }),
+    { message: 'the devbox key folder must be 0700 and this user\'s' });
 });

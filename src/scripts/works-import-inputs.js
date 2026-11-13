@@ -26,6 +26,10 @@ const HELP = [
   'Before a run, the operator opens the crosswalk the devbox sealed to them, checks it, and seals it back to the devbox:',
   '  yarn works:extract seal --env test --purpose crosswalk --in <crosswalk.csv> --signature <signature file>',
   '    --recipient-key <devbox public keys pem> --expect-fingerprint <devbox fingerprint> --out <file>.sealed.json',
+  'After a --live run, the operator reseals the works-backup in --out-dir to the devbox, for a rollback. Nothing plain is written:',
+  '  yarn works:extract reseal --env test --purpose works-backup --in <backup>.sealed.json --key <operator key pem>',
+  '    --passphrase-ref <ref> --expect-sha256 <backupSha256> --recipient-key <devbox public keys pem>',
+  '    --expect-fingerprint <devbox fingerprint> --out <file>.sealed.json',
   '--live is refused from the command line until the rollback (W8b) can open the works-backup it writes.',
   '--signoff-ref must be one of the sign-off refs the extract carries, when it carries any. The batch records it to show',
   '  the load matched the extract; it is not proof that anyone signed off.',
@@ -62,18 +66,25 @@ function optionsOf(argv) {
 
 const ownedBy = stat => typeof process.getuid !== 'function' || stat.uid === process.getuid();
 
-/** The key file is 0600 or tighter in a 0700 folder, both this user's and neither a symbolic link. */
-function checkKeyFile(file) {
-  const stat = fs.lstatSync(file);
-  const dir = fs.lstatSync(path.dirname(path.resolve(file)));
-  if (!stat.isFile() || (stat.mode & 0o077) !== 0 || !ownedBy(stat)) refuse('the devbox key must be a 0600 file of this user');
-  if (!dir.isDirectory() || (dir.mode & 0o777) !== 0o700 || !ownedBy(dir)) refuse('the devbox key folder must be 0700 and this user\'s');
+const checkKeyStat = (stat) => {
+  if ((stat.mode & 0o077) !== 0 || !ownedBy(stat)) refuse('the devbox key must be a 0600 file of this user');
+};
+
+/**
+ * The devbox keys, from a 0600 file of this user in a 0700 folder of this user, opened once without following a
+ * link; refused unless their fingerprint is `expectFingerprint`.
+ */
+function devboxKeysOf(file, expectFingerprint) {
+  const dir = fs.lstatSync(path.dirname(path.resolve(file)), { throwIfNoEntry: false });
+  if (!dir || !dir.isDirectory() || (dir.mode & 0o777) !== 0o700 || !ownedBy(dir)) refuse('the devbox key folder must be 0700 and this user\'s');
+  const pem = readCapped(file, MAX_BYTES.key, { label: 'the devbox key', check: checkKeyStat });
+  const keys = devboxKeysFromPem(pem.toString('utf8'));
+  if (keys.fingerprint !== String(expectFingerprint).toLowerCase()) refuse('fingerprint of the devbox key does not match');
+  return keys;
 }
 
 function openInputs(o, env) {
-  checkKeyFile(o['devbox-key']);
-  const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
-  if (keys.fingerprint !== o['expect-devbox-fingerprint'].toLowerCase()) refuse('fingerprint of the devbox key does not match');
+  const keys = devboxKeysOf(o['devbox-key'], o['expect-devbox-fingerprint']);
   const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
   const recipient = { rsa: operator, fingerprint: fingerprintOf({ rsa: operator }) };
   if (recipient.fingerprint !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
@@ -115,4 +126,4 @@ async function heldElsewhere(demi, plan) {
   return held;
 }
 
-module.exports = { ENV, MAX_BYTES, HELP, optionsOf, testEnvironment, checkKeyFile, openInputs, readStored, heldElsewhere };
+module.exports = { ENV, MAX_BYTES, HELP, optionsOf, testEnvironment, devboxKeysOf, openInputs, readStored, heldElsewhere };

@@ -79,8 +79,11 @@ function recipientFromPem(pemText, expectFingerprint, label) {
   return { keys, fingerprint };
 }
 
-/** Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap. */
-function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLOW } = {}) {
+/**
+ * Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap.
+ * `check` gets the fstat of the open file, so its checks and the read see the same file.
+ */
+function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLOW, check } = {}) {
   if (!noFollow && fs.lstatSync(file).isSymbolicLink()) throw new Error(`${label} is a symbolic link`);
   let fd;
   try {
@@ -90,7 +93,9 @@ function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLO
     throw new Error(err.code === 'ELOOP' ? `${label} is a symbolic link` : `${label} cannot be opened`, { cause: err });
   }
   try {
-    if (!fs.fstatSync(fd).isFile()) throw new Error(`${label} is not a regular file`);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`${label} is not a regular file`);
+    if (check) check(stat);
     const chunks = [];
     const chunk = Buffer.alloc(1024 * 1024);
     let total = 0;
