@@ -45,6 +45,14 @@ test('sheet assessment phases appear under their actYear', () => {
   assert.deepStrictEqual(phases.map(one => [one.phase.name, one.year]), [['Pre-Application', 2002]]);
 });
 
+test('a sheet Assessment with no actYear leaves the row\'s own phases', () => {
+  const work = sheetWork(1, { actYear: null, phases: [{ id: 'pre-application', name: 'Pre-Application' }] });
+
+  const phases = trackPhasesOf({ works: [work], phases: [{ name: 'Stored', eaActName: '2018 Act' }] }, () => 2018);
+
+  assert.deepStrictEqual(phases.map(one => [one.phase.name, one.year]), [['Stored', 2018]]);
+});
+
 test('activeWork carries workId for a sheet work', () => {
   const work = sheetWork(1, { isActive: true });
 
@@ -70,14 +78,33 @@ test('legislationTransitions with sheet transitionOut', async (t) => {
     const out = { transitionOut: { toActYear: 2018, date: '2021-03-01', dateSource: 'sheet' } };
     const works = publicWorksOf([trackDoc('2025-05-30T00:00:00.000Z'), sheetDoc(1, out)], ROW);
 
-    assert.strictEqual(legislationTransitions([2002, 2018], works)[0].date, '2021-03-01');
+    assert.deepStrictEqual(legislationTransitions([2002, 2018], works),
+      [{ fromYear: 2002, toYear: 2018, date: '2021-03-01' }]);
   });
 
-  const fallback477 = { transitionOut: { toActYear: 2018, date: '2025-05-21', dateSource: 'track' } };
+  await t.test('held pairs chaining across an Eagle pair replace it', () => {
+    const works = publicWorksOf([
+      sheetDoc(1, handOver('2003-02-01', 'sheet')),
+      sheetDoc(2, { transitionOut: { toActYear: 2018, date: '2021-03-01', dateSource: 'sheet' } })
+    ], ROW);
+
+    assert.deepStrictEqual(legislationTransitions([1996, 2018], works), [
+      { fromYear: 1996, toYear: 2002, date: '2003-02-01' },
+      { fromYear: 2002, toYear: 2018, date: '2021-03-01' }
+    ]);
+  });
+
+  await t.test('two works holding one pair give one entry, dated by the first that has a date', () => {
+    const works = publicWorksOf([sheetDoc(1, handOver(null, 'none')), sheetDoc(2, handOver('2003-02-01', 'sheet'))], ROW);
+
+    assert.deepStrictEqual(legislationTransitions([], works), [{ fromYear: 1996, toYear: 2002, date: '2003-02-01' }]);
+  });
+
+  const fallback = { transitionOut: { toActYear: 2018, date: '2025-05-21', dateSource: 'track' } };
   const publicDateOf = (works) => works.find(work => work.source === 'sheet').transitionOut.date;
 
-  await t.test('477: Track\'s milestone beats the fallback, the same date as the public transitionOut', () => {
-    const works = publicWorksOf([trackDoc('2025-05-30T19:00:00.000Z'), sheetDoc(1, fallback477)], ROW);
+  await t.test('Track\'s milestone beats a 2025 sheet fallback, the same date as the public transitionOut', () => {
+    const works = publicWorksOf([trackDoc('2025-05-30T19:00:00.000Z'), sheetDoc(1, fallback)], ROW);
 
     const [{ date }] = legislationTransitions([2002, 2018], works);
 
@@ -85,8 +112,8 @@ test('legislationTransitions with sheet transitionOut', async (t) => {
     assert.strictEqual(date, publicDateOf(works));
   });
 
-  await t.test('477: with no milestone the fallback date is used, the same date as the public transitionOut', () => {
-    const works = publicWorksOf([sheetDoc(1, fallback477)], ROW);
+  await t.test('with no Track milestone the 2025 sheet fallback is used, the same date as the public transitionOut', () => {
+    const works = publicWorksOf([sheetDoc(1, fallback)], ROW);
 
     const [{ date }] = legislationTransitions([2002, 2018], works);
 

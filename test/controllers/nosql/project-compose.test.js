@@ -80,7 +80,7 @@ test('project reads and writes with WORKS_READ on', async (t) => {
     assert.deepStrictEqual(composed.phases, row.phases);
   });
 
-  await t.test('Eagle-only row keeps its phases', () => {
+  await t.test('a picked sheet Assessment leaves the stored phases', () => {
     const row = { id: '207', phases: [{ name: 'Stored' }] };
     const sheet = { workId: 'sheet-1', source: 'sheet', workTypeCode: 'assessment', phases: [{ name: 'Pre-Application' }] };
 

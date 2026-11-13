@@ -29,17 +29,22 @@ function legislationTransitions(yearList, works) {
   const years = [...new Set((Array.isArray(yearList) ? yearList : []).map(Number))]
     .filter(Number.isInteger)
     .sort((a, b) => a - b);
-  const pairs = years.slice(1).map((toYear, i) => ({ fromYear: years[i], toYear }));
   const handOvers = listed.map(handOverOf).filter(Boolean);
   const samePair = (a, b) => a.fromYear === b.fromYear && a.toYear === b.toYear;
+  // Held pairs chaining across an Eagle pair's span replace it, so no Act gets two starts.
+  const chained = (fromYear, toYear) => handOvers.some(held => held.fromYear === fromYear &&
+    (held.toYear === toYear || (held.toYear < toYear && chained(held.toYear, toYear))));
+  const pairs = years.slice(1).map((toYear, i) => ({ fromYear: years[i], toYear }))
+    .filter(pair => !chained(pair.fromYear, pair.toYear));
   for (const { fromYear, toYear } of handOvers) {
     if (!pairs.some(pair => samePair(pair, { fromYear, toYear }))) pairs.push({ fromYear, toYear });
   }
   pairs.sort((a, b) => a.fromYear - b.fromYear || a.toYear - b.toYear);
 
   // publicWorksOf already resolved a held date with transitionDateOf; a rerun would drop a 2025 sheet fallback.
-  const dateOf = (pair) => handOvers.filter(held => samePair(held, pair)).map(held => dayOf(held.out.date)).find(Boolean) ??
-    transitionDateOf(NO_TRANSITION_OUT, listed, pair.fromYear);
+  const heldDate = (pair) => handOvers.filter(held => samePair(held, pair)).map(held => dayOf(held.out.date))
+    .find(Boolean);
+  const dateOf = (pair) => heldDate(pair) ?? transitionDateOf(NO_TRANSITION_OUT, listed, pair.fromYear);
   return pairs.map(pair => ({ ...pair, date: dateOf(pair) }));
 }
 
