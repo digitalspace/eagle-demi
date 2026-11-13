@@ -9511,16 +9511,29 @@ components:
         works:
           type: array
           description: >-
-            The project's Track works of types 1, 2, 3, 5, 6, 7, 9, 10, 11, 15 and 16. Absent when
-            Track has none or the works sync has not run. Notes, staff and hidden events are left
-            out.
+            The project's works: Track works of types 1, 2, 3, 5, 6, 7, 9, 10, 11, 15 and 16 by
+            `trackWorkId`, then works from other sources by `startDate`, then `workId`. Absent when
+            there are none or the works sync has not run. Notes, staff, hidden events and source
+            references are left out. On a work from another source the Track-only keys are null.
           items:
             type: object
             properties:
+              workId:
+                type: string
+                description: The work's id, `track-<n>` for a Track work.
+              source:
+                type: string
+                enum: [track, sheet, demi]
               trackWorkId:
                 type: integer
+                nullable: true
               workTypeId:
                 type: integer
+                nullable: true
+              workTypeCode:
+                type: string
+                nullable: true
+                description: The works catalog code of the work type.
               workType:
                 type: string
               title:
@@ -9529,6 +9542,33 @@ components:
               eaAct:
                 type: string
                 nullable: true
+              actYear:
+                type: integer
+                nullable: true
+                enum: [1996, 2002, 2018, 2025, null]
+              outcomeCode:
+                type: string
+                nullable: true
+              transitionOut:
+                type: object
+                nullable: true
+                description: >-
+                  Present on a work that ended because its project moved to a later Act.
+                properties:
+                  toActYear:
+                    type: integer
+                  date:
+                    type: string
+                    nullable: true
+                    description: >-
+                      The hand-over date: a sheet date before 2025-01-01, else the date of Track's
+                      "Project Transitioning FROM" milestone naming this work's Act, else the stored
+                      date, else null.
+                  dateSource:
+                    type: string
+                    enum: [sheet, track, none]
+              undated:
+                $ref: '#/components/schemas/WorkUndated'
               startDate:
                 type: string
                 format: date-time
@@ -9556,7 +9596,64 @@ components:
               phases:
                 type: array
                 items:
-                  $ref: '#/components/schemas/TrackWorkPhase'
+                  allOf:
+                    - $ref: '#/components/schemas/TrackWorkPhase'
+                    - type: object
+                      properties:
+                        trackPhaseId:
+                          type: integer
+                          nullable: true
+                        phaseCodeId:
+                          type: integer
+                          nullable: true
+                        catalogId:
+                          type: string
+                          nullable: true
+                          description: The phase catalog entry, `track-<phase code>` when the catalog lacks it.
+                        catalogName:
+                          type: string
+                          nullable: true
+                        stage:
+                          type: string
+                          nullable: true
+                        order:
+                          type: integer
+                          nullable: true
+                        isSuspended:
+                          type: boolean
+                          nullable: true
+                        suspendedDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        undated:
+                          $ref: '#/components/schemas/WorkUndated'
+                        interruptions:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              kind:
+                                type: string
+                                enum: [extension, suspension, interregnum]
+                              typeCode:
+                                type: string
+                                nullable: true
+                              legalSection:
+                                type: string
+                                nullable: true
+                              startDate:
+                                type: string
+                                nullable: true
+                              endDate:
+                                type: string
+                                nullable: true
+                              days:
+                                type: integer
+                                nullable: true
+                                description: End minus start.
               milestones:
                 type: array
                 items:
@@ -9564,13 +9661,20 @@ components:
                   properties:
                     name:
                       type: string
+                    code:
+                      type: string
+                      nullable: true
+                      description: The works catalog milestone code; null on a Track milestone.
                     position:
                       type: string
-                      enum: [START, INTERMEDIATE, END]
+                      enum: [START, INTERMEDIATE, INTERIOR, END]
                     eventType:
                       type: integer
                       nullable: true
                       description: Track event type id
+                    trackEventId:
+                      type: integer
+                      nullable: true
                     actualDate:
                       type: string
                       format: date-time
@@ -9579,12 +9683,26 @@ components:
                       type: string
                       format: date-time
                       nullable: true
+                    endDate:
+                      type: string
+                      nullable: true
                     outcome:
                       type: string
                       nullable: true
                     numberOfDays:
                       type: integer
                       nullable: true
+                    links:
+                      type: object
+                      properties:
+                        commentPeriodId:
+                          type: string
+                          nullable: true
+                        blockField:
+                          type: string
+                          nullable: true
+                    undated:
+                      $ref: '#/components/schemas/WorkUndated'
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
@@ -9594,6 +9712,20 @@ components:
           (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
           `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
           a field with no top-level counterpart is withheld. `PUT` ignores these keys.
+
+    WorkUndated:
+      type: object
+      nullable: true
+      description: >-
+        Date fields the source gave no real date for, each null on the item. The key is the field
+        name; `notAfter` is the latest day the event can have happened.
+      additionalProperties:
+        type: object
+        properties:
+          notAfter:
+            type: string
+            format: date
+            nullable: true
 
     TrackWorkPhase:
       type: object

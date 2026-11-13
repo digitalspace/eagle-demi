@@ -1,14 +1,13 @@
 'use strict';
 
-/**
- * Track team feed -> `project:<id>` realm roles, then mirror, credential sweep and dating pass. Owns
- * only `project:` roles for ids Track lists; `project:eagle-abc` stays.
- */
+/** Track team feed -> `project:<id>` realm roles, then mirror, works parity, credential sweep and dating
+ *  pass. Owns only `project:` roles for ids Track lists; `project:eagle-abc` stays. */
 
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
 const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorks } = require('../seed/sources');
 const { syncProjects } = require('./sync-track-run');
+const { trackParity } = require('./check-works-parity');
 const { logger } = require('../utils/logger');
 
 /** Keycloak's admin API caps a listing page; anything longer has to be walked with `first=`. */
@@ -279,8 +278,7 @@ async function sync(argv = [], deps = {}) {
   try {
     const projects = await fetchTrackProjects(trackToken, get);
 
-    // Phases and works on their own try, ahead of the mirror: a Track feed that is down must cost
-    // them only, and `mergeTrackProject` then leaves the stored ones alone rather than blanking them.
+    // Own try, ahead of the mirror: a Track feed outage costs phases and works only; the stored ones stay.
     let phases = new Map();
     let works = new Map();
     let nested = new Map();
@@ -304,6 +302,7 @@ async function sync(argv = [], deps = {}) {
       summary.failures++;
       logger.error('[track-teams] project mirror failed', { error: err.message, stack: err.stack });
     }
+    await trackParity(projects, works);
 
     const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
     summary.closedProjects = closed.size;

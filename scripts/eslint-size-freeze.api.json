@@ -49,7 +49,7 @@
   "src/scripts/seed-nosql.js": {"complexity":[116,42,24],"max-lines":[1143],"max-lines-per-function":[686]},
   "src/scripts/seed-public-reads.js": {"complexity":[21],"max-lines":[416]},
   "src/scripts/sync-track-projects.js": {"complexity":[41],"max-lines":[425],"max-lines-per-function":[279]},
-  "src/scripts/sync-track-teams.js": {"complexity":[33],"max-lines":[415],"max-lines-per-function":[177]},
+  "src/scripts/sync-track-teams.js": {"complexity":[33],"max-lines":[414],"max-lines-per-function":[177]},
   "src/scripts/sync-wildfires.js": {"complexity":[37]},
   "src/search/ai-search.js": {"complexity":[24],"max-lines":[1625]},
   "src/search/eagle-query.js": {"complexity":[46,21],"max-lines":[738]},

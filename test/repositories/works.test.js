@@ -23,6 +23,7 @@ const MAY_REQUIRE = new Set([
   'src/controllers/nosql/works-staff.js',
   'src/domain/works-derive.js',
   'src/scripts/check-business-works-parity.js',
+  'src/scripts/check-works-parity.js',
   'src/scripts/date-assessment-phases.js',
   'src/scripts/load-business-works.js',
   'src/scripts/rollback-business-works.js',

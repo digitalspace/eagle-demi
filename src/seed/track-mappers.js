@@ -5,9 +5,31 @@
 
 const { workActYear } = require('../merge/assessment-work');
 const { entryForTrackCode } = require('../domain/phase-catalog');
+const { TRACK_WORK_TYPE_CODES, summaryOf, transitionDateOf } = require('../domain/work-model');
 
 /** Track `WorkTypeEnum` ids mirrored into `works[]`; 4, 8, 12, 13 and 14 stay out. */
 const MIRRORED_WORK_TYPE_IDS = new Set([1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 16]);
+
+const WORK_SCHEMA_VERSION = 1;
+
+/** Keys `publicWorksOf` adds to the works Track's pull builds, at any depth; nothing else may differ.
+ *  `endDate` is added on milestones only, so it is stripped there alone. */
+const ADDED_KEYS = new Set([
+  'catalogId', 'catalogName', 'stage', 'order', 'trackPhaseId', 'phaseCodeId', 'trackEventId',
+  'isSuspended', 'suspendedDate', 'startPlanned', 'endPlanned',
+  'workId', 'source', 'actYear', 'workTypeCode', 'outcomeCode', 'transitionOut', 'undated',
+  'interruptions', 'code', 'links'
+]);
+const ADDED_MILESTONE_KEYS = new Set(['endDate']);
+
+/** `value` with every added key dropped. */
+function withoutAdded(value, inMilestones = false) {
+  if (Array.isArray(value)) return value.map(item => withoutAdded(item, inMilestones));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !ADDED_KEYS.has(key) && !(inMilestones && ADDED_MILESTONE_KEYS.has(key)))
+    .map(([key, inner]) => [key, withoutAdded(inner, key === 'milestones')]));
+}
 
 /** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */
 const nameOf = (v) => (v && typeof v === 'object' ? v.name : v);
@@ -154,7 +176,10 @@ function docWorkFieldsOf(work, projectId) {
     isActive: pub.isActive,
     workState: pub.workState,
     decisionDate: pub.decisionDate,
-    anticipatedDecisionDate: pub.anticipatedDecisionDate
+    anticipatedDecisionDate: pub.anticipatedDecisionDate,
+    schemaVersion: WORK_SCHEMA_VERSION,
+    workTypeCode: TRACK_WORK_TYPE_CODES[pub.workTypeId] ?? null,
+    actYear: workActYear(pub)
   };
 }
 
@@ -167,7 +192,8 @@ function settledDoc(fields, phases, pushStamps, updatedAt) {
   const ordered = phases.map(p => ({ ...p, milestones: [...p.milestones].sort(byMilestoneOrder) }))
     .sort(byPhaseOrder);
   const last = ordered.length ? ordered[ordered.length - 1].milestones : [];
-  return { ...fields, outcome: outcomeOf(last), phases: ordered, pushStamps, updatedAt };
+  const doc = { ...fields, outcome: outcomeOf(last), phases: ordered, pushStamps, updatedAt };
+  return { ...doc, summary: summaryOf(doc) };
 }
 
 /**
@@ -187,62 +213,125 @@ function titleOf(doc, projectName) {
   return [projectName, doc.workType, doc.simpleTitle].filter(Boolean).join(' - ');
 }
 
+const isTrackDoc = (doc) => /^track-\d+$/.test(String(doc.id));
+const listOf = (value) => (Array.isArray(value) ? value : []);
+const or = (value) => value ?? null;
+
+/** Only `{notAfter}` of each entry, so nothing else stored beside a date leaves. */
+function undatedOf(undated) {
+  if (!undated || typeof undated !== 'object') return null;
+  return Object.fromEntries(Object.entries(undated).map(([key, entry]) => [key, { notAfter: or(entry && entry.notAfter) }]));
+}
+
+function catalogEntryOf(doc, phase, catalog) {
+  if (!catalog) return null;
+  if (isTrackDoc(doc)) return entryForTrackCode(catalog, workActYear(doc), phase.phaseCodeId);
+  return listOf(catalog[doc.actYear]).find(entry => entry.catalogId === phase.catalogId) || null;
+}
+
+function catalogIdOf(doc, phase, entry) {
+  if (entry) return entry.catalogId;
+  if (!isTrackDoc(doc)) return or(phase.catalogId);
+  return phase.phaseCodeId === null || phase.phaseCodeId === undefined ? null : `track-${phase.phaseCodeId}`;
+}
+
+const publicInterruptionOf = (x) => ({
+  id: or(x.id), kind: or(x.kind), typeCode: or(x.typeCode), legalSection: or(x.legalSection),
+  startDate: or(x.startDate), endDate: or(x.endDate), days: or(x.days)
+});
+
 function publicPhaseOf(doc, phase, catalog) {
-  const entry = catalog ? entryForTrackCode(catalog, workActYear(doc), phase.phaseCodeId) : null;
+  const entry = catalogEntryOf(doc, phase, catalog);
+  // A sheet phase shows its catalog name, never the sheet's own text.
+  const name = isTrackDoc(doc) ? or(phase.trackName) : or(entry ? entry.name : phase.name);
   return {
-    name: phase.trackName,
+    name,
     // A work's phases come from the phase codes of its own Act and work type (Track services/work.py).
-    eaActId: doc.eaActId,
-    eaActName: doc.eaAct,
-    workType: doc.workType,
-    startDate: phase.startDate,
-    endDate: phase.endDate,
-    numberOfDays: phase.numberOfDays,
-    legislated: phase.legislated,
-    sortOrder: phase.sortOrder,
-    isCompleted: phase.isCompleted,
-    trackPhaseId: phase.trackPhaseId,
-    phaseCodeId: phase.phaseCodeId,
-    catalogId: entry ? entry.catalogId : phase.phaseCodeId === null ? null : `track-${phase.phaseCodeId}`,
-    catalogName: entry ? entry.name : phase.trackName,
-    stage: entry ? entry.stage ?? null : null,
-    order: entry ? entry.order ?? null : phase.sortOrder,
-    isSuspended: phase.isSuspended,
-    suspendedDate: phase.suspendedDate
+    eaActId: or(doc.eaActId),
+    eaActName: or(doc.eaAct),
+    workType: or(doc.workType),
+    startDate: or(phase.startDate),
+    endDate: or(phase.endDate),
+    numberOfDays: or(phase.numberOfDays),
+    legislated: or(phase.legislated),
+    sortOrder: or(phase.sortOrder),
+    isCompleted: phase.isCompleted === true,
+    trackPhaseId: or(phase.trackPhaseId),
+    phaseCodeId: or(phase.phaseCodeId),
+    catalogId: catalogIdOf(doc, phase, entry),
+    catalogName: entry ? entry.name : name,
+    stage: entry ? or(entry.stage) : null,
+    order: entry ? or(entry.order) : or(phase.sortOrder),
+    isSuspended: or(phase.isSuspended),
+    suspendedDate: or(phase.suspendedDate),
+    undated: undatedOf(phase.undated),
+    interruptions: listOf(phase.interruptions).map(publicInterruptionOf)
   };
 }
 
 const publicMilestoneOf = (m) => ({
-  name: m.name, position: m.position, eventType: m.eventType, actualDate: m.actualDate,
-  anticipatedDate: m.anticipatedDate, outcome: m.outcome, numberOfDays: m.numberOfDays, trackEventId: m.trackEventId
+  name: or(m.name), code: or(m.code), position: or(m.position), eventType: or(m.eventType),
+  actualDate: or(m.actualDate), anticipatedDate: or(m.anticipatedDate), endDate: or(m.endDate),
+  outcome: or(m.outcome), numberOfDays: or(m.numberOfDays), trackEventId: or(m.trackEventId),
+  links: { commentPeriodId: or(m.links && m.links.commentPeriodId), blockField: or(m.links && m.links.blockField) },
+  undated: undatedOf(m.undated)
 });
 
+function publicWorkOf(doc, projectName, catalog) {
+  const phases = listOf(doc.phases);
+  return {
+    workId: doc.id,
+    source: or(doc.source ?? (isTrackDoc(doc) ? 'track' : null)),
+    trackWorkId: or(doc.trackWorkId),
+    workTypeId: or(doc.workTypeId),
+    workTypeCode: or(doc.workTypeCode),
+    workType: or(doc.workType),
+    title: titleOf(doc, projectName),
+    eaAct: or(doc.eaAct),
+    actYear: or(doc.actYear),
+    startDate: or(doc.startDate),
+    isActive: or(doc.isActive),
+    workState: or(doc.workState),
+    decisionDate: or(doc.decisionDate),
+    anticipatedDecisionDate: or(doc.anticipatedDecisionDate),
+    outcome: or(doc.outcome),
+    outcomeCode: or(doc.outcomeCode),
+    transitionOut: doc.transitionOut
+      ? { toActYear: or(doc.transitionOut.toActYear), date: null, dateSource: or(doc.transitionOut.dateSource) }
+      : null,
+    undated: undatedOf(doc.undated),
+    phases: phases.map(phase => publicPhaseOf(doc, phase, catalog)),
+    milestones: phases.flatMap(phase => listOf(phase.milestones).map(publicMilestoneOf))
+  };
+}
+
+const textOrder = (a, b) => (String(a ?? '') < String(b ?? '') ? -1 : String(a ?? '') > String(b ?? '') ? 1 : 0);
+
+/** Track documents by Track work id, then the rest by start date, then id. */
+const byPublicOrder = (a, b) => isTrackDoc(b) - isTrackDoc(a) || (isTrackDoc(a)
+  ? a.trackWorkId - b.trackWorkId
+  : textOrder(a.startDate, b.startDate) || textOrder(a.id, b.id));
+
 /**
- * Stored work documents as the public `works[]` the project row has carried: by Track work id,
- * flat `milestones`, Track's phase names, title built from `row.sources.track.name`. Tombstones are left out.
+ * Stored work documents as the public `works[]`: an allow-list at every level, flat `milestones`,
+ * title built from `row.sources.track.name`. Tombstones are left out.
  */
 function publicWorksOf(workDocs, row, { catalog } = {}) {
   const projectName = row?.sources?.track?.name ?? null;
-  return (Array.isArray(workDocs) ? workDocs : []).filter(doc => doc && doc.deleted !== true)
-    .sort((a, b) => a.trackWorkId - b.trackWorkId)
-    .map(doc => ({
-      trackWorkId: doc.trackWorkId,
-      workTypeId: doc.workTypeId,
-      workType: doc.workType,
-      title: titleOf(doc, projectName),
-      eaAct: doc.eaAct,
-      startDate: doc.startDate,
-      isActive: doc.isActive,
-      workState: doc.workState,
-      decisionDate: doc.decisionDate,
-      anticipatedDecisionDate: doc.anticipatedDecisionDate,
-      outcome: doc.outcome,
-      phases: doc.phases.map(phase => publicPhaseOf(doc, phase, catalog)),
-      milestones: doc.phases.flatMap(phase => phase.milestones.map(publicMilestoneOf))
-    }));
+  const live = listOf(workDocs).filter(doc => doc && doc.deleted !== true).sort(byPublicOrder);
+  const works = live.map(doc => publicWorkOf(doc, projectName, catalog));
+  // Resolved over the public shape, where Track's transition milestone sits in flat `milestones`.
+  live.forEach((doc, i) => {
+    if (works[i].transitionOut) works[i].transitionOut.date = transitionDateOf(doc.transitionOut, works, doc.actYear);
+  });
+  return works;
 }
 
 module.exports = {
+  ADDED_KEYS,
+  MIRRORED_WORK_TYPE_IDS,
+  withoutAdded,
+  isTrackDoc,
   nameOf,
   workTypeIdOf,
   isMirrored,
