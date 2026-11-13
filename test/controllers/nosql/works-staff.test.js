@@ -97,6 +97,11 @@ test('a malformed project id is refused before any read', async (t) => {
   assert.strictEqual(reads, 0);
 });
 
+test('an unreadable project is a 404', async (t) => {
+  const { res } = await call(t, STAFF, { row: null });
+  assert.strictEqual(res.statusCode, 404);
+});
+
 test('response carries no sourceKey or sheetKey', async (t) => {
   const { res } = await call(t, STAFF);
   const text = JSON.stringify(res.body);
@@ -111,12 +116,12 @@ test('currentInvestment is the open track entry when track, eagle and sheet entr
 
 test('a note tied to one work shows on that work only', async (t) => {
   const note = {
-    id: 'n1', text: 'Example note', workId: WORK_1997.id, effectiveFrom: '1990-01-01', effectiveTo: null,
-    observedAt: '2026-11-01', source: 'demi', sheetKey: null, recordedAt: '2026-11-01T00:00:00.000Z'
+    id: 'n1', text: 'Example note', workId: WORK_1997.id, observedAt: '2026-11-01', source: 'demi',
+    sheetKey: null, recordedAt: '2026-11-01T00:00:00.000Z'
   };
   const { res } = await call(t, STAFF, { row: { ...ROW, staffNotes: [note] } });
-  assert.deepStrictEqual(workOf(res.body, WORK_1997.id).notes.map(entry => entry.id), ['n1']);
-  assert.deepStrictEqual(workOf(res.body, OPEN_WORK.id).notes, []);
+  const noteIds = res.body.works.map(work => [work.workId, work.notes.map(entry => entry.id)]);
+  assert.deepStrictEqual(noteIds, [[OPEN_WORK.id, []], [WORK_1997.id, ['n1']], [ENDED_WORK.id, []]]);
 });
 
 test('a row dial narrower than the caller withholds that staff list', async (t) => {

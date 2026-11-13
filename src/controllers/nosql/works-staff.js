@@ -16,16 +16,20 @@ const STAFF_LEVEL = 2;
 // DEMI project ids: a Track integer, `eagle-<ObjectId>` or a UUID.
 const PROJECT_ID = /^(?:0|[1-9]\d{0,15}|eagle-[0-9a-f]{24}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-/** `entry` without `sheetKey`, which encodes the sheet's project number. */
-function shown(entry) {
-  const { sheetKey, ...rest } = entry;
-  return rest;
-}
+// The keys each list returns; `sheetKey` is never one, as it encodes the sheet's project number.
+const COMMON_KEYS = ['id', 'observedAt', 'source', 'recordedAt', 'currentAsOf'];
+const CONTACT_KEYS = [...COMMON_KEYS, 'role', 'name', 'effectiveFrom', 'effectiveTo'];
+const INVESTMENT_KEYS = [...COMMON_KEYS, 'amountCad', 'effectiveFrom', 'effectiveTo', 'workId'];
+const NOTE_KEYS = [...COMMON_KEYS, 'text', 'workId'];
 
-/** The entries of `list` in effect for `work`; one tied to another work is left out. */
-const entriesFor = (list, work) => inEffect(list, work)
-  .filter(entry => entry.workId === null || entry.workId === undefined || entry.workId === work.id)
-  .map(shown);
+const pick = (entry, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(entry, key)).map(key => [key, entry[key]]));
+
+/** The entries of `list` for `work`: one tied to it by `workId` whatever its dates, else those `inEffect` gives. */
+const entriesFor = (list, keys, work) => (Array.isArray(list) ? list : []).flatMap((entry) => {
+  const tiedTo = entry?.workId;
+  if (tiedTo === null || tiedTo === undefined) return inEffect([entry], work);
+  return tiedTo === work.id ? [entry] : [];
+}).map(entry => pick(entry, keys));
 
 /** `GET /projects/:id/works-staff` */
 exports.getWorksStaff = async (req, res) => {
@@ -47,13 +51,13 @@ exports.getWorksStaff = async (req, res) => {
         title: work.title ?? null,
         startDate: range.start,
         endDate: range.end,
-          contacts: entriesFor(row.staffAssignments, work),
-        investments: entriesFor(row.capitalInvestments, work),
-        notes: entriesFor(row.staffNotes, work)
+        contacts: entriesFor(row.staffAssignments, CONTACT_KEYS, work),
+        investments: entriesFor(row.capitalInvestments, INVESTMENT_KEYS, work),
+        notes: entriesFor(row.staffNotes, NOTE_KEYS, work)
       };
     });
     const current = currentInvestment(row.capitalInvestments);
-    return res.json({ projectId: project.id, currentInvestment: current && shown(current), works: body });
+    return res.json({ projectId: project.id, currentInvestment: current && pick(current, INVESTMENT_KEYS), works: body });
   } catch (err) {
     return serverError(res, err, 'works-staff read failed');
   }
