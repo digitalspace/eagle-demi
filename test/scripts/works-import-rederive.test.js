@@ -165,7 +165,7 @@ test('rederive refuses when the probe answers an error or no JSON body', async (
   const answer = res => ({ fetchFn: async () => res });
 
   await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: false, status: 503 })), /probe of project 7001 answered 503$/);
-  await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad'); } })),
+  await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); } })),
     /probe of project 7001 answered 200 with no JSON body/);
   await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => null })), /answered 200 with no JSON body/);
   assert.deepEqual(demi.derives, []);
