@@ -28,19 +28,25 @@ async function markerOf(projectId) {
   return null;
 }
 
+/** The read's boundary, the untilTrack sheet ids a Track work replaced, and the sheet ids that show. */
+function overrideShown(sheetWorks, trackWorks, marker) {
+  // listForRead drops sourceKey, so untilTrackHidden breaks a tie by input order; id order keeps it stable.
+  const sorted = [...sheetWorks].sort((a, b) => compareText(a.id, b.id));
+  const boundary = overrideBoundaryOf(trackWorks);
+  const replaced = untilTrackHidden(sorted, trackWorks, marker);
+  const shownSheetIds = new Set(sorted
+    .filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, boundary, []))
+    .map(work => work.id));
+  return { boundary, replaced, shownSheetIds };
+}
+
 /**
  * `stored` less what the sheet override hides: sheet works first, then Track works paired with a shown one.
  * Track works move the boundary and replace untilTrack works only when listed, so an event never shows nowhere.
  */
 function withOverride(stored, marker, sources) {
   const trackWorks = sources.includes('track') ? stored.filter(work => sourceOf(work) === 'track') : [];
-  // listForRead drops sourceKey, so untilTrackHidden breaks a tie by input order; id order keeps it stable.
-  const sheetWorks = stored.filter(work => sourceOf(work) === 'sheet').sort((a, b) => compareText(a.id, b.id));
-  const boundary = overrideBoundaryOf(trackWorks);
-  const replaced = untilTrackHidden(sheetWorks, trackWorks, marker);
-  const shownSheetIds = new Set(sheetWorks
-    .filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, boundary, []))
-    .map(work => work.id));
+  const { boundary, shownSheetIds } = overrideShown(stored.filter(work => sourceOf(work) === 'sheet'), trackWorks, marker);
   return stored.filter(work => (sourceOf(work) === 'sheet'
     ? shownSheetIds.has(work.id)
     : !hiddenByOverride(work, marker, boundary, shownSheetIds)));
@@ -56,4 +62,4 @@ async function loadWorks(row, { sources = ['track'] } = {}) {
   return { worksForDerive: publicWorksOf(kept, row, { catalog }), catalog };
 }
 
-module.exports = { deriveInputs, loadWorks };
+module.exports = { deriveInputs, loadWorks, overrideShown };
