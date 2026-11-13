@@ -111,7 +111,8 @@ test('response carries no sourceKey or sheetKey', async (t) => {
 
 test('currentInvestment is the open track entry when track, eagle and sheet entries are open', async (t) => {
   const { res } = await call(t, STAFF);
-  assert.strictEqual(res.body.currentInvestment.id, 'i-track');
+  const { sheetKey: _sheetKey, ...expected } = investment('i-track', 'track');
+  assert.deepStrictEqual(res.body.currentInvestment, expected);
 });
 
 test('a note tied to one work shows on that work only', async (t) => {
@@ -120,8 +121,11 @@ test('a note tied to one work shows on that work only', async (t) => {
     sheetKey: null, recordedAt: '2026-11-01T00:00:00.000Z'
   };
   const { res } = await call(t, STAFF, { row: { ...ROW, staffNotes: [note] } });
-  const noteIds = res.body.works.map(work => [work.workId, work.notes.map(entry => entry.id)]);
-  assert.deepStrictEqual(noteIds, [[OPEN_WORK.id, []], [WORK_1997.id, ['n1']], [ENDED_WORK.id, []]]);
+  const { sheetKey: _sheetKey, ...stored } = note;
+  const notesByWork = res.body.works.map(work => [work.workId, work.notes]);
+  assert.deepStrictEqual(notesByWork, [
+    [OPEN_WORK.id, []], [WORK_1997.id, [{ ...stored, currentAsOf: note.observedAt }]], [ENDED_WORK.id, []]
+  ]);
 });
 
 test('a row dial narrower than the caller withholds that staff list', async (t) => {
