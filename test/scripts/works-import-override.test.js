@@ -139,6 +139,14 @@ test('revert names exactly one of --project and --all', async (t) => {
   await assert.rejects(rollback(['--revert-override'], demi), /one of --project <id> or --all/);
 });
 
+test('revert stops when the marker moved between its read and its write', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  demi.saveWork = async () => ({ status: 'foreign' });
+
+  await assert.rejects(rollback(['--revert-override', '--all'], demi), /marker write on project 7001 answered foreign/);
+  assert.equal(store.all().find(item => item.batchKind === 'override').status, 'pending');
+});
+
 /**
  * A revert --all over 7001 to 7003 whose write on 7003 is refused, or with `landed` lands and then fails; 7002 was
  * turned off by a load. Resolves the store, the fake and the pending override batch's id.
