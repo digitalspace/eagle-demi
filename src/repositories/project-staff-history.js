@@ -185,16 +185,34 @@ async function closeHistory(id, field, entryId, effectiveTo) {
   });
 }
 
-/** `removed`, `absent`, `changed` (its hash is not `expectedSha256`, or it is staff's), `conflict` or `missing`. */
-async function removeHistory(id, field, entryId, expectedSha256) {
-  checkedField(field);
+/** `next(list, index, set)` on entry `entryId` while it hashes to `expectedSha256`; `absent`, or `changed` when it does not or is staff's. */
+function underHash(id, field, entryId, expectedSha256, next) {
   return guarded(id, async (row, set) => {
     const list = listOf(row, field);
     const index = byId(list, entryId);
     if (index < 0) return { status: 'absent' };
     if (list[index].source === 'demi' || historyEntrySha256(list[index]) !== expectedSha256) return { status: 'changed' };
+    return next(list, index, set);
+  });
+}
+
+/** `removed`, `absent`, `changed` (its hash is not `expectedSha256`, or it is staff's), `conflict` or `missing`. */
+async function removeHistory(id, field, entryId, expectedSha256) {
+  checkedField(field);
+  return underHash(id, field, entryId, expectedSha256, async (list, index, set) => {
     await set(field, list.toSpliced(index, 1));
     return { status: 'removed' };
+  });
+}
+
+/** Puts `prior` back over its entry: `restored`, `absent`, `changed` (its hash is not `expectedSha256`, or it is staff's), `conflict` or `missing`. */
+async function restoreHistory(id, field, prior, expectedSha256) {
+  checkedField(field, CLOSEABLE_FIELDS);
+  if (!isObject(prior) || typeof prior.id !== 'string' || !prior.id) throw new TypeError('[project history] an entry needs an id');
+  checkedSource(prior.source);
+  return underHash(id, field, prior.id, expectedSha256, async (list, index, set) => {
+    await set(field, list.with(index, prior));
+    return { status: 'restored' };
   });
 }
 
@@ -208,5 +226,6 @@ module.exports = {
   removeExternalId,
   appendHistory,
   closeHistory,
-  removeHistory
+  removeHistory,
+  restoreHistory
 };

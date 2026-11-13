@@ -101,3 +101,12 @@ test('lists reads return no ImportBatch, ImportBatchEntry or ImportLock item', a
     .flatMap(([id, kind]) => [resolveAccess({}), staff].map(access => lists.getById(access, id, kind)));
   assert.deepEqual(await Promise.all(reads), [null, null, null, null, null, null]);
 });
+
+test('two takers of an expired lock, one wins', async (t) => {
+  const store = fakeLists(t);
+  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: 'b1', expiresAt: new Date(T0 - 1).toISOString() });
+  const results = await Promise.allSettled([batches.takeOverLock('b1', T0), batches.takeOverLock('b1', T0)]);
+  assert.deepEqual(results.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.match(results.find(result => result.status === 'rejected').reason.message, /another run took/);
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK)._etag, results.find(result => result.status === 'fulfilled').value.etag);
+});

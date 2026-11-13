@@ -16,6 +16,8 @@ const TARGET_SHAPES = Object.freeze([['id', 'projectId'], ['entryId', 'field', '
 
 const refuse = (message) => { throw new Error(message); };
 
+const lockItem = (batchId, expiresAt) => ({ kind: KINDS.LOCK, id: LOCK_ID, batchId, expiresAt });
+
 function leaseLost(message, cause) {
   return Object.assign(new Error(message, cause && { cause }), { code: 'LEASE_LOST' });
 }
@@ -29,10 +31,29 @@ async function takeLock(batchId, now = Date.now()) {
   if (pending.items.length) refuse('an ImportBatch is pending');
   const expiresAt = new Date(now + LEASE_MS).toISOString();
   try {
-    const created = await cosmos.create(CONTAINER, { kind: KINDS.LOCK, id: LOCK_ID, batchId, expiresAt });
+    const created = await cosmos.create(CONTAINER, lockItem(batchId, expiresAt));
     return { batchId, etag: created._etag, expiresAt, writes: 0 };
   } catch (err) {
     if (err.code === 409) refuse('the import lock exists, expired or not');
+    throw err;
+  }
+}
+
+/**
+ * Takes the lock of a stopped run for `batchId`: refused while its lease is fresh. An expired lock is replaced under
+ * its etag, so of two takers one wins and the other is refused; with no lock item it is created, as by takeLock.
+ */
+async function takeOverLock(batchId, now = Date.now()) {
+  const lock = await cosmos.readItem(CONTAINER, LOCK_ID, KINDS.LOCK);
+  if (lock && now < Date.parse(lock.expiresAt)) refuse('the import lease is fresh');
+  const expiresAt = new Date(now + LEASE_MS).toISOString();
+  try {
+    const taken = lock
+      ? await cosmos.replace(CONTAINER, LOCK_ID, KINDS.LOCK, lockItem(batchId, expiresAt), lock._etag)
+      : await cosmos.create(CONTAINER, lockItem(batchId, expiresAt));
+    return { batchId, etag: taken._etag, expiresAt, writes: 0 };
+  } catch (err) {
+    if ([404, 409, 412].includes(err.code)) refuse('another run took the import lock');
     throw err;
   }
 }
@@ -44,8 +65,7 @@ async function beforeWrite(lease, now = Date.now()) {
     const expiresAt = new Date(now + LEASE_MS).toISOString();
     let renewed;
     try {
-      renewed = await cosmos.replace(CONTAINER, LOCK_ID, KINDS.LOCK,
-        { kind: KINDS.LOCK, id: LOCK_ID, batchId: lease.batchId, expiresAt }, lease.etag);
+      renewed = await cosmos.replace(CONTAINER, LOCK_ID, KINDS.LOCK, lockItem(lease.batchId, expiresAt), lease.etag);
     } catch (err) {
       throw leaseLost('the import lease renewal failed', err);
     }
@@ -73,6 +93,41 @@ async function releaseLock(lease) {
   await cosmos.remove(CONTAINER, LOCK_ID, KINDS.LOCK, { etag: lease.etag });
 }
 
+/** The ImportBatch header with its `_etag`; null when absent. */
+async function readBatch(batchId) {
+  return cosmos.readItem(CONTAINER, batchId, KINDS.BATCH);
+}
+
+/** Every `complete` header, earliest completion first; batches are few, so one id query, then a point read each. */
+async function completeBatches() {
+  const ids = await cosmos.query(CONTAINER, {
+    query: 'SELECT VALUE c.id FROM c WHERE c.status = @status', parameters: [{ name: '@status', value: 'complete' }]
+  }, { partitionKey: KINDS.BATCH });
+  const headers = (await Promise.all(ids.items.map(readBatch))).filter(Boolean);
+  return headers.sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
+}
+
+/** The latest `complete` batch of `batchKind`, or null. */
+async function latestCompleteBatch(batchKind = 'load') {
+  return (await completeBatches()).filter(batch => batch.batchKind === batchKind).at(-1) || null;
+}
+
+/** The batch's entries by seq; writeAhead numbers them 1, 2, 3 with no gap, so the walk ends at the first absent seq. */
+async function listEntries(batchId) {
+  const entries = [];
+  for (let seq = 1; ; seq += 1) {
+    const entry = await cosmos.readItem(CONTAINER, `${batchId}:${seq}`, KINDS.ENTRY);
+    if (!entry) return entries;
+    entries.push(entry);
+  }
+}
+
+/** Marks the batch `rolledBack` under the etag `batch` was read with. */
+async function markRolledBack(batch, now = Date.now()) {
+  const { _etag: etag, ...item } = batch;
+  await cosmos.replace(CONTAINER, item.id, KINDS.BATCH, { ...item, status: 'rolledBack', rolledBackAt: new Date(now).toISOString() }, etag);
+}
+
 function checkedTarget(target) {
   const keys = Object.keys(target || {}).sort().join();
   const shaped = TARGET_SHAPES.some(shape => shape.join() === keys) &&
@@ -98,5 +153,6 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
-  takeLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead
+  takeLock, takeOverLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead,
+  readBatch, completeBatches, latestCompleteBatch, listEntries, markRolledBack
 };
