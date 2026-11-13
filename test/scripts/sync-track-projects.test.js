@@ -833,7 +833,9 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   const summary = await syncProjects([API_PROJECT], { live: true, now: NOW });
 
-  assert.deepStrictEqual(summary, emptySummary(1), 'the feed side still counts; the write side is honestly zero');
+  const { trackProjects, investment, ...counts } = summary;
+  assert.deepStrictEqual([trackProjects, investment], [1, { appended: 0, closed: 0, unreadable: 0, full: 0 }], 'the feed side still counts');
+  assert.deepStrictEqual(Object.entries(counts).filter(([, n]) => n !== 0), [], 'the write side is honestly zero');
 });
 
 /**

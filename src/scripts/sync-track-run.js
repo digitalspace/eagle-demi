@@ -4,12 +4,12 @@
 
 const { systemAccess } = require('../helpers/access-sql');
 const { isNativeProject } = require('../merge/project');
-const { observeInvestment } = require('../domain/project-staff-fields');
+const { observeInvestment, pacificDay } = require('../domain/project-staff-fields');
 const { clientToken, fetchTrackProjects } = require('../seed/sources');
 const { HEAL_CAP, rowWriter, emptySummary, owesLink } = require('./sync-track-projects');
 const config = require('../config');
 const linksRepository = require('../repositories/links');
-const { appendHistory } = require('../repositories/project-staff-history');
+const { appendHistory, closeHistory } = require('../repositories/project-staff-history');
 const { logger } = require('../utils/logger');
 
 /** Write results that leave a row under the Track id, so its investment entries are this run's to keep. */
@@ -37,9 +37,21 @@ function indexStored(items) {
   };
 }
 
+/** The write `observeInvestment` asked for, or its status when it asked none; a dry run reports the live outcome. */
+async function writeSeen(id, seen, live, stillDue) {
+  const field = 'capitalInvestments';
+  if (seen.status === 'append') {
+    return live ? (await appendHistory(id, field, seen.append, seen.close, stillDue)).status : 'appended';
+  }
+  if (seen.status === 'empty' && seen.close) {
+    return live ? (await closeHistory(id, field, seen.close.id, seen.close.effectiveTo)).status : 'closed';
+  }
+  return seen.status;
+}
+
 /**
  * Appends a `track` entry for Track's `capital_investment` and an `eagle` one for the row's `intake.investment`
- * when either moved, closing that source's open entry in the same patch. {row} is the stored row or `{}`.
+ * when either moved, closing that source's open entry in the same patch; a cleared value only closes it.
  */
 async function observeInvestments(apiProject, row, { live, runDate, summary }) {
   const id = String(apiProject.id);
@@ -48,17 +60,14 @@ async function observeInvestments(apiProject, row, { live, runDate, summary }) {
   for (const [source, value] of [['track', apiProject.capital_investment], ['eagle', row.intake?.investment]]) {
     const seen = observeInvestment(row.capitalInvestments, source, value, runDate);
     if (seen.status === 'unreadable') counts.unreadable++;
-    let status = seen.status;
-    if (status === 'append') {
-      status = live ? (await appendHistory(id, 'capitalInvestments', seen.append, seen.close)).status : 'appended';
-    }
+    // A run that overlaps this one may have appended the same move since the run-start read.
+    const stillDue = (list) => observeInvestment(list, source, value, runDate).status === 'append';
+    const status = await writeSeen(id, seen, live, stillDue);
     if (status === 'full') full = true;
-    if (status === 'appended') {
-      counts.appended++;
-      if (seen.close) counts.closed++;
-    }
+    if (status === 'appended') counts.appended++;
+    if (status === 'closed' || (status === 'appended' && seen.close)) counts.closed++;
     // The entries stay as they were, so the next run observes the same move again.
-    if (['changed', 'conflict', 'missing'].includes(status)) {
+    if (['changed', 'absent', 'conflict', 'missing'].includes(status)) {
       summary.failures++;
       logger.error(`[investment] project ${id} ${source} entry not written`, { status });
     }
@@ -67,13 +76,15 @@ async function observeInvestments(apiProject, row, { live, runDate, summary }) {
 }
 
 /** The run's investment step and its log line; none when {enabled} is false, as the poll leaves it to the nightly. */
-function investmentPass(enabled, { stored, repo, live, runDate, summary }) {
+function investmentPass(enabled, { stored, eagleOnly, repo, live, runDate, summary }) {
   if (enabled === false) return { observe: null, report: () => {} };
-  // The run-start copy of the row; a relink's row is new, and carries the twin's entries and `intake`, so it is read.
+  // A relink's row is new and carries the twin's entries and `intake`: read live, the run-start twin in a dry run.
+  const relinkedRow = (apiProject, id) =>
+    (live ? repo.getById(systemAccess(), id) : eagleOnly.get(String(apiProject.epic_guid)));
   const observe = async (apiProject, action) => {
     const id = String(apiProject.id);
     try {
-      const row = stored.get(id) ?? (live && action === 'relinked' ? await repo.getById(systemAccess(), id) : null) ?? {};
+      const row = stored.get(id) ?? (action === 'relinked' ? await relinkedRow(apiProject, id) : null) ?? {};
       await observeInvestments(apiProject, row, { live, runDate, summary });
     } catch (err) {
       summary.failures++;
@@ -189,9 +200,10 @@ async function syncProjects(apiProjects, opts = {}) {
     onRelink: (relink) => rekeyed.add(String(relink.eagleId))
   });
 
-  const investment = investmentPass(opts.investment, { stored, repo, live, runDate: now.slice(0, 10), summary });
+  const investment = investmentPass(opts.investment, { stored, eagleOnly, repo, live, runDate: pacificDay(now), summary });
   const { listed, nativeClashes, stateMoves } = await writeListed(rows, writer,
     { ...lists, pushedAt, investment: investment.observe }, summary);
+  investment.report();
   reportUnlisted(stored, listed, summary, skipLinkUpkeep);
   if (nativeClashes.length) {
     logger.warn('[track-projects] Track projects name the Eagle id of a native project; not created',
@@ -208,7 +220,6 @@ async function syncProjects(apiProjects, opts = {}) {
   if (stateMoves.size) {
     logger.info(`[track-projects] projectState moves ${[...stateMoves].map(([move, n]) => `${move} x${n}`).join('; ')}`);
   }
-  investment.report();
   return summary;
 }
 

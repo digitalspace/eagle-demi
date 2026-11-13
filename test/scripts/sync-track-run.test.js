@@ -1,7 +1,7 @@
 'use strict';
 
 // The nightly's investment step: Track's `capital_investment` and the row's `intake.investment` become dated
-// `capitalInvestments` entries. The history repository's Cosmos calls land on the same in-memory projects fake.
+// `capitalInvestments` entries.
 
 process.env.NODE_ENV = 'test';
 
@@ -11,16 +11,18 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const config = require('../../src/config');
 const { run, syncProjects } = require('../../src/scripts/sync-track-run');
+const { currentInvestment } = require('../../src/domain/project-staff-fields');
 const { NOW, API_PROJECT, storedProject, eagleOnlyProject, fakeLinks, fakeProjects } = require('../helpers/track-sync-fakes');
 const { logger } = require('../../src/utils/logger');
 
-const RUN_DATE = NOW.slice(0, 10);
+// NOW is midnight UTC, so the run's Pacific day is the day before.
+const RUN_DATE = '2026-09-01';
 const INVESTED = { ...API_PROJECT, capital_investment: 12000000 };
 const amount = (id, source, amountCad) => ({ id, amountCad, effectiveFrom: null, effectiveTo: null, source });
 
 /** {rows} in the projects fake, with the history repository's reads and patches routed to it. */
-function store(t, rows) {
-  const projects = fakeProjects(rows);
+function store(t, rows, midRun) {
+  const projects = fakeProjects(rows, { midRun });
   const find = (id) => projects.items.find(row => String(row.id) === String(id)) || null;
   t.mock.method(cosmos, 'readItem', async (_container, id) => structuredClone(find(id)));
   t.mock.method(cosmos, 'patch', async (_container, id, _key, operations, _condition, etag) => {
@@ -60,6 +62,31 @@ test("nightly closes the open track entry and appends one when Track's value cha
   assert.deepStrictEqual([closed.id, closed.effectiveTo], ['t1', RUN_DATE]);
   assert.deepStrictEqual([added.source, added.amountCad, added.effectiveFrom, added.effectiveTo], ['track', 12000000, RUN_DATE, null]);
   assert.deepStrictEqual([summary.investment.appended, summary.investment.closed], [1, 1]);
+});
+
+test('a project with both sources gets a track and an eagle entry', async (t) => {
+  const projects = store(t, [storedProject({ intake: { investment: 5000 } })]);
+
+  const summary = await nightly(projects);
+
+  assert.deepStrictEqual(entriesOf(projects).map(e => [e.source, e.amountCad]), [['track', 12000000], ['eagle', 5000]]);
+  assert.deepStrictEqual([summary.investment.appended, summary.failures], [2, 0]);
+});
+
+test('a cleared Track value closes its open entry so the Eagle figure is current; an unreadable one leaves it open', async (t) => {
+  const row = storedProject({ capitalInvestments: [amount('t1', 'track', 12000000)], intake: { investment: 5000 } });
+  const cleared = store(t, [row]);
+
+  const summary = await nightly(cleared, [{ ...API_PROJECT, capital_investment: null }]);
+
+  const current = currentInvestment(entriesOf(cleared));
+  assert.strictEqual(entriesOf(cleared)[0].effectiveTo, RUN_DATE);
+  assert.deepStrictEqual([current.source, current.amountCad], ['eagle', 5000]);
+  assert.deepStrictEqual([summary.investment.closed, summary.investment.appended], [1, 1]);
+
+  const unreadable = store(t, [row]);
+  await nightly(unreadable, [{ ...API_PROJECT, capital_investment: 'TBD' }]);
+  assert.strictEqual(entriesOf(unreadable)[0].effectiveTo, null);
 });
 
 test("Eagle intake.investment '$85,000,000' becomes an eagle entry of 85000000", async (t) => {
@@ -108,6 +135,28 @@ test('a patch that fails leaves the entries as they were and counts a failure', 
   assert.deepStrictEqual([summary.failures, summary.investment.appended], [1, 0]);
 });
 
+test('an overlapping run that already appended the move leaves one entry', async (t) => {
+  const projects = store(t, [storedProject()], (save, find) =>
+    save({ ...find('207'), capitalInvestments: [{ ...amount('other', 'track', 12000000), observedAt: RUN_DATE }] }));
+
+  const summary = await nightly(projects);
+
+  assert.deepStrictEqual(entriesOf(projects).map(e => e.id), ['other']);
+  assert.deepStrictEqual([summary.investment.appended, summary.failures], [0, 0]);
+});
+
+test('a close target closed since the run-start read fails the append and keeps the entries', async (t) => {
+  const closed = { ...amount('t1', 'track', 10), effectiveTo: '2026-08-01' };
+  const projects = store(t, [storedProject({ capitalInvestments: [amount('t1', 'track', 10)] })], (save, find) =>
+    save({ ...find('207'), capitalInvestments: [closed] }));
+  t.mock.method(logger, 'error', () => {});
+
+  const summary = await nightly(projects);
+
+  assert.deepStrictEqual(entriesOf(projects), [closed]);
+  assert.deepStrictEqual([summary.failures, summary.investment.appended], [1, 0]);
+});
+
 test("a relinked row's Eagle intake becomes an eagle entry", async (t) => {
   const projects = store(t, [eagleOnlyProject({ intake: { investment: 5000 } })]);
 
@@ -124,6 +173,14 @@ test('a dry run counts the entries a live run would append and writes none', asy
 
   assert.strictEqual(summary.investment.appended, 1);
   assert.strictEqual(entriesOf(projects), undefined);
+});
+
+test("a dry run counts a relinked row's entries from the run-start twin", async (t) => {
+  const projects = store(t, [eagleOnlyProject({ intake: { investment: 5000 } })]);
+
+  const summary = await nightly(projects, [API_PROJECT], { live: false });
+
+  assert.deepStrictEqual([summary.relinked, summary.investment.appended], [1, 1]);
 });
 
 test('a row the write skipped gets no entry', async (t) => {
