@@ -10,12 +10,10 @@ const { TRACK_WORK_TYPE_CODES } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
 const listsRepository = require('../repositories/lists');
 const { logger } = require('../utils/logger');
-const { parseDryRunArgs, runWhenMain } = require('./catalog-cli');
+const { runWhenMain } = require('./catalog-cli');
 
 const { normalizeName } = phaseCatalogs;
 const APPLIED_TO = 'appliedTo';
-
-const parseArgs = (argv) => parseDryRunArgs('works-catalog', argv);
 
 /** Track work type ids per catalog code; TRACK_WORK_TYPE_CODES is the one source. */
 function trackWorkTypeIds() {
@@ -80,6 +78,7 @@ function resolveAppliedTo(map, phaseCatalog) {
   const missing = [];
   const entries = (map[APPLIED_TO] || []).map(({ label, phase, acts = [] }) => {
     const catalogIds = {};
+    if (acts.length === 0) missing.push(`${APPLIED_TO} "${label}": no acts`);
     for (const year of acts) {
       const entry = phaseCatalogs.entryForName(phaseCatalog, year, phase);
       if (entry) catalogIds[year] = entry.catalogId;
@@ -87,7 +86,7 @@ function resolveAppliedTo(map, phaseCatalog) {
     }
     return { label, phase, acts, catalogIds };
   });
-  const claims = [...entries.map(entry => [entry.label, entry.label]),
+  const claims = [...entries.map((entry, index) => [entry.label, `${APPLIED_TO}[${index}]`]),
     ...((map.skip2018 || {})[APPLIED_TO] || []).map(label => [label, 'skip2018'])];
   return { entries, missing: [...missing, ...conflictsOf(APPLIED_TO, claims)] };
 }
@@ -153,6 +152,6 @@ async function run({ dryRun = false, deps = {} } = {}) {
   return summary;
 }
 
-module.exports = { parseArgs, resolveWorksCatalog, run };
+module.exports = { resolveWorksCatalog, run };
 
 runWhenMain(module, 'works-catalog', run);

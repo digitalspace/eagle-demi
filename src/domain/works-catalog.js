@@ -11,21 +11,22 @@ const LISTS = Object.freeze(['workTypes', 'milestoneTypes', 'outcomes', 'workSta
 const entriesOf = (catalog, list) => (catalog && Array.isArray(catalog[list]) ? catalog[list] : []);
 const labelsOf = (entry) => [entry.code, entry.name, ...(entry.aliases || [])];
 const sameLabel = (a, b) => normalizeName(a) === normalizeName(b);
+const isBlank = (label) => typeof label !== 'string' || !label.trim();
 
 /**
  * The entry whose code, name or alias is `label`. The `interruptionTypes` entry `other` has
  * `kind: null`: its kind comes from the sheet tab the row was read on.
  */
 function entryFor(catalog, list, label) {
-  if (typeof label !== 'string' || !label.trim()) return null;
+  if (isBlank(label)) return null;
   return entriesOf(catalog, list).find(entry => labelsOf(entry).some(one => sameLabel(one, label))) || null;
 }
 
 /** The phase catalog id an Applied-To label names under `actYear`, else null. */
 function appliedToPhaseOf(catalog, label, actYear) {
-  if (typeof label !== 'string') return null;
+  if (isBlank(label)) return null;
   const entry = entriesOf(catalog, 'appliedTo').find(one => sameLabel(one.label, label));
-  return (entry && entry.catalogIds[actYear]) || null;
+  return (entry && entry.catalogIds && entry.catalogIds[actYear]) || null;
 }
 
 /** True when `label` is one only 2018 Act records carry, so the sheet loader skips it. */

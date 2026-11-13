@@ -62,6 +62,8 @@ test('sheet labels resolve to the codes the loader stores', () => {
   assert.strictEqual(codeOf('workStates', 'transitioned'), 'transitioned');
   assert.strictEqual(catalog.appliedToPhaseOf(CATALOG, 'Decision', 1996), phaseIdOf('Referral'));
   assert.strictEqual(catalog.appliedToPhaseOf(CATALOG, 'Decision', 2018), null);
+  assert.strictEqual(catalog.appliedToPhaseOf({ appliedTo: [{ label: '', catalogIds: { 1996: 'p' } }] }, ' ', 1996), null);
+  assert.strictEqual(catalog.appliedToPhaseOf({ appliedTo: [{ label: 'Review' }] }, 'Review', 1996), null);
   assert.strictEqual(CATALOG.outcomes[0].eagleListId, 'decision-0');
   assert.strictEqual(catalog.entryFor(CATALOG, 'commentPeriodTypes', 'IPD PECP'), null);
   assert.strictEqual(catalog.entryFor(null, 'outcomes', 'Withdrawn'), null);
@@ -89,7 +91,8 @@ test('what does not resolve, or two owners claim, is reported', () => {
   const broken = {
     ...MAP,
     complexities: [...MAP.complexities, { code: 'typical-2', name: 'Typical' }, { code: 'simple', name: 'Easy' }],
-    appliedTo: [...MAP.appliedTo, { label: 'Early Engagement', phase: 'Scoping', acts: [2002] }],
+    appliedTo: [...MAP.appliedTo, { label: 'Early Engagement', phase: 'Scoping', acts: [2002] },
+      { label: 'Decision', phase: 'Application Review', acts: [1996, 2002] }, { label: 'Hearing', phase: 'Referral' }],
     skip2018: { ...MAP.skip2018, outcomes: ['Withdrawn'], phases: ['Review'] }
   };
   const rows = [...LIST_ROWS.filter(row => row.name !== 'Terminated'),
@@ -101,7 +104,9 @@ test('what does not resolve, or two owners claim, is reported', () => {
     'complexities "simple": duplicate code',
     'complexities "typical": held by typical, typical-2',
     'appliedTo "Early Engagement": 2002 phase "Scoping"',
-    'appliedTo "early engagement": held by Early Engagement, skip2018',
+    'appliedTo "Hearing": no acts',
+    'appliedTo "decision": held by appliedTo[2], appliedTo[4]',
+    'appliedTo "early engagement": held by appliedTo[3], skip2018',
     'skip2018 "phases": not a catalog list'
   ]);
 });
