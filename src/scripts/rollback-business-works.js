@@ -47,8 +47,8 @@ function liveDemi() {
     removeHistory: (projectId, field, entryId, expectedSha256) => history.removeHistory(projectId, field, entryId, expectedSha256),
     restoreHistory: (projectId, field, prior, expectedSha256) => history.restoreHistory(projectId, field, prior, expectedSha256),
     project: projectId => projects.getById(systemAccess(), projectId),
-    // Without `sources` the derive reads WORKS_READ_SOURCES, as the API does.
-    patchDerived: (projectId, sources) => projects.patchDerived(projectId, { inputsFor: sources ? row => loadWorks(row, { sources }) : deriveInputs })
+    readWorkIds: async (row, sources) => (await loadWorks(row, { sources })).worksForDerive.map(work => work.workId),
+    patchDerived: projectId => projects.patchDerived(projectId, { inputsFor: deriveInputs })
   };
 }
 

@@ -46,6 +46,11 @@ function rollbackDemi(demi = fakeDemi()) {
   return Object.assign(demi, {
     reads: 0,
     work: async (_projectId, id) => { demi.reads += 1; return demi.docs.get(id) || null; },
+    // A sheet read's work ids: the sheet works the override shows.
+    readWorkIds: async () => {
+      const all = [...demi.docs.values()].filter(doc => !doc.deleted);
+      return [...overrideShown(all.filter(isSheet), all.filter(doc => doc.source === 'track'), demi.docs.get(OVERRIDE_MARKER_ID)).shownSheetIds];
+    },
     saveWork: async (doc, options = {}) => (options.etag !== undefined && demi.docs.get(doc.id)?._etag !== options.etag ? { status: 'foreign' } : save(doc, options)),
     removeWork: async ({ id }, { etag }) => {
       if (demi.docs.get(id)?._etag !== etag) return { status: 'foreign' };

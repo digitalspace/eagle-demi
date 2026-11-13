@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const config = require('../../src/config');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const { overrideShown } = require('../../src/domain/works-derive');
@@ -156,6 +157,9 @@ test('a derive refuses while WORKS_READ is unset', async (t) => {
 test('stdout, stderr and logger output of revert, reapply and rederive contain no sourceKey or number', async (t) => {
   const said = [];
   for (const level of ['error', 'warn', 'info', 'debug']) t.mock.method(logger, level, (...args) => { said.push(JSON.stringify(args)); });
+  const { worksRead, worksReadSources } = config;
+  Object.assign(config, { worksRead: true, worksReadSources: ['track', 'sheet'] });
+  t.after(() => Object.assign(config, { worksRead, worksReadSources }));
   const { demi, batchId } = await loaded(t, staffed(), undefined, { signoff: 'so-staff' });
   demi.row = { ...demi.row, read: ['public'] };
   const sheetIds = [...demi.docs.values()].filter(isSheet).map(doc => doc.id);

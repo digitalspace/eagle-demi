@@ -41,26 +41,41 @@ function workIdsOf(body) {
   return new Set((Array.isArray(body.works) ? body.works : []).map(work => work && work.workId));
 }
 
+/** The response body as JSON; refused, naming only the project and status, when it is not an object. */
+async function bodyOf(res, projectId) {
+  const body = await res.json().catch(() => null);
+  return body && typeof body === 'object' ? body : refuse(`the probe of project ${projectId} answered ${res.status} with no JSON body`);
+}
+
 /**
- * The first batch project with a sheet work whose row `read` holds the public token, read anonymously (no
- * Authorization header); resolves `{projectId, shown}`, the batch's sheet work ids the response holds, or null.
+ * The first public batch project, tried in turn, with a batch sheet work a sheet read would show (a reverted marker
+ * shows none), read anonymously with no Authorization header; resolves `{projectId, shown}` (those works the response
+ * holds), or null.
  */
 async function probe({ demi, fetchFn, env }, entries) {
-  const base = API_BASE[env];
+  const base = API_BASE[env] || refuse(`no API base for ${env}`);
   for (const [projectId, ids] of sheetWorkIds(entries)) {
     const row = await demi.project(projectId);
     if (!row || !Array.isArray(row.read) || !row.read.includes('public')) continue;
-    const res = await fetchFn(`${base}/projects/${encodeURIComponent(projectId)}`, { headers: { Accept: 'application/json' } });
+    const readable = new Set(await demi.readWorkIds(row, FLIP_SOURCES));
+    const expected = ids.filter(id => readable.has(id));
+    if (!expected.length) continue;
+    const res = await fetchFn(`${base}/projects/${encodeURIComponent(projectId)}`, { headers: { Accept: 'application/json' }, redirect: 'error' });
     if (!res.ok) refuse(`the probe of project ${projectId} answered ${res.status}`);
-    const held = workIdsOf(await res.json());
-    return { projectId, shown: ids.filter(id => held.has(id)) };
+    const held = workIdsOf(await bodyOf(res, projectId));
+    return { projectId, shown: expected.filter(id => held.has(id)) };
   }
   return null;
 }
 
+/** The lock for `batchId`: taken fresh, or taken over once a run of this batch left it expired. */
+async function lockFor(batchId, now) {
+  return (await batches.readLock()) ? batches.takeOverLock(batchId, now, [batchId]) : batches.takeLock(batchId, now);
+}
+
 /**
- * Re-derives every project of a complete load batch. Without --unflip the probe must show a sheet work of the batch
- * and the derive reads Track and sheet; with it the probe must show none and the derive reads WORKS_READ_SOURCES.
+ * Re-derives every project of a complete load batch with WORKS_READ_SOURCES. Without --unflip sheet must be in it and
+ * the probe must show a batch sheet work; with --unflip sheet must not be and the probe must show none.
  */
 async function rederiveBatch(o, ctx) {
   const { demi, now, write } = ctx;
@@ -68,6 +83,7 @@ async function rederiveBatch(o, ctx) {
   const unflip = o.unflip === true;
   requireDeriveEnv();
   if (unflip && config.worksReadSources.includes('sheet')) refuse('--unflip needs WORKS_READ_SOURCES without sheet');
+  if (!unflip && !(config.worksRead && config.worksReadSources.includes('sheet'))) refuse('--rederive needs WORKS_READ=true and sheet in WORKS_READ_SOURCES');
   const batch = await batches.readBatch(batchId);
   if (!batch || batch.batchKind !== 'load' || batch.status !== 'complete') refuse('--rederive acts only on a complete load batch');
   const entries = await batches.listEntries(batchId);
@@ -79,11 +95,9 @@ async function rederiveBatch(o, ctx) {
   else write(`flipProbe=${seen.projectId}`);
 
   const projectIds = [...new Set(entries.map(entry => entry.target.projectId))];
-  const lease = await batches.takeLock(batchId, now());
+  const lease = await lockFor(batchId, now());
   try {
-    // Without --unflip the derive reads Track and sheet whatever WORKS_READ_SOURCES says.
-    const deriving = unflip ? demi : { ...demi, patchDerived: projectId => demi.patchDerived(projectId, FLIP_SOURCES) };
-    const { counts, ok } = await rederive(deriving, projectIds, lease, now);
+    const { counts, ok } = await rederive(demi, projectIds, lease, now);
     write(`batchId=${batchId}`);
     writeCounts(write, counts, projectIds.length);
     return ok ? 0 : 1;
