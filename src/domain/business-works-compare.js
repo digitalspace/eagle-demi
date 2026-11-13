@@ -4,11 +4,16 @@
 // row with the stored project. Pure; report entries name fields and ids, never a value.
 
 const { PUBLIC_ROLES } = require('../helpers/access-sql');
+const { EXTENSION_LIST_FIELDS } = require('../ownership/project');
+const { idOf } = require('./extensions');
 const { normalizeName } = require('./phase-catalog');
-const { dayOf, daysBetween, listOf } = require('./work-override');
+const { dayOf, listOf } = require('./work-model');
+const { gapWithin } = require('./work-override');
 
 const ITEM_DAYS = 1;
 const PERIOD_DAYS = 3;
+/** The Eagle item type of each interruption kind (eagle-admin extension.component.ts:54). */
+const EAGLE_TYPES = Object.freeze({ extension: 'Extension', suspension: 'Suspension' });
 // [reason, register field, stored project field, reader]; status, region and subsector name no stored field.
 const COMPARISONS = Object.freeze([
   ['expiryDiffers', 'expiryDate', 'eacExpires', dayOf],
@@ -16,29 +21,26 @@ const COMPARISONS = Object.freeze([
   ['ceaaDiffers', 'ceaa', 'CEAAInvolvement', (value) => (typeof value === 'string' && value.trim() ? normalizeName(value) : null)]
 ]);
 
-function within(a, b, limit) {
-  const [x, y] = [dayOf(a), dayOf(b)];
-  return Boolean(x && y) && Math.abs(daysBetween(x, y)) <= limit;
+const within = (a, b, limit) => gapWithin(a, b, limit) !== null;
+
+function onlyId(ids, reason, list) {
+  if (ids.length > 1) list(reason, { candidates: ids });
+  return ids.length === 1 ? ids[0] : null;
 }
 
-function onlyId(hits, reason, list) {
-  if (hits.length > 1) list(reason, { candidates: hits.map(hit => hit.id) });
-  return hits.length === 1 ? hits[0].id : null;
-}
-
-/** The one Eagle extension or suspension item of the same kind and dates within a day, else null. */
-function eagleItemIdFor(items, interruption, list) {
+/** `idOf` the one item on the row's extension lists of the same kind and dates within a day, else null. */
+function eagleItemIdFor(row, interruption, list) {
   const sameEnd = (end) => (dayOf(end) || interruption.endDate ? within(end, interruption.endDate, ITEM_DAYS) : true);
-  const hits = listOf(items && items.extensions).filter(item => (item.type === 'Extension') === (interruption.kind === 'extension') &&
-    within(item.start, interruption.startDate, ITEM_DAYS) && sameEnd(item.end));
-  return onlyId(hits, 'eagleItemAmbiguous', list);
+  const hits = EXTENSION_LIST_FIELDS.flatMap(field => listOf(row && row[field])).filter(item => item && typeof item === 'object' &&
+    item.type === EAGLE_TYPES[interruption.kind] && within(item.start, interruption.startDate, ITEM_DAYS) && sameEnd(item.end));
+  return onlyId(hits.map(idOf), 'eagleItemAmbiguous', list);
 }
 
 /** The one public Eagle comment period starting within three days of `start`, else null. */
 function commentPeriodIdFor(items, start, list) {
   const hits = listOf(items && items.commentPeriods).filter(period =>
     listOf(period.read).some(role => PUBLIC_ROLES.includes(role)) && within(period.dateStarted, start, PERIOD_DAYS));
-  return onlyId(hits, 'commentPeriodAmbiguous', list);
+  return onlyId(hits.map(hit => hit.id), 'commentPeriodAmbiguous', list);
 }
 
 /** Lists each field where the register row and the stored project disagree; never changes a work. */

@@ -30,6 +30,7 @@ const POST_DECISION_PHASE = Object.freeze({
   'substantial-start': 'Post Decision - Substantial Start'
 });
 const OUTCOME_STATES = Object.freeze({ withdrawn: 'withdrawn', terminated: 'terminated' });
+const OPEN_STATES = Object.freeze(['in-progress', 'suspended']);
 
 const oneLine = (text) => (typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '');
 const keyOf = (text) => normalizeName(oneLine(text));
@@ -123,27 +124,29 @@ function cutPhases(phases, day, lastDay) {
     phase.milestones = phase.milestones.filter(one => !isLater(dayOf(one.actualDate), lastDay));
     if (isLater(dayOf(phase.endDate), lastDay)) Object.assign(phase, { endDate: null, isCompleted: false });
   }
-  return { kept, later, dropped: [...dropped, ...later.flatMap(phase => phase.milestones)] };
+  return { kept, later, dropped };
 }
 
-/** Ends the last kept phase on `day` with an `act-transition` END milestone; later records are listed. */
+const milestonesOf = (phases) => phases.flatMap(phase => phase.milestones);
+
+/** Cuts `phases` on `day` and ends the last kept one there with an `act-transition` END; lists kept milestones after `day`. */
 function endOnTransition(ctx, phases, day, list) {
-  const { kept, dropped } = cutPhases(phases, day, day);
+  const { kept, later, dropped } = cutPhases(phases, day, day);
   dropped.forEach(one => list('afterTransition', { milestone: one.code }));
   const last = kept.at(-1);
   if (last) {
+    const held = milestonesOf(kept).filter(one => one.code === 'act-transition').length;
     Object.assign(last, { endDate: day, isCompleted: true });
-    last.milestones.push(milestoneOf(ctx, 'act-transition', 'END', { day }));
+    last.milestones.push(milestoneOf(ctx, 'act-transition', 'END', { day }, { n: held ? held + 1 : undefined }));
   }
-  return kept;
+  return { kept, later };
 }
 
-function baseWork(ctx, { projectId, number, kind, slot, code, actYear, actBasis, title, ref }) {
-  const type = entryFor(ctx.catalog, 'workTypes', code);
+function baseWork(ctx, { projectId, number, kind, slot, type, actYear, actBasis, title, ref }) {
   return {
     id: newWorkId('sheet'), projectId, source: 'sheet', owner: 'sheet', sourceKey: sourceKeyOf(number, kind, slot),
     sourceRef: { sheet: refOf(ref) }, provenance: { batchId: ctx.batchId }, schemaVersion: WORK_SCHEMA_VERSION,
-    workTypeCode: code, workType: type ? type.name : code, actYear, actBasis, eaAct: LEGISLATIONS[actYear].label, title,
+    workTypeCode: type.code, workType: type.name, actYear, actBasis, eaAct: LEGISLATIONS[actYear].label, title,
     startDate: null, decisionDate: null, isActive: true, workState: 'in-progress', outcomeCode: null, outcome: null
   };
 }
@@ -151,28 +154,28 @@ function baseWork(ctx, { projectId, number, kind, slot, code, actYear, actBasis,
 /** One part per Act the row spans: two when it moved to the 2002 Act on its in-force day, else one. */
 function partsOf(ctx, row, act, list) {
   const capped = cutPhases(assessmentPhases(ctx, row, act.actYear), TRACK_FROM, LAST_SHEET_DAY);
-  capped.dropped.forEach(one => list('afterTrackFrom', { milestone: one.code }));
+  [...capped.dropped, ...milestonesOf(capped.later)].forEach(one => list('afterTrackFrom', { milestone: one.code }));
   const intake = datedOf(row, 'intakeDate');
   const intakeBefore = intake.unknown || (intake.day && intake.day < SPLIT_DAY);
   const splitRule = act.actYear === 1996 && intakeBefore && keyOf(row.determinationType) === 'pre 2002 act' &&
     row.determinationDate === SPLIT_DAY;
   const pac = certificateKindOf(ctx.catalog, row.decision) === 'PAC';
-  if (splitRule && pac) list('pac-1996');
-  if (!splitRule || pac) {
-    const decided = datedOf(row, 'decisionDate');
-    if (act.actYear === 1996 && intakeBefore && !decided.unknown && !(decided.day && decided.day < SPLIT_DAY)) {
-      list('open-across-2002');
-      if (row.timeline2002) list('sheet-2002-on-1996-work');
-    }
-    return [{ ...act, phases: capped.kept, start: intake }];
+  if (splitRule && !pac) {
+    const { kept, later } = endOnTransition(ctx, capped.kept, SPLIT_DAY, list);
+    later.forEach(phase => Object.assign(phase, { catalogId: phaseOf(ctx, 2002, phase.name).catalogId }));
+    if (later[0]) later[0].milestones.unshift(milestoneOf(ctx, 'act-transition', 'START', { day: SPLIT_DAY }, { n: 1 }));
+    return [
+      { ...act, phases: kept, start: intake, out: { toActYear: 2002, date: SPLIT_DAY, dateSource: 'sheet' } },
+      { actYear: 2002, actBasis: 'transition', phases: later, start: { day: SPLIT_DAY }, in: { fromActYear: 1996, date: SPLIT_DAY } }
+    ];
   }
-  const { kept, later } = cutPhases(capped.kept, SPLIT_DAY, SPLIT_DAY);
-  later.forEach(phase => Object.assign(phase, { catalogId: phaseOf(ctx, 2002, phase.name).catalogId }));
-  if (later[0]) later[0].milestones.unshift(milestoneOf(ctx, 'act-transition', 'START', { day: SPLIT_DAY }));
-  return [
-    { ...act, phases: endOnTransition(ctx, kept, SPLIT_DAY, list), start: intake, out: { toActYear: 2002, date: SPLIT_DAY, dateSource: 'sheet' } },
-    { actYear: 2002, actBasis: 'transition', phases: later, start: { day: SPLIT_DAY }, in: { fromActYear: 1996, date: SPLIT_DAY } }
-  ];
+  const decided = datedOf(row, 'decisionDate');
+  if (splitRule) list('pac-1996');
+  else if (act.actYear === 1996 && intakeBefore && !decided.unknown && !(decided.day && decided.day < SPLIT_DAY)) {
+    list('open-across-2002');
+    if (row.timeline2002) list('sheet-2002-on-1996-work');
+  }
+  return [{ ...act, phases: capped.kept, start: intake }];
 }
 
 /** Applies a 2002-to-2018 Transition Order to the 2002 part; a dated order before 2025 cuts it. */
@@ -181,7 +184,9 @@ function applyTransition(ctx, part, transition, list) {
   if (!day) {
     part.out = { toActYear: 2018, date: null, dateSource: 'none' };
   } else if (day < TRACK_FROM) {
-    part.phases = endOnTransition(ctx, part.phases, day, list);
+    const { kept, later } = endOnTransition(ctx, part.phases, day, list);
+    milestonesOf(later).forEach(one => list('afterTransition', { milestone: one.code }));
+    part.phases = kept;
     part.out = { toActYear: 2018, date: day, dateSource: 'sheet' };
   } else {
     part.out = { toActYear: 2018, date: day, dateSource: 'track' };
@@ -189,6 +194,11 @@ function applyTransition(ctx, part, transition, list) {
 }
 
 function assessmentWorks(ctx, row, base, act, list) {
+  const type = entryFor(ctx.catalog, 'workTypes', 'assessment');
+  if (!type) {
+    list('unknownWorkType', { code: 'assessment' });
+    return [];
+  }
   const parts = partsOf(ctx, row, act, list);
   const transition = ctx.transitions.get(row.id);
   const to2018 = parts.find(part => part.actYear === 2002);
@@ -197,14 +207,14 @@ function assessmentWorks(ctx, row, base, act, list) {
   const decision = decisionOf(ctx, row.decision);
   if (decision.unknown) list('unknownDecision', { field: 'decision' });
   return parts.map((part, i) => {
-    const work = baseWork(ctx, { ...base, ...part, kind: 'register', slot: `assessment-${part.actYear}`, code: 'assessment' });
+    const work = baseWork(ctx, { ...base, ...part, kind: 'register', slot: `assessment-${part.actYear}`, type });
     setDay(work, 'startDate', part.start);
     const holds = part.phases.some(phase => phase.milestones.some(one => one.code === 'decision'));
     const undecided = !row.decisionDate && i === parts.length - 1 && !part.out;
     if (holds || undecided) {
       if (holds) setDay(work, 'decisionDate', datedOf(row, 'decisionDate'));
       const { unknown: _unknown, ...fields } = decision;
-      Object.assign(work, fields, { isActive: !holds && !fields.workState });
+      Object.assign(work, fields, { isActive: !holds && (!fields.workState || OPEN_STATES.includes(fields.workState)) });
       if (holds && !fields.workState) work.workState = 'completed';
     }
     if (part.out) Object.assign(work, { transitionOut: part.out, workState: 'transitioned', isActive: false });
@@ -226,16 +236,20 @@ function postDecisionWork(ctx, project, spec, list) {
   const certificate = certificateFor(project.certificates, startDay);
   if (!certificate) return list('no-certificate');
   if (certificate.actYear === 2018) return list('onCertificate2018');
+  const type = entryFor(ctx.catalog, 'workTypes', spec.code);
+  if (!type) return list('unknownWorkType', { code: spec.code });
   const work = baseWork(ctx, {
-    ...project.base, ...spec, actYear: certificate.actYear, actBasis: 'certificate',
-    title: `${project.base.title} - ${entryFor(ctx.catalog, 'workTypes', spec.code).name}${spec.kind === 'register' ? '' : ` ${spec.slot}`}`
+    ...project.base, ...spec, type, actYear: certificate.actYear, actBasis: 'certificate',
+    title: `${project.base.title} - ${type.name}${spec.kind === 'register' ? '' : ` ${spec.slot}`}`
   });
   const phase = { ...phaseOf(ctx, certificate.actYear, POST_DECISION_PHASE[spec.code]), startDate: startDay || null };
   Object.assign(phase, { endDate: spec.decisionDay || null, isCompleted: Boolean(spec.decisionDay) });
-  const state = spec.status ? entryFor(ctx.catalog, 'workStates', spec.status) : null;
+  const state = oneLine(spec.status) ? entryFor(ctx.catalog, 'workStates', spec.status) : null;
+  if (oneLine(spec.status) && !state) list('unknownAmendmentStatus', { field: 'status' });
+  const workState = state ? state.code : spec.decisionDay ? 'completed' : 'in-progress';
   Object.assign(work, {
-    startDate: startDay || null, decisionDate: spec.decisionDay || null, isActive: !spec.decisionDay,
-    workState: state ? state.code : spec.decisionDay ? 'completed' : 'in-progress', phases: [phase], ...spec.extra
+    startDate: startDay || null, decisionDate: spec.decisionDay || null, isActive: OPEN_STATES.includes(workState),
+    workState, phases: [phase], ...spec.extra
   });
   return project.works.push(work);
 }
@@ -257,6 +271,5 @@ function registerPostDecision(ctx, project, row, list) {
 
 module.exports = {
   LAST_SHEET_DAY, UNKNOWN_DAY, UNKNOWN_FIELDS,
-  actOf, assessmentWorks, certificateFor, datedOf, isLater, keyOf, milestoneOf, oneLine, phaseOf, postDecisionWork,
-  refOf, registerPostDecision
+  actOf, assessmentWorks, datedOf, isLater, keyOf, milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
 };

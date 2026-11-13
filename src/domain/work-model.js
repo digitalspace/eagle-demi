@@ -271,7 +271,7 @@ module.exports = {
   TRACK_FROM,
   TRACK_RETIRED_WORK_TYPES,
   TRACK_WORK_TYPE_CODES: override.TRACK_WORK_TYPE_CODES,
-  checkSize, childIdOf, dayOf, inEffect, newWorkId, sourceKeyOf, summaryOf, transitionDateOf, transitionOf, validateWork,
+  checkSize, childIdOf, dayOf, daysBetween, inEffect, listOf, newWorkId, sourceKeyOf, summaryOf, transitionDateOf, transitionOf, validateWork,
   workRangeOf,
   compareText: override.compareText,
   workTypeCodeOf: override.workTypeCodeOf,
