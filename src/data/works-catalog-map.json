@@ -1,5 +1,5 @@
 {
-  "about": "Works catalog. Each list holds {code, name, aliases, acts}; aliases are the business sheet labels. Work type Track ids come from TRACK_WORK_TYPE_CODES (src/domain/work-model.js), work state trackIds are Track's work_state values. `eagle` names the Eagle List row an entry resolves to, under `eagleLists`. `skip2018` holds sheet labels that only 2018 Act records carry. `build-works-catalog.js` resolves this map for one environment.",
+  "about": "Works catalog. Each list holds {code, name, aliases, acts}; aliases are the business sheet labels. Work type Track ids come from TRACK_WORK_TYPE_CODES (src/domain/work-model.js), work state trackIds are Track's work_state values. `eagle` names the Eagle List row an entry resolves to, under `eagleLists`. `appliedTo` maps a sheet Applied-To label to a phase catalog name per Act. `skip2018` holds sheet labels that only 2018 Act records carry. `build-works-catalog.js` resolves this map for one environment.",
   "eagleLists": {
     "outcomes": { "type": "eaDecisions", "legislation": 2002 }
   },
@@ -62,8 +62,6 @@
   "interruptionTypes": [
     { "code": "suspension-s24-2", "name": "Suspension s.24(2)", "kind": "suspension", "legalSection": "s.24(2)",
       "acts": [1996, 2002] },
-    { "code": "suspension-s24-3", "name": "Suspension s.24(3)", "kind": "suspension", "legalSection": "s.24(3)",
-      "acts": [1996, 2002] },
     { "code": "suspension-s30-1", "name": "Suspension s.30(1)", "kind": "suspension", "legalSection": "s.30(1)",
       "acts": [1996, 2002] },
     { "code": "extension-s24-4", "name": "Extension s.24(4)", "kind": "extension", "legalSection": "s.24(4)",
@@ -99,7 +97,13 @@
     { "code": "s7", "name": "s.7", "acts": [2002] },
     { "code": "neb-panel", "name": "NEB Panel", "acts": [] },
     { "code": "act-2018", "name": "2018 Act", "acts": [2018] },
+    { "code": "transition-order", "name": "Transition Order (2018)", "acts": [2018] },
     { "code": "other", "name": "Other", "acts": [] }
+  ],
+  "appliedTo": [
+    { "label": "Review", "phase": "Application Review", "acts": [1996, 2002] },
+    { "label": "Evaluation", "phase": "Evaluation", "acts": [1996, 2002] },
+    { "label": "Decision", "phase": "Referral", "acts": [1996, 2002] }
   ],
   "skip2018": {
     "commentPeriodTypes": ["IPD PECP", "Process Order PECP", "Application PECP", "Draft Report PECP", "Other PECP"],
