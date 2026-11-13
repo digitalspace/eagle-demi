@@ -1,0 +1,112 @@
+{
+  "about": "Works catalog. Each list holds {code, name, aliases, acts}; aliases are the business sheet labels. Work type Track ids come from TRACK_WORK_TYPE_CODES (src/domain/work-model.js), work state trackIds are Track's work_state values. `eagle` names the Eagle List row an entry resolves to, under `eagleLists`. `appliedTo` maps a sheet Applied-To label to a phase catalog name per Act. `skip2018` holds sheet labels that only 2018 Act records carry. `build-works-catalog.js` resolves this map for one environment.",
+  "eagleLists": {
+    "outcomes": { "type": "eaDecisions", "legislation": 2002 }
+  },
+  "workTypes": [
+    { "code": "assessment", "name": "Assessment", "acts": [1996, 2002, 2018] },
+    { "code": "amendment", "name": "Amendment", "acts": [1996, 2002, 2018] },
+    { "code": "eac-extension", "name": "EAC Extension", "acts": [1996, 2002, 2018] },
+    { "code": "substantial-start", "name": "Substantial Start", "acts": [1996, 2002, 2018] },
+    { "code": "project-notification", "name": "Project Notification", "acts": [2018] },
+    { "code": "minister-designation", "name": "Minister's Designation", "acts": [2018] },
+    { "code": "ceao-designation", "name": "CEAO's Designation", "acts": [2018] },
+    { "code": "exemption-order", "name": "Exemption Order", "acts": [2018] },
+    { "code": "transfer", "name": "Transfer", "acts": [2018] },
+    { "code": "material-alteration", "name": "Material Alteration", "acts": [2018] }
+  ],
+  "milestoneTypes": [
+    { "code": "intake", "name": "Intake", "acts": [1996, 2002] },
+    { "code": "determination", "name": "Determination", "aliases": ["s.10 Determination"], "acts": [1996, 2002] },
+    { "code": "s11-order", "name": "Section 11 Order", "aliases": ["s.11/14 Order"], "acts": [1996, 2002] },
+    { "code": "draft-air", "name": "Draft AIR", "acts": [1996, 2002] },
+    { "code": "air-accepted", "name": "AIR Accepted", "acts": [1996, 2002] },
+    { "code": "evaluation-start", "name": "Evaluation Start", "aliases": ["Start (30)"], "acts": [1996, 2002] },
+    { "code": "review-start", "name": "Application Review Start", "aliases": ["Start (180)"], "acts": [1996, 2002] },
+    { "code": "referral-start", "name": "Referral Start", "aliases": ["Start (45)"], "acts": [1996, 2002] },
+    { "code": "decision", "name": "Decision", "acts": [1996, 2002] },
+    { "code": "order-variation", "name": "Order Variation", "aliases": ["Section 13/15"], "acts": [1996, 2002] },
+    { "code": "comment-period", "name": "Public Comment Period", "aliases": ["PCP"], "acts": [1996, 2002] },
+    { "code": "act-transition", "name": "Act Transition", "aliases": ["Transition Order (2018)"], "acts": [1996, 2002] }
+  ],
+  "outcomes": [
+    { "code": "certificate-issued", "name": "Certificate Issued", "eagle": "Certificate Issued",
+      "aliases": ["EA Certificate Granted", "PA Certificate Granted"],
+      "certificateKinds": { "EA Certificate Granted": "EAC", "PA Certificate Granted": "PAC" }, "acts": [1996, 2002] },
+    { "code": "certificate-refused", "name": "Certificate Refused", "eagle": "Certificate Refused",
+      "aliases": ["EA Certificate Refused"], "acts": [1996, 2002] },
+    { "code": "certificate-not-required", "name": "Certificate Not Required", "eagle": "Certificate Not Required",
+      "aliases": ["EAC Not Required"], "acts": [1996, 2002] },
+    { "code": "certificate-expired", "name": "Certificate Expired", "eagle": "Certificate Expired",
+      "aliases": ["EA Certificate Expired"], "acts": [1996, 2002] },
+    { "code": "further-assessment-required", "name": "Further Assessment Required",
+      "eagle": "Further Assessment Required", "aliases": ["Further Assessment"], "acts": [1996, 2002] },
+    { "code": "not-designated-reviewable", "name": "Not Designated Reviewable", "eagle": "Not Designated Reviewable",
+      "acts": [1996, 2002] },
+    { "code": "terminated", "name": "Terminated", "eagle": "Terminated", "acts": [1996, 2002] },
+    { "code": "withdrawn", "name": "Withdrawn", "eagle": "Withdrawn", "acts": [1996, 2002] }
+  ],
+  "workStates": [
+    { "code": "in-progress", "name": "In Progress", "aliases": ["Active"], "trackIds": ["IN_PROGRESS"],
+      "acts": [1996, 2002, 2018] },
+    { "code": "completed", "name": "Completed", "aliases": ["Complete"], "trackIds": ["COMPLETED"],
+      "acts": [1996, 2002, 2018] },
+    { "code": "suspended", "name": "Suspended", "aliases": ["On Hold"], "trackIds": ["SUSPENDED"],
+      "acts": [1996, 2002, 2018] },
+    { "code": "withdrawn", "name": "Withdrawn", "trackIds": ["WITHDRAWN"], "acts": [1996, 2002, 2018] },
+    { "code": "terminated", "name": "Terminated", "trackIds": ["TERMINATED"], "acts": [1996, 2002, 2018] },
+    { "code": "closed", "name": "Closed", "trackIds": ["CLOSED"], "acts": [2018] },
+    { "code": "inactive", "name": "Inactive", "aliases": ["Incomplete/Inactive"], "acts": [1996, 2002] },
+    { "code": "transitioned", "name": "Transitioned", "acts": [1996, 2002] }
+  ],
+  "interruptionTypes": [
+    { "code": "suspension-s24-2", "name": "Suspension s.24(2)", "kind": "suspension", "legalSection": "s.24(2)",
+      "acts": [1996, 2002] },
+    { "code": "suspension-s30-1", "name": "Suspension s.30(1)", "kind": "suspension", "legalSection": "s.30(1)",
+      "acts": [1996, 2002] },
+    { "code": "extension-s24-4", "name": "Extension s.24(4)", "kind": "extension", "legalSection": "s.24(4)",
+      "acts": [1996, 2002] },
+    { "code": "extension-s38-1", "name": "Extension s.38(1)", "kind": "extension", "legalSection": "s.38(1)",
+      "acts": [1996, 2002] },
+    { "code": "other", "name": "Other", "kind": null, "legalSection": null, "acts": [1996, 2002] }
+  ],
+  "commentPeriodTypes": [
+    { "code": "project-description-pcp", "name": "Project Description PCP", "aliases": ["Project Desc. PCP"],
+      "acts": [1996, 2002] },
+    { "code": "draft-air-pcp", "name": "Draft AIR PCP", "acts": [1996, 2002] },
+    { "code": "air-pcp", "name": "AIR PCP", "acts": [1996, 2002] },
+    { "code": "vc-selection-pcp", "name": "VC Selection PCP", "acts": [1996, 2002] },
+    { "code": "application-pcp", "name": "Application PCP", "acts": [1996, 2002] },
+    { "code": "draft-report-pcp", "name": "Draft Report PCP", "acts": [1996, 2002] },
+    { "code": "joint-pcp", "name": "Joint EAO/CEAA PCP", "acts": [1996, 2002] },
+    { "code": "amendment-pcp", "name": "Amendment PCP", "acts": [1996, 2002] },
+    { "code": "other-pcp", "name": "Other PCP", "acts": [1996, 2002] }
+  ],
+  "complexities": [
+    { "code": "pre-2014", "name": "Pre-2014", "acts": [1996, 2002] },
+    { "code": "simple", "name": "Simple", "acts": [1996, 2002] },
+    { "code": "typical", "name": "Typical", "acts": [1996, 2002] },
+    { "code": "complex", "name": "Complex", "acts": [1996, 2002] }
+  ],
+  "intakeTypes": [
+    { "code": "pre-eao", "name": "Pre-EAO", "acts": [1996] },
+    { "code": "standard", "name": "Standard", "acts": [] },
+    { "code": "s6-s11", "name": "s.6/s.11", "acts": [2002] },
+    { "code": "s7-s12", "name": "s.7/s.12", "acts": [2002] },
+    { "code": "s6", "name": "s.6", "acts": [2002] },
+    { "code": "s7", "name": "s.7", "acts": [2002] },
+    { "code": "neb-panel", "name": "NEB Panel", "acts": [] },
+    { "code": "act-2018", "name": "2018 Act", "acts": [2018] },
+    { "code": "transition-order", "name": "Transition Order (2018)", "acts": [2018] },
+    { "code": "other", "name": "Other", "acts": [] }
+  ],
+  "appliedTo": [
+    { "label": "Review", "phase": "Application Review", "acts": [1996, 2002] },
+    { "label": "Evaluation", "phase": "Evaluation", "acts": [1996, 2002] },
+    { "label": "Decision", "phase": "Referral", "acts": [1996, 2002] }
+  ],
+  "skip2018": {
+    "commentPeriodTypes": ["IPD PECP", "Process Order PECP", "Application PECP", "Draft Report PECP", "Other PECP"],
+    "appliedTo": ["Early Engagement"]
+  }
+}

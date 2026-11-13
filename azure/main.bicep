@@ -268,6 +268,9 @@ param worksWrite bool = false
 @description('Compose project works from the `works` container instead of the project row. Off until the parity check passes.')
 param worksRead bool = false
 
+@description('Sources whose works a read keeps: a comma list of track, sheet and demi. Any other token stops the app.')
+param worksReadSources string = 'track'
+
 @description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
 param assessmentPass bool = false
 
@@ -774,6 +777,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trackWorksSync: trackWorksSync
     worksWrite: worksWrite
     worksRead: worksRead
+    worksReadSources: worksReadSources
     assessmentPass: assessmentPass
     trackClientSecretUri: trackClientSecretUri
     roleSyncClientId: roleSyncClientId

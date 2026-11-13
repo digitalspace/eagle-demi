@@ -1,7 +1,7 @@
 'use strict';
 
 // `List` and `Organization` rows, partitioned by `/kind`, get role ACL and no project scope.
-// `PhaseCatalog` items here carry no `read[]`, so no caller-facing read returns them.
+// `PhaseCatalog` and `WorksCatalog` items here carry no `read[]`, so no caller-facing read returns them.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
@@ -16,7 +16,9 @@ const PARTITION_FIELD = 'kind';
 /** Null is load-bearing, not a placeholder — see the header. */
 const SCOPE_FIELD = null;
 
-const KINDS = Object.freeze({ LIST: 'List', ORGANIZATION: 'Organization', PHASE_CATALOG: 'PhaseCatalog' });
+const KINDS = Object.freeze({
+  LIST: 'List', ORGANIZATION: 'Organization', PHASE_CATALOG: 'PhaseCatalog', WORKS_CATALOG: 'WorksCatalog'
+});
 
 // Per kind: an ORDER BY on a field a kind's rows lack drops every row. Each key must be an
 // included path in the `lists` indexing policy (azure/modules/cosmos-nosql.bicep).
@@ -49,6 +51,13 @@ const catalogItemId = (year) => `phase-catalog-${year}`;
 /** One Act's phase catalog item, or null; server-side only, so no access check. */
 async function readCatalog(year) {
   return cosmos.readItem(CONTAINER, catalogItemId(year), KINDS.PHASE_CATALOG);
+}
+
+const WORKS_CATALOG_ID = 'works-catalog';
+
+/** The works catalog item, or null; server-side only, so no access check. */
+async function readWorksCatalog() {
+  return cosmos.readItem(CONTAINER, WORKS_CATALOG_ID, KINDS.WORKS_CATALOG);
 }
 
 /**
@@ -187,6 +196,8 @@ module.exports = {
   readForWriteByEagleId,
   catalogItemId,
   readCatalog,
+  WORKS_CATALOG_ID,
+  readWorksCatalog,
   listByIds,
   listOrganizationLabels,
   listByKind,
