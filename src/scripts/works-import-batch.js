@@ -69,6 +69,11 @@ async function createBatch(batchId, fields, now = Date.now()) {
 async function completeBatch(batch, lease, now = Date.now()) {
   await cosmos.replace(CONTAINER, batch.item.id, KINDS.BATCH,
     { ...batch.item, status: 'complete', completedAt: new Date(now).toISOString() }, batch.etag);
+  await releaseLock(lease);
+}
+
+/** Deletes the lock under the lease's etag; a run that stops before its first write leaves no lock behind. */
+async function releaseLock(lease) {
   await cosmos.remove(CONTAINER, LOCK_ID, KINDS.LOCK, { etag: lease.etag });
 }
 
@@ -108,5 +113,5 @@ function writeSealed(dir, plaintext, { purpose, env, recipient, signingKey }) {
 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
-  takeLock, beforeWrite, createBatch, completeBatch, writeAhead, writeSealed
+  takeLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead, writeSealed
 };

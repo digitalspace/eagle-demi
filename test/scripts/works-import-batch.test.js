@@ -8,48 +8,14 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cosmos = require('../../src/db/cosmos-nosql');
 const batches = require('../../src/scripts/works-import-batch');
 const { fingerprintOf, openEnvelope, verify } = require('../../src/utils/import-envelope');
+const { fakeLists } = require('./works-import-fakes');
 
 const { KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY } = batches;
 const T0 = Date.parse('2026-11-13T18:00:00Z');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'works-import-batch-'));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
-
-const coded = (code, message) => Object.assign(new Error(message), { code });
-
-/** An in-memory `lists` container: etags change on every write, and create, replace and remove honour them as Cosmos does. */
-function fakeLists(t) {
-  const items = new Map();
-  let n = 0;
-  const keyOf = (id, kind) => `${kind}|${id}`;
-  const put = (item) => {
-    const stored = { ...item, _etag: `"e${n += 1}"` };
-    items.set(keyOf(item.id, item.kind), stored);
-    return stored;
-  };
-  t.mock.method(cosmos, 'readItem', async (_c, id, kind) => items.get(keyOf(id, kind)) || null);
-  t.mock.method(cosmos, 'create', async (_c, item) => {
-    if (items.has(keyOf(item.id, item.kind))) throw coded(409, 'conflict');
-    return put(item);
-  });
-  t.mock.method(cosmos, 'replace', async (_c, id, kind, item, etag) => {
-    const current = items.get(keyOf(id, kind));
-    if (!current) throw coded(404, 'missing');
-    if (current._etag !== etag) throw coded(412, 'precondition');
-    return put(item);
-  });
-  t.mock.method(cosmos, 'remove', async (_c, id, kind, { etag }) => {
-    const current = items.get(keyOf(id, kind));
-    if (current && current._etag !== etag) throw coded(412, 'precondition');
-    return items.delete(keyOf(id, kind));
-  });
-  t.mock.method(cosmos, 'query', async (_c, spec, { partitionKey }) => ({
-    items: [...items.values()].filter(item => item.kind === partitionKey && item.status === spec.parameters[0].value).map(item => item.id)
-  }));
-  return { get: (id, kind) => items.get(keyOf(id, kind)), all: () => [...items.values()], set: put };
-}
 
 async function started(t, batchId = 'b1') {
   const store = fakeLists(t);
