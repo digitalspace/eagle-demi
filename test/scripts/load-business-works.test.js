@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { run, liveDemi } = require('../../src/scripts/load-business-works');
+const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { KINDS } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const projects = require('../../src/repositories/projects');
@@ -16,7 +17,7 @@ const { deriveInputs } = require('../../src/domain/works-derive');
 const { devboxKeysFromPem, fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
 const { COLUMNS } = require('../../src/scripts/works-crosswalk');
 const { logger } = require('../../src/utils/logger');
-const { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork } = require('./works-import-fakes');
+const { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork } = require('../helpers/works-import-fakes');
 
 const ENV = 'test';
 const T0 = Date.parse('2026-11-13T18:00:00Z');
@@ -40,7 +41,7 @@ const TRACK = [trackWork(43, { startDate: '2023-03-01', decisionDate: '2023-11-0
 /** A fake DEMI: works keyed by id with etags from each save, one project row, and every derive call. */
 function fakeDemi() {
   const docs = new Map(TRACK.map(doc => [doc.id, { ...doc, _etag: '"t"' }]));
-  const state = { saves: 0, derived: [], docs };
+  const state = { saves: 0, derived: [], docs, projectFields: [] };
   let n = 0;
   const saveWork = async (doc) => {
     const stored = { ...doc, _etag: `"w${n += 1}"` };
@@ -53,12 +54,13 @@ function fakeDemi() {
     phaseCatalog: async () => PHASES,
     works: async () => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID),
     marker: async () => docs.get(OVERRIDE_MARKER_ID) || null,
-    project: async id => (id === PROJECT ? { id: PROJECT, externalIds: [] } : null),
+    project: async id => (id === PROJECT ? { id: PROJECT, externalIds: [], reviewExtensions: [], reviewSuspensions: [] } : null),
+    commentPeriods: async () => [],
     trackPublic: async () => [],
     saveWork,
     tombstone: async doc => saveWork({ ...doc, deleted: true }),
-    addExternalId: async () => ({ status: 'set' }),
-    appendHistory: async () => ({ status: 'appended' }),
+    addExternalId: async () => { state.projectFields.push('externalIds'); return { status: 'set', etag: '"p"' }; },
+    appendHistory: async (_id, field) => { state.projectFields.push(field); return { status: 'appended', etag: '"p"' }; },
     patchDerived: async (id) => { state.derived.push(id); return { status: 'patched' }; }
   });
 }
@@ -67,11 +69,12 @@ const toDevbox = (text, purpose, extra = {}) => sealEnvelope(Buffer.from(text), 
 const cell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
 /** Sealed extract and signed crosswalk on disk, and the argv of a dry run over them. */
-function inputs({ records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07')] }, crosswalkRows } = {}) {
+const NO_SIGNOFF = { staffIncluded: false, numbersReal: false, signoffRefs: { keepStaff: null, keepNumbers: null } };
+
+function inputs({ records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07')] }, crosswalkRows, flags = NO_SIGNOFF } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, 'in-'));
   const outDir = fs.mkdtempSync(path.join(tmp, 'out-'));
-  const signoffRefs = { keepStaff: null, keepNumbers: null };
-  const extractText = JSON.stringify({ schemaVersion: 1, env: ENV, staffIncluded: false, numbersReal: false, signoffRefs, records });
+  const extractText = JSON.stringify({ schemaVersion: 1, env: ENV, ...flags, records });
   const extractSha256 = sha256Hex(Buffer.from(extractText));
   const manualSha256 = sha256Hex(Buffer.from('manual'));
   const rows = crosswalkRows || [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }];
@@ -81,7 +84,7 @@ function inputs({ records = { projects: [register], amendments: [amendment(1, '2
   const signature = sign(keys.ed25519, { purpose: 'crosswalk', env: ENV, sha256: crosswalkSha256 });
   const file = (name, data) => { fs.writeFileSync(path.join(dir, name), data); return path.join(dir, name); };
   const argv = [
-    '--extract', file('extract.sealed.json', toDevbox(extractText, 'extract', { staffIncluded: false, numbersReal: false, signoffRefs })),
+    '--extract', file('extract.sealed.json', toDevbox(extractText, 'extract', flags)),
     '--expect-sha256', extractSha256,
     '--crosswalk', file('crosswalk.sealed.json', toDevbox(csv, 'crosswalk', { signature })),
     '--expect-crosswalk-sha256', crosswalkSha256, '--expect-manual-sha256', manualSha256,
@@ -227,4 +230,41 @@ test('patchDerived uses WORKS_READ_SOURCES through deriveInputs', async (t) => {
   t.mock.method(projects, 'patchDerived', async (_id, options) => { inputsFor = options.inputsFor; return { status: 'unchanged' }; });
   await liveDemi().patchDerived(PROJECT);
   assert.equal(inputsFor, deriveInputs);
+});
+
+test('truncated extract changes planSha256', async () => {
+  const full = inputs({ records: { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07'), amendment(2, '2012-02-01', '2012-05-01')] } });
+  const truncated = inputs();
+  assert.notEqual((await load(full.argv)).value('planSha256'), (await load(truncated.argv)).value('planSha256'));
+});
+
+const STAFF = { staffIncluded: true, numbersReal: true, signoffRefs: { keepStaff: 'so-staff', keepNumbers: 'so-numbers' } };
+const staffed = () => inputs({ flags: STAFF, records: { projects: [{ ...register, epd: 'staff-value-1', lead: 'staff-value-2', notes: 'staff-value-3' }],
+  amendments: [amendment(1, '2023-06-01', '2023-11-07')] } });
+
+async function liveLoad(t, given) {
+  fakeLists(t);
+  const demi = fakeDemi();
+  await load([...given.argv, ...liveArgs((await load(given.argv, demi)).value('planSha256'))], demi);
+  return demi;
+}
+
+test('never writes projectLead, responsibleEPD, eaoMember, reviewExtensions, commentPeriods or legislation_* blocks', async (t) => {
+  const demi = await liveLoad(t, staffed());
+  assert.deepEqual([...new Set(demi.projectFields)].sort(), ['externalIds', 'staffAssignments', 'staffNotes']);
+});
+
+/** A work as a reader gets it: listForRead drops PRIVATE_KEYS at every depth. */
+const publicOf = value => (Array.isArray(value) ? value.map(publicOf) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.entries(value).filter(([key]) => !PRIVATE_KEYS.has(key)).map(([key, inner]) => [key, publicOf(inner)])) : value);
+
+test('no anonymous field contains the project number', async (t) => {
+  const demi = await liveLoad(t, inputs({ records: { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07'), amendment(2, '2012-02-01', '2012-05-01')] } }));
+  const written = [...demi.docs.values()].filter(doc => doc.source === 'sheet' && doc.id !== OVERRIDE_MARKER_ID);
+  const kinds = [...new Set(written.map(doc => doc.sourceKey.split(':')[1]))];
+  const slots = [...Array.from({ length: 15 }, (_, i) => String(i + 1)), ...written.map(doc => doc.sourceKey.split(':')[2])];
+  const keys = Array.from({ length: NUMBER }, (_, i) => i + 1).flatMap(n => kinds.flatMap(kind => slots.map(slot => `${n}:${kind}:${slot}`)));
+  const text = JSON.stringify(written.map(publicOf));
+  assert.ok(written.length >= 3);
+  assert.deepEqual(keys.filter(key => text.includes(key)), []);
 });

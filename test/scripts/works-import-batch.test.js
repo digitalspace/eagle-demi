@@ -10,7 +10,7 @@ const os = require('os');
 const path = require('path');
 const batches = require('../../src/scripts/works-import-batch');
 const { fingerprintOf, openEnvelope, verify } = require('../../src/utils/import-envelope');
-const { fakeLists } = require('./works-import-fakes');
+const { fakeLists } = require('../helpers/works-import-fakes');
 
 const { KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY } = batches;
 const T0 = Date.parse('2026-11-13T18:00:00Z');

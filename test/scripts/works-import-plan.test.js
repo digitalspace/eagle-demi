@@ -6,14 +6,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildPlan } = require('../../src/scripts/works-import-plan');
 const { ownerOf } = require('../../src/repositories/works');
-const { CATALOG, PHASES, PROJECT, NUMBER, register, amendment, trackWork } = require('./works-import-fakes');
+const { CATALOG, PHASES, PROJECT, NUMBER, ref, register, amendment, trackWork } = require('../helpers/works-import-fakes');
 
 const KEY = `${NUMBER}:amendment:1`;
 const extractOf = (records, flags = {}) => ({ staffIncluded: false, numbersReal: false, ...flags, records: { projects: [register], ...records } });
 
-function plan(records, { stored = [], row = { id: PROJECT }, track = [], flags } = {}) {
+function plan(records, { stored = [], row = { id: PROJECT }, track = [], flags, options } = {}) {
   return buildPlan(extractOf(records, flags), {
-    catalog: CATALOG, phaseCatalog: PHASES, crosswalk: new Map([[NUMBER, PROJECT]]), batchId: 'batch-1', batchAt: '2026-11-13T18:00:00Z',
+    ...options,
+    catalog: CATALOG, phaseCatalog: PHASES, crosswalk: new Map([[NUMBER, PROJECT], [477, PROJECT]]), batchId: 'batch-1', batchAt: '2026-11-13T18:00:00Z',
     trackWorks: new Map([[PROJECT, track]]), stored: new Map([[PROJECT, [...track, ...stored]]]), storedMarkers: new Map(),
     rows: new Map([[PROJECT, row]]), trackPublic: new Map(), ownerOf
   });
@@ -69,4 +70,25 @@ test('dry run lists a Track amendment started 2024-11-01 and decided 2025-03-01 
   const result = plan({ amendments: [amendment(1, '2024-11-01', '2025-03-01')] }, { track });
   assert.deepEqual(result.lists.trackShownStartedBefore.map(item => item.workId), ['track-50']);
   assert.deepEqual(result.lists.afterBoundary.map(item => item.sourceKey), [KEY]);
+});
+
+test('a stored sheet work the spreadsheet no longer holds is tombstoned', () => {
+  const gone = { ...sheetDoc('sheet-gone', 'sheet'), sourceKey: `${NUMBER}:amendment:9` };
+  const [entry] = plan(amended, { stored: [gone] }).entries.filter(one => one.action === 'tombstone');
+  assert.deepEqual([entry.current.id, entry.sourceKey], ['sheet-gone', `${NUMBER}:amendment:9`]);
+});
+
+test('oversize work becomes a report entry', () => {
+  const suspensions = Array.from({ length: 2001 }, (_, i) => ({
+    ref: ref('Suspensions', i + 1), id: NUMBER, type: 'Suspension s.24(2)', appliedTo: 'Review', startDate: '2006-02-01', endDate: '2006-03-01'
+  }));
+  const result = plan({ projects: [{ ...register, start180: '2006-01-01' }], suspensions });
+  const [oversize] = result.report.filter(entry => (entry.errors || []).some(error => error.rule === 'oversize'));
+  assert.equal(result.entries.filter(entry => entry.sourceKey === oversize.sourceKey).length, 0);
+});
+
+test('dry run reports trackTransitionMissing for 477 with 2025-05-21', () => {
+  const records = { projects: [{ ...register, id: 477, decision: null, decisionDate: null }], transitions: [{ ref: ref('EA Process Data'), id: 477, date: '2025-05-21' }] };
+  const result = plan(records, { options: { transitionIdsAreRegisterIds: true } });
+  assert.deepEqual(result.lists.trackTransitionMissing.map(item => [item.projectId, item.fallbackDate]), [[PROJECT, '2025-05-21']]);
 });

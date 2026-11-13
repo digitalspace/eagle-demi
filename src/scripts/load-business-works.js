@@ -8,10 +8,11 @@ const { parseArgs } = require('util');
 const lists = require('../repositories/lists');
 const works = require('../repositories/works');
 const projects = require('../repositories/projects');
+const commentPeriods = require('../repositories/comment-periods');
 const history = require('../repositories/project-staff-history');
 const phaseCatalog = require('../domain/phase-catalog');
 const { deriveInputs, loadWorks } = require('../domain/works-derive');
-const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
+const { OVERRIDE_MARKER_ID, sourceOf } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
 const { readCrosswalk } = require('./works-crosswalk');
 const { buildPlan, countLines } = require('./works-import-plan');
@@ -26,7 +27,15 @@ const OWNER = 'sheet';
 const INPUTS = ['extract', 'expect-sha256', 'crosswalk', 'expect-crosswalk-sha256', 'expect-manual-sha256', 'devbox-key',
   'operator-key', 'expect-operator-fingerprint', 'out-dir'];
 const LIVE = ['operator', 'run-ref', 'signoff-ref', 'expect-plan-sha256'];
-const OPTIONS = { ...Object.fromEntries([...INPUTS, ...LIVE].map(name => [name, { type: 'string' }])), live: { type: 'boolean' } };
+const OPTIONS = { ...Object.fromEntries([...INPUTS, ...LIVE].map(name => [name, { type: 'string' }])), live: { type: 'boolean' }, help: { type: 'boolean' } };
+const HELP = [
+  'Usage: load-business-works.js --extract <sealed> --expect-sha256 <hex> --crosswalk <sealed> --expect-crosswalk-sha256 <hex>',
+  '  --expect-manual-sha256 <hex> --devbox-key <pem> --operator-key <pem> --expect-operator-fingerprint <hex> --out-dir <dir>',
+  '  [--live --operator <upn> --run-ref <id> --signoff-ref <id> --expect-plan-sha256 <hex>]',
+  'Dry run by default; --live writes. Runs only where COSMOS_ENDPOINT is demi-cosmos-test.',
+  'The transitions tab joins as the sheet-to-master map defaults: refused (transitionJoinUndecided) until the business decides',
+  'that column A holds the register id, so no sheet work takes a transition date from it.'
+];
 const DONE = new Set(['written', 'set', 'appended', 'unchanged']);
 
 const refuse = (message) => { throw new Error(message); };
@@ -44,6 +53,7 @@ function optionsOf(argv) {
   } catch {
     refuse(`options are --${Object.keys(OPTIONS).join(', --')}`);
   }
+  if (values.help) return values;
   const missing = [...INPUTS, ...(values.live ? LIVE : [])].filter(name => !values[name]);
   if (missing.length) refuse(`missing --${missing.join(', --')}`);
   return values;
@@ -56,6 +66,7 @@ function liveDemi() {
     phaseCatalog: () => phaseCatalog.load(),
     works: projectId => works.listByProject(projectId, { includeDeleted: true }),
     marker: projectId => works.get(projectId, OVERRIDE_MARKER_ID),
+    commentPeriods: projectId => commentPeriods.listEveryByProject(projectId, systemAccess()),
     project: projectId => projects.getById(systemAccess(), projectId),
     trackPublic: async row => (await loadWorks(row)).worksForDerive,
     saveWork: (doc, options) => works.save(doc, options),
@@ -81,7 +92,7 @@ function openInputs(o, env) {
   return { keys, recipient, opened, crosswalk };
 }
 
-/** Every stored input of the crosswalk's projects. */
+/** Every stored input of the crosswalk's projects, built as check-business-works-parity.js builds them, so a parity run and a load agree. */
 async function readStored(demi, projectIds) {
   const state = { stored: new Map(), storedMarkers: new Map(), rows: new Map(), trackWorks: new Map(), trackPublic: new Map(), eagleItems: new Map() };
   for (const projectId of projectIds) {
@@ -92,9 +103,9 @@ async function readStored(demi, projectIds) {
     state.rows.set(projectId, row);
     state.stored.set(projectId, docs);
     if (marker) state.storedMarkers.set(projectId, marker);
-    state.trackWorks.set(projectId, docs.filter(doc => works.ownerOf(doc) === 'track' && !doc.deleted));
+    state.trackWorks.set(projectId, docs.filter(doc => sourceOf(doc) === 'track' && !doc.deleted));
     state.trackPublic.set(projectId, await demi.trackPublic(row));
-    state.eagleItems.set(projectId, { reviewExtensions: row.reviewExtensions || [], reviewSuspensions: row.reviewSuspensions || [] });
+    state.eagleItems.set(projectId, { ...row, commentPeriods: await demi.commentPeriods(projectId) });
   }
   return state;
 }
@@ -191,6 +202,10 @@ async function dryRun(o, { demi, inputs, env, now, write }) {
 /** Resolves the exit code. @param {object} [deps] test seam {write, demi, now} */
 async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), now = Date.now } = {}) {
   const o = optionsOf(argv);
+  if (o.help) {
+    HELP.forEach(write);
+    return 0;
+  }
   const env = testEnvironment();
   const ctx = { demi, inputs: openInputs(o, env), env, now, write };
   if (o.live) await live(o, ctx);
