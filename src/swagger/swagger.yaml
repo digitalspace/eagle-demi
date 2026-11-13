@@ -9523,7 +9523,8 @@ components:
                 description: The work's id, `track-<n>` for a Track work.
               source:
                 type: string
-                enum: [track, sheet, demi]
+                nullable: true
+                enum: [track, sheet, demi, null]
               trackWorkId:
                 type: integer
                 nullable: true
@@ -9536,6 +9537,7 @@ components:
                 description: The works catalog code of the work type.
               workType:
                 type: string
+                nullable: true
               title:
                 type: string
                 nullable: true
@@ -9557,16 +9559,22 @@ components:
                 properties:
                   toActYear:
                     type: integer
+                    nullable: true
                   date:
                     type: string
+                    format: date
                     nullable: true
                     description: >-
-                      The hand-over date: a sheet date before 2025-01-01, else the date of Track's
-                      "Project Transitioning FROM" milestone naming this work's Act, else the stored
-                      date, else null.
+                      The hand-over day. A sheet date before 2025-01-01 when the stored `dateSource`
+                      is `sheet`. Else the day of Track's "Project Transitioning FROM" milestone naming
+                      this work's Act. Else the stored sheet date, only when the stored `dateSource` is
+                      `track`. Else null.
                   dateSource:
                     type: string
                     enum: [sheet, track, none]
+                    description: >-
+                      Where `date` came from: `track` for Track's milestone, `sheet` for a sheet date,
+                      `none` when `date` is null.
               undated:
                 $ref: '#/components/schemas/WorkUndated'
               startDate:
@@ -9575,10 +9583,14 @@ components:
                 nullable: true
               isActive:
                 type: boolean
+                nullable: true
               workState:
                 type: string
                 nullable: true
-                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, null]
+                description: >-
+                  Track's state on a Track work. `transitioned` marks a work its project left for a
+                  later Act; `inactive` a sheet work recorded as incomplete or inactive.
+                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, transitioned, inactive, null]
               decisionDate:
                 type: string
                 format: date-time
@@ -9591,8 +9603,9 @@ components:
                 type: string
                 nullable: true
                 description: >-
-                  The Track outcome name of the END milestone in the work's last phase that has
-                  one.
+                  The outcome name. On a Track work, the Track outcome of the END milestone in the
+                  work's last phase that has one. On a work from another source, the stored name
+                  for `outcomeCode`.
               phases:
                 type: array
                 items:

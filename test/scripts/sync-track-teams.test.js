@@ -703,38 +703,28 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
   assert.strictEqual(summary.failures, 0);
 });
 
+// The parity's own cases are in test/scripts/check-works-parity.test.js; this one proves the nightly runs it.
 test('works parity', async (t) => {
   const config = require('../../src/config');
   const worksRepository = require('../../src/repositories/works');
   const { logger } = require('../../src/utils/logger');
-  const { trackParity } = require('../../src/scripts/check-works-parity');
-  const { workDocOf, trackWorkToPublic, phaseEventsOf } = require('../../src/seed/track-mappers');
-  const { trackWorks, workDocs } = require('../helpers/track-works-fixtures');
+  const { workDocOf } = require('../../src/seed/track-mappers');
   const { fakeWorks, useWorks } = require('../helpers/track-sync-fakes');
 
   const held = { trackWorksSync: config.trackWorksSync, worksWrite: config.worksWrite };
   Object.assign(config, { trackWorksSync: true, worksWrite: true });
   t.after(() => Object.assign(config, held));
-  t.afterEach(() => t.mock.restoreAll());
-
-  const PROJECT_207 = { id: 207, name: 'Nicomen Wind Energy' };
-  const pulled = () => new Map([['207', trackWorks().map(work => trackWorkToPublic(work, phaseEventsOf(work)))]]);
-  const sheetWork = { id: 'sheet-00000000-0000-4000-8000-000000000001', projectId: '207', source: 'sheet',
-    workType: 'Assessment', actYear: 2002, startDate: '2003-02-01', phases: [] };
-  const container = (byProject) => t.mock.method(worksRepository, 'listForRead', async (id) => byProject[id] || []);
-  const parityLines = () => {
-    const lines = [];
-    for (const level of ['info', 'warn']) {
-      t.mock.method(logger, level, (msg) => { if (msg.startsWith('[works-parity]')) lines.push(msg); });
-    }
-    return lines;
-  };
 
   await t.test('nightly logs trackMismatch=1 when a container Track work differs from the pull', async () => {
     useWorks(t, fakeWorks());
     const work = { id: 12, project_id: 1, work_type_id: 7, is_active: true };
-    container({ 1: [workDocOf({ ...work, is_active: false }, { projectId: '1' })] });
-    const lines = parityLines();
+    t.mock.method(worksRepository, 'liveProjectIds', async () => ['1']);
+    t.mock.method(worksRepository, 'listForRead', async (id) =>
+      (id === '1' ? [workDocOf({ ...work, is_active: false }, { projectId: '1' })] : []));
+    const lines = [];
+    for (const level of ['info', 'warn']) {
+      t.mock.method(logger, level, (msg) => { if (msg.startsWith('[works-parity]')) lines.push(msg); });
+    }
     const get = async (url) => {
       if (url.endsWith('/team-members')) return TEAMS;
       if (url.endsWith('/api/v1/works')) return [work];
@@ -746,31 +736,8 @@ test('works parity', async (t) => {
 
     await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
 
-    assert.deepStrictEqual(lines, ['[works-parity] trackMismatch id=1', '[works-parity] trackMismatch=1 projects=1 skipped=0']);
+    assert.deepStrictEqual(lines, ['[works-parity] trackMismatch id=1',
+      '[works-parity] trackMismatch=1 projects=1 skipped=0 absentFromPull=0 notWritten=0']);
   });
 
-  await t.test('nightly skips a project missing from the pull and counts it as skipped, not as a mismatch', async () => {
-    container({ 207: workDocs(), 300: [workDocOf({ ...trackWorks()[1], id: 77, project_id: 300 }, { projectId: '300' })] });
-
-    const counts = await trackParity([PROJECT_207, { id: 300 }, { id: 301 }], pulled());
-
-    assert.deepStrictEqual(counts, { trackMismatch: 0, projects: 1, skipped: 1 });
-  });
-
-  await t.test('nightly parity reads the container through listForRead', async () => {
-    const reads = container({ 207: workDocs() });
-    const full = t.mock.method(worksRepository, 'listByProject', async () => []);
-
-    const counts = await trackParity([PROJECT_207], pulled());
-
-    assert.deepStrictEqual([counts.trackMismatch, reads.mock.callCount(), full.mock.callCount()], [0, 1, 0]);
-  });
-
-  await t.test('parity ignores a non-Track work', async () => {
-    container({ 207: [...workDocs(), sheetWork] });
-
-    const counts = await trackParity([PROJECT_207], pulled());
-
-    assert.deepStrictEqual(counts, { trackMismatch: 0, projects: 1, skipped: 0 });
-  });
 });

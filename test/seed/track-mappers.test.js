@@ -20,7 +20,7 @@ test('a stored work document reads back as the public work the nightly builds fr
 
   const [composed] = publicWorksOf([workDocOf(work, { projectId: 'p-1' })], ROW);
 
-  assert.deepStrictEqual(withoutAdded(composed), trackWorkToPublic(work, phaseEventsOf(work)));
+  assert.deepStrictEqual(withoutAdded({ works: [composed] }).works[0], trackWorkToPublic(work, phaseEventsOf(work)));
   assert.strictEqual(composed.outcome, 'Proceed', 'the END outcome of the last phase, not the earlier one');
 });
 
@@ -74,9 +74,9 @@ test('a tombstoned work is left out of the public works', () => {
 const SHEET_REF = { sheet: { file: 'works.xlsx', sheet: 'Assessments', row: 7, slot: 1 } };
 const sheetId = (n) => `sheet-00000000-0000-4000-8000-00000000000${n}`;
 
-/** A made-up sheet work in the stored shape, private keys at every level. */
+/** A made-up sheet work in the stored shape, private keys and stray Track ids at every level. */
 const sheetDoc = (n = 1, overrides = {}) => ({
-  id: sheetId(n), projectId: '1001', source: 'sheet', owner: 'sheet', schemaVersion: 1,
+  id: sheetId(n), projectId: '1001', source: 'sheet', owner: 'sheet', schemaVersion: 1, trackWorkId: 9, workTypeId: 6,
   workTypeCode: 'assessment', workType: 'Assessment', actYear: 2002, startDate: '2003-02-01', decisionDate: null,
   isActive: false, workState: 'transitioned', outcomeCode: null, outcome: null,
   sourceKey: '12:assessment:1', sourceRef: SHEET_REF, provenance: { writtenBy: 'loader', batchId: 'b-1' },
@@ -85,8 +85,9 @@ const sheetDoc = (n = 1, overrides = {}) => ({
   phases: [{
     id: 'pre-application', catalogId: 'list-9', name: 'Pre-Application', sourceName: 'pre app (as typed)',
     startDate: '2003-02-01', endDate: '2004-01-01', sortOrder: 1, isCompleted: true, sourceRef: SHEET_REF,
+    trackPhaseId: 3001, phaseCodeId: 6001, isSuspended: true,
     undated: { startDate: { notAfter: '1995-06-30' } },
-    milestones: [{ id: 'act-transition', code: 'act-transition', name: 'Act transition', position: 'END',
+    milestones: [{ id: 'act-transition', code: 'act-transition', name: 'Act transition', position: 'END', trackEventId: 4001,
       actualDate: '2004-01-01', anticipatedDate: null, endDate: null, outcomeCode: null, sourceRef: SHEET_REF,
       links: { commentPeriodId: 'cp-1', blockField: 'decision', eagleItemId: 'e-9' },
       undated: { anticipatedDate: { notAfter: '1995-06-30' } } }],
@@ -113,6 +114,9 @@ test('Track work carries workTypeCode and actYear', () => {
 
   assert.deepStrictEqual([workDocOf(nestedWork()), workDocOf(amendment)].map(d => [d.workTypeCode, d.actYear]),
     [['assessment', 2018], ['amendment', 2002]]);
+  const { workTypeCode, actYear, ...unstamped } = workDocOf(amendment);
+  const [read] = publicWorksOf([unstamped], ROW);
+  assert.deepStrictEqual([read.workTypeCode, read.actYear], [workTypeCode, actYear], 'a document the nightly has not rewritten');
 });
 
 test('TRACK_WORK_TYPE_CODES keys equal MIRRORED_WORK_TYPE_IDS', () => {
@@ -127,7 +131,7 @@ test('Track-only works keep today\'s order', () => {
 });
 
 test('sheet work sorts after Track works by startDate', () => {
-  const late = sheetDoc(2, { startDate: '2010-05-01' });
+  const late = sheetDoc(2, { startDate: '2010-05-01', phases: undefined });
 
   const order = publicWorksOf([late, workDocOf(nestedWork()), sheetDoc(1)], ROW).map(w => w.workId);
 
@@ -142,6 +146,14 @@ test('sheet phase gets its stored catalogId', () => {
 
   assert.deepStrictEqual([bare.phases[0].catalogId, bare.phases[0].name], ['list-9', 'Pre-Application']);
   assert.deepStrictEqual([named.phases[0].name, named.phases[0].stage], ['Pre-Application Phase', 'Pre-Application']);
+  assert.deepStrictEqual([bare.trackWorkId, bare.workTypeId, bare.phases[0].trackPhaseId, bare.phases[0].phaseCodeId,
+    bare.phases[0].isSuspended, bare.milestones[0].trackEventId], [null, null, null, null, null, null], 'Track-only keys');
+});
+
+test('a sheet work on a project with no Track source is titled by the row\'s name', () => {
+  const [work] = publicWorksOf([sheetDoc()], { name: 'Old Quarry', sources: {} });
+
+  assert.strictEqual(work.title, 'Old Quarry - Assessment');
 });
 
 test('event push recomputes summary', () => {
@@ -182,12 +194,16 @@ test('exact key set at work, phase, milestone, interruption and links level', ()
 test('transitionOut and undated pass through; transitionIn does not', () => {
   const transitionOut = { toActYear: 2018, date: '2010-04-01', dateSource: 'sheet' };
 
-  const [work] = publicWorksOf([sheetDoc(1, { transitionOut })], ROW);
+  const doc = sheetDoc(1, { transitionOut });
+  doc.phases[0].milestones.push({ id: 'odd', undated: [{ notAfter: '1995-06-30' }] });
+  doc.phases[0].undated.endDate = { notAfter: 19950630 };
+
+  const [work] = publicWorksOf([doc], ROW);
 
   assert.deepStrictEqual(work.transitionOut, transitionOut);
-  assert.deepStrictEqual([work.undated, work.phases[0].undated, work.milestones[0].undated], [
-    { decisionDate: { notAfter: '1995-06-30' } }, { startDate: { notAfter: '1995-06-30' } },
-    { anticipatedDate: { notAfter: '1995-06-30' } }]);
+  assert.deepStrictEqual([work.undated, work.phases[0].undated, ...work.milestones.map(m => m.undated)], [
+    { decisionDate: { notAfter: '1995-06-30' } }, { startDate: { notAfter: '1995-06-30' }, endDate: { notAfter: null } },
+    { anticipatedDate: { notAfter: '1995-06-30' } }, null]);
   assert.ok(!('transitionIn' in work));
 });
 
@@ -196,7 +212,7 @@ test('a Track transition milestone stored under phases[].milestones resolves the
 
   const sheet = publicWorksOf(docs, ROW).find(w => w.source === 'sheet');
 
-  assert.strictEqual(sheet.transitionOut.date, '2020-03-10T07:00:00.000Z');
+  assert.deepStrictEqual(sheet.transitionOut, { toActYear: 2018, date: '2020-03-10', dateSource: 'track' });
 });
 
 test('477 publishes Track\'s transition date when Track\'s milestone exists, else the sheet fallback', () => {
@@ -204,7 +220,8 @@ test('477 publishes Track\'s transition date when Track\'s milestone exists, els
 
   const sheet = publicWorksOf(docs, ROW).find(w => w.source === 'sheet');
 
-  assert.deepStrictEqual(sheet.transitionOut, TRANSITION_OUT, 'no Track milestone: the stored fallback');
+  assert.deepStrictEqual(sheet.transitionOut, { toActYear: 2018, date: '2019-12-20', dateSource: 'sheet' },
+    'no Track milestone: the stored sheet date');
 });
 
 test('no provenance, sourceKey or sourceRef key in publicWorksOf output', () => {

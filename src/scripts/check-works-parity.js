@@ -8,33 +8,33 @@ const config = require('../config');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const worksRepository = require('../repositories/works');
-const { fetchAll } = require('../repositories/_sql');
 const { loadWorks } = require('../domain/works-derive');
 const { composedRow } = require('../controllers/nosql/project-compose');
-const { ADDED_KEYS, withoutAdded, isTrackDoc, publicWorksOf } = require('../seed/track-mappers');
+const { withoutAdded, publicWorksOf, workDocOf } = require('../seed/track-mappers');
+const { mapLimit } = require('../utils/worker-pool');
 const { logger } = require('../utils/logger');
 
+const TRACK_OWNER = 'track';
+/** Projects whose container is read at once, as the pull reads Track. */
+const PARITY_CONCURRENCY = 8;
+
+const listOf = (value) => (Array.isArray(value) ? value : []);
 const holdsWorks = (row) => Array.isArray(row.works) && row.works.length > 0;
+const isTrackWork = (work) => Boolean(work) && work.trackWorkId !== null && work.trackWorkId !== undefined;
 
-/** Whether the composed `works` and `phases` equal the row's; an empty container never does. */
+/** The row's Track works and phases as the row stored them; sheet works are not in `row.works`. */
+const comparable = (row) => withoutAdded({ works: listOf(row.works).filter(isTrackWork), phases: row.phases });
+
+/** Whether the composed Track works and phases equal the row's; an empty container never does. */
 function matches(row, worksForDerive) {
-  const composed = composedRow(row, worksForDerive);
-  return worksForDerive.length > 0 &&
-    isDeepStrictEqual(withoutAdded(composed.works), withoutAdded(row.works)) &&
-    isDeepStrictEqual(withoutAdded(composed.phases), withoutAdded(row.phases));
+  return worksForDerive.length > 0 && isDeepStrictEqual(comparable(composedRow(row, worksForDerive)), comparable(row));
 }
-
-/** The project id of every live work; the override marker is not a work. */
-const liveWorkProjectIds = () => fetchAll('works', {
-  query: 'SELECT VALUE c.projectId FROM c WHERE NOT (IS_BOOL(c.deleted) AND c.deleted = true) AND NOT IS_DEFINED(c.kind)',
-  parameters: []
-});
 
 /** Resolves the exit code. @param {object} [deps] test seam {projects, loadWorks, workProjectIds} */
 async function run(deps = {}) {
   const projects = deps.projects || projectsRepository;
   const load = deps.loadWorks || loadWorks;
-  const workProjectIds = deps.workProjectIds || liveWorkProjectIds;
+  const workProjectIds = deps.workProjectIds || (() => worksRepository.liveProjectIds());
   const summary = { projects: 0, failures: 0, storedMismatch: 0, orphaned: 0 };
   try {
     const { items } = await projects.listVisible(systemAccess(), {});
@@ -60,34 +60,58 @@ async function run(deps = {}) {
   return summary.storedMismatch > 0 || summary.failures > 0 ? 1 : 0;
 }
 
-/** The nightly's check: each project's container Track works against {pulled}, the pull's works by project id.
- *  A project the pull lacks (a failed read or the time budget) is skipped. Logs; never throws. */
-async function trackParity(trackProjects, pulled) {
-  if (!config.worksWrite || !config.trackWorksSync) return null;
-  const counts = { trackMismatch: 0, projects: 0, skipped: 0 };
-  for (const project of trackProjects || []) {
-    const id = String(project.id);
+/** `same`, `trackMismatch`, or `notWritten` when the container holds no Track-owned work (the mirror skipped it). */
+async function compareProject(id, nestedWorks, name) {
+  const stored = await worksRepository.listForRead(id);
+  const owned = stored.filter(doc => worksRepository.ownerOf(doc) === TRACK_OWNER);
+  if (!owned.length) return 'notWritten';
+  // Another owner holds an adopted work, so the nightly never writes its Track copy.
+  const foreign = new Set(stored.filter(doc => !owned.includes(doc)).map(doc => doc.id));
+  const fresh = listOf(nestedWorks).map(work => workDocOf(work, { projectId: id })).filter(doc => doc && !foreign.has(doc.id));
+  const row = { sources: { track: { name } } };
+  return isDeepStrictEqual(publicWorksOf(owned, row), publicWorksOf(fresh, row)) ? 'same' : 'trackMismatch';
+}
+
+/** Projects with Track-owned works that the pull lacks: skipped when the pull failed a project or hit its budget. */
+async function countAbsent(pull, counts) {
+  try {
+    const known = new Set((await worksRepository.liveProjectIds({ owner: TRACK_OWNER })).map(String));
+    const absent = [...known].filter(id => !pull.nested.has(id)).length;
+    // The pull does not name the projects it failed or ran out of time on, so any of either skips them all.
+    counts[pull.stats.failures > 0 || pull.stats.budgetHit ? 'skipped' : 'absentFromPull'] += absent;
+  } catch (err) {
+    logger.error('[works-parity] Track work projects not listed', { error: err.message, stack: err.stack });
+  }
+}
+
+/** The nightly's check after a live works write: the container's Track works against the pull's ({pull} as
+ *  `fetchTrackWorks` returns it). Logs; never throws. */
+async function trackParity(trackProjects, pull, { live = false } = {}) {
+  if (!live || !config.worksWrite || !config.trackWorksSync || !pull || !pull.stats) return null;
+  const counts = { trackMismatch: 0, projects: 0, skipped: 0, absentFromPull: 0, notWritten: 0 };
+  const names = new Map(listOf(trackProjects).map(project => [String(project.id), project.name]));
+  await mapLimit([...pull.nested], PARITY_CONCURRENCY, async ([id, nestedWorks]) => {
+    let outcome;
     try {
-      const stored = (await worksRepository.listForRead(id)).filter(isTrackDoc);
-      if (!pulled.has(id)) {
-        if (stored.length) counts.skipped++;
-        continue;
-      }
-      counts.projects++;
-      const container = publicWorksOf(stored, { sources: { track: { name: project.name } } });
-      if (isDeepStrictEqual(withoutAdded(container), withoutAdded(pulled.get(id)))) continue;
-      counts.trackMismatch++;
-      logger.warn(`[works-parity] trackMismatch id=${id}`);
+      outcome = await compareProject(id, nestedWorks, names.get(id));
     } catch (err) {
       counts.skipped++;
       logger.error(`[works-parity] project ${id} not compared`, { error: err.message, stack: err.stack });
+      return;
     }
-  }
-  logger.info(`[works-parity] trackMismatch=${counts.trackMismatch} projects=${counts.projects} skipped=${counts.skipped}`);
+    if (outcome === 'notWritten') return void counts.notWritten++;
+    counts.projects++;
+    if (outcome === 'same') return;
+    counts.trackMismatch++;
+    logger.warn(`[works-parity] trackMismatch id=${id}`);
+  });
+  await countAbsent(pull, counts);
+  logger.info(`[works-parity] trackMismatch=${counts.trackMismatch} projects=${counts.projects} ` +
+    `skipped=${counts.skipped} absentFromPull=${counts.absentFromPull} notWritten=${counts.notWritten}`);
   return counts;
 }
 
-module.exports = { run, trackParity, withoutAdded, ADDED_KEYS };
+module.exports = { run, trackParity, withoutAdded };
 
 if (require.main === module) {
   run().then(code => { process.exitCode = code; }, (err) => {

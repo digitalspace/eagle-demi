@@ -279,14 +279,11 @@ async function sync(argv = [], deps = {}) {
     const projects = await fetchTrackProjects(trackToken, get);
 
     // Own try, ahead of the mirror: a Track feed outage costs phases and works only; the stored ones stay.
-    let phases = new Map();
-    let works = new Map();
-    let nested = new Map();
+    let pull = { phases: new Map(), works: new Map(), nested: new Map(), stats: null };
     try {
-      const pulled = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
-      ({ phases, works, nested } = pulled);
-      summary.trackWorks = pulled.stats.works;
-      summary.trackWorksFailed = pulled.stats.failures;
+      pull = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
+      summary.trackWorks = pull.stats.works;
+      summary.trackWorksFailed = pull.stats.failures;
     } catch (err) {
       summary.failures++;
       logger.error('[track-teams] work phase pull failed', { error: err.message, stack: err.stack });
@@ -295,6 +292,7 @@ async function sync(argv = [], deps = {}) {
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
+      const { phases, works, nested } = pull;
       const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, nested, pushedAt });
       Object.assign(summary, mirrorCounts(mirrored));
       summary.failures += mirrored.failures;
@@ -302,7 +300,7 @@ async function sync(argv = [], deps = {}) {
       summary.failures++;
       logger.error('[track-teams] project mirror failed', { error: err.message, stack: err.stack });
     }
-    await trackParity(projects, works);
+    await trackParity(projects, pull, { live: args.live });
 
     const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
     summary.closedProjects = closed.size;
