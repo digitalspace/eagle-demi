@@ -9,10 +9,10 @@ const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
 const { fakeLists } = require('../helpers/works-import-fakes');
-const { main, run } = require('../../src/scripts/load-business-works');
+const { run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
-const { ENV, T0, PROJECT, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
+const { ENV, T0, PROJECT, DERIVE_ENV, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
 
 const DAY = 24 * 60 * 60 * 1000;
 const entriesOf = store => store.all().filter(item => item.kind === KINDS.ENTRY).sort((a, b) => a.seq - b.seq);
@@ -22,6 +22,14 @@ test('a missing --out-dir refuses before the lock', async (t) => {
   const given = inputs();
   const argv = given.argv.map(arg => (arg === given.outDir ? path.join(given.outDir, 'absent') : arg));
   await assert.rejects(load([...argv, ...liveArgs('0'.repeat(64))]), /--out-dir does not exist/);
+  assert.deepEqual(store.all(), []);
+});
+
+test('a live run refuses while WORKS_READ is unset, before the lock', async (t) => {
+  const store = fakeLists(t);
+  t.after(() => Object.assign(process.env, DERIVE_ENV));
+  delete process.env.WORKS_READ;
+  await assert.rejects(load([...inputs().argv, ...liveArgs('0'.repeat(64))]), /^Error: WORKS_READ is not set$/);
   assert.deepEqual(store.all(), []);
 });
 
@@ -57,7 +65,7 @@ test('a dry run refuses a works-backup too big for a rollback to read, before it
   assert.deepEqual(fs.readdirSync(given.outDir), []);
 });
 
-test('a live run that stops after the batch header has printed the batch id, the backup blob and its sha', async (t) => {
+test('a live run that stops after the batch header has printed the batch id, the backup blob, its sha and the derive env', async (t) => {
   const store = fakeLists(t);
   const demi = fakeDemi();
   const given = inputs();
@@ -66,7 +74,8 @@ test('a live run that stops after the batch header has printed the batch id, the
   const lines = [];
   await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0 }), /save failed/);
   const { id, backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
-  assert.deepEqual(lines, [`batchId=${id}`, `backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`]);
+  assert.deepEqual(lines, [`batchId=${id}`, `backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`,
+    `worksRead=${DERIVE_ENV.WORKS_READ}`, `worksReadSources=${DERIVE_ENV.WORKS_READ_SOURCES}`]);
 });
 
 test('a works-backup too big for a rollback to read refuses before the backup or the batch header is written', async (t) => {
@@ -154,10 +163,4 @@ test('an external id another project holds is not planned and is reported', asyn
   assert.equal(dry.value('addExternalId'), '0');
   const report = reportOf(given.outDir, dry.value('blob')).report;
   assert.deepEqual(report.filter(entry => entry.reason === 'externalIdHeldElsewhere').map(entry => entry.projectId), [PROJECT]);
-});
-
-test('the command line refuses --live until the rollback can open its backup', async (t) => {
-  const store = fakeLists(t);
-  await assert.rejects(main([...inputs().argv, ...liveArgs('0'.repeat(64))]), /refused until the rollback/);
-  assert.deepEqual(store.all(), []);
 });

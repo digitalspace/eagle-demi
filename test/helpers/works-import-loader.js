@@ -22,12 +22,17 @@ const ed = crypto.generateKeyPairSync('ed25519');
 const operator = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
 const keys = devboxKeysFromPem(pemOf(rsa.privateKey, 'pkcs8') + pemOf(ed.privateKey, 'pkcs8'));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'load-business-works-'));
-const endpoint = process.env.COSMOS_ENDPOINT;
 const testHost = 'https://demi-cosmos-test.documents.azure.com:443/';
-process.env.COSMOS_ENDPOINT = testHost;
+// A live load and the rollback modes that derive refuse while WORKS_READ or WORKS_READ_SOURCES is unset, as on a devbox shell.
+const DERIVE_ENV = { WORKS_READ: 'true', WORKS_READ_SOURCES: 'track' };
+const runEnv = { COSMOS_ENDPOINT: testHost, ...DERIVE_ENV };
+const saved = Object.fromEntries(Object.keys(runEnv).map(name => [name, process.env[name]]));
+Object.assign(process.env, runEnv);
 test.after(() => {
-  if (endpoint === undefined) delete process.env.COSMOS_ENDPOINT;
-  else process.env.COSMOS_ENDPOINT = endpoint;
+  for (const [name, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -144,5 +149,5 @@ async function liveLoad(t, given, signoff) {
 }
 
 module.exports = {
-  ENV, T0, PROJECT, NUMBER, TRACK, keys, operator, testHost, fakeDemi, inputs, keyFile, load, reportOf, liveArgs, STAFF, staffed, liveRun, liveLoad
+  ENV, T0, PROJECT, NUMBER, TRACK, DERIVE_ENV, keys, operator, testHost, fakeDemi, inputs, keyFile, load, reportOf, liveArgs, STAFF, staffed, liveRun, liveLoad
 };

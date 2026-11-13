@@ -19,12 +19,11 @@ const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, hel
 const { mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
+const { requireDeriveEnv } = require('./works-rollback-steps');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
 const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
-// Refused until W8b lands the restore path, since nothing can open a works-backup yet.
-const LIVE_REFUSED = '--live is refused until the rollback (W8b) can open the works-backup it writes; run the dry run';
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const DERIVED = new Set(['patched', 'unchanged']);
 // The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
@@ -147,10 +146,12 @@ async function live(o, ctx) {
   const batchId = crypto.randomUUID();
   const lease = await batches.takeLock(batchId, now());
   const { plan, stored, backup, batch } = await startBatch(o, ctx, batchId, lease);
-  // Printed before any write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
+  // Printed before any works or project write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
   write(`batchId=${batchId}`);
   write(`backupBlob=${backup.name}`);
   write(`backupSha256=${backup.sha256}`);
+  write(`worksRead=${process.env.WORKS_READ}`);
+  write(`worksReadSources=${process.env.WORKS_READ_SOURCES}`);
   const run = { batchId, lease, seq: 0 };
   const rowEtags = new Map([...stored.rows].map(([id, row]) => [id, row._etag ?? null]));
   let written = 0;
@@ -199,6 +200,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
     return 0;
   }
   const env = testEnvironment();
+  if (o.live) requireDeriveEnv();
   checkOutDir(o['out-dir']);
   const ctx = { demi, inputs: openInputs(o, env), env, now, runAt: new Date(now()).toISOString(), write };
   if (o.live) await live(o, ctx);
@@ -206,16 +208,10 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
   return 0;
 }
 
-/** The command line: `run`, except that `--live` is refused (LIVE_REFUSED). */
-function main(argv) {
-  if (argv.includes('--live')) return Promise.reject(new Error(LIVE_REFUSED));
-  return run(argv);
-}
-
-module.exports = { run, main, liveDemi };
+module.exports = { run, liveDemi };
 
 if (require.main === module) {
-  main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
+  run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
     logger.error('[load-business-works] failed', { error: err.message, code: err.code, stack: err.stack });
     process.exitCode = 1;
   });

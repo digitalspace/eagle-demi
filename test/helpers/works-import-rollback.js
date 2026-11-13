@@ -2,7 +2,6 @@
 
 // The rollback CLI tests' harness: a fake DEMI with the undo writes, a backup opener, the CLI runner and a loaded batch.
 
-const test = require('node:test');
 const fs = require('fs');
 const path = require('path');
 const { run } = require('../../src/scripts/rollback-business-works');
@@ -12,21 +11,10 @@ const { OVERRIDE_MARKER_ID, hiddenByOverride } = require('../../src/domain/work-
 const { overrideShown } = require('../../src/domain/works-derive');
 const { openEnvelope, fingerprintOf } = require('../../src/utils/import-envelope');
 const { fakeLists } = require('./works-import-fakes');
-const { ENV, T0, operator, fakeDemi, inputs, liveRun } = require('./works-import-loader');
+const { ENV, T0, DERIVE_ENV, operator, fakeDemi, inputs, liveRun } = require('./works-import-loader');
 
 const LATER = T0 + 60 * 1000;
 const SHA = 'a'.repeat(64);
-const DERIVE_ENV = { WORKS_READ: 'true', WORKS_READ_SOURCES: 'track' };
-
-// The modes that derive refuse while WORKS_READ or WORKS_READ_SOURCES is unset, as on a devbox shell.
-const saved = Object.fromEntries(Object.keys(DERIVE_ENV).map(name => [name, process.env[name]]));
-Object.assign(process.env, DERIVE_ENV);
-test.after(() => {
-  for (const [name, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-});
 
 const isSheet = doc => doc.source === 'sheet' && doc.id !== OVERRIDE_MARKER_ID;
 
