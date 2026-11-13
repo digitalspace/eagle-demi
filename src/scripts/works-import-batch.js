@@ -4,6 +4,7 @@
 // None carries `read[]`, so no caller-facing lists read returns them, as with the catalog items.
 
 const cosmos = require('../db/cosmos-nosql');
+const { logger } = require('../utils/logger');
 
 const CONTAINER = 'lists';
 const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: 'ImportBatchEntry' });
@@ -100,6 +101,16 @@ async function releaseLock(lease) {
   await cosmos.remove(CONTAINER, LOCK_ID, KINDS.LOCK, { etag: lease.etag });
 }
 
+/** releaseLock in a `finally`, unless the run completed (`lease.released`); a failed release is logged so the first error stands. */
+async function releaseQuietly(lease) {
+  if (lease.released) return;
+  try {
+    await releaseLock(lease);
+  } catch (err) {
+    logger.warn('[works-import] import lock release failed', { error: err.message });
+  }
+}
+
 /** The ImportBatch header with its `_etag`; null when absent. */
 async function readBatch(batchId) {
   return cosmos.readItem(CONTAINER, batchId, KINDS.BATCH);
@@ -180,6 +191,6 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
-  takeLock, takeOverLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead,
+  takeLock, takeOverLock, beforeWrite, releaseLock, releaseQuietly, createBatch, completeBatch, writeAhead,
   readLock, readBatch, batchesWithStatus, latestCompleteBatch, listEntries, markBatch
 };

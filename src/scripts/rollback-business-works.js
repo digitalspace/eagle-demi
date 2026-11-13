@@ -1,17 +1,19 @@
 'use strict';
 
-// Undoes a business works load on test: `--rollback <batchId>` for the latest complete load batch,
-// `--rollback-incomplete <batchId>` for a pending one whose lease expired. Output names project and document ids and counts only.
+// Undoes or adjusts a business works load on test; HELP lists the modes. Output names project and document ids and counts only.
 
 const crypto = require('crypto');
 const { isDeepStrictEqual, parseArgs } = require('util');
 const works = require('../repositories/works');
 const projects = require('../repositories/projects');
 const history = require('../repositories/project-staff-history');
-const { deriveInputs } = require('../domain/works-derive');
+const { systemAccess } = require('../helpers/access-sql');
+const { deriveInputs, loadWorks } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
 const { stepKey, projectSteps, rederive, loggedOf, openSteps } = require('./works-rollback-steps');
+const { rederiveBatch, timedFetch } = require('./works-import-rederive');
+const { revertOverride, reapplyOverride } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -44,7 +46,9 @@ function liveDemi() {
     removeExternalId: (projectId, pair) => history.removeExternalId(projectId, pair),
     removeHistory: (projectId, field, entryId, expectedSha256) => history.removeHistory(projectId, field, entryId, expectedSha256),
     restoreHistory: (projectId, field, prior, expectedSha256) => history.restoreHistory(projectId, field, prior, expectedSha256),
-    patchDerived: projectId => projects.patchDerived(projectId, { inputsFor: deriveInputs })
+    project: projectId => projects.getById(systemAccess(), projectId),
+    // Without `sources` the derive reads WORKS_READ_SOURCES, as the API does.
+    patchDerived: (projectId, sources) => projects.patchDerived(projectId, { inputsFor: sources ? row => loadWorks(row, { sources }) : deriveInputs })
   };
 }
 
@@ -171,16 +175,6 @@ async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed
   return 0;
 }
 
-/** Frees the lock unless the run completed; a failed release is logged so the first error stands. */
-async function releaseQuietly(lease) {
-  if (lease.released) return;
-  try {
-    await batches.releaseLock(lease);
-  } catch (err) {
-    logger.warn('[rollback-business-works] import lock release failed', { error: err.message });
-  }
-}
-
 /** The pending rollback batch of `batchId` that a failed run left, or null. */
 async function pendingRollbackOf(batchId) {
   return (await batches.batchesWithStatus('pending')).find(one => one.batchKind === 'rollback' && one.targetBatchId === batchId) || null;
@@ -230,7 +224,7 @@ async function rollback(o, ctx) {
     if (!target || target.id !== batchId) refuse('--rollback acts only on the latest complete load batch');
     return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
@@ -247,7 +241,7 @@ async function rollbackIncomplete(o, ctx) {
     const target = await loadBatch(batchId, statuses, message);
     return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
@@ -269,27 +263,37 @@ async function abandonRollback(o, { now, write }) {
     write(`abandoned=${rollbackId}`);
     return 0;
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
 const BACKUP_OPTIONS = Object.fromEntries(BACKUP_KEYS.map(name => [name, { type: 'string' }]));
+const MARKER_OPTIONS = { project: { type: 'string' }, all: { type: 'boolean' } };
 // One entry per mode: its flags, the ones it needs, and its runner, which resolves the exit code.
 const MODES = {
   rollback: { options: { rollback: { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback', ...BACKUP_KEYS], run: rollback },
   'rollback-incomplete': {
     options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete', ...BACKUP_KEYS], run: rollbackIncomplete
   },
-  'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback }
+  'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback },
+  'revert-override': { options: { 'revert-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['revert-override'], run: revertOverride },
+  'reapply-override': { options: { 'reapply-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['reapply-override'], run: reapplyOverride },
+  rederive: { options: { rederive: { type: 'string' }, unflip: { type: 'boolean' } }, required: ['rederive'], run: rederiveBatch }
 };
 
 const HELP = [
-  'Usage: rollback-business-works.js <mode> --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem>',
+  'Usage: rollback-business-works.js <mode>',
+  '  --rollback and --rollback-incomplete need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem>',
   '         --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>                 undo the latest complete load batch',
   '  --rollback-incomplete <batchId>      undo a pending load batch whose lease expired',
   '  --abandon-rollback <rollbackBatchId> give up a stuck rollback batch (no backup flags); a fresh rollback then finishes',
+  '  --revert-override                    turn the sheet override marker off, with --project <id> or --all',
+  '  --reapply-override                   turn it back on, with --project <id> or --all',
+  '      --all: every marker the latest complete load batch wrote',
+  '  --rederive <batchId>                 after sheet joins WORKS_READ_SOURCES: the public read must show a batch sheet work',
+  '  --rederive <batchId> --unflip        after sheet leaves WORKS_READ_SOURCES: the public read must show none',
   'A failed run leaves its rollback batch pending; the same command resumes it.',
   'Export WORKS_READ and WORKS_READ_SOURCES with the API\'s values first: the devbox shell has no app settings.'
 ];
@@ -308,20 +312,20 @@ function optionsOf(argv) {
   const mode = MODES[named[0]];
   const stray = Object.keys(values).find(key => !Object.hasOwn(mode.options, key));
   if (stray) refuse(`--${stray} does not apply to --${named[0]}`);
-  const missing = mode.required.find(key => typeof values[key] !== 'string' || values[key] === '');
+  const missing = mode.required.find(key => values[key] === undefined || values[key] === '');
   if (missing) refuse(`--${named[0]} needs --${missing}`);
   return { mode, o: values };
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {write, demi, openBackup, now} */
-async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), openBackup, now = Date.now } = {}) {
+/** Resolves the exit code. @param {object} [deps] test seam {write, demi, openBackup, now, fetchFn} */
+async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), openBackup, now = Date.now, fetchFn = timedFetch } = {}) {
   const { help, mode, o } = optionsOf(argv);
   if (help) {
     HELP.forEach(write);
     return 0;
   }
-  testEnvironment();
-  return mode.run(o, { demi, openBackup, now, write });
+  const env = testEnvironment();
+  return mode.run(o, { demi, openBackup, now, write, fetchFn, env, ownerOf: works.ownerOf });
 }
 
 /** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
