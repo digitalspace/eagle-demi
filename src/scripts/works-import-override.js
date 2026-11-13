@@ -6,7 +6,7 @@
 const crypto = require('crypto');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const batches = require('./works-import-batch');
-const { rederive, requireDeriveEnv } = require('./works-rollback-steps');
+const { stepKey, rederive, loggedOf, requireDeriveEnv } = require('./works-rollback-steps');
 const { writeCounts } = require('./works-import-rederive');
 
 const OWNER = 'sheet';
@@ -47,44 +47,45 @@ function withValues(current, { active, deactivatedBy }) {
   return deactivatedBy === null ? doc : { ...doc, deactivatedBy };
 }
 
+/** Writes the marker of `write` ahead, recording its prior values for --rollback-incomplete; resolves the written etag. */
+function writeMarker(demi, run, { projectId, current, values }, now) {
+  const prior = { active: current.active, deactivatedBy: current.deactivatedBy ?? null };
+  return batches.writeAhead(run, { target: { projectId, id: OVERRIDE_MARKER_ID }, action: 'marker', priorEtag: current._etag, prior }, async () => {
+    const result = await demi.saveWork(withValues(current, values), { owner: OWNER, etag: current._etag, existing: current });
+    return result.status === 'written' ? result.etag : refuse(`the marker write on project ${projectId} answered ${result.status}`);
+  }, now());
+}
+
 /**
- * A pending override batch `batchId` holding `writes`, each entry recording the marker's prior values; `fields` go
- * on the header. Resolves the header for completeBatch; a refused write leaves it pending, for --rollback-incomplete.
+ * Sets `active` on the markers of the projects `o` names, in an override batch under the import lock, then
+ * re-derives them; ctx `ownerOf` is works.js's. A failed write leaves the batch pending for --rollback-incomplete.
  */
-async function writeMarkers({ demi, now }, { lease, batchId }, writes, fields) {
-  const header = await batches.createBatch(batchId, { batchKind: 'override', ...fields }, now());
-  const run = { batchId, lease, seq: 0 };
-  for (const { projectId, current, values } of writes) {
-    const prior = { active: current.active, deactivatedBy: current.deactivatedBy ?? null };
-    await batches.writeAhead(run, { target: { projectId, id: OVERRIDE_MARKER_ID }, action: 'marker', priorEtag: current._etag, prior }, async () => {
-      const result = await demi.saveWork(withValues(current, values), { owner: OWNER, etag: current._etag, existing: current });
-      return result.status === 'written' ? result.etag : refuse(`the marker write on project ${projectId} answered ${result.status}`);
-    }, now());
-  }
-  return header;
-}
-
-/** Re-derives `projectIds`, then completes `header` and frees the lock; complete even when the count check fails, as every write landed. */
-async function deriveAndComplete({ demi, now, write }, header, lease, projectIds) {
-  const { counts, ok } = await rederive(demi, projectIds, lease, now);
-  await batches.completeBatch(header, lease, now());
-  lease.released = true;
-  writeCounts(write, counts, projectIds.length);
-  return ok ? 0 : 1;
-}
-
-/** Sets `active` on the markers of the projects `o` names, under the import lock; ctx `ownerOf` is works.js's. */
 async function setOverride(o, ctx, active) {
-  const { now, write } = ctx;
+  const { demi, now, write } = ctx;
   requireDeriveEnv();
   const projectIds = await projectsOf(o);
   const lease = await batches.takeLock(crypto.randomUUID(), now());
   try {
     const writes = await markerWrites(ctx, projectIds, active);
-    const header = await writeMarkers(ctx, { lease, batchId: lease.batchId }, writes, { active });
-    write(`batchId=${lease.batchId}`);
+    const batchId = lease.batchId;
+    const header = await batches.createBatch(batchId, { batchKind: 'override', active }, now());
+    write(`batchId=${batchId}`);
+    const run = { batchId, lease, seq: 0 };
+    for (const one of writes) {
+      try {
+        await writeMarker(demi, run, one, now);
+      } catch (err) {
+        err.message = `${err.message}; override batch ${batchId} stays pending`;
+        throw err;
+      }
+    }
+    const { counts, ok } = await rederive(demi, projectIds, lease, now);
+    // Complete even when the count check fails: every write landed, and a pending batch blocks every run.
+    await batches.completeBatch(header, lease, now());
+    lease.released = true;
     write(`markers=${writes.length}`);
-    return await deriveAndComplete(ctx, header, lease, projectIds);
+    writeCounts(write, counts, projectIds.length);
+    return ok ? 0 : 1;
   } finally {
     await batches.releaseQuietly(lease);
   }
@@ -92,54 +93,82 @@ async function setOverride(o, ctx, active) {
 
 /**
  * Whether the stopped batch's write on `current` landed: a done entry by its writtenEtag; an intent entry when the
- * marker left priorEtag and holds the batch's `active`. False also when the marker moved since.
+ * marker left priorEtag and holds what the write sets (the batch's `active`, no `deactivatedBy`).
  */
 function landed(entry, current, batch) {
   if (!current) return false;
   if (entry.state === 'done') return current._etag === entry.writtenEtag;
-  return current._etag !== entry.priorEtag && current.active === batch.active;
+  return current._etag !== entry.priorEtag && current.active === batch.active && current.deactivatedBy === undefined;
+}
+
+const holds = (current, prior) => current.active === prior.active && (current.deactivatedBy ?? null) === prior.deactivatedBy;
+
+/** Puts `values` back on the marker under the etag read before; resolves the written etag. */
+async function restoreMarker(demi, current, values) {
+  const { projectId } = current;
+  const result = await demi.saveWork(withValues(current, values), { owner: OWNER, etag: current._etag, existing: current });
+  return result.status === 'written' ? result.etag : refuse(`the marker restore on project ${projectId} answered ${result.status}`);
+}
+
+/** One restore step per landed marker write of `target`, all checked before any write; a moved marker is kept and reported. */
+async function restoreSteps({ demi, ownerOf }, target, entries, logged, note) {
+  const steps = [];
+  const moved = new Set();
+  for (const entry of entries.filter(one => one.action === 'marker')) {
+    const { projectId, id } = entry.target;
+    const log = logged.get(stepKey('restore', entry.target));
+    if (log?.done) continue;
+    const current = await demi.work(projectId, id);
+    if (current && ownerOf(current) !== OWNER) refuse(`the override marker on project ${projectId} is not owned by ${OWNER}; ${note}`);
+    // A resumed restore whose write landed is logged done with the etag it left, so a later rollback can chain on it.
+    if (current && holds(current, entry.prior)) {
+      if (log?.intent) steps.push({ target: entry.target, priorEtag: null, run: async () => current._etag });
+      continue;
+    }
+    if (landed(entry, current, target)) steps.push({ target: entry.target, priorEtag: current._etag, run: () => restoreMarker(demi, current, entry.prior) });
+    else if (entry.state === 'done' || current?._etag !== entry.priorEtag) moved.add(projectId);
+  }
+  return { steps, moved };
 }
 
 /**
- * `--rollback-incomplete` of an override batch: landed writes get their prior values back in a new complete override
- * batch, so a later --rollback expects its etags; a moved marker is kept and reported. Resolves the exit code.
+ * `--rollback-incomplete` of a pending override batch `target`, as rollback-business-works.js undoes a load: restore
+ * steps written ahead in a rollback batch (or resuming `resumed`), then the re-derive; `target` is marked rolledBack
+ * only once the count check passes. Resolves the exit code.
  */
-async function rollbackIncompleteOverride(ctx, batchId) {
-  const pending = async () => {
-    const batch = await batches.readBatch(batchId);
-    return batch && batch.batchKind === 'override' && batch.status === 'pending' ? batch : refuse('--rollback-incomplete acts only on a pending batch');
-  };
-  await pending();
-  const lease = await batches.takeOverLock(batchId, ctx.now());
-  try {
-    return await undoOverride(ctx, await pending(), lease);
-  } finally {
-    await batches.releaseQuietly(lease);
-  }
-}
-
-async function undoOverride(ctx, batch, lease) {
+async function undoOverrideBatch(ctx, { target, entries, lease, resumed }) {
   const { demi, now, write } = ctx;
-  const entries = await batches.listEntries(batch.id);
-  const writes = [];
-  const moved = new Set();
-  for (const entry of entries) {
-    const { projectId, id } = entry.target;
-    if (!entry.prior) refuse(`an entry on project ${projectId} records no prior marker values; nothing was undone`);
-    const current = await demi.work(projectId, id);
-    if (landed(entry, current, batch)) writes.push({ projectId, current, values: entry.prior });
-    else if (entry.state === 'done' || current?._etag !== entry.priorEtag) moved.add(projectId);
+  const log = resumed ? await batches.listEntries(resumed.id) : [];
+  const note = `this run wrote nothing${resumed ? `; rollback batch ${resumed.id} stays pending` : ''}`;
+  const { steps, moved } = await restoreSteps(ctx, target, entries, loggedOf(log), note);
+  const header = resumed
+    ? { item: withoutSystem(resumed), etag: resumed._etag }
+    : await batches.createBatch(crypto.randomUUID(), { batchKind: 'rollback', targetBatchId: target.id }, now());
+  const run = { batchId: header.item.id, lease, seq: log.length };
+  for (const step of steps) {
+    try {
+      await batches.writeAhead(run, { target: step.target, action: 'restore', priorEtag: step.priorEtag }, step.run, now());
+    } catch (err) {
+      err.message = `${err.message}; rollback batch ${header.item.id} stays pending`;
+      throw err;
+    }
   }
-  const header = await writeMarkers(ctx, { lease, batchId: crypto.randomUUID() }, writes, { targetBatchId: batch.id });
-  await batches.markBatch(batch, 'rolledBack', now());
-  write(`batchId=${batch.id}`);
-  write(`markers=${writes.length}`);
+  const projectIds = [...new Set(entries.map(entry => entry.target.projectId))];
+  const { counts, ok } = await rederive(demi, projectIds, lease, now);
+  write(`batchId=${target.id}`);
+  write(`rollbackBatchId=${header.item.id}`);
+  write(`markers=${steps.length}`);
   write(`moved=${moved.size}`);
   moved.forEach(projectId => write(`movedProject=${projectId}`));
-  return deriveAndComplete(ctx, header, lease, [...new Set(entries.map(entry => entry.target.projectId))]);
+  writeCounts(write, counts, projectIds.length);
+  if (!ok) return 1;
+  await batches.markBatch(target, 'rolledBack', now());
+  await batches.completeBatch(header, lease, now());
+  lease.released = true;
+  return 0;
 }
 
 const revertOverride = (o, ctx) => setOverride(o, ctx, false);
 const reapplyOverride = (o, ctx) => setOverride(o, ctx, true);
 
-module.exports = { revertOverride, reapplyOverride, rollbackIncompleteOverride };
+module.exports = { revertOverride, reapplyOverride, undoOverrideBatch };

@@ -103,4 +103,27 @@ function shownTrackIds(docs) {
   return track.filter(doc => !hiddenByOverride(doc, marker, boundary, shownSheetIds)).map(doc => doc.id);
 }
 
-module.exports = { LATER, SHA, DERIVE_ENV, isSheet, rollbackDemi, openBackup, argsOf, rollback, loaded, loadedBatch, shownTrackIds };
+/** A complete load batch writing markers on `projects`, and a fake DEMI holding an active sheet marker on each of `stored`. */
+function markerStore(t, projects, stored) {
+  const store = fakeLists(t);
+  store.set({ kind: KINDS.BATCH, id: 'b1', batchKind: 'load', status: 'complete', startedAt: new Date(T0).toISOString(), completedAt: new Date(T0 + 1).toISOString() });
+  projects.forEach((projectId, i) => store.set({ kind: KINDS.ENTRY, id: `b1:${i + 1}`, batchId: 'b1', seq: i + 1, target: { projectId, id: OVERRIDE_MARKER_ID },
+    action: 'marker', priorEtag: null, writtenEtag: '"m"', state: 'done' }));
+  store.set({ kind: KINDS.ENTRY, id: `b1:${projects.length + 1}`, batchId: 'b1', seq: projects.length + 1, target: { projectId: '7003', id: 'sheet-a' },
+    action: 'create', priorEtag: null, writtenEtag: '"a"', state: 'done' });
+  const markers = new Map(stored.map(projectId => [projectId, { id: OVERRIDE_MARKER_ID, projectId, source: 'sheet', owner: 'sheet', active: true, _etag: '"m"' }]));
+  let n = 0;
+  const demi = {
+    markers,
+    work: async projectId => markers.get(projectId) || null,
+    saveWork: async (doc, { etag }) => {
+      if (markers.get(doc.projectId)?._etag !== etag) return { status: 'foreign' };
+      markers.set(doc.projectId, { ...doc, _etag: `"w${n += 1}"` });
+      return { status: 'written', etag: markers.get(doc.projectId)._etag };
+    },
+    patchDerived: async () => ({ status: 'patched' })
+  };
+  return { store, demi };
+}
+
+module.exports = { LATER, SHA, DERIVE_ENV, markerStore, isSheet, rollbackDemi, openBackup, argsOf, rollback, loaded, loadedBatch, shownTrackIds };

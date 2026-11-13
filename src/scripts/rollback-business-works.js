@@ -13,7 +13,7 @@ const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
 const { stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv } = require('./works-rollback-steps');
 const { rederiveBatch, timedFetch } = require('./works-import-rederive');
-const { revertOverride, reapplyOverride, rollbackIncompleteOverride } = require('./works-import-override');
+const { revertOverride, reapplyOverride, undoOverrideBatch } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -193,9 +193,9 @@ async function stillResumed(batchId, resumed) {
   return now;
 }
 
-async function loadBatch(batchId, statuses, message) {
+async function loadBatch(batchId, statuses, message, batchKind = 'load') {
   const batch = await batches.readBatch(batchId);
-  return batch && batch.batchKind === 'load' && statuses.includes(batch.status) ? batch : refuse(message);
+  return batch && batch.batchKind === batchKind && statuses.includes(batch.status) ? batch : refuse(message);
 }
 
 /** Done entries of the override and rollback batches that started after `target`, in the order they ended; a rollback's carry `undoes`. */
@@ -231,18 +231,22 @@ async function rollback(o, ctx) {
 async function rollbackIncomplete(o, ctx) {
   requireDeriveEnv();
   const batchId = o['rollback-incomplete'];
-  if ((await batches.readBatch(batchId))?.batchKind === 'override') return rollbackIncompleteOverride(ctx, batchId);
+  // An override batch is undone from the prior values its entries hold, so it takes no backup.
+  const kind = (await batches.readBatch(batchId))?.batchKind === 'override' ? 'override' : 'load';
   const missingKey = BACKUP_KEYS.find(key => !o[key]);
-  if (missingKey) refuse(`--rollback-incomplete of a load batch needs --${missingKey}`);
+  if (kind === 'override' && BACKUP_KEYS.some(key => o[key])) refuse('--rollback-incomplete of an override batch takes no backup flags');
+  if (kind === 'load' && missingKey) refuse(`--rollback-incomplete of a load batch needs --${missingKey}`);
   const seen = await pendingRollbackOf(batchId);
   const statuses = seen ? ['pending', 'rolledBack'] : ['pending'];
-  const message = '--rollback-incomplete acts only on a pending load batch';
-  await loadBatch(batchId, statuses, message);
+  const message = `--rollback-incomplete acts only on a pending ${kind} batch`;
+  await loadBatch(batchId, statuses, message, kind);
   const lease = await batches.takeOverLock(batchId, ctx.now(), [batchId, seen?.id].filter(Boolean));
   try {
     const resumed = await stillResumed(batchId, seen);
-    const target = await loadBatch(batchId, statuses, message);
-    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
+    const target = await loadBatch(batchId, statuses, message, kind);
+    const entries = await batches.listEntries(batchId);
+    if (kind === 'override') return await undoOverrideBatch(ctx, { target, entries, lease, resumed });
+    return await undoBatch(o, ctx, { target, entries, laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
     await batches.releaseQuietly(lease);
   }
@@ -295,6 +299,7 @@ const HELP = [
   '  --revert-override                    turn the sheet override marker off, with --project <id> or --all',
   '  --reapply-override                   turn it back on, with --project <id> or --all',
   '      --all: every marker the latest complete load batch wrote',
+  '      a failed revert or reapply leaves its override batch pending: clear it with --rollback-incomplete <id>',
   '  --rederive <batchId>                 after sheet joins WORKS_READ_SOURCES: the public read must show a batch sheet work',
   '  --rederive <batchId> --unflip        after sheet leaves WORKS_READ_SOURCES: the public read must show none',
   'A failed run leaves its rollback batch pending; the same command resumes it.',
