@@ -1582,6 +1582,91 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/works-staff:
+    get:
+      summary: Get a project's works with the staff entries in effect for each
+      description: >-
+        Every live work of the project, each with the contacts, investments and notes that apply to
+        it, plus the project's `currentInvestment`. Needs the role `staff`, `sysadmin` or
+        `demi-admin`, or a registry key carrying `demi-service-read` or a write role. Anonymous and
+        IDIR-only callers get 403 before the project is read. A staff list that a per-project dial
+        hides from the caller comes back empty. The route lists all works, with no sheet-override
+        hiding, so it shows the sheet works a public read leaves out. `sourceKey` and `sheetKey`
+        never appear.
+
+        An entry tied to a work by `workId` shows on that work only, with no date test. Any other
+        entry shows on each work whose dates it overlaps. An entry with no `effectiveFrom` shows on a
+        work that was open on its `observedAt` day, and carries `currentAsOf`, set to that day.
+
+        `currentInvestment` is the open entry (no `effectiveTo`) of the first source that has one,
+        in the order `demi`, `track`, `eagle`, `sheet`; `null` when none is open.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id (a Track number, `eagle-<ObjectId>` or a UUID).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The project's works and its current investment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                  currentInvestment:
+                    nullable: true
+                    allOf:
+                      - $ref: '#/components/schemas/WorksStaffEntry'
+                  works:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        workId:
+                          type: string
+                        title:
+                          type: string
+                          nullable: true
+                        startDate:
+                          type: string
+                          nullable: true
+                          description: '`YYYY-MM-DD`; null when unknown.'
+                        endDate:
+                          type: string
+                          nullable: true
+                          description: >-
+                            The decision date, else the end of the last phase; null while the work is
+                            open.
+                        contacts:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/WorksStaffEntry'
+                        investments:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/WorksStaffEntry'
+                        notes:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/WorksStaffEntry'
+        '400':
+          description: The id is not a DEMI project id. Nothing is read.
+        '401':
+          description: Credential rejected.
+        '403':
+          description: The caller is anonymous, holds only an IDIR login, or has no staff-level role.
+        '404':
+          description: Project not found, or not readable by the caller.
+        '500':
+          description: The read failed.
+
   /api/projects/{id}/level:
     put:
       summary: Set a project's ladder level
@@ -10219,6 +10304,46 @@ components:
           items:
             type: object
             description: The stored item plus its `id`.
+
+    WorksStaffEntry:
+      type: object
+      description: >-
+        One staff entry. Which keys appear depends on the list: contacts add `role`, `name`,
+        `effectiveFrom` and `effectiveTo`; investments add `amountCad`, `effectiveFrom`,
+        `effectiveTo` and `workId`; notes add `text` and `workId`. `currentAsOf` is set only on an
+        entry with no `effectiveFrom`.
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+          description: Where the entry came from, such as `demi`, `track`, `eagle` or `sheet`.
+        observedAt:
+          type: string
+          description: '`YYYY-MM-DD`.'
+        recordedAt:
+          type: string
+          description: ISO timestamp.
+        currentAsOf:
+          type: string
+          description: The `observedAt` day, for an entry with no start date.
+        role:
+          type: string
+        name:
+          type: string
+        text:
+          type: string
+        amountCad:
+          type: number
+        effectiveFrom:
+          type: string
+          nullable: true
+        effectiveTo:
+          type: string
+          nullable: true
+        workId:
+          type: string
+          nullable: true
 
     ProjectCac:
       type: object
