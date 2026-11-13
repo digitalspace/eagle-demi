@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { pickAssessmentWork, workActYear } = require('../../src/merge/assessment-work');
-const { activeWorkOf, legislationTransitions, trackPhasesOf } = require('../../src/merge/track-derived');
+const { activeWorkOf, legislationTransitions, assessmentPhasesOf } = require('../../src/merge/track-derived');
 const { publicWorksOf } = require('../../src/seed/track-mappers');
 
 const ROW = { id: '1001', name: 'Made-up Mine' };
@@ -40,7 +40,7 @@ test('the Assessment pick breaks a tie between sheet works on the work id', () =
 test('sheet assessment phases appear under their actYear', () => {
   const work = sheetWork(1, { phases: [{ id: 'pre-application', name: 'Pre-Application', sortOrder: 1 }] });
 
-  const phases = trackPhasesOf({ works: [work], phases: [] }, () => 2018);
+  const phases = assessmentPhasesOf({ works: [work], phases: [] }, () => 2018);
 
   assert.deepStrictEqual(phases.map(one => [one.phase.name, one.year]), [['Pre-Application', 2002]]);
 });
@@ -48,7 +48,7 @@ test('sheet assessment phases appear under their actYear', () => {
 test('a sheet Assessment with no actYear leaves the row\'s own phases', () => {
   const work = sheetWork(1, { actYear: null, phases: [{ id: 'pre-application', name: 'Pre-Application' }] });
 
-  const phases = trackPhasesOf({ works: [work], phases: [{ name: 'Stored', eaActName: '2018 Act' }] }, () => 2018);
+  const phases = assessmentPhasesOf({ works: [work], phases: [{ name: 'Stored', eaActName: '2018 Act' }] }, () => 2018);
 
   assert.deepStrictEqual(phases.map(one => [one.phase.name, one.year]), [['Stored', 2018]]);
 });
