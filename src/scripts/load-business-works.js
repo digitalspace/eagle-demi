@@ -147,7 +147,8 @@ async function live(o, ctx) {
   const batchId = crypto.randomUUID();
   const lease = await batches.takeLock(batchId, now());
   const { plan, stored, backup, batch } = await startBatch(o, ctx, batchId, lease);
-  // Printed before any write, so a run that stops midway still leaves the operator the backup's sha.
+  // Printed before any write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
+  write(`batchId=${batchId}`);
   write(`backupBlob=${backup.name}`);
   write(`backupSha256=${backup.sha256}`);
   const run = { batchId, lease, seq: 0 };
@@ -172,7 +173,6 @@ async function live(o, ctx) {
     }, now());
   }
   await batches.completeBatch(batch, lease, now());
-  write(`batchId=${batchId}`);
   write(`written=${written}`);
   write(`derived=${touched.length}`);
 }

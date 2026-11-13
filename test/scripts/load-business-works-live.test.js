@@ -57,7 +57,7 @@ test('a dry run refuses a works-backup too big for a rollback to read, before it
   assert.deepEqual(fs.readdirSync(given.outDir), []);
 });
 
-test('a live run that stops after the batch header has printed the backup blob and its sha', async (t) => {
+test('a live run that stops after the batch header has printed the batch id, the backup blob and its sha', async (t) => {
   const store = fakeLists(t);
   const demi = fakeDemi();
   const given = inputs();
@@ -65,8 +65,8 @@ test('a live run that stops after the batch header has printed the backup blob a
   demi.saveWork = async () => { throw new Error('save failed'); };
   const lines = [];
   await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0 }), /save failed/);
-  const { backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
-  assert.deepEqual(lines, [`backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`]);
+  const { id, backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
+  assert.deepEqual(lines, [`batchId=${id}`, `backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`]);
 });
 
 test('a works-backup too big for a rollback to read refuses before the backup or the batch header is written', async (t) => {
