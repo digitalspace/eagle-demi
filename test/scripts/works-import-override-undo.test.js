@@ -4,10 +4,12 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { KINDS, LOCK_ID, LEASE_MS } = require('../../src/scripts/works-import-batch');
+const batches = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const { PROJECT } = require('../helpers/works-import-loader');
 const { LATER, markerStore, rollback, loaded } = require('../helpers/works-import-rollback');
+
+const { KINDS, LOCK_ID, LEASE_MS } = batches;
 
 const undo = id => ['--rollback-incomplete', id];
 const batchesOf = (store, kind) => store.all().filter(item => item.kind === KINDS.BATCH && item.batchKind === kind);
@@ -109,7 +111,7 @@ test('rollback-incomplete of an override batch resumes after its undo stopped on
   await assert.rejects(rollback(undo(stuck), demi), /connection reset; rollback batch .+ stays pending/);
   demi.saveWork = save;
   assert.equal(demi.markers.get('7001').active, true);
-  // A load turns 7001 off after its restore; the resumed run leaves that alone and does not call it moved.
+  // A later write turns 7001 off after its restore; the resumed run leaves that alone and does not call it moved.
   demi.markers.set('7001', { ...demi.markers.get('7001'), active: false, deactivatedBy: 'load', _etag: '"load"' });
 
   const { code, value } = await rollback(undo(stuck), demi);
@@ -139,17 +141,26 @@ test('a resumed override undo logs done the restore that landed before its run s
 
 test('rollback-incomplete of an override batch takes over its own lock after a hard stop', async (t) => {
   const { store, demi, stuck } = await stopped(t);
-  demi.patchDerived = async () => ({ status: 'missing' });
-  assert.equal((await rollback(undo(stuck), demi)).code, 1, 'the count check fails, so nothing is marked done');
-  assert.equal(store.get(stuck, KINDS.BATCH).status, 'pending');
+  // The process dies after the restores are written: both batches stay pending and the lock stays.
+  t.mock.method(batches, 'markBatch', async () => { throw new Error('killed'); }, { times: 1 });
+  t.mock.method(batches, 'releaseQuietly', async () => {}, { times: 1 });
+  await assert.rejects(rollback(undo(stuck), demi), /killed/);
   const [pendingUndo] = batchesOf(store, 'rollback');
-  assert.equal(pendingUndo.status, 'pending');
-  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: stuck, expiresAt: new Date(LATER).toISOString() });
-  demi.patchDerived = async () => ({ status: 'patched' });
+  assert.deepEqual([store.get(stuck, KINDS.BATCH).status, pendingUndo.status, store.get(LOCK_ID, KINDS.LOCK).batchId], ['pending', 'pending', stuck]);
 
   assert.equal((await rollback(undo(stuck), demi, { at: LATER + LEASE_MS })).code, 0);
   assert.equal(store.get(stuck, KINDS.BATCH).status, 'rolledBack');
   assert.equal(store.get(pendingUndo.id, KINDS.BATCH).status, 'complete');
+});
+
+test('an override undo whose restores are all written finishes when the count check fails, and exits 1', async (t) => {
+  const { store, demi, stuck } = await stopped(t);
+  demi.patchDerived = async () => ({ status: 'missing' });
+
+  assert.equal((await rollback(undo(stuck), demi)).code, 1);
+  assert.equal(store.get(stuck, KINDS.BATCH).status, 'rolledBack');
+  assert.deepEqual(batchesOf(store, 'rollback').map(one => one.status), ['complete']);
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
 });
 
 test('--abandon-rollback clears a stuck override undo, and a fresh run finishes it', async (t) => {

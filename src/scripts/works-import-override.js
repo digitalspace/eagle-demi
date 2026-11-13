@@ -162,11 +162,11 @@ async function undoOverrideBatch(ctx, { target, entries, lease, resumed }) {
   write(`moved=${moved.size}`);
   moved.forEach(projectId => write(`movedProject=${projectId}`));
   writeCounts(write, counts, projectIds.length);
-  if (!ok) return 1;
+  // Every restore is logged done, so the undo is finished even when the count check fails, as in setOverride.
   await batches.markBatch(target, 'rolledBack', now());
   await batches.completeBatch(header, lease, now());
   lease.released = true;
-  return 0;
+  return ok ? 0 : 1;
 }
 
 const revertOverride = (o, ctx) => setOverride(o, ctx, false);

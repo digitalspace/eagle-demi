@@ -69,7 +69,9 @@ async function probe({ demi, fetchFn, env }, entries) {
 
 /** The lock for `batchId`: taken fresh, or taken over once a run of this batch left it expired. */
 async function lockFor(batchId, now) {
-  return (await batches.readLock()) ? batches.takeOverLock(batchId, now, [batchId]) : batches.takeLock(batchId, now);
+  if (!await batches.readLock()) return batches.takeLock(batchId, now);
+  if ((await batches.batchesWithStatus('pending')).length) refuse('an ImportBatch is pending');
+  return batches.takeOverLock(batchId, now, [batchId]);
 }
 
 /**

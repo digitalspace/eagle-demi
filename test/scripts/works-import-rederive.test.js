@@ -132,6 +132,15 @@ test('rederive takes over its own lock after a hard stop, and refuses while that
   assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
 });
 
+test('a pending rollback of the batch blocks rederive, even when it can take over the lock', async (t) => {
+  const { store, demi, batchId, readable } = await published(t);
+  store.set({ kind: KINDS.BATCH, id: 'rb1', batchKind: 'rollback', targetBatchId: batchId, status: 'pending', startedAt: new Date(LATER).toISOString() });
+  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId, expiresAt: new Date(LATER - 1).toISOString() });
+
+  await assert.rejects(rollback(rederive(batchId), demi, publicRead(readable)), /an ImportBatch is pending/);
+  assert.deepEqual(demi.derives, []);
+});
+
 test('rederive refuses a batch that is not a complete load batch', async (t) => {
   const { store, demi, batchId } = await published(t);
   store.set({ ...store.get(batchId, KINDS.BATCH), status: 'rolledBack' });
