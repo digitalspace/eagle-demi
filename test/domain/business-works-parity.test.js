@@ -7,6 +7,8 @@ const assert = require('node:assert');
 
 const { parityOf } = require('../../src/domain/business-works-parity');
 const { idOf } = require('../../src/domain/extensions');
+const { overrideShown } = require('../../src/domain/works-derive');
+const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { eagleOnlyProjectId } = require('../../src/merge/project');
 const {
   PROJECT, AT, CROSSWALK, register, amendment, extractOf, trackWork, settledAmendment, aliveAmendment, decided2018, loaded, stateOf, withChild
@@ -171,6 +173,21 @@ test('an untilTrack work two new Track works stand for counts once', () => {
   const track = [trackWork(502, { startDate: '2010-01-05' }), trackWork(503, { startDate: '2010-01-10' })];
   const result = parity(open, stateOf(loaded(open), { track }));
   assert.deepStrictEqual(result.listed('untilTrackHidden').map(item => [item.sourceKey, item.trackWorkId]), [[KEY, 'track-502']]);
+});
+
+test('on an equal gap, parity and the read name the same untilTrack work a Track work hides', () => {
+  const twin = extractOf(amendment('1', '2010-01-01', null), amendment('2', '2010-01-01', null));
+  const state = loaded(twin);
+  // Ids in the reverse of sourceKey order, so a sourceKey tie-break and an id tie-break disagree.
+  const idFor = { '101:amendment:1': 'sheet-00000000-0000-4000-8000-00000000000b', '101:amendment:2': 'sheet-00000000-0000-4000-8000-00000000000a' };
+  const old = new Map(state.works.map(work => [work.id, work.sourceKey]));
+  state.works = state.works.map(work => (idFor[work.sourceKey] ? { ...work, id: idFor[work.sourceKey] } : work));
+  const marker = state.markers.get(PROJECT);
+  marker.untilTrack = marker.untilTrack.map(id => idFor[old.get(id)]);
+  const track = [trackWork(502, { startDate: '2010-01-01' })];
+  const [item] = parity(twin, stateOf(state, { track })).listed('untilTrackHidden');
+  const read = state.works.map(work => Object.fromEntries(Object.entries(work).filter(([key]) => !PRIVATE_KEYS.has(key))));
+  assert.deepStrictEqual([item.sheetWorkId], [...overrideShown(read, track, marker).replaced]);
 });
 
 // [the fields its one hiddenDrift item carries, extract, stored state]

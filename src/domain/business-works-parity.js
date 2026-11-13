@@ -9,7 +9,7 @@ const { mapBusinessWorks } = require('./business-works-map');
 const { idOf } = require('./extensions');
 const { overrideShown } = require('./works-derive');
 const {
-  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, settledBefore, sourceOf, untilTrackHidden, workTypeCodeOf
+  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, settledBefore, sourceOf, workTypeCodeOf
 } = require('./work-model');
 
 const COUNTS = ['projects', 'works', 'mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'notInCrosswalk', 'noRegisterRow',
@@ -154,7 +154,7 @@ function checkMarker(tally, { projectId, marker, freshMarker, sheet, track }) {
   const trackById = new Map(track.map(work => [work.id, work]));
   const drift = (reason, fields) => tally.add('hiddenDrift', { project: projectId, reason, ...fields });
   for (const sheetWorkId of replaced) {
-    const by = track.find(trackWork => untilTrackHidden(sheet, [trackWork], marker).has(sheetWorkId));
+    const by = track.find(trackWork => overrideShown(sheet, [trackWork], marker).replaced.has(sheetWorkId));
     tally.add('untilTrackHidden', { project: projectId, sheetWorkId, sourceKey: keyOf.get(sheetWorkId), trackWorkId: by.id });
   }
   checkPairs(drift, { marker, freshMarker, keyOf, storedKeys: new Set(keyOf.values()), trackById, boundary, shownIds: [...shownSheetIds] });
