@@ -1,14 +1,13 @@
 'use strict';
 
-/**
- * Track team feed -> `project:<id>` realm roles, then mirror, credential sweep and dating pass. Owns
- * only `project:` roles for ids Track lists; `project:eagle-abc` stays.
- */
+/** Track team feed -> `project:<id>` realm roles, then mirror, works parity, credential sweep and dating
+ *  pass. Owns only `project:` roles for ids Track lists; `project:eagle-abc` stays. */
 
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
 const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorks } = require('../seed/sources');
 const { syncProjects } = require('./sync-track-run');
+const { trackParity } = require('./check-works-parity');
 const { logger } = require('../utils/logger');
 
 /** Keycloak's admin API caps a listing page; anything longer has to be walked with `first=`. */
@@ -279,16 +278,12 @@ async function sync(argv = [], deps = {}) {
   try {
     const projects = await fetchTrackProjects(trackToken, get);
 
-    // Phases and works on their own try, ahead of the mirror: a Track feed that is down must cost
-    // them only, and `mergeTrackProject` then leaves the stored ones alone rather than blanking them.
-    let phases = new Map();
-    let works = new Map();
-    let nested = new Map();
+    // Own try, ahead of the mirror: a Track feed outage costs phases and works only; the stored ones stay.
+    let pull = { phases: new Map(), works: new Map(), nested: new Map(), stats: null };
     try {
-      const pulled = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
-      ({ phases, works, nested } = pulled);
-      summary.trackWorks = pulled.stats.works;
-      summary.trackWorksFailed = pulled.stats.failures;
+      pull = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
+      summary.trackWorks = pull.stats.works;
+      summary.trackWorksFailed = pull.stats.failures;
     } catch (err) {
       summary.failures++;
       logger.error('[track-teams] work phase pull failed', { error: err.message, stack: err.stack });
@@ -297,9 +292,11 @@ async function sync(argv = [], deps = {}) {
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
+      const { phases, works, nested } = pull;
       const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, nested, pushedAt });
       Object.assign(summary, mirrorCounts(mirrored));
       summary.failures += mirrored.failures;
+      await trackParity(projects, pull, { live: args.live, mirrored, pushedAt });
     } catch (err) {
       summary.failures++;
       logger.error('[track-teams] project mirror failed', { error: err.message, stack: err.stack });

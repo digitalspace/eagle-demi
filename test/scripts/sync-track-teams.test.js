@@ -702,3 +702,48 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
   assert.strictEqual(summary.credentialsRevoked, 0);
   assert.strictEqual(summary.failures, 0);
 });
+
+// The parity's own cases are in test/scripts/check-works-parity.test.js; this one proves the nightly runs it.
+test('works parity', async (t) => {
+  const config = require('../../src/config');
+  const worksRepository = require('../../src/repositories/works');
+  const { logger } = require('../../src/utils/logger');
+  const { workDocOf } = require('../../src/seed/track-mappers');
+  const { fakeWorks, useWorks } = require('../helpers/track-sync-fakes');
+
+  const held = { trackWorksSync: config.trackWorksSync, worksWrite: config.worksWrite };
+  Object.assign(config, { trackWorksSync: true, worksWrite: true });
+  t.after(() => Object.assign(config, held));
+
+  /** One night over work 12 of project 1, the container holding a copy that differs; resolves the parity lines. */
+  async function night(t, argv) {
+    useWorks(t, fakeWorks());
+    const work = { id: 12, project_id: 1, work_type_id: 7, is_active: true };
+    t.mock.method(worksRepository, 'liveProjectIds', async () => ['1']);
+    t.mock.method(worksRepository, 'listForRead', async (id) =>
+      (id === '1' ? [workDocOf({ ...work, is_active: false }, { projectId: '1' })] : []));
+    const lines = [];
+    for (const level of ['info', 'warn']) {
+      t.mock.method(logger, level, (msg) => { if (msg.startsWith('[works-parity]')) lines.push(msg); });
+    }
+    const get = async (url) => {
+      if (url.endsWith('/team-members')) return TEAMS;
+      if (url.endsWith('/api/v1/works')) return [work];
+      if (url.endsWith('/works/12/phases')) return [];
+      return CLOSED_AND_OPEN;
+    };
+    const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+    const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+    await sync(argv, { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+    return lines;
+  }
+
+  await t.test('nightly logs trackMismatch=1 when a container Track work differs from the pull', async (t) => {
+    assert.deepStrictEqual(await night(t, ['--live']), ['[works-parity] trackMismatch id=1',
+      '[works-parity] trackMismatch=1 projects=1 skipped=0 absentFromPull=0 notWritten=0']);
+  });
+
+  await t.test('a dry-run night runs no parity', async (t) => {
+    assert.deepStrictEqual(await night(t, []), []);
+  });
+});

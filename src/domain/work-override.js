@@ -260,5 +260,6 @@ function validateMarker(marker) {
 module.exports = {
   OVERRIDE_MARKER_ID, OVERRIDE_TYPES, TRACK_FROM, TRACK_WORK_TYPE_CODES, WORK_ID_PATTERNS,
   compareText, controlErrors, dayOf, daysBetween, eachString, given, hasControl, isObject, listOf, sourceOf,
-  hiddenByOverride, matchEvents, overrideBoundaryOf, sameEvent, settledBefore, untilTrackHidden, validateMarker
+  hiddenByOverride, matchEvents, overrideBoundaryOf, sameEvent, settledBefore, untilTrackHidden, validateMarker,
+  workTypeCodeOf
 };

@@ -8,19 +8,14 @@ const { isDeepStrictEqual } = require('node:util');
 const { check } = require('./_schema');
 const { ADMIN_ROLES } = require('../helpers/access-sql');
 const { STAFF_ROLE_FIELDS } = require('../ownership/project');
+const { SYSTEMS, MAX_ENTRIES } = require('../repositories/project-staff-history');
 const { logger } = require('../utils/logger');
 
 const ROLES = Object.freeze(['epd', 'lead']);
 
-const SYSTEMS = Object.freeze({
-  'eao-register': /^[1-9]\d{0,8}$/,
-  // Assumed ORCS file number shape (primary-secondary, optional file part); no ORCS value is loaded yet.
-  orcs: /^\d{5}-\d{2}(?:\/[A-Za-z0-9.-]{1,40})?$/
-});
-
-const MAX_ENTRIES = 200;
 // Keeps the row well under the Cosmos 2 MB item limit whatever else it holds.
 const MAX_BYTES = 256 * 1024;
+const MAX_NEW_EXTERNAL_IDS = 20;
 
 /** Which source's open entry is the current investment, first wins. */
 const INVESTMENT_ORDER = Object.freeze(['demi', 'track', 'eagle', 'sheet']);
@@ -136,10 +131,20 @@ function stamp(field, entry, now) {
 const appendedToOlderCopy = (field, sent, index, today) => index < sent.length &&
   sent.slice(index).every(entry => !newEntryError(field, trimmed(entry), today));
 
+/** Index of the first entry from `from` on whose (system, value) an earlier entry holds, value case-blind; else -1. */
+function repeatedIdIndex(entries, from) {
+  const keys = entries.map(entry => `${entry.system} ${String(entry.value).toLowerCase()}`);
+  return keys.findIndex((key, index) => index >= from && keys.indexOf(key) < index);
+}
+
 /** `{entries}` for `field` after a PUT sent `sent` over `stored`, or `{error}` (`stale` when the list moved). */
 function nextEntries(field, stored, sent, now) {
   if (!Array.isArray(sent)) return { error: `${field}: must be an array` };
   if (sent.length > MAX_ENTRIES) return { error: `${field}[${MAX_ENTRIES}]: at most ${MAX_ENTRIES} entries` };
+  // All appended ids go to one query across every project; the cap limits probing which values exist.
+  if (field === 'externalIds' && sent.length - stored.length > MAX_NEW_EXTERNAL_IDS) {
+    return { error: `externalIds: at most ${MAX_NEW_EXTERNAL_IDS} new external ids per request` };
+  }
   const today = pacificDay(now);
   const entries = [];
   for (const [index, given] of sent.entries()) {
@@ -159,10 +164,9 @@ function nextEntries(field, stored, sent, now) {
     entries.push(stamp(field, entry, now));
   }
   if (sent.length < stored.length) return { error: `${field}[${sent.length}]: a stored entry cannot be removed` };
-  // A (system, value) pair is unique across projects, and no query checks that yet.
-  if (field === 'externalIds' && entries.length > stored.length) {
-    return { error: `externalIds[${stored.length}]: a new external id cannot be added until it can be checked against other projects` };
-  }
+  // Other projects are checked against the store when the write runs (project-staff-history.js).
+  const repeat = field === 'externalIds' ? repeatedIdIndex(entries, stored.length) : -1;
+  if (repeat >= 0) return { error: `externalIds[${repeat}]: the list already holds this id (compared without case)` };
   return { entries };
 }
 

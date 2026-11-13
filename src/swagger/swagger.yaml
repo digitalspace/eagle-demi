@@ -1366,7 +1366,8 @@ paths:
             names the unknown ids. Also `externalIds`, `staffAssignments`, `capitalInvestments`
             or `staffNotes` from a caller without `sysadmin`, `staff` or `demi-admin` (a service
             key is refused), or a staff list that breaks the rules on `ProjectInput`: the error
-            names the field and the entry index, never a value.
+            names the field, and the entry index where there is one, never a value. That includes an appended external
+            id already in the list, compared without case, and more than 20 new external ids.
         '401':
           description: Unauthorized.
         '403':
@@ -1386,7 +1387,8 @@ paths:
             changes `eagleId` on a project mirrored from Eagle or taken over from it. Or a staff
             list in the body appends to an older copy of the stored list, which has gained entries
             since the caller read it, or another write changed it while this request ran; read the
-            project again. Nothing is written.
+            project again. Or an appended external id is held by another project; the answer is one
+            fixed message that names neither the id nor the project. Nothing is written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
@@ -9511,34 +9513,86 @@ components:
         works:
           type: array
           description: >-
-            The project's Track works of types 1, 2, 3, 5, 6, 7, 9, 10, 11, 15 and 16. Absent when
-            Track has none or the works sync has not run. Notes, staff and hidden events are left
-            out.
+            The project's works: Track works of types 1, 2, 3, 5, 6, 7, 9, 10, 11, 15 and 16 by
+            `trackWorkId`, then works from other sources by `startDate`, then `workId`. Absent when
+            there are none or the works sync has not run. Notes, staff, hidden events and source
+            references are left out. On a work from another source the Track-only keys are null.
           items:
             type: object
             properties:
+              workId:
+                type: string
+                description: The work's id, `track-<n>` for a Track work.
+              source:
+                type: string
+                nullable: true
+                enum: [track, sheet, demi, null]
               trackWorkId:
                 type: integer
+                nullable: true
               workTypeId:
                 type: integer
+                nullable: true
+              workTypeCode:
+                type: string
+                nullable: true
+                description: The works catalog code of the work type.
               workType:
                 type: string
+                nullable: true
               title:
                 type: string
                 nullable: true
               eaAct:
                 type: string
                 nullable: true
+              actYear:
+                type: integer
+                nullable: true
+                enum: [1996, 2002, 2018, 2025, null]
+              outcomeCode:
+                type: string
+                nullable: true
+              transitionOut:
+                type: object
+                nullable: true
+                description: >-
+                  Present on a work that ended because its project moved to a later Act.
+                properties:
+                  toActYear:
+                    type: integer
+                    nullable: true
+                  date:
+                    type: string
+                    format: date
+                    nullable: true
+                    description: >-
+                      The hand-over day. A sheet date before 2025-01-01 when the stored `dateSource`
+                      is `sheet`. Else the day of Track's "Project Transitioning FROM" milestone naming
+                      this work's Act. Else the stored sheet date, only when the stored `dateSource` is
+                      `track`. Else null.
+                  dateSource:
+                    type: string
+                    enum: [sheet, track, none]
+                    description: >-
+                      Where `date` came from: `track` for Track's milestone, `sheet` for a sheet date,
+                      `none` when `date` is null.
+              undated:
+                $ref: '#/components/schemas/WorkUndated'
               startDate:
                 type: string
                 format: date-time
                 nullable: true
               isActive:
                 type: boolean
+                nullable: true
               workState:
                 type: string
                 nullable: true
-                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, null]
+                description: >-
+                  Track's state on a Track work. `transitioned` marks a work its project left for a
+                  later Act; `inactive` a sheet work recorded as incomplete or inactive.
+                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, transitioned, inactive, null]
               decisionDate:
                 type: string
                 format: date-time
@@ -9551,12 +9605,70 @@ components:
                 type: string
                 nullable: true
                 description: >-
-                  The Track outcome name of the END milestone in the work's last phase that has
-                  one.
+                  The outcome name. On a Track work, the Track outcome of the END milestone in the
+                  work's last phase that has one. On a work from another source, the stored name
+                  for `outcomeCode`.
               phases:
                 type: array
                 items:
-                  $ref: '#/components/schemas/TrackWorkPhase'
+                  allOf:
+                    - $ref: '#/components/schemas/TrackWorkPhase'
+                    - type: object
+                      properties:
+                        trackPhaseId:
+                          type: integer
+                          nullable: true
+                        phaseCodeId:
+                          type: integer
+                          nullable: true
+                        catalogId:
+                          type: string
+                          nullable: true
+                          description: The phase catalog entry, `track-<phase code>` when the catalog lacks it.
+                        catalogName:
+                          type: string
+                          nullable: true
+                        stage:
+                          type: string
+                          nullable: true
+                        order:
+                          type: integer
+                          nullable: true
+                        isSuspended:
+                          type: boolean
+                          nullable: true
+                        suspendedDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        undated:
+                          $ref: '#/components/schemas/WorkUndated'
+                        interruptions:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              kind:
+                                type: string
+                                enum: [extension, suspension, interregnum]
+                              typeCode:
+                                type: string
+                                nullable: true
+                              legalSection:
+                                type: string
+                                nullable: true
+                              startDate:
+                                type: string
+                                nullable: true
+                              endDate:
+                                type: string
+                                nullable: true
+                              days:
+                                type: integer
+                                nullable: true
+                                description: End minus start.
               milestones:
                 type: array
                 items:
@@ -9564,27 +9676,51 @@ components:
                   properties:
                     name:
                       type: string
+                      nullable: true
+                    code:
+                      type: string
+                      nullable: true
+                      description: The works catalog milestone code; null on a Track milestone.
                     position:
                       type: string
-                      enum: [START, INTERMEDIATE, END]
+                      nullable: true
+                      enum: [START, INTERMEDIATE, INTERIOR, END, null]
                     eventType:
                       type: integer
                       nullable: true
                       description: Track event type id
+                    trackEventId:
+                      type: integer
+                      nullable: true
                     actualDate:
                       type: string
-                      format: date-time
                       nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
                     anticipatedDate:
                       type: string
-                      format: date-time
                       nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
+                    endDate:
+                      type: string
+                      nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
                     outcome:
                       type: string
                       nullable: true
                     numberOfDays:
                       type: integer
                       nullable: true
+                    links:
+                      type: object
+                      properties:
+                        commentPeriodId:
+                          type: string
+                          nullable: true
+                        blockField:
+                          type: string
+                          nullable: true
+                    undated:
+                      $ref: '#/components/schemas/WorkUndated'
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
@@ -9594,6 +9730,20 @@ components:
           (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
           `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
           a field with no top-level counterpart is withheld. `PUT` ignores these keys.
+
+    WorkUndated:
+      type: object
+      nullable: true
+      description: >-
+        Date fields the source gave no real date for, each null on the item. The key is the field
+        name; `notAfter` is the latest day the event can have happened.
+      additionalProperties:
+        type: object
+        properties:
+          notAfter:
+            type: string
+            format: date
+            nullable: true
 
     TrackWorkPhase:
       type: object
@@ -10253,8 +10403,10 @@ components:
             no string may hold a control, bidi, zero-width or line separator character. The four
             lists together may hold at most 256 KB of JSON. A change to these lists alone does
             not set `dateUpdated` or queue the project for Eagle. External ids are `{system, value}`:
-            `system` is `eao-register` (digits, no leading zero) or `orcs`. A new external id is
-            refused (400) until it can be checked against other projects.
+            `system` is `eao-register` (digits, no leading zero) or `orcs`. An external id belongs to
+            one project: an appended id another project holds is refused (409). An appended id
+            already in the list, compared without case, is refused (400). One request may append
+            at most 20 external ids (400 above that).
           items:
             type: object
             properties:

@@ -232,17 +232,20 @@ function trackTransitionDateOf(projectWorks, fromYear) {
 }
 
 /**
- * A sheet date before `TRACK_FROM`, else Track's milestone naming the work's own `actYear`,
- * else the stored fallback, else null.
+ * `{date, source}`: a sheet date before `TRACK_FROM`, else Track's milestone naming the work's own
+ * `actYear`, else the stored sheet fallback, else `{date: null, source: 'none'}`.
  */
-function transitionDateOf(transitionOut, projectWorks, actYear) {
-  if (!isObject(transitionOut)) return null;
+function transitionOf(transitionOut, projectWorks, actYear) {
+  const none = { date: null, source: 'none' };
+  if (!isObject(transitionOut)) return none;
   const stored = dayOf(transitionOut.date) ? transitionOut.date : null;
-  if (transitionOut.dateSource === 'sheet' && stored && dayOf(stored) < TRACK_FROM) return stored;
+  if (transitionOut.dateSource === 'sheet' && stored && dayOf(stored) < TRACK_FROM) return { date: stored, source: 'sheet' };
   const fromTrack = ACT_YEARS.includes(actYear) ? trackTransitionDateOf(projectWorks, actYear) : null;
-  if (fromTrack) return fromTrack;
-  return transitionOut.dateSource === 'track' ? stored : null;
+  if (fromTrack) return { date: fromTrack, source: 'track' };
+  return transitionOut.dateSource === 'track' && stored ? { date: stored, source: 'sheet' } : none;
 }
+
+const transitionDateOf = (transitionOut, projectWorks, actYear) => transitionOf(transitionOut, projectWorks, actYear).date;
 
 /** Staff entries that overlap the work; an unknown-start entry only when the work is open on its `observedAt`. */
 function inEffect(entries, work) {
@@ -264,11 +267,14 @@ function inEffect(entries, work) {
 module.exports = {
   OVERRIDE_MARKER_ID: override.OVERRIDE_MARKER_ID,
   OVERRIDE_TYPES: override.OVERRIDE_TYPES,
+  DATE_KEYS,
   TRACK_FROM,
   TRACK_RETIRED_WORK_TYPES,
   TRACK_WORK_TYPE_CODES: override.TRACK_WORK_TYPE_CODES,
-  checkSize, childIdOf, dayOf, inEffect, newWorkId, sourceKeyOf, summaryOf, transitionDateOf, validateWork, workRangeOf,
+  checkSize, childIdOf, dayOf, inEffect, newWorkId, sourceKeyOf, summaryOf, transitionDateOf, transitionOf, validateWork,
+  workRangeOf,
   compareText: override.compareText,
+  workTypeCodeOf: override.workTypeCodeOf,
   hiddenByOverride: override.hiddenByOverride,
   matchEvents: override.matchEvents,
   overrideBoundaryOf: override.overrideBoundaryOf,

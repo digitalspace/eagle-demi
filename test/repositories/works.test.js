@@ -23,6 +23,7 @@ const MAY_REQUIRE = new Set([
   'src/controllers/nosql/works-staff.js',
   'src/domain/works-derive.js',
   'src/scripts/check-business-works-parity.js',
+  'src/scripts/check-works-parity.js',
   'src/scripts/date-assessment-phases.js',
   'src/scripts/load-business-works.js',
   'src/scripts/rollback-business-works.js',
@@ -257,5 +258,26 @@ test('works repository', async (t) => {
       { code: 412 }
     );
     assert.strictEqual(cosmosStore.read('track-1').simpleTitle, 'North Pit');
+  });
+
+  await t.test('liveProjectIds reads only projectId of live works, marker left out, owner filter kept', async (t) => {
+    mirrorStore(t, [TRACK, { ...LEGACY_TRACK, projectId: 'p2' }, { ...TOMBSTONE, projectId: 'p3' }, MARKER,
+      { ...SHEET, projectId: 'p4' }].map(row => ({ container: 'works', ...row })));
+    const query = cosmos.query;
+    const projections = [];
+    // The fake runs the WHERE clause on whole rows; the projection is checked here and applied after it.
+    t.mock.method(cosmos, 'query', async (container, spec, opts) => {
+      const [projection] = spec.query.match(/^SELECT VALUE c\.projectId FROM c WHERE /) || [];
+      projections.push(projection);
+      const page = await query(container, { ...spec, query: spec.query.replace(projection, 'SELECT * FROM c WHERE ') }, opts);
+      return { ...page, items: page.items.map(row => row.projectId) };
+    });
+
+    const all = await works.liveProjectIds();
+    const track = await works.liveProjectIds({ owner: 'track' });
+
+    assert.deepStrictEqual([all.sort(), track.sort()], [['p1', 'p2', 'p4'], ['p1', 'p2']]);
+    assert.ok(projections.every(Boolean), 'SELECT VALUE c.projectId only');
+    await assert.rejects(works.liveProjectIds({ owner: '' }), TypeError);
   });
 });

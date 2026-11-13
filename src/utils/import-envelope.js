@@ -1,11 +1,13 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
 
 const ENVELOPE_VERSION = 1;
 const MIN_RSA_BITS = 3072;
 const STAFF_FIELDS = Object.freeze(['epd', 'lead', 'notes', 'investment']);
 const PEM_BLOCK = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/g;
+const PRIVATE_PEM_BLOCK = /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/g;
 const OAEP = { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' };
 
 // Unlike `canonical` in src/domain/extensions.js, this drops keys whose value is undefined.
@@ -38,11 +40,11 @@ function fingerprintOf({ rsa, ed25519 }) {
   return sha256Hex(Buffer.concat(parts));
 }
 
-/** Reads a PEM file holding one RSA key of at least 3072 bits and at most one Ed25519 public key. */
-function publicKeysFromPem(text) {
+/** At most one RSA key of at least 3072 bits and at most one Ed25519 key, from the PEM blocks `pattern` finds. */
+function keysFromPem(text, pattern, make) {
   const keys = {};
-  for (const block of String(text).match(PEM_BLOCK) || []) {
-    const key = crypto.createPublicKey(block);
+  for (const block of String(text).match(pattern) || []) {
+    const key = make(block);
     const kind = key.asymmetricKeyType;
     if ((kind !== 'rsa' && kind !== 'ed25519') || keys[kind]) throw new Error(`unexpected ${kind} key in PEM`);
     if (kind === 'rsa' && key.asymmetricKeyDetails.modulusLength < MIN_RSA_BITS) {
@@ -50,8 +52,56 @@ function publicKeysFromPem(text) {
     }
     keys[kind] = key;
   }
+  return keys;
+}
+
+/** Reads a PEM file holding one RSA key of at least 3072 bits and at most one Ed25519 public key. */
+function publicKeysFromPem(text) {
+  const keys = keysFromPem(text, PEM_BLOCK, block => crypto.createPublicKey(block));
   if (!keys.rsa) throw new Error('PEM holds no RSA public key');
   return keys;
+}
+
+/** The devbox's unencrypted PKCS#8 RSA and Ed25519 private keys, and the fingerprint the extract was sealed to. */
+function devboxKeysFromPem(text) {
+  const keys = keysFromPem(text, PRIVATE_PEM_BLOCK, block => crypto.createPrivateKey(block));
+  if (!keys.rsa || !keys.ed25519) throw new Error('devbox key PEM must hold one RSA and one Ed25519 private key');
+  const fingerprint = fingerprintOf({ rsa: crypto.createPublicKey(keys.rsa), ed25519: crypto.createPublicKey(keys.ed25519) });
+  return { ...keys, fingerprint };
+}
+
+/** The public keys in `pemText`, refused unless their fingerprint is `expectFingerprint`. */
+function recipientFromPem(pemText, expectFingerprint, label) {
+  const keys = publicKeysFromPem(pemText);
+  const fingerprint = fingerprintOf(keys);
+  if (fingerprint !== String(expectFingerprint).toLowerCase()) throw new Error(`fingerprint of ${label} does not match`);
+  return { keys, fingerprint };
+}
+
+/** Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap. */
+function readCapped(file, max, { label = file, noFollow = fs.constants.O_NOFOLLOW } = {}) {
+  if (!noFollow && fs.lstatSync(file).isSymbolicLink()) throw new Error(`${label} is a symbolic link`);
+  let fd;
+  try {
+    // O_NONBLOCK so a FIFO opens at once and is refused below, instead of waiting for a writer.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (noFollow || 0) | (fs.constants.O_NONBLOCK || 0));
+  } catch (err) {
+    throw new Error(err.code === 'ELOOP' ? `${label} is a symbolic link` : `${label} cannot be opened`, { cause: err });
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${label} is not a regular file`);
+    const chunks = [];
+    const chunk = Buffer.alloc(1024 * 1024);
+    let total = 0;
+    for (let n = fs.readSync(fd, chunk); n > 0; n = fs.readSync(fd, chunk)) {
+      total += n;
+      if (total > max) throw new Error(`${label} is over ${max} bytes`);
+      chunks.push(Buffer.from(chunk.subarray(0, n)));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function aadOf({ purpose, env, keyFingerprint, staffIncluded, numbersReal, signoffRefs }) {
@@ -124,9 +174,16 @@ function hasStaffField(extract) {
     rows.some(row => STAFF_FIELDS.some(f => Object.prototype.hasOwnProperty.call(row, f))));
 }
 
-/** Opens an extract and refuses a body whose env, flags or staff columns disagree with the signed header. */
-function openExtract(sealed, opts) {
+/**
+ * Opens an extract and refuses a body whose env, flags or staff columns disagree with the signed header.
+ * With `expectSha256`, the plaintext is hashed and refused on a mismatch before it is parsed.
+ */
+function openExtract(sealed, { expectSha256, ...opts }) {
   const opened = openEnvelope(sealed, { ...opts, purpose: 'extract' });
+  const sha256 = sha256Hex(opened.plaintext);
+  if (expectSha256 !== undefined && sha256 !== String(expectSha256).toLowerCase()) {
+    throw new Error('extract SHA-256 does not match the expected value');
+  }
   let extract;
   try {
     extract = JSON.parse(opened.plaintext.toString('utf8'));
@@ -143,7 +200,7 @@ function openExtract(sealed, opts) {
     && canonicalJson(extract.signoffRefs ?? null) === canonicalJson(opened.signoffRefs ?? null)
     && hasStaffField(extract) === (opened.staffIncluded === true);
   if (!agrees) throw refused('extract', opts.env);
-  return { ...opened, extract };
+  return { ...opened, sha256, extract };
 }
 
 function statementOf({ purpose, env, sha256 }) {
@@ -176,6 +233,9 @@ module.exports = {
   sha256Hex,
   fingerprintOf,
   publicKeysFromPem,
+  devboxKeysFromPem,
+  recipientFromPem,
+  readCapped,
   sealEnvelope,
   openEnvelope,
   openExtract,

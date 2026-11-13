@@ -9,7 +9,7 @@ const { parseArgs } = require('util');
 const { readFolder } = require('./cells');
 const { openSurrogates, surrogateOf } = require('./surrogates');
 const {
-  STAFF_FIELDS, fingerprintOf, publicKeysFromPem, sealEnvelope, openEnvelope, sha256Hex, verify
+  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, sha256Hex, verify
 } = require('../../src/utils/import-envelope');
 
 const ENVS = ['test', 'prod'];
@@ -63,12 +63,7 @@ function need(opts, ...names) {
   if (opts.env && !ENVS.includes(opts.env)) throw new Error(`--env must be one of ${ENVS.join(', ')}`);
 }
 
-function recipientOf(pemFile, expectFingerprint) {
-  const keys = publicKeysFromPem(fs.readFileSync(pemFile, 'utf8'));
-  const fingerprint = fingerprintOf(keys);
-  if (fingerprint !== String(expectFingerprint).toLowerCase()) throw new Error(`fingerprint of ${pemFile} does not match`);
-  return { keys, fingerprint };
-}
+const recipientOf = (pemFile, expectFingerprint) => recipientFromPem(fs.readFileSync(pemFile, 'utf8'), expectFingerprint, pemFile);
 
 const shaLabel = purpose => `${purpose.replace(/-(\w)/g, (_, c) => c.toUpperCase())}Sha256`;
 
