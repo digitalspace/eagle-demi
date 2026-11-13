@@ -144,7 +144,7 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
     'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
-    'relinked=0 skippedApiRows=0 trackPhases=0 trackWorks=0 trackWorksFailed=0 stale=0 derivedDrift=0 failures=0');
+    'relinked=0 skippedApiRows=0 trackPhases=0 trackWorks=0 trackWorksFailed=0 stale=0 adopted=0 derivedDrift=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -338,7 +338,7 @@ test('the nightly leaves alone a row a newer push wrote', async () => {
 
   assert.ok(!written.includes('1'));
   assert.strictEqual(summary.updated, 0);
-  assert.ok(summaryLine(summary).includes(' stale=1 derivedDrift=0 '), summaryLine(summary));
+  assert.ok(summaryLine(summary).includes(' stale=1 adopted=0 derivedDrift=0 '), summaryLine(summary));
 });
 
 test('the project list is read once and feeds both the mirror and the credential sweep', async () => {
