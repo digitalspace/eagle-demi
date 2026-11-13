@@ -23,6 +23,9 @@ const {
 const { SOURCE_FIRST } = require('../../src/ownership/project');
 const { redactForAccess } = require('../../src/vis/redact');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
+const { trackWorks: pulledWorks, workDocs } = require('../helpers/track-works-fixtures');
+const { publicWorksOf, trackWorkToPublic, phaseEventsOf, withoutAdded } = require('../../src/seed/track-mappers');
+const { composedRow } = require('../../src/controllers/nosql/project-compose');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
@@ -359,8 +362,25 @@ test('Track work phases', async (t) => {
 test('Track works', async (t) => {
   const twoActs = (overrides = {}) => eagleFor(TRACK_207, { legislationYearList: [2002, 2018], ...overrides });
 
-  await t.test('works pass through unchanged', () => {
+  await t.test('with WORKS_READ off the stored works are Track\'s nested works as today', () => {
     const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: trackWorks() });
+    assert.deepStrictEqual(merged.works, trackWorks());
+  });
+
+  await t.test('project list works equal GET works with a hidden Track work', () => {
+    const [shown] = pulledWorks();
+    const worksForDerive = publicWorksOf(workDocs([shown]), { id: '207' });
+    const stored = mergeTrackProject(TRACK_207, twoActs(),
+      { ...OPTS, works: pulledWorks().map(work => trackWorkToPublic(work, phaseEventsOf(work))), worksForDerive });
+
+    const got = composedRow(stored, worksForDerive);
+
+    assert.deepStrictEqual(stored.works.map(work => work.trackWorkId), [shown.id]);
+    assert.deepStrictEqual(withoutAdded(stored).works, withoutAdded(got).works);
+  });
+
+  await t.test('an empty container leaves the stored works as Track\'s', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: trackWorks(), worksForDerive: [] });
     assert.deepStrictEqual(merged.works, trackWorks());
   });
 
