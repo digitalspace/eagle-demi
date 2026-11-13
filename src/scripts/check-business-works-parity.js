@@ -1,8 +1,11 @@
 'use strict';
 
 // Devbox, test only: `scripts/demi-devbox.sh run --env test -- node src/scripts/check-business-works-parity.js <options>`.
-// Read-only and in memory; prints ids and counts. Exit 1 on a mismatch, a duplicate external id or a duplicate sourceKey.
+// Read-only; stdout holds counts only, and listed items go sealed to the operator, as sourceKeys hold sheet numbers.
 
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { parseArgs } = require('util');
 const { systemAccess, PUBLIC_ROLES } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
@@ -17,13 +20,17 @@ const {
   DATE_KEYS, OVERRIDE_MARKER_ID, OVERRIDE_TYPES, dayOf, listOf, overrideBoundaryOf, settledBefore, sourceOf,
   untilTrackHidden, workTypeCodeOf
 } = require('../domain/work-model');
-const { devboxKeysFromPem, openExtract, readCapped } = require('../utils/import-envelope');
-const { readCrosswalk } = require('./works-crosswalk');
+const {
+  devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped, sealEnvelope, sha256Hex, sign
+} = require('../utils/import-envelope');
+const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
 const { logger } = require('../utils/logger');
 
 const ENV = 'test';
-const TEST_HOST = 'demi-cosmos-test.documents.azure.com';
-const OPTIONS = ['extract', 'expect-extract-sha256', 'crosswalk', 'expect-manual-sha256', 'devbox-key'];
+// `extract.js open --purpose report` reads it back.
+const REPORT_PURPOSE = 'report';
+const OPTIONS = ['extract', 'expect-extract-sha256', 'crosswalk', 'expect-manual-sha256', 'devbox-key', 'operator-key',
+  'expect-operator-fingerprint', 'out-dir'];
 const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 4 * 1024 * 1024, key: 64 * 1024 };
 const COUNTS = ['mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'danglingEagleItemId', 'commentPeriodMissing',
   'commentPeriodNotPublic', 'undatedDates', 'hiddenDrift', 'untilTrackHidden', 'sheetHiddenByMovedBoundary', 'overrideHeldOff'];
@@ -36,7 +43,8 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 /** Options, refused unless COSMOS_ENDPOINT is the test account: Daniel's rule keeps this check off prod. */
 function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
   const host = URL.canParse(endpoint || '') ? new URL(endpoint).hostname : '';
-  if (host !== TEST_HOST) refuse(`COSMOS_ENDPOINT must name ${TEST_HOST}`);
+  const [, env] = COSMOS_HOST.exec(host) || [];
+  if (env !== ENV) refuse('COSMOS_ENDPOINT must name demi-cosmos-test');
   let values;
   try {
     ({ values } = parseArgs({ args: argv, options: Object.fromEntries(OPTIONS.map(name => [name, { type: 'string' }])), strict: true }));
@@ -48,16 +56,30 @@ function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
   return values;
 }
 
-/** The decrypted extract and the crosswalk Map of register number to project id; nothing touches disk. */
+/** The keys, the decrypted extract and the crosswalk Map of register number to project id; nothing touches disk. */
 function openInputs(o) {
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
+  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
+  if (fingerprintOf({ rsa: operator }) !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
   const { extract, sha256 } = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env: ENV, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-extract-sha256']
   });
   const { rows } = readCrosswalk(readCapped(o.crosswalk, MAX_BYTES.crosswalk), {
     env: ENV, keys, expectExtractSha256: sha256, expectManualSha256: o['expect-manual-sha256']
   });
-  return { extract, crosswalk: new Map(rows.map(row => [Number(row.sheetId), row.targetId])) };
+  return { keys, operator, extract, crosswalk: new Map(rows.map(row => [Number(row.sheetId), row.targetId])) };
+}
+
+/** Signs the report with the devbox key and seals it to the operator under a random name; returns the name and hash. */
+function writeReport(report, { keys, operator, outDir }) {
+  const plaintext = Buffer.from(JSON.stringify(report));
+  const sha256 = sha256Hex(plaintext);
+  const signature = sign(keys.ed25519, { purpose: REPORT_PURPOSE, env: ENV, sha256 });
+  const blob = `${crypto.randomUUID()}.sealed.json`;
+  fs.writeFileSync(path.join(outDir, blob), sealEnvelope(plaintext, {
+    purpose: REPORT_PURPOSE, env: ENV, keyFingerprint: fingerprintOf({ rsa: operator }), recipientKey: operator, signature
+  }), { mode: 0o600, flag: 'wx' });
+  return { blob, sha256 };
 }
 
 /** Every date a work holds by path; list items key on their id, so a reorder is no change. */
@@ -86,7 +108,7 @@ function makeTally() {
   const items = [];
   const add = (name, fields) => {
     counts[name]++;
-    items.push(`${name} ${Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(' ')}`);
+    items.push({ list: name, ...fields });
   };
   return { counts, items, add };
 }
@@ -249,15 +271,17 @@ async function liveState(crosswalk) {
     phaseCatalog: await phaseCatalog.load() };
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {open, state, write, endpoint, now} */
+/** Resolves the exit code; exit 1 on a mismatch, a duplicate external id or sourceKey. @param {object} [deps] test seam {state, write, endpoint, now} */
 async function run(argv, deps = {}) {
   const write = deps.write || (line => process.stdout.write(`${line}\n`));
   const o = optionsOf(argv, deps.endpoint);
-  const { extract, crosswalk } = (deps.open || openInputs)(o);
+  const { keys, operator, extract, crosswalk } = openInputs(o);
   const state = await (deps.state || liveState)(crosswalk);
   const { counts, items } = parityOf({ extract, crosswalk, ...state, at: (deps.now || new Date()).toISOString() });
-  items.forEach(write);
+  const { blob, sha256 } = writeReport({ counts, items }, { keys, operator, outDir: o['out-dir'] });
   COUNTS.forEach(name => write(`${name}=${counts[name]}`));
+  write(`reportSha256=${sha256}`);
+  write(`blob=${blob}`);
   return FAILING.some(name => counts[name] > 0) ? 1 : 0;
 }
 
