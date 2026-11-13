@@ -22,7 +22,7 @@ function payloadOf(plaintext, batchId) {
     refuse('works-backup is not JSON');
   }
   const shaped = isObject(backup) && objects(backup.documents) && objects(backup.projects)
-    && (backup.projectEntries === undefined || objects(backup.projectEntries));
+    && objects(backup.projectEntries);
   if (!shaped) refuse('works-backup is malformed');
   if (backup.batchId !== batchId) refuse('works-backup is not for this batch');
   return backup;

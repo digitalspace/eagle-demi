@@ -6,6 +6,9 @@ const path = require('path');
 
 const ENVELOPE_VERSION = 1;
 const MIN_RSA_BITS = 3072;
+// What the works-backup reader and the laptop tool read at most: a sealed backup, and one key or signature file.
+const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
+const MAX_KEY_BYTES = 64 * 1024;
 const STAFF_FIELDS = Object.freeze(['epd', 'lead', 'notes', 'investment']);
 const PEM_BLOCK = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/g;
 const PRIVATE_PEM_BLOCK = /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/g;
@@ -258,6 +261,8 @@ function writeSealed(dir, plaintext, { purpose, env, recipient, signingKey }) {
 }
 
 module.exports = {
+  MAX_BACKUP_BYTES,
+  MAX_KEY_BYTES,
   STAFF_FIELDS,
   sha256Hex,
   fingerprintOf,

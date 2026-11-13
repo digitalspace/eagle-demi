@@ -91,7 +91,7 @@ test('refuses a works-backup of another batch', () => {
 test('refuses a works-backup whose documents, projects or projectEntries are not arrays of objects', () => {
   assert.throws(() => openBackup(withBody({ documents: {} })), /works-backup is malformed/);
   assert.throws(() => openBackup(withBody({ projects: ['p-1'] })), /works-backup is malformed/);
-  assert.throws(() => openBackup(withBody({ projectEntries: null })), /works-backup is malformed/);
+  assert.throws(() => openBackup(withBody({ projectEntries: undefined })), /works-backup is malformed/);
 });
 
 test('a works-backup that is not JSON is refused without quoting it', () => {
@@ -109,6 +109,13 @@ test('refuses a devbox key that is a symbolic link', () => {
   const link = path.join(path.dirname(devboxKeyFile()), 'link.pem');
   fs.symlinkSync(devboxKeyPath, link);
   assert.throws(() => openBackup({ ...given, devboxKeyPath: link }), /the devbox key is a symbolic link/);
+});
+
+test('refuses a devbox key whose folder is a symbolic link', () => {
+  const link = path.join(fresh('key-link'), 'folder');
+  fs.symlinkSync(path.dirname(devboxKeyPath), link);
+  assert.throws(() => openBackup({ ...given, devboxKeyPath: path.join(link, path.basename(devboxKeyPath)) }),
+    { message: 'the devbox key folder must be 0700 and this user\'s' });
 });
 
 test('a missing devbox key is refused without its path', () => {

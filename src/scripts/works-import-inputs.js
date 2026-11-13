@@ -8,11 +8,13 @@ const path = require('path');
 const { parseArgs } = require('util');
 const cosmos = require('../db/cosmos-nosql');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
-const { devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped } = require('../utils/import-envelope');
+const {
+  MAX_BACKUP_BYTES, MAX_KEY_BYTES, devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped
+} = require('../utils/import-envelope');
 
 const ENV = 'test';
 const TEST_DATABASE = 'demi';
-const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, backup: 64 * 1024 * 1024, key: 64 * 1024 };
+const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, backup: MAX_BACKUP_BYTES, key: MAX_KEY_BYTES };
 const INPUTS = ['extract', 'expect-sha256', 'crosswalk', 'expect-crosswalk-sha256', 'expect-manual-sha256', 'devbox-key',
   'expect-devbox-fingerprint', 'operator-key', 'expect-operator-fingerprint', 'out-dir'];
 const LIVE = ['operator', 'run-ref', 'signoff-ref', 'expect-plan-sha256'];
@@ -74,9 +76,26 @@ const checkKeyStat = (stat) => {
  * The devbox keys, from a 0600 file of this user in a 0700 folder of this user, opened once without following a
  * link; refused unless their fingerprint is `expectFingerprint`.
  */
+const FOLDER_REFUSED = 'the devbox key folder must be 0700 and this user\'s';
+
+/** The key folder, checked on the fstat of a descriptor opened without following a link. */
+function checkKeyFolder(dir) {
+  let fd;
+  try {
+    fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  } catch {
+    refuse(FOLDER_REFUSED);
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700 || !ownedBy(stat)) refuse(FOLDER_REFUSED);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function devboxKeysOf(file, expectFingerprint) {
-  const dir = fs.lstatSync(path.dirname(path.resolve(file)), { throwIfNoEntry: false });
-  if (!dir || !dir.isDirectory() || (dir.mode & 0o777) !== 0o700 || !ownedBy(dir)) refuse('the devbox key folder must be 0700 and this user\'s');
+  checkKeyFolder(path.dirname(path.resolve(file)));
   const pem = readCapped(file, MAX_BYTES.key, { label: 'the devbox key', check: checkKeyStat });
   const keys = devboxKeysFromPem(pem.toString('utf8'));
   if (keys.fingerprint !== String(expectFingerprint).toLowerCase()) refuse('fingerprint of the devbox key does not match');

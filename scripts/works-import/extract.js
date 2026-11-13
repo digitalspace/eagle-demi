@@ -9,7 +9,7 @@ const { parseArgs } = require('util');
 const { readFolder } = require('./cells');
 const { openSurrogates, surrogateOf } = require('./surrogates');
 const {
-  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, readCapped, sha256Hex, verify
+  MAX_BACKUP_BYTES, MAX_KEY_BYTES, STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, readCapped, sha256Hex, verify
 } = require('../../src/utils/import-envelope');
 
 const ENVS = ['test', 'prod'];
@@ -20,8 +20,6 @@ const SEAL_PURPOSES = ['crosswalk', 'manual-match'];
 const OPEN_PURPOSES = ['crosswalk', 'works-parity', 'works-report'];
 // The works-backup holds staff fields, so it is only resealed in memory, never opened to a file.
 const RESEAL_PURPOSES = ['works-backup'];
-// Same cap as MAX_BYTES.backup in src/scripts/works-import-inputs.js, which this laptop tool cannot load.
-const MAX_IN = 64 * 1024 * 1024;
 
 function keyringCommand(ref) {
   if (ref.startsWith('op://')) return ['op', ['read', '--no-newline', ref]];
@@ -67,9 +65,10 @@ function need(opts, ...names) {
   if (opts.env && !ENVS.includes(opts.env)) throw new Error(`--env must be one of ${ENVS.join(', ')}`);
 }
 
-const readIn = file => readCapped(file, MAX_IN, { label: '--in' });
+const readIn = file => readCapped(file, MAX_BACKUP_BYTES, { label: '--in' });
+const readKey = (file, label) => readCapped(file, MAX_KEY_BYTES, { label });
 
-const recipientOf = (pemFile, expectFingerprint) => recipientFromPem(fs.readFileSync(pemFile, 'utf8'), expectFingerprint, pemFile);
+const recipientOf = (pemFile, expectFingerprint) => recipientFromPem(readKey(pemFile, pemFile).toString('utf8'), expectFingerprint, pemFile);
 
 const shaLabel = purpose => `${purpose.replace(/-(\w)/g, (_, c) => c.toUpperCase())}Sha256`;
 
@@ -144,7 +143,7 @@ function seal(o, io) {
   const sha256 = sha256Hex(plaintext);
   let signature;
   if (o.purpose === 'crosswalk') {
-    signature = fs.readFileSync(o.signature, 'utf8').trim();
+    signature = readKey(o.signature, '--signature').toString('utf8').trim();
     if (!keys.ed25519 || !verify(keys.ed25519, { purpose: o.purpose, env: o.env, sha256 }, signature)) {
       throw new Error('crosswalk signature does not verify');
     }
@@ -158,7 +157,7 @@ function seal(o, io) {
 /** Opens a blob the devbox sealed to the operator; refused unless the devbox signature and --expect-sha256 hold. */
 function openFromDevbox(o, io, devbox) {
   const privateKey = crypto.createPrivateKey({
-    key: fs.readFileSync(o.key), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
+    key: readKey(o.key, '--key'), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
   });
   const keyFingerprint = fingerprintOf({ rsa: crypto.createPublicKey(privateKey) });
   const opened = openEnvelope(readIn(o.in), { purpose: o.purpose, env: o.env, keyFingerprint, privateKey });
