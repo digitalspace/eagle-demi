@@ -60,7 +60,8 @@ function checkedArgs(argv) {
   const args = parseArgs(argv);
   if (!args.target) throw new Error('Missing --target <endpoint>');
   if (!process.env.COSMOS_ENDPOINT) throw new Error('COSMOS_ENDPOINT not set');
-  if (argv.includes('--keep-staff') && !args.keepStaff) throw new Error('--keep-staff needs a sign-off reference');
+  // No sign-off ref format exists elsewhere, so one token with no spaces is the rule.
+  if (argv.includes('--keep-staff') && !/^\S+$/.test(args.keepStaff)) throw new Error('--keep-staff needs a sign-off reference');
   const refused = args.containers.filter(name => REFUSED_CONTAINERS.has(name));
   if (refused.length) throw new Error(`Refusing to copy container ${refused.join(',')}`);
   if (args.keepStaff) logger.warn(`[copy-to-env] keeping staff-only project fields under sign-off ${args.keepStaff}`);

@@ -185,6 +185,11 @@ test('copy-to-env', async (t) => {
     assert.deepStrictEqual(source.reads, []);
   });
 
+  await t.test('--keep-staff with a reference holding a space throws', async (tt) => {
+    await assert.rejects(main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt), '--keep-staff', 'SIGNOFF 1'],
+      { client: fakeClient(fakeContainer(staffPage(), 1), fakeContainer({})) }), { message: '--keep-staff needs a sign-off reference' });
+  });
+
   await t.test('a run with no --target throws', async (tt) => {
     await assert.rejects(main(['--containers', 'projects', '--checkpoint', tmpCheckpoint(tt)],
       { client: fakeClient(fakeContainer({}), fakeContainer({})) }), { message: 'Missing --target <endpoint>' });
