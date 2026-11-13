@@ -150,6 +150,18 @@ test('the live document of a sourceKey wins over its tombstone', () => {
   assert.equal(entry.doc.id, 'sheet-live');
 });
 
+test('a tombstoned Track work hides no sheet work', () => {
+  const track = [trackWork(50, { startDate: '2010-06-01', decisionDate: '2010-11-07', deleted: true })];
+  const [entry] = plan(amended, { track }).entries.filter(one => one.action === 'marker');
+  assert.deepEqual(entry.doc.hidden, []);
+});
+
+test('a tombstoned override marker does not hold the fresh marker off', () => {
+  const tombstoned = { id: 'sheet-override', projectId: PROJECT, deleted: true, source: 'sheet', owner: 'sheet' };
+  const [entry] = plan(amended, { markers: new Map([[PROJECT, tombstoned]]) }).entries.filter(one => one.action === 'marker');
+  assert.equal(entry.doc.active, true);
+});
+
 test('a create\'s bodySha256 is the same across two dry runs', () => {
   const sha = () => plan(amended).entries.find(entry => entry.sourceKey === KEY).bodySha256;
   assert.equal(sha(), sha());
@@ -172,6 +184,11 @@ test('an open sheet staff entry the extract no longer carries is closed; a note 
   const result = plan({ projects: [{ ...register, epd: 'staff-value-3' }] }, { row, flags: STAFFED });
   const closes = result.entries.filter(entry => entry.action === 'closeHistory');
   assert.deepEqual(closes.map(entry => [entry.field, entry.entryId, entry.effectiveTo]), [['staffAssignments', 'held-lead', '2026-11-13']]);
+});
+
+test('refuses closing sheet staff entries without a keepStaff sign-off ref', () => {
+  const row = { id: PROJECT, staffAssignments: [sheetEntry('held-lead', 'register:lead', { role: 'lead', name: 'staff-value-1' })] };
+  assert.throws(() => plan({ projects: [register] }, { row, flags: { staffIncluded: true, signoffRefs: { keepStaff: ' ' } } }), /keepStaff/);
 });
 
 test('real numbers need no keepNumbers ref when no external id is written', () => {
