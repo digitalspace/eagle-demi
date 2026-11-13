@@ -16,12 +16,19 @@ const RSA_BITS = 4096;
 
 const pemOf = (key, type) => key.export({ type, format: 'pem' });
 
-/** The key directory at 0700, made when absent; refused when it is a symbolic link or not a directory. */
+/** The key directory at 0700, made when absent; refused when it is a symbolic link, not a directory, or another user's. */
 function keyDir(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('key directory is not a directory');
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('key directory belongs to another user');
   fs.chmodSync(dir, 0o700);
+}
+
+/** The public keys and fingerprint of `keys`, as the operator records them. */
+function publicLines(keys, label) {
+  return [`${label}Fingerprint=${keys.fingerprint}`,
+    pemOf(crypto.createPublicKey(keys.rsa), 'spki').trim(), pemOf(crypto.createPublicKey(keys.ed25519), 'spki').trim()];
 }
 
 /** A new file at 0600; with `rotate`, written beside the old one and renamed over it, so no reader sees half a key. */
@@ -54,7 +61,9 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`) } =
   const dir = values.dir || DEFAULT_DIR;
   keyDir(dir);
   const file = path.join(dir, KEY_FILE);
-  if (!values.rotate && fs.existsSync(file)) throw new Error('a devbox key exists; pass --rotate to replace it');
+  const exists = fs.existsSync(file);
+  if (!values.rotate && exists) throw new Error('a devbox key exists; pass --rotate to replace it');
+  if (exists) publicLines(devboxKeysFromPem(fs.readFileSync(file, 'utf8')), 'old').forEach(write);
   const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: RSA_BITS });
   const ed = crypto.generateKeyPairSync('ed25519');
   const pem = pemOf(rsa.privateKey, 'pkcs8') + pemOf(ed.privateKey, 'pkcs8');

@@ -14,7 +14,7 @@ const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: '
 const LOCK_ID = 'import-lock';
 const LEASE_MS = 2 * 60 * 60 * 1000;
 const RENEW_EVERY = 100;
-const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory']);
+const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'derive']);
 // Each target names a document, a project list entry or an id system; never a sourceKey, number or staff value.
 const TARGET_SHAPES = Object.freeze([['id', 'projectId'], ['entryId', 'field', 'projectId'], ['projectId', 'system']]);
 

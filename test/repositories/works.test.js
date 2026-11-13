@@ -179,6 +179,15 @@ test('works repository', async (t) => {
     assert.deepStrictEqual(cosmosStore.rows(), []);
   });
 
+  await t.test('save answers a create and an update with the stored etag', async (t) => {
+    const cosmosStore = store(t, [TRACK]);
+    const current = cosmosStore.read('track-1');
+    const updated = await works.save({ ...current, simpleTitle: 'Renamed' }, { owner: 'track', etag: current._etag, existing: current });
+    assert.deepStrictEqual(updated, { status: 'written', etag: cosmosStore.read('track-1')._etag });
+    const created = await works.save({ ...SHEET }, { owner: 'sheet' });
+    assert.deepStrictEqual(created, { status: 'written', etag: cosmosStore.read(SHEET.id)._etag });
+  });
+
   await t.test('update cannot change source or owner', async (t) => {
     const cosmosStore = store(t, [LEGACY_TRACK, ADOPTED]);
     const legacy = cosmosStore.read('track-2');

@@ -4,7 +4,6 @@
 // Run on the devbox with DEVBOX_RUN_MODE=invoke; every decryption stays in memory.
 
 const crypto = require('crypto');
-const { parseArgs } = require('util');
 const lists = require('../repositories/lists');
 const works = require('../repositories/works');
 const projects = require('../repositories/projects');
@@ -12,52 +11,19 @@ const commentPeriods = require('../repositories/comment-periods');
 const history = require('../repositories/project-staff-history');
 const phaseCatalog = require('../domain/phase-catalog');
 const { deriveInputs, loadWorks } = require('../domain/works-derive');
-const { OVERRIDE_MARKER_ID, sourceOf } = require('../domain/work-model');
+const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
-const { readCrosswalk } = require('./works-crosswalk');
-const { buildPlan, countLines } = require('./works-import-plan');
+const { buildPlan, withoutHeld } = require('./works-import-plan');
+const { countLines } = require('./works-import-lists');
+const { HELP, optionsOf, testEnvironment, checkOutDir, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
-const { devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped } = require('../utils/import-envelope');
 const { logger } = require('../utils/logger');
 
-const ENV = 'test';
-const TEST_HOST = 'demi-cosmos-test.documents.azure.com';
-const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, key: 64 * 1024 };
 const OWNER = 'sheet';
-const INPUTS = ['extract', 'expect-sha256', 'crosswalk', 'expect-crosswalk-sha256', 'expect-manual-sha256', 'devbox-key',
-  'operator-key', 'expect-operator-fingerprint', 'out-dir'];
-const LIVE = ['operator', 'run-ref', 'signoff-ref', 'expect-plan-sha256'];
-const OPTIONS = { ...Object.fromEntries([...INPUTS, ...LIVE].map(name => [name, { type: 'string' }])), live: { type: 'boolean' }, help: { type: 'boolean' } };
-const HELP = [
-  'Usage: load-business-works.js --extract <sealed> --expect-sha256 <hex> --crosswalk <sealed> --expect-crosswalk-sha256 <hex>',
-  '  --expect-manual-sha256 <hex> --devbox-key <pem> --operator-key <pem> --expect-operator-fingerprint <hex> --out-dir <dir>',
-  '  [--live --operator <upn> --run-ref <id> --signoff-ref <id> --expect-plan-sha256 <hex>]',
-  'Dry run by default; --live writes. Runs only where COSMOS_ENDPOINT is demi-cosmos-test.',
-  'The transitions tab joins as the sheet-to-master map defaults: refused (transitionJoinUndecided) until the business decides',
-  'that column A holds the register id, so no sheet work takes a transition date from it.'
-];
 const DONE = new Set(['written', 'set', 'appended', 'unchanged']);
+const DERIVED = new Set(['patched', 'unchanged']);
 
 const refuse = (message) => { throw new Error(message); };
-
-/** Test only: any Cosmos host but demi-cosmos-test refuses, in dry run and live alike. */
-function testEnvironment(endpoint = process.env.COSMOS_ENDPOINT) {
-  const host = URL.canParse(endpoint || '') ? new URL(endpoint).hostname : '';
-  return host === TEST_HOST ? ENV : refuse('COSMOS_ENDPOINT is not demi-cosmos-test; this loader runs on test only');
-}
-
-function optionsOf(argv) {
-  let values;
-  try {
-    ({ values } = parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: false }));
-  } catch {
-    refuse(`options are --${Object.keys(OPTIONS).join(', --')}`);
-  }
-  if (values.help) return values;
-  const missing = [...INPUTS, ...(values.live ? LIVE : [])].filter(name => !values[name]);
-  if (missing.length) refuse(`missing --${missing.join(', --')}`);
-  return values;
-}
 
 /** The repositories the loader reads and writes; tests pass a fake. */
 function liveDemi() {
@@ -68,6 +34,7 @@ function liveDemi() {
     marker: projectId => works.get(projectId, OVERRIDE_MARKER_ID),
     commentPeriods: projectId => commentPeriods.listEveryByProject(projectId, systemAccess()),
     project: projectId => projects.getById(systemAccess(), projectId),
+    externalIdHolders: (system, value) => history.externalIdHolders(system, value),
     trackPublic: async row => (await loadWorks(row)).worksForDerive,
     saveWork: (doc, options) => works.save(doc, options),
     tombstone: (doc, options) => works.tombstone(doc, options),
@@ -77,48 +44,15 @@ function liveDemi() {
   };
 }
 
-function openInputs(o, env) {
-  const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
-  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
-  const recipient = { rsa: operator, fingerprint: fingerprintOf({ rsa: operator }) };
-  if (recipient.fingerprint !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
-  const opened = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
-    env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-sha256']
-  });
-  const crosswalk = readCrosswalk(readCapped(o.crosswalk, MAX_BYTES.crosswalk), {
-    env, keys, expectExtractSha256: opened.sha256, expectManualSha256: o['expect-manual-sha256']
-  });
-  if (crosswalk.sha256 !== o['expect-crosswalk-sha256'].toLowerCase()) refuse('crosswalk SHA-256 does not match --expect-crosswalk-sha256');
-  return { keys, recipient, opened, crosswalk };
-}
-
-/** Every stored input of the crosswalk's projects, built as check-business-works-parity.js builds them, so a parity run and a load agree. */
-async function readStored(demi, projectIds) {
-  const state = { stored: new Map(), storedMarkers: new Map(), rows: new Map(), trackWorks: new Map(), trackPublic: new Map(), eagleItems: new Map() };
-  for (const projectId of projectIds) {
-    const row = await demi.project(projectId);
-    if (!row) continue;
-    const docs = await demi.works(projectId);
-    const marker = await demi.marker(projectId);
-    state.rows.set(projectId, row);
-    state.stored.set(projectId, docs);
-    if (marker) state.storedMarkers.set(projectId, marker);
-    state.trackWorks.set(projectId, docs.filter(doc => sourceOf(doc) === 'track' && !doc.deleted));
-    state.trackPublic.set(projectId, await demi.trackPublic(row));
-    state.eagleItems.set(projectId, { ...row, commentPeriods: await demi.commentPeriods(projectId) });
-  }
-  return state;
-}
-
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const stored = await readStored(demi, [...new Set(crosswalk.values())]);
-  const markers = new Map(stored.storedMarkers);
   const plan = buildPlan(inputs.opened.extract, {
-    ...stored, markers, crosswalk, batchId, batchAt, ownerOf: works.ownerOf, catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
+    ...stored, markers: new Map(stored.storedMarkers), crosswalk, batchId, batchAt, ownerOf: works.ownerOf,
+    catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
   });
   if (plan.report.some(entry => entry.reason === 'notInCrosswalk')) refuse('a sheet number is not in the signed crosswalk');
-  return { plan, stored };
+  return { plan: withoutHeld(plan, await heldElsewhere(demi, plan)), stored };
 }
 
 const targetOf = entry => ({
@@ -126,7 +60,7 @@ const targetOf = entry => ({
   appendHistory: { projectId: entry.projectId, field: entry.field, entryId: entry.entry && entry.entry.id }
 }[entry.action] || { projectId: entry.projectId, id: (entry.doc || entry.current).id });
 
-/** Runs one planned write; resolves the etag the save returned. A refused write stops the run. */
+/** Runs one planned write; resolves the save's answer. A refused write stops the run. */
 async function writeOne(demi, entry, batchAt) {
   const current = entry.current;
   const guard = current ? { owner: OWNER, etag: current._etag, existing: current } : { owner: OWNER };
@@ -139,12 +73,13 @@ async function writeOne(demi, entry, batchAt) {
     appendHistory: () => demi.appendHistory(entry.projectId, entry.field, entry.entry, entry.close)
   }[entry.action]();
   if (!DONE.has(result.status)) refuse(`${entry.action} on project ${entry.projectId} answered ${result.status}`);
-  return result.etag ?? null;
+  return result;
 }
 
-function backupOf(plan, stored) {
+function backupOf(plan, stored, batchId) {
   const touched = [...new Set(plan.entries.map(entry => entry.projectId))];
   return Buffer.from(JSON.stringify({
+    batchId,
     documents: plan.entries.filter(entry => entry.current).map(entry => entry.current),
     projects: touched.map((projectId) => {
       const row = stored.rows.get(projectId) || {};
@@ -154,41 +89,72 @@ function backupOf(plan, stored) {
   }));
 }
 
+/** Frees the lock of a run that wrote no batch header; a failed release is logged so the first error stands. */
+async function releaseQuietly(lease) {
+  try {
+    await batches.releaseLock(lease);
+  } catch (err) {
+    logger.warn('[load-business-works] import lock release failed', { error: err.message });
+  }
+}
+
+/** The plan, the sealed backup and the pending header, all under the lock; without a header the lock is freed. */
+async function startBatch(o, ctx, batchId, lease) {
+  const { demi, inputs, env, runAt } = ctx;
+  let batch = null;
+  try {
+    const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
+    if (plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
+    const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
+    const backup = batches.writeSealed(o['out-dir'], backupOf(plan, stored, batchId), sealed);
+    batch = await batches.createBatch(batchId, {
+      operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
+      inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,
+      backupBlob: backup.name, backupSha256: backup.sha256
+    }, Date.parse(runAt));
+    return { plan, stored, backup, batch };
+  } finally {
+    if (!batch) await releaseQuietly(lease);
+  }
+}
+
 async function live(o, ctx) {
-  const { demi, inputs, env, now, write } = ctx;
+  const { demi, inputs, now, runAt, write } = ctx;
+  const refs = Object.values(inputs.opened.signoffRefs || {}).filter(Boolean);
+  if (refs.length && !refs.includes(o['signoff-ref'])) refuse('--signoff-ref is not a sign-off ref the extract was sealed with');
   const batchId = crypto.randomUUID();
   const lease = await batches.takeLock(batchId, now());
-  let planned;
-  try {
-    planned = await planFor(demi, inputs, { batchId, batchAt: new Date(now()).toISOString() });
-    if (planned.plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
-  } catch (err) {
-    await batches.releaseLock(lease);
-    throw err;
-  }
-  const { plan, stored } = planned;
-  const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
-  const backup = batches.writeSealed(o['out-dir'], backupOf(plan, stored), sealed);
-  const batch = await batches.createBatch(batchId, {
-    operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
-    inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,
-    backupBlob: backup.name, backupSha256: backup.sha256
-  }, now());
+  const { plan, stored, backup, batch } = await startBatch(o, ctx, batchId, lease);
   const run = { batchId, lease, seq: 0 };
-  const batchAt = batch.item.startedAt;
+  const rowEtags = new Map([...stored.rows].map(([id, row]) => [id, row._etag ?? null]));
+  let written = 0;
   for (const entry of plan.entries) {
-    await batches.writeAhead(run, { target: targetOf(entry), action: entry.action, priorEtag: entry.current ? entry.current._etag : null },
-      () => writeOne(demi, entry, batchAt), now());
+    const project = !entry.doc && !entry.current;
+    const priorEtag = project ? rowEtags.get(entry.projectId) : entry.current?._etag ?? null;
+    const etag = await batches.writeAhead(run, { target: targetOf(entry), action: entry.action, priorEtag }, async () => {
+      const result = await writeOne(demi, entry, runAt);
+      if (result.status !== 'unchanged') written += 1;
+      return result.etag ?? null;
+    }, now());
+    if (project && etag) rowEtags.set(entry.projectId, etag);
   }
-  for (const projectId of new Set(plan.entries.map(entry => entry.projectId))) await demi.patchDerived(projectId);
+  const touched = [...new Set(plan.entries.map(entry => entry.projectId))];
+  for (const projectId of touched) {
+    await batches.writeAhead(run, { target: { projectId, id: projectId }, action: 'derive', priorEtag: rowEtags.get(projectId) ?? null }, async () => {
+      const { status } = await demi.patchDerived(projectId);
+      if (!DERIVED.has(status)) refuse(`patchDerived on project ${projectId} answered ${status}`);
+      return null;
+    }, now());
+  }
   await batches.completeBatch(batch, lease, now());
   write(`batchId=${batchId}`);
-  write(`written=${plan.entries.length}`);
+  write(`written=${written}`);
+  write(`derived=${touched.length}`);
   write(`backupSha256=${backup.sha256}`);
 }
 
-async function dryRun(o, { demi, inputs, env, now, write }) {
-  const { plan } = await planFor(demi, inputs, { batchId: crypto.randomUUID(), batchAt: new Date(now()).toISOString() });
+async function dryRun(o, { demi, inputs, env, runAt, write }) {
+  const { plan } = await planFor(demi, inputs, { batchId: crypto.randomUUID(), batchAt: runAt });
   const body = Buffer.from(JSON.stringify({ planSha256: plan.planSha256, report: plan.report, lists: plan.lists }));
   const report = batches.writeSealed(o['out-dir'], body, { purpose: 'works-report', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 });
   countLines(plan).forEach(write);
@@ -207,13 +173,14 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
     return 0;
   }
   const env = testEnvironment();
-  const ctx = { demi, inputs: openInputs(o, env), env, now, write };
+  checkOutDir(o['out-dir']);
+  const ctx = { demi, inputs: openInputs(o, env), env, now, runAt: new Date(now()).toISOString(), write };
   if (o.live) await live(o, ctx);
   else await dryRun(o, ctx);
   return 0;
 }
 
-module.exports = { run, liveDemi, testEnvironment };
+module.exports = { run, liveDemi };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {

@@ -11,6 +11,8 @@ const path = require('path');
 const batches = require('../../src/scripts/works-import-batch');
 const { fingerprintOf, openEnvelope, verify } = require('../../src/utils/import-envelope');
 const { fakeLists } = require('../helpers/works-import-fakes');
+const lists = require('../../src/repositories/lists');
+const { resolveAccess } = require('../../src/helpers/access-sql');
 
 const { KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY } = batches;
 const T0 = Date.parse('2026-11-13T18:00:00Z');
@@ -93,12 +95,13 @@ test('entries hold no sourceKey, number or staff value', async (t) => {
   assert.equal(store.all().filter(item => item.kind === KINDS.ENTRY).length, 0);
 });
 
-test('lists reads return no ImportBatch, ImportBatchEntry or ImportLock item: none carries read[]', async (t) => {
-  const { store, run } = await started(t);
+test('lists reads return no ImportBatch, ImportBatchEntry or ImportLock item', async (t) => {
+  const { run } = await started(t);
   await batches.writeAhead(run, { target, action: 'create' }, async () => '"w"', T0);
-  const written = store.all();
-  assert.deepEqual([...new Set(written.map(item => item.kind))].sort(), [KINDS.BATCH, KINDS.ENTRY, KINDS.LOCK].sort());
-  assert.deepEqual(written.filter(item => 'read' in item || 'isPublished' in item), []);
+  const staff = resolveAccess({ user: { preferred_username: 'staff.person', roles: ['staff'] } });
+  const reads = [[LOCK_ID, KINDS.LOCK], ['b1', KINDS.BATCH], ['b1:1', KINDS.ENTRY]]
+    .flatMap(([id, kind]) => [resolveAccess({}), staff].map(access => lists.getById(access, id, kind)));
+  assert.deepEqual(await Promise.all(reads), [null, null, null, null, null, null]);
 });
 
 test('writeSealed writes one 0600 blob the operator opens and whose devbox signature verifies', () => {

@@ -4,111 +4,19 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { run, liveDemi } = require('../../src/scripts/load-business-works');
+const { liveDemi } = require('../../src/scripts/load-business-works');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { KINDS } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const projects = require('../../src/repositories/projects');
 const { deriveInputs } = require('../../src/domain/works-derive');
-const { devboxKeysFromPem, fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
-const { COLUMNS } = require('../../src/scripts/works-crosswalk');
 const { logger } = require('../../src/utils/logger');
-const { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork } = require('../helpers/works-import-fakes');
-
-const ENV = 'test';
-const T0 = Date.parse('2026-11-13T18:00:00Z');
-const pemOf = (key, type) => key.export({ type, format: 'pem' });
-const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-const ed = crypto.generateKeyPairSync('ed25519');
-const operator = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-const keys = devboxKeysFromPem(pemOf(rsa.privateKey, 'pkcs8') + pemOf(ed.privateKey, 'pkcs8'));
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'load-business-works-'));
-const endpoint = process.env.COSMOS_ENDPOINT;
-const testHost = 'https://demi-cosmos-test.documents.azure.com:443/';
-process.env.COSMOS_ENDPOINT = testHost;
-test.after(() => {
-  if (endpoint === undefined) delete process.env.COSMOS_ENDPOINT;
-  else process.env.COSMOS_ENDPOINT = endpoint;
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
-
-const TRACK = [trackWork(43, { startDate: '2023-03-01', decisionDate: '2023-11-07' }), trackWork(45, { startDate: '2015-03-01', decisionDate: '2015-05-07' })];
-
-/** A fake DEMI: works keyed by id with etags from each save, one project row, and every derive call. */
-function fakeDemi() {
-  const docs = new Map(TRACK.map(doc => [doc.id, { ...doc, _etag: '"t"' }]));
-  const state = { saves: 0, derived: [], docs, projectFields: [] };
-  let n = 0;
-  const saveWork = async (doc) => {
-    const stored = { ...doc, _etag: `"w${n += 1}"` };
-    docs.set(doc.id, stored);
-    state.saves += 1;
-    return { status: 'written', etag: stored._etag };
-  };
-  return Object.assign(state, {
-    worksCatalog: async () => CATALOG,
-    phaseCatalog: async () => PHASES,
-    works: async () => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID),
-    marker: async () => docs.get(OVERRIDE_MARKER_ID) || null,
-    project: async id => (id === PROJECT ? { id: PROJECT, externalIds: [], reviewExtensions: [], reviewSuspensions: [] } : null),
-    commentPeriods: async () => [],
-    trackPublic: async () => [],
-    saveWork,
-    tombstone: async doc => saveWork({ ...doc, deleted: true }),
-    addExternalId: async () => { state.projectFields.push('externalIds'); return { status: 'set', etag: '"p"' }; },
-    appendHistory: async (_id, field) => { state.projectFields.push(field); return { status: 'appended', etag: '"p"' }; },
-    patchDerived: async (id) => { state.derived.push(id); return { status: 'patched' }; }
-  });
-}
-
-const toDevbox = (text, purpose, extra = {}) => sealEnvelope(Buffer.from(text), { purpose, env: ENV, keyFingerprint: keys.fingerprint, recipientKey: rsa.publicKey, ...extra });
-const cell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
-
-/** Sealed extract and signed crosswalk on disk, and the argv of a dry run over them. */
-const NO_SIGNOFF = { staffIncluded: false, numbersReal: false, signoffRefs: { keepStaff: null, keepNumbers: null } };
-
-function inputs({ records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07')] }, crosswalkRows, flags = NO_SIGNOFF } = {}) {
-  const dir = fs.mkdtempSync(path.join(tmp, 'in-'));
-  const outDir = fs.mkdtempSync(path.join(tmp, 'out-'));
-  const extractText = JSON.stringify({ schemaVersion: 1, env: ENV, ...flags, records });
-  const extractSha256 = sha256Hex(Buffer.from(extractText));
-  const manualSha256 = sha256Hex(Buffer.from('manual'));
-  const rows = crosswalkRows || [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }];
-  const csv = [['extractSha256', extractSha256, 'manualSha256', manualSha256], COLUMNS, ...rows.map(r => COLUMNS.map(c => r[c]))]
-    .map(line => line.map(cell).join(',')).join('\r\n').concat('\r\n');
-  const crosswalkSha256 = sha256Hex(Buffer.from(csv));
-  const signature = sign(keys.ed25519, { purpose: 'crosswalk', env: ENV, sha256: crosswalkSha256 });
-  const file = (name, data) => { fs.writeFileSync(path.join(dir, name), data); return path.join(dir, name); };
-  const argv = [
-    '--extract', file('extract.sealed.json', toDevbox(extractText, 'extract', flags)),
-    '--expect-sha256', extractSha256,
-    '--crosswalk', file('crosswalk.sealed.json', toDevbox(csv, 'crosswalk', { signature })),
-    '--expect-crosswalk-sha256', crosswalkSha256, '--expect-manual-sha256', manualSha256,
-    '--devbox-key', file('devbox.key.pem', pemOf(rsa.privateKey, 'pkcs8') + pemOf(ed.privateKey, 'pkcs8')),
-    '--operator-key', file('operator.pub.pem', pemOf(operator.publicKey, 'spki')),
-    '--expect-operator-fingerprint', fingerprintOf({ rsa: operator.publicKey }), '--out-dir', outDir
-  ];
-  return { argv, outDir, dir };
-}
-
-async function load(argv, demi = fakeDemi()) {
-  const lines = [];
-  await run(argv, { write: line => lines.push(line), demi, now: () => T0 });
-  const value = key => (lines.find(line => line.startsWith(`${key}=`)) || '').slice(key.length + 1);
-  return { lines, value, demi };
-}
-
-/** The sealed dry-run report, opened as the operator opens it. */
-const reportOf = (outDir, blob) => JSON.parse(openEnvelope(fs.readFileSync(path.join(outDir, blob)), {
-  purpose: 'works-report', env: ENV, keyFingerprint: fingerprintOf({ rsa: operator.publicKey }), privateKey: operator.privateKey
-}).plaintext);
-
-const liveArgs = (planSha256, { signoff = true } = {}) =>
-  ['--live', '--operator', 'operator-upn', '--run-ref', 'run-1', ...(signoff ? ['--signoff-ref', 'so-1'] : []), '--expect-plan-sha256', planSha256];
+const { fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
+const {
+  PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
+} = require('../helpers/works-import-loader');
 
 test('dry run twice on unchanged input gives the same planSha256', async () => {
   const { argv } = inputs();
@@ -168,6 +76,8 @@ test('dry run lists trackHidden with project id, work id, type, start date and m
   const [hidden] = report.lists.trackHidden;
   assert.deepEqual([hidden.projectId, hidden.workId, hidden.type, hidden.startDate, hidden.gap], [PROJECT, 'track-43', 'amendment', '2023-03-01', 0]);
   assert.match(hidden.sheetWorkId, /^sheet-/);
+  assert.equal(hidden.sourceKey, `${NUMBER}:amendment:1`);
+  assert.equal(value('sheetShown'), value('create'));
   assert.equal(report.lists.trackShownNoSheetMatch[0].workId, 'track-45');
   const printed = lines.map(line => line.split('=')[0]);
   const wanted = ['trackHidden', 'sheetShown', 'trackShownNoSheetMatch', 'trackAlive', 'trackCompletedNoDate', 'untilTrack', 'sameEventChoice'];
@@ -180,11 +90,11 @@ test('a Track amendment decided before B with no matching loaded sheet work is l
   const report = reportOf(outDir, value('blob'));
   const [shown] = report.lists.trackShownNoSheetMatch;
   assert.equal(shown.workId, 'track-45');
-  assert.equal(shown.nearest.gap, 3106);
+  assert.equal(shown.nearest.gap, 3014);
 });
 
 test('live refuses without --signoff-ref', async () => {
-  await assert.rejects(load([...inputs().argv, ...liveArgs('0'.repeat(64), { signoff: false })]), /missing --signoff-ref/);
+  await assert.rejects(load([...inputs().argv, ...liveArgs('0'.repeat(64), { signoff: null })]), /missing --signoff-ref/);
 });
 
 test('live exits before any write on any hash mismatch, and leaves no lock', async (t) => {
@@ -238,19 +148,8 @@ test('truncated extract changes planSha256', async () => {
   assert.notEqual((await load(full.argv)).value('planSha256'), (await load(truncated.argv)).value('planSha256'));
 });
 
-const STAFF = { staffIncluded: true, numbersReal: true, signoffRefs: { keepStaff: 'so-staff', keepNumbers: 'so-numbers' } };
-const staffed = () => inputs({ flags: STAFF, records: { projects: [{ ...register, epd: 'staff-value-1', lead: 'staff-value-2', notes: 'staff-value-3' }],
-  amendments: [amendment(1, '2023-06-01', '2023-11-07')] } });
-
-async function liveLoad(t, given) {
-  fakeLists(t);
-  const demi = fakeDemi();
-  await load([...given.argv, ...liveArgs((await load(given.argv, demi)).value('planSha256'))], demi);
-  return demi;
-}
-
 test('never writes projectLead, responsibleEPD, eaoMember, reviewExtensions, commentPeriods or legislation_* blocks', async (t) => {
-  const demi = await liveLoad(t, staffed());
+  const demi = await liveLoad(t, staffed(), 'so-staff');
   assert.deepEqual([...new Set(demi.projectFields)].sort(), ['externalIds', 'staffAssignments', 'staffNotes']);
 });
 

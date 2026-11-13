@@ -39,10 +39,15 @@ test('works-import-key refuses to overwrite without --rotate', async () => {
   assert.equal(fs.readFileSync(path.join(dir, KEY_FILE), 'utf8'), pem);
 });
 
-test('--rotate replaces the key and leaves no other file', async () => {
+test('--rotate replaces the key, leaves no other file, and prints the old fingerprint first', async () => {
   const dir = path.join(tmp, 'rotated');
   const first = await keygen(dir);
   const second = await keygen(dir, '--rotate');
   assert.notEqual(devboxKeysFromPem(second.pem).fingerprint, devboxKeysFromPem(first.pem).fingerprint);
   assert.deepEqual(fs.readdirSync(dir), [KEY_FILE]);
+  assert.equal(second.lines[0], `oldFingerprint=${devboxKeysFromPem(first.pem).fingerprint}`);
+});
+
+test('refuses a key directory another user owns', { skip: process.getuid && process.getuid() === 0 }, async () => {
+  await assert.rejects(run(['--dir', path.parse(tmp).root], { write: () => {} }), /another user/);
 });
