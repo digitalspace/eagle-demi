@@ -247,6 +247,7 @@ module.exports = {
   pacificDay,
   ENTRY_SCHEMAS,
   SERVER_KEYS,
+  newEntryError,
   unwritableStaffFields,
   staffFieldChanges,
   observeInvestment,
