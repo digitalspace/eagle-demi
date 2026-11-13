@@ -20,6 +20,7 @@ for (const [name, why] of [
   ['trackPrincipals', 'the API module call — without it DEMI_TRACK_PRINCIPALS is always the module default'],
   ['worksWrite', 'the API module call — without it WORKS_WRITE stays false whatever the param file says'],
   ['worksRead', 'the API module call — without it WORKS_READ stays false whatever the param file says'],
+  ['worksReadSources', 'the API module call — without it WORKS_READ_SOURCES stays track whatever the param file says'],
 ]) {
   test(`main.bicep declares and wires ${name} (${why.split(' —')[0]})`, () => {
     assert.match(MAIN, new RegExp(`^param ${name} `, 'm'),
@@ -115,7 +116,7 @@ test('cosmos indexes the project external id pair for the cross-project uniquene
 });
 
 // src/config.js reads only the string 'true' as on.
-test('the API app carries WORKS_WRITE and WORKS_READ, default off', () => {
+test('the API app carries WORKS_WRITE and WORKS_READ, default off, and WORKS_READ_SOURCES, default track', () => {
   assert.match(MAIN, /^param worksWrite bool = false$/m);
   assert.match(MAIN, /^param worksRead bool = false$/m);
   assert.match(API_MODULE, /^param worksWrite bool = false$/m);
@@ -123,6 +124,10 @@ test('the API app carries WORKS_WRITE and WORKS_READ, default off', () => {
   assert.match(API_MODULE, /name: 'WORKS_WRITE'\n\s+value: worksWrite \? 'true' : 'false'$/m,
     'an undeclared app setting dies on the next whole-collection PUT');
   assert.match(API_MODULE, /name: 'WORKS_READ'\n\s+value: worksRead \? 'true' : 'false'$/m,
+    'an undeclared app setting dies on the next whole-collection PUT');
+  assert.match(MAIN, /^param worksReadSources string = 'track'$/m);
+  assert.match(API_MODULE, /^param worksReadSources string = 'track'$/m);
+  assert.match(API_MODULE, /name: 'WORKS_READ_SOURCES'\n\s+value: worksReadSources$/m,
     'an undeclared app setting dies on the next whole-collection PUT');
 });
 
