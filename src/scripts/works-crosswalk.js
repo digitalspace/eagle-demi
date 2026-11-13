@@ -7,12 +7,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { parseArgs } = require('util');
-const config = require('../config');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
 const {
-  devboxKeysFromPem, recipientFromPem, readCapped, fingerprintOf, sealEnvelope, openEnvelope, openExtract, sha256Hex, sign, verify
+  devboxKeysFromPem, publicKeysFromPem, readCapped, fingerprintOf, sealEnvelope, openEnvelope, openExtract, sha256Hex, sign, verify
 } = require('../utils/import-envelope');
 const { logger } = require('../utils/logger');
 
@@ -33,8 +32,13 @@ const MAX_NAME = 500;
 const MAX_MANUAL_ENTRIES = 1000;
 // `'` too, so a cell that already starts with one survives the strip in readCrosswalk.
 const FORMULA_START = /^[=+\-@']/;
+// Zero-width space, line and paragraph separators, BOM; ZWJ and ZWNJ stay, since names can need them.
+const INVISIBLE = [0x200b, 0x2028, 0x2029, 0xfeff].map(code => String.fromCharCode(code)).join('');
 // C0 and C1 controls, and bidi controls that could make a reviewer read a cell other than it is.
-const CONTROL = /[\p{Cc}\p{Bidi_Control}]/gu;
+const CONTROL = new RegExp(`[\\p{Cc}\\p{Bidi_Control}${INVISIBLE}]`, 'gu');
+// scripts/works-import/surrogates.js draws test surrogates from this range.
+const SURROGATE_RANGE = [100000, 999999];
+const COSMOS_HOST = /^demi-cosmos-(test|prod)\.documents\.azure\.com$/;
 const CSV_CELL = /"((?:[^"]|"")*)"(,?)/y;
 const EAGLE_ID = /^[0-9a-f]{24}$/;
 const TRACK_ID = /^[1-9]\d{0,9}$/;
@@ -81,13 +85,15 @@ function manualOf(plaintext) {
   });
   const foldEagleOf = new Map();
   const foldTrackOf = new Map();
+  const foldIndex = new Map();
   doc.foldPairs.forEach((pair, i) => {
     const [, trackId, eagleId] = (typeof pair === 'string' && FOLD_PAIR.exec(pair)) || [];
     if (!trackId || foldEagleOf.has(trackId) || foldTrackOf.has(eagleId)) refuse(`manual-match foldPairs[${i}] is not a unique trackId:eagleId`);
     foldEagleOf.set(trackId, eagleId);
     foldTrackOf.set(eagleId, trackId);
+    foldIndex.set(trackId, i);
   });
-  return { matches, foldEagleOf, foldTrackOf };
+  return { matches, foldEagleOf, foldTrackOf, foldIndex };
 }
 
 /** Register rows grouped by sheet id with every alias name, plus rows the extractor dropped or whose id is unusable. */
@@ -116,13 +122,25 @@ function sheetProjectsOf(extract) {
   return { byId, aliases, dropped };
 }
 
-/** Refuses a manual entry for an id the register lacks: on test the register holds surrogates, not real numbers. */
+/**
+ * Refuses a manual entry for an id the register lacks, and on test one outside the surrogate range: there the
+ * register holds surrogates, and a real register number must never reach the devbox.
+ */
 function checkManualIds(manual, sheet, numbersReal) {
+  const hint = numbersReal ? '' : '; this extract holds surrogate ids, so key the file by surrogate, translated with ' +
+    'the surrogate map on the operator machine, and never put a real register number on the devbox';
   for (const [sheetId, { index }] of manual.matches) {
-    if (sheet.byId.has(sheetId)) continue;
-    const hint = numbersReal ? '' : '; this extract holds surrogate ids, so key the file by surrogate, translated with ' +
-      'the surrogate map on the operator machine, and never put a real register number on the devbox';
-    refuse(`manual-match matches[${index}] names a sheet id the register does not hold${hint}`);
+    if (!numbersReal && (sheetId < SURROGATE_RANGE[0] || sheetId > SURROGATE_RANGE[1])) {
+      refuse(`manual-match matches[${index}] is not a surrogate id${hint}`);
+    }
+    if (!sheet.byId.has(sheetId)) refuse(`manual-match matches[${index}] names a sheet id the register does not hold${hint}`);
+  }
+}
+
+/** Refuses a fold pair whose Track id names no live project row. */
+function checkFoldPairs(manual, pool) {
+  for (const [trackId, index] of manual.foldIndex) {
+    if (!pool.byId.has(trackId)) refuse(`manual-match foldPairs[${index}] names a Track id with no live project row`);
   }
 }
 
@@ -178,7 +196,7 @@ function linkStateOf(match, pool, manual) {
   const fold = manual.foldTrackOf.get(eagleId);
   const unfolded = Boolean(twin) && ((fold && String(twin.foldedInto ?? '') !== fold) || isDemiOwnedProject(twin));
   let { state } = match;
-  if (eagleId && targetEagleId !== eagleId) state = 'unlinked';
+  if ((eagleId && targetEagleId !== eagleId) || (fold && fold !== match.targetId)) state = 'unlinked';
   else if (unfolded) state = 'unfolded';
   return {
     ...match, state, eagleId, targetEagleId, twinBeside: Boolean(twin) && !unfolded,
@@ -210,7 +228,8 @@ function crosswalkOf(sheet, pool, manual) {
 
 const cellOf = (value) => {
   const text = value == null ? '' : String(value).replace(CONTROL, ' ');
-  return `"${(FORMULA_START.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
+  // Spreadsheets skip leading blanks before reading a formula.
+  return `"${(FORMULA_START.test(text.trimStart()) ? `'${text}` : text).replace(/"/g, '""')}"`;
 };
 const lineOf = cells => cells.map(cellOf).join(',');
 
@@ -236,9 +255,9 @@ function cellsOf(line) {
 
 /**
  * Opens a crosswalk the operator sealed to the devbox, verifies the devbox signature over
- * {purpose: 'crosswalk', env, sha256}, and returns its hashes and its exact and manual rows only.
+ * {purpose: 'crosswalk', env, sha256} and the input hashes in its header, and returns its exact and manual rows only.
  */
-function readCrosswalk(sealed, { env, keys }) {
+function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha256 }) {
   const opened = openEnvelope(sealed, { purpose: PURPOSE, env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa });
   const sha256 = sha256Hex(opened.plaintext);
   if (!verify(crypto.createPublicKey(keys.ed25519), { purpose: PURPOSE, env, sha256 }, opened.signature)) {
@@ -251,6 +270,8 @@ function readCrosswalk(sealed, { env, keys }) {
     SHA256.test(head[1]) && SHA256.test(head[3]) && columns && columns.join() === COLUMNS.join() &&
     lines.every(cells => cells.length === COLUMNS.length);
   if (!shaped) refuse('crosswalk CSV is malformed');
+  if (head[1] !== String(expectExtractSha256).toLowerCase()) refuse('crosswalk was not built from the expected extract');
+  if (head[3] !== String(expectManualSha256).toLowerCase()) refuse('crosswalk was not built from the expected manual-match file');
   const rows = lines.map(cells => Object.fromEntries(COLUMNS.map((c, i) => [c, cells[i]]))).filter(r => PASSING.has(r.state));
   return { sha256, extractSha256: head[1], manualSha256: head[3], rows };
 }
@@ -260,13 +281,25 @@ const OPTIONS = Object.fromEntries([
   'expect-operator-fingerprint', 'out-dir'
 ].map(name => [name, { type: 'string' }]));
 
+/** The environment named by the Cosmos host the rows come from; demi-run binds only COSMOS_ENDPOINT. */
+function cosmosEnvironment() {
+  const host = URL.canParse(process.env.COSMOS_ENDPOINT || '') ? new URL(process.env.COSMOS_ENDPOINT).hostname : '';
+  const [, env] = COSMOS_HOST.exec(host) || [];
+  return env || refuse('COSMOS_ENDPOINT names no demi-cosmos-test or demi-cosmos-prod account');
+}
+
 function optionsOf(argv) {
-  const { values } = parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: false });
+  let values;
+  try {
+    ({ values } = parseArgs({ args: argv, options: OPTIONS, strict: true, allowPositionals: false }));
+  } catch {
+    refuse(`options are --${Object.keys(OPTIONS).join(', --')}, each with one value`);
+  }
   const missing = Object.keys(OPTIONS).filter(name => !values[name]);
   if (missing.length) refuse(`missing --${missing.join(', --')}`);
   if (!ENVS.includes(values.env)) refuse(`--env must be one of ${ENVS.join(', ')}`);
-  // The rows come from the Cosmos account this process is configured for; --env names the keys and the CSV.
-  if (values.env !== config.environmentName) refuse(`--env ${values.env} does not match ENVIRONMENT ${config.environmentName}`);
+  // --env picks the keys and the signed statement; the rows come from the account COSMOS_ENDPOINT names.
+  if (values.env !== cosmosEnvironment()) refuse(`--env ${values.env} does not match the COSMOS_ENDPOINT account`);
   return values;
 }
 
@@ -288,22 +321,25 @@ async function liveRows() {
 async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows } = {}) {
   const o = optionsOf(argv);
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
-  const operator = recipientFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8'),
-    o['expect-operator-fingerprint'], 'operator key').keys.rsa;
+  // RSA only, as `extract.js keygen` prints it and `extract.js open` rebuilds it.
+  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
+  const operatorFingerprint = fingerprintOf({ rsa: operator });
+  if (operatorFingerprint !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
   const manual = openManual(o, keys);
   const { extract, numbersReal, sha256: extractSha256 } = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env: o.env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-extract-sha256']
   });
   const sheet = sheetProjectsOf(extract);
   checkManualIds(manual, sheet, numbersReal === true);
-  const result = crosswalkOf(sheet, poolOf(await listRows()), manual);
+  const pool = poolOf(await listRows());
+  checkFoldPairs(manual, pool);
+  const result = crosswalkOf(sheet, pool, manual);
   const csv = Buffer.from(csvOf(result.rows, { extractSha256, manualSha256: manual.sha256 }));
   const sha256 = sha256Hex(csv);
   const signature = sign(keys.ed25519, { purpose: PURPOSE, env: o.env, sha256 });
   const blob = `${crypto.randomUUID()}.sealed.json`;
-  // `extract.js open` rebuilds the fingerprint from the operator's RSA key alone.
   fs.writeFileSync(path.join(o['out-dir'], blob), sealEnvelope(csv, {
-    purpose: PURPOSE, env: o.env, keyFingerprint: fingerprintOf({ rsa: operator }), recipientKey: operator, signature
+    purpose: PURPOSE, env: o.env, keyFingerprint: operatorFingerprint, recipientKey: operator, signature
   }), { mode: 0o600, flag: 'wx' });
   STATES.forEach(state => write(`${state}=${result.counts[state]}`));
   write(`twinsBeside=${result.twinsBeside}`);
