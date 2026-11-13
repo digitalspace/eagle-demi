@@ -150,6 +150,8 @@ async function live(o, ctx) {
   write(`batchId=${batchId}`);
   write(`backupBlob=${backup.name}`);
   write(`backupSha256=${backup.sha256}`);
+  write(`worksRead=${process.env.WORKS_READ}`);
+  write(`worksReadSources=${process.env.WORKS_READ_SOURCES}`);
   const run = { batchId, lease, seq: 0 };
   const rowEtags = new Map([...stored.rows].map(([id, row]) => [id, row._etag ?? null]));
   let written = 0;
