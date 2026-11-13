@@ -273,6 +273,76 @@ test('a repeated register number is refused with a report entry', () => {
   assert.strictEqual(reasons(result, 'duplicateKey').length, 2);
 });
 
+const suspension = { ref: ref('Suspensions', 1), id: 101, type: 'Suspension s.24(2)', appliedTo: 'Review', startDate: '2006-02-01', endDate: '2006-03-01' };
+const eagleItem = (id, fields) => ({ id, type: 'Suspension', start: '2006-02-02', end: '2006-02-28', ...fields });
+const linkedItem = (extensions) => run({ projects: [register({ start180: '2006-01-01' })], suspensions: [suspension] },
+  { eagleItems: new Map([[PROJECT, { extensions, commentPeriods: [] }]]) });
+const itemLink = (result) => assessments(result)[0].phases.flatMap(phase => phase.interruptions)[0].links.eagleItemId;
+
+test('an interruption links to the Eagle item of its kind whose dates match within a day', () => {
+  assert.strictEqual(itemLink(linkedItem([eagleItem('item-a'), eagleItem('item-b', { type: 'Extension' })])), 'item-a');
+});
+
+test('an Eagle item whose end date is more than a day off is not linked', () => {
+  assert.strictEqual(itemLink(linkedItem([eagleItem('item-a', { end: '2006-03-05' })])), null);
+});
+
+test('two matching Eagle items link nothing and are listed', () => {
+  const result = linkedItem([eagleItem('item-a'), eagleItem('item-b', { start: '2006-01-31' })]);
+  assert.strictEqual(itemLink(result), null);
+  assert.deepStrictEqual(reasons(result, 'eagleItemAmbiguous').map(entry => entry.candidates), [['item-a', 'item-b']]);
+});
+
+const pcp = { ref: ref('PCPs', 1), id: 101, type: 'Application PCP', startDate: '2005-02-01', endDate: '2005-02-28' };
+const linkedPeriod = (commentPeriods) => {
+  const result = run({ commentPeriods: [pcp] }, { eagleItems: new Map([[PROJECT, { extensions: [], commentPeriods }]]) });
+  return { result, link: milestones(assessments(result)[0]).find(one => one.code === 'comment-period').links.commentPeriodId };
+};
+
+test('a comment period links only to an Eagle period whose read includes the public token', () => {
+  const { link } = linkedPeriod([{ id: 'cp-staff', dateStarted: '2005-02-01', read: ['staff'] },
+    { id: 'cp-public', dateStarted: '2005-02-04T08:00:00Z', read: ['staff', 'public'] }]);
+  assert.strictEqual(link, 'cp-public');
+});
+
+test('an Eagle period starting more than three days off is not linked', () => {
+  assert.strictEqual(linkedPeriod([{ id: 'cp-public', dateStarted: '2005-02-05', read: ['public'] }]).link, null);
+});
+
+test('two public Eagle periods in the window link nothing and are listed', () => {
+  const { result, link } = linkedPeriod([{ id: 'cp-a', dateStarted: '2005-02-01', read: ['public'] },
+    { id: 'cp-b', dateStarted: '2005-02-02', read: ['public'] }]);
+  assert.strictEqual(link, null);
+  assert.strictEqual(reasons(result, 'commentPeriodAmbiguous').length, 1);
+});
+
+const compared = (row, stored, options = {}) => run({ projects: [register(row)] }, { storedProjects: new Map([[PROJECT, stored]]), ...options });
+const COMPARED_REASONS = ['expiryDiffers', 'substantialStartDateDiffers', 'ceaaDiffers', 'substantialStartDiffers'];
+const comparedEntries = (result) => result.report.filter(entry => COMPARED_REASONS.includes(entry.reason))
+  .map(({ reason, sheetField, field, projectId }) => ({ reason, sheetField, field, projectId }));
+
+test('register fields that differ from the stored project are listed by field name only', () => {
+  const result = compared({ expiryDate: '2013-05-01', substantialStartDate: '2012-01-01', ceaa: 'Yes' },
+    { eacExpires: '2014-05-01', substantiallyDate: null, CEAAInvolvement: 'No' });
+  assert.deepStrictEqual(comparedEntries(result), [
+    { reason: 'expiryDiffers', sheetField: 'expiryDate', field: 'eacExpires', projectId: PROJECT },
+    { reason: 'substantialStartDateDiffers', sheetField: 'substantialStartDate', field: 'substantiallyDate', projectId: PROJECT },
+    { reason: 'ceaaDiffers', sheetField: 'ceaa', field: 'CEAAInvolvement', projectId: PROJECT }
+  ]);
+});
+
+test('a stored timestamp on the same Pacific day and text differing only in case are not listed', () => {
+  const result = compared({ expiryDate: '2013-05-01', ceaa: 'Comprehensive  Study' },
+    { eacExpires: '2013-05-02T06:00:00Z', CEAAInvolvement: 'comprehensive study' });
+  assert.deepStrictEqual(comparedEntries(result), []);
+});
+
+test('the sheet\'s substantial start is compared with the stored flag once the caller says how to read it', () => {
+  const result = compared({ substantialStartDate: '2012-01-01' }, { substantially: false, substantiallyDate: '2012-01-01' },
+    { substantialStart: () => true });
+  assert.deepStrictEqual(comparedEntries(result).map(entry => entry.reason), ['substantialStartDiffers']);
+});
+
 const EVENT_SOURCES = ['amendments', 'suspensions', 'extensions', 'orderVariations', 'commentPeriods'];
 
 test('the real workbook folder maps or reports every event row', { skip: !process.env.WORKS_REAL_DIR }, async () => {

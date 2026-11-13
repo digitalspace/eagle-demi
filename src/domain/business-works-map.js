@@ -15,6 +15,7 @@ const {
   LAST_SHEET_DAY, UNKNOWN_DAY, UNKNOWN_FIELDS, actOf, assessmentWorks, datedOf, isLater, keyOf,
   milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
 } = require('./business-works-assessment');
+const { commentPeriodIdFor, compareRegister, eagleItemIdFor } = require('./business-works-compare');
 
 /** Sheet ID 8 shows Track's investment, never a sheet figure (A19). */
 const INVESTMENT_USE_TRACK = Object.freeze([8]);
@@ -32,6 +33,7 @@ function contextOf(options = {}) {
     catalog, phaseCatalog, crosswalk, batchId, batchAt, batchDate: dayOf(batchAt),
     trackWorks: options.trackWorks || new Map(), markers: options.markers || new Map(),
     transitionIdsAreRegisterIds: options.transitionIdsAreRegisterIds === true,
+    eagleItems: options.eagleItems || new Map(), storedProjects: options.storedProjects || new Map(),
     substantialStart: options.substantialStart || null, report: [], projects: new Map(), bases: new Map()
   };
 }
@@ -110,6 +112,7 @@ function readRegister(ctx, records) {
     }
     const row = withTimeline(raw, timelines.get(raw.id));
     UNKNOWN_FIELDS.filter(field => row[field] === UNKNOWN_DAY).forEach(field => list('unknownDate', { field }));
+    compareRegister(ctx.storedProjects.get(projectId), row, ctx.substantialStart, list);
     const project = projectOf(ctx, projectId);
     const entries = staffEntries(ctx, row, list);
     STAFF_LISTS.forEach(key => project.entries[key].push(...entries[key]));
@@ -189,12 +192,14 @@ function attachInterruption(ctx, { project, list }, row, tabKind) {
   const phase = catalogId && work.phases.find(one => one.catalogId === catalogId);
   if (work && !phase) list('noPhase', { sourceKey: work.sourceKey });
   if (!phase) return undefined;
-  return phase.interruptions.push({
+  const interruption = {
     id: childIdOf(type.code, nextN(work, type.code)), kind: type.kind || tabKind, typeCode: type.code,
     legalSection: type.legalSection ?? null, startDate: days.start, endDate: days.end,
     days: days.end ? Math.max(0, daysBetween(days.start, days.end)) : null, links: { eagleItemId: null },
     sourceRef: { sheet: refOf(row.ref) }
-  });
+  };
+  interruption.links.eagleItemId = eagleItemIdFor(ctx.eagleItems.get(project.projectId), interruption, list);
+  return phase.interruptions.push(interruption);
 }
 
 function attachVariation(ctx, { project, list }, row) {
@@ -217,8 +222,9 @@ function attachCommentPeriod(ctx, { project, list }, row) {
   if (type && !work) list('noWork');
   if (!work) return undefined;
   const options = { n: nextN(work, 'comment-period'), endDate: days.end, name: type.name };
-  return phaseHolding(work, days.start).milestones
-    .push({ ...milestoneOf(ctx, 'comment-period', 'INTERIOR', { day: days.start }, options), sourceRef: { sheet: refOf(row.ref) } });
+  const milestone = { ...milestoneOf(ctx, 'comment-period', 'INTERIOR', { day: days.start }, options), sourceRef: { sheet: refOf(row.ref) } };
+  milestone.links.commentPeriodId = commentPeriodIdFor(ctx.eagleItems.get(project.projectId), days.start, list);
+  return phaseHolding(work, days.start).milestones.push(milestone);
 }
 
 /** `kept` when closed before `boundary`, else `open` (no close date) or `closedAfter`. */
