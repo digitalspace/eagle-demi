@@ -414,6 +414,6 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
 
 const emptySummary = (trackProjects) => ({ trackProjects, created: 0, updated: 0, relinked: 0, skippedApiRows: 0,
   orphaned: 0, phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, adopted: 0,
-  derivedDrift: 0, failures: 0 });
+  derivedDrift: 0, failures: 0, investment: { appended: 0, closed: 0, unreadable: 0, full: 0 } });
 
 module.exports = { HEAL_CAP, trackChanges, writeTrackProject, rowWriter, emptySummary, owesLink, foldTwin, settleTwin };
