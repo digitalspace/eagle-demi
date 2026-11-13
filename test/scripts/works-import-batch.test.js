@@ -4,12 +4,10 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const batches = require('../../src/scripts/works-import-batch');
-const { fingerprintOf, openEnvelope, verify } = require('../../src/utils/import-envelope');
 const { fakeLists } = require('../helpers/works-import-fakes');
 const lists = require('../../src/repositories/lists');
 const { resolveAccess } = require('../../src/helpers/access-sql');
@@ -102,20 +100,4 @@ test('lists reads return no ImportBatch, ImportBatchEntry or ImportLock item', a
   const reads = [[LOCK_ID, KINDS.LOCK], ['b1', KINDS.BATCH], ['b1:1', KINDS.ENTRY]]
     .flatMap(([id, kind]) => [resolveAccess({}), staff].map(access => lists.getById(access, id, kind)));
   assert.deepEqual(await Promise.all(reads), [null, null, null, null, null, null]);
-});
-
-test('writeSealed writes one 0600 blob the operator opens and whose devbox signature verifies', () => {
-  const operator = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-  const ed = crypto.generateKeyPairSync('ed25519');
-  const recipient = { rsa: operator.publicKey, fingerprint: fingerprintOf({ rsa: operator.publicKey }) };
-  const dir = fs.mkdtempSync(path.join(tmp, 'sealed-'));
-  const plaintext = Buffer.from('{"report":[]}');
-  const { name, sha256 } = batches.writeSealed(dir, plaintext, { purpose: 'works-report', env: 'test', recipient, signingKey: ed.privateKey });
-  assert.deepEqual(fs.readdirSync(dir), [name]);
-  assert.equal(fs.statSync(path.join(dir, name)).mode & 0o777, 0o600);
-  const opened = openEnvelope(fs.readFileSync(path.join(dir, name)), {
-    purpose: 'works-report', env: 'test', keyFingerprint: recipient.fingerprint, privateKey: operator.privateKey
-  });
-  assert.equal(opened.plaintext.toString(), plaintext.toString());
-  assert.ok(verify(ed.publicKey, { purpose: 'works-report', env: 'test', sha256 }, opened.signature));
 });

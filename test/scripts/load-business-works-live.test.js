@@ -8,6 +8,7 @@ const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
 const { fakeLists } = require('../helpers/works-import-fakes');
+const { main } = require('../../src/scripts/load-business-works');
 const { T0, PROJECT, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -71,7 +72,7 @@ test('project writes record the row etag as priorEtag, and each patchDerived get
   await liveRun(staffed(), fakeDemi(), { signoff: 'so-staff' });
   const entries = entriesOf(store);
   assert.equal(entries.find(entry => entry.action === 'addExternalId').priorEtag, '"r"');
-  assert.deepEqual(entries.filter(entry => entry.action === 'derive').map(entry => [entry.target.id, entry.state]), [[PROJECT, 'done']]);
+  assert.deepEqual(entries.filter(entry => entry.action === 'derive').map(entry => [entry.target.id, entry.state, entry.writtenEtag]), [[PROJECT, 'done', '"d"']]);
 });
 
 test('a patchDerived conflict stops the run with the batch pending', async (t) => {
@@ -97,4 +98,10 @@ test('an external id another project holds is not planned and is reported', asyn
   assert.equal(dry.value('addExternalId'), '0');
   const report = reportOf(given.outDir, dry.value('blob')).report;
   assert.deepEqual(report.filter(entry => entry.reason === 'externalIdHeldElsewhere').map(entry => entry.projectId), [PROJECT]);
+});
+
+test('the command line refuses --live until the rollback can open its backup', async (t) => {
+  const store = fakeLists(t);
+  await assert.rejects(main([...inputs().argv, ...liveArgs('0'.repeat(64))]), /refused until the rollback/);
+  assert.deepEqual(store.all(), []);
 });

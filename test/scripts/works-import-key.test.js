@@ -48,6 +48,24 @@ test('--rotate replaces the key, leaves no other file, and prints the old finger
   assert.equal(second.lines[0], `oldFingerprint=${devboxKeysFromPem(first.pem).fingerprint}`);
 });
 
-test('refuses a key directory another user owns', { skip: process.getuid && process.getuid() === 0 }, async () => {
-  await assert.rejects(run(['--dir', path.parse(tmp).root], { write: () => {} }), /another user/);
+test('refuses a key directory another user owns', async (t) => {
+  const fstat = fs.fstatSync;
+  t.mock.method(fs, 'fstatSync', (...args) => ({ ...fstat(...args), uid: process.getuid() + 1 }));
+  await assert.rejects(keygen(path.join(tmp, 'foreign')), /another user/);
+});
+
+test('--rotate replaces a key that no longer parses', async () => {
+  const dir = path.join(tmp, 'broken');
+  await keygen(dir);
+  fs.writeFileSync(path.join(dir, KEY_FILE), 'not a key');
+  const { lines, pem } = await keygen(dir, '--rotate');
+  assert.equal(lines[0], 'oldFingerprint=unreadable');
+  assert.ok(devboxKeysFromPem(pem).fingerprint);
+});
+
+test('refuses a key directory that is a symbolic link', async () => {
+  const real = path.join(tmp, 'real');
+  fs.mkdirSync(real);
+  fs.symlinkSync(real, path.join(tmp, 'linked'));
+  await assert.rejects(keygen(path.join(tmp, 'linked')), /not a directory/);
 });

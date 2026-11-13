@@ -167,3 +167,13 @@ test('no anonymous field contains the project number', async (t) => {
   assert.ok(written.length >= 3);
   assert.deepEqual(keys.filter(key => text.includes(key)), []);
 });
+
+test('refuses an extract sealed for another environment', async () => {
+  await assert.rejects(load(inputs({ extractEnv: 'prod' }).argv), /envelope refused/);
+});
+
+test('refuses a sheet number with no register row, as the parity check does', async () => {
+  const rows = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'exact', targetId: '7002' }];
+  const records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }] };
+  await assert.rejects(load(inputs({ records, crosswalkRows: rows }).argv), /no register row/);
+});

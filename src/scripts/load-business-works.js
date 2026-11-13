@@ -15,12 +15,17 @@ const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
-const { HELP, optionsOf, testEnvironment, checkOutDir, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
+const { HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
+const { mapperInputs } = require('../domain/business-works-inputs');
+const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
-const DONE = new Set(['written', 'set', 'appended', 'unchanged']);
+const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
+// Refused until W8b lands the restore path, since nothing can open a works-backup yet.
+const LIVE_REFUSED = '--live is refused until the rollback (W8b) can open the works-backup it writes; run the dry run';
+const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const DERIVED = new Set(['patched', 'unchanged']);
 
 const refuse = (message) => { throw new Error(message); };
@@ -40,6 +45,7 @@ function liveDemi() {
     tombstone: (doc, options) => works.tombstone(doc, options),
     addExternalId: (projectId, pair, recordedAt) => history.addExternalId(projectId, pair, recordedAt),
     appendHistory: (projectId, field, entry, close) => history.appendHistory(projectId, field, entry, close),
+    closeHistory: (projectId, field, entryId, effectiveTo) => history.closeHistory(projectId, field, entryId, effectiveTo),
     patchDerived: projectId => projects.patchDerived(projectId, { inputsFor: deriveInputs })
   };
 }
@@ -47,17 +53,21 @@ function liveDemi() {
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const stored = await readStored(demi, [...new Set(crosswalk.values())]);
-  const plan = buildPlan(inputs.opened.extract, {
-    ...stored, markers: new Map(stored.storedMarkers), crosswalk, batchId, batchAt, ownerOf: works.ownerOf,
+  const mapper = mapperInputs({
+    crosswalk, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
     catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
   });
-  if (plan.report.some(entry => entry.reason === 'notInCrosswalk')) refuse('a sheet number is not in the signed crosswalk');
+  const plan = buildPlan(inputs.opened.extract, {
+    mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf
+  });
+  if (plan.report.some(entry => CROSSWALK_REASONS.includes(entry.reason))) refuse('a sheet number is not in the signed crosswalk or has no register row');
   return { plan: withoutHeld(plan, await heldElsewhere(demi, plan)), stored };
 }
 
 const targetOf = entry => ({
   addExternalId: { projectId: entry.projectId, system: entry.system },
-  appendHistory: { projectId: entry.projectId, field: entry.field, entryId: entry.entry && entry.entry.id }
+  appendHistory: { projectId: entry.projectId, field: entry.field, entryId: entry.entry && entry.entry.id },
+  closeHistory: { projectId: entry.projectId, field: entry.field, entryId: entry.entryId }
 }[entry.action] || { projectId: entry.projectId, id: (entry.doc || entry.current).id });
 
 /** Runs one planned write; resolves the save's answer. A refused write stops the run. */
@@ -70,7 +80,8 @@ async function writeOne(demi, entry, batchAt) {
     marker: () => demi.saveWork(entry.doc, guard),
     tombstone: () => demi.tombstone(current, { owner: OWNER, etag: current._etag }),
     addExternalId: () => demi.addExternalId(entry.projectId, entry.pair, batchAt),
-    appendHistory: () => demi.appendHistory(entry.projectId, entry.field, entry.entry, entry.close)
+    appendHistory: () => demi.appendHistory(entry.projectId, entry.field, entry.entry, entry.close),
+    closeHistory: () => demi.closeHistory(entry.projectId, entry.field, entry.entryId, entry.effectiveTo)
   }[entry.action]();
   if (!DONE.has(result.status)) refuse(`${entry.action} on project ${entry.projectId} answered ${result.status}`);
   return result;
@@ -106,7 +117,7 @@ async function startBatch(o, ctx, batchId, lease) {
     const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
     if (plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
     const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
-    const backup = batches.writeSealed(o['out-dir'], backupOf(plan, stored, batchId), sealed);
+    const backup = writeSealed(o['out-dir'], backupOf(plan, stored, batchId), sealed);
     batch = await batches.createBatch(batchId, {
       operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
       inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,
@@ -141,9 +152,9 @@ async function live(o, ctx) {
   const touched = [...new Set(plan.entries.map(entry => entry.projectId))];
   for (const projectId of touched) {
     await batches.writeAhead(run, { target: { projectId, id: projectId }, action: 'derive', priorEtag: rowEtags.get(projectId) ?? null }, async () => {
-      const { status } = await demi.patchDerived(projectId);
+      const { status, etag } = await demi.patchDerived(projectId);
       if (!DERIVED.has(status)) refuse(`patchDerived on project ${projectId} answered ${status}`);
-      return null;
+      return etag ?? null;
     }, now());
   }
   await batches.completeBatch(batch, lease, now());
@@ -156,7 +167,7 @@ async function live(o, ctx) {
 async function dryRun(o, { demi, inputs, env, runAt, write }) {
   const { plan } = await planFor(demi, inputs, { batchId: crypto.randomUUID(), batchAt: runAt });
   const body = Buffer.from(JSON.stringify({ planSha256: plan.planSha256, report: plan.report, lists: plan.lists }));
-  const report = batches.writeSealed(o['out-dir'], body, { purpose: 'works-report', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 });
+  const report = writeSealed(o['out-dir'], body, { purpose: 'works-report', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 });
   countLines(plan).forEach(write);
   write(`inputSha256=${inputs.opened.sha256}`);
   write(`crosswalkSha256=${inputs.crosswalk.sha256}`);
@@ -180,11 +191,17 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
   return 0;
 }
 
-module.exports = { run, liveDemi };
+/** The command line: `run`, except that `--live` is refused (LIVE_REFUSED). */
+function main(argv) {
+  if (argv.includes('--live')) return Promise.reject(new Error(LIVE_REFUSED));
+  return run(argv);
+}
+
+module.exports = { run, main, liveDemi };
 
 if (require.main === module) {
-  run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
-    logger.error('[load-business-works] failed', { error: err.message, code: err.code });
+  main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
+    logger.error('[load-business-works] failed', { error: err.message, code: err.code, stack: err.stack });
     process.exitCode = 1;
   });
 }

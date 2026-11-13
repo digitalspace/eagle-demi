@@ -81,54 +81,67 @@ function markerDocOf(marker, ids, report) {
 }
 
 /**
- * The fresh markers, plus a deactivate for an active stored marker W7 did not build this run. Off, not removed,
- * so Track's works show and W8b can still reapply what the last load hid.
+ * The markers the load keeps: fresh ones, plus a turn-off of an active stored marker W7 did not build. Off, not removed, so
+ * Track's works show and W8b can reapply it; `deactivatedBy: 'load'` lets a later load turn it back on, unlike a staff revert.
  */
 function markersPlan(mapped, ids, { storedMarkers, ownerOf, batchId }, report) {
   const entries = [];
   const docs = [];
   const fresh = new Set(mapped.markers.map(marker => marker.projectId));
   for (const marker of mapped.markers) {
-    const { doc, hashed } = markerDocOf(marker, ids, report);
-    docs.push(doc);
-    const checked = validateMarker(doc);
-    if (!checked.ok) refuse(`marker for project ${marker.projectId} fails the validator at ${checked.errors.map(e => e.path).join(', ')}`);
     const current = storedMarkers.get(marker.projectId) || null;
     if (current && ownerOf(current) !== SHEET) {
       report.push({ reason: 'ownerNotSheet', source: 'load', projectId: marker.projectId, workId: OVERRIDE_MARKER_ID });
       continue;
     }
+    const { doc, hashed } = markerDocOf(marker, ids, report);
+    if (current && current.deactivatedBy === 'load') {
+      doc.active = true;
+      report.splice(0, report.length, ...report.filter(one => !(one.reason === 'overrideHeldOff' && one.projectId === marker.projectId)));
+    }
+    const checked = validateMarker(doc);
+    if (!checked.ok) refuse(`marker for project ${marker.projectId} fails the validator at ${checked.errors.map(e => e.path).join(', ')}`);
+    docs.push(doc);
     if (current && bodySha256(current) === bodySha256(doc)) continue;
-    entries.push({ action: 'marker', projectId: marker.projectId, sourceKey: OVERRIDE_MARKER_ID, bodySha256: bodySha256(hashed),
+    entries.push({ action: 'marker', projectId: marker.projectId, sourceKey: OVERRIDE_MARKER_ID, bodySha256: bodySha256({ ...hashed, active: doc.active }),
       ...(current && { currentSha256: bodySha256(current) }), doc, current });
   }
   for (const [projectId, current] of storedMarkers) {
     if (fresh.has(projectId) || current.active !== true || ownerOf(current) !== SHEET) continue;
-    const doc = { ...current, active: false, batchId, provenance: { batchId } };
+    const doc = { ...current, active: false, deactivatedBy: 'load', batchId, provenance: { batchId } };
+    docs.push(doc);
     report.push({ reason: 'markerDeactivated', source: 'load', projectId });
     entries.push({ action: 'marker', projectId, sourceKey: OVERRIDE_MARKER_ID, bodySha256: bodySha256(doc), currentSha256: bodySha256(current), doc, current });
   }
   return { entries, docs };
 }
 
-/** External ids only for real numbers, staff lists only when the extract carries staff; nothing a row already says. */
+/**
+ * External ids only for real numbers, staff lists only when the extract carries staff; nothing a row already says.
+ * An open sheet entry of a closeable list whose sheetKey the extract does not carry is closed; notes never close.
+ */
 function staffPlan(mapped, rows, { numbersReal, staffIncluded, batchDate }) {
   const entries = [];
   for (const project of mapped.projects) {
     const row = rows.get(project.projectId);
-    const priorEtag = row._etag ?? null;
     const held = row.externalIds || [];
     for (const pair of numbersReal ? project.externalIds : []) {
       if (held.some(one => one.system === pair.system && String(one.value).toLowerCase() === pair.value.toLowerCase())) continue;
-      entries.push({ action: 'addExternalId', projectId: project.projectId, system: pair.system, bodySha256: bodySha256(pair), pair, priorEtag });
+      entries.push({ action: 'addExternalId', projectId: project.projectId, system: pair.system, bodySha256: bodySha256(pair), pair });
     }
     for (const field of staffIncluded ? Object.keys(STAFF_CONTENT) : []) {
+      const openSheet = (row[field] || []).filter(one => one.source === SHEET && (one.effectiveTo ?? null) === null);
       for (const entry of project[field]) {
-        const open = (row[field] || []).filter(one => one.source === SHEET && one.sheetKey === entry.sheetKey && (one.effectiveTo ?? null) === null);
+        const open = openSheet.filter(one => one.sheetKey === entry.sheetKey);
         if (open.some(one => staffSha256(field, one) === staffSha256(field, entry))) continue;
         const close = CLOSEABLE.has(field) && open.length === 1 ? { id: open[0].id, effectiveTo: batchDate } : null;
         entries.push({ action: 'appendHistory', projectId: project.projectId, field, sheetKey: entry.sheetKey, bodySha256: staffSha256(field, entry),
-          ...(close && { currentSha256: staffSha256(field, open[0]) }), entry, close, priorEtag });
+          ...(close && { currentSha256: staffSha256(field, open[0]) }), entry, close });
+      }
+      const carried = new Set(project[field].map(entry => entry.sheetKey));
+      for (const gone of CLOSEABLE.has(field) ? openSheet.filter(one => !carried.has(one.sheetKey)) : []) {
+        entries.push({ action: 'closeHistory', projectId: project.projectId, field, sheetKey: gone.sheetKey, bodySha256: null,
+          currentSha256: staffSha256(field, gone), entryId: gone.id, effectiveTo: batchDate });
       }
     }
   }
@@ -142,11 +155,14 @@ function planSha256Of(entries) {
   return sha256Hex(hashed.sort().join('\n'));
 }
 
-/** Staff and real numbers load only under the sign-off ref the extract was sealed with. */
-function checkSignoff(extract) {
+const isRef = value => typeof value === 'string' && value.trim() !== '';
+
+/** Staff writes load only under a keepStaff ref, external ids only under a keepNumbers ref, as the extract was sealed. */
+function checkSignoff(extract, entries) {
   const refs = extract.signoffRefs || {};
-  if (extract.staffIncluded === true && !refs.keepStaff) refuse('the extract carries staff columns without a keepStaff sign-off ref');
-  if (extract.numbersReal === true && !refs.keepNumbers) refuse('the extract carries real numbers without a keepNumbers sign-off ref');
+  const has = (...actions) => entries.some(entry => actions.includes(entry.action));
+  if (has('appendHistory', 'closeHistory') && !isRef(refs.keepStaff)) refuse('the plan writes staff entries without a keepStaff sign-off ref');
+  if (has('addExternalId') && !isRef(refs.keepNumbers)) refuse('the plan writes external ids without a keepNumbers sign-off ref');
 }
 
 /** W7's output less every project with no stored row, each reported once; Track stands for those. */
@@ -158,24 +174,24 @@ function withRows(mapped, rows, report) {
 }
 
 /**
- * The whole plan from an opened extract and the stored DEMI state; `inputs` holds the W7 options plus `stored` (works by
- * project), `storedMarkers`, `rows`, `trackPublic` (Track works in public shape) and works.js `ownerOf`, which this file may not require.
+ * The whole plan from an opened extract and the stored DEMI state. `mapper` comes from business-works-inputs.js; the rest
+ * is `stored` (works by project), `storedMarkers`, `rows`, `trackPublic` and works.js `ownerOf`, which this file may not require.
  */
-function buildPlan(extract, inputs) {
-  checkSignoff(extract);
-  const { stored, storedMarkers, rows, trackPublic, ownerOf, ...options } = inputs;
-  const raw = mapBusinessWorks(extract, { ...options, storedProjects: rows });
+function buildPlan(extract, { mapper, stored, storedMarkers, rows, trackPublic, ownerOf }) {
+  const { base, trackWorks, markers: priorMarkers } = mapper;
+  const raw = mapBusinessWorks(extract, { ...base, trackWorks, markers: priorMarkers });
   const report = [...raw.report];
   const mapped = withRows(raw, rows, report);
   const works = worksPlan(mapped, { stored, ownerOf }, report);
-  const markers = markersPlan(mapped, works.ids, { storedMarkers, ownerOf, batchId: options.batchId }, report);
+  const markers = markersPlan(mapped, works.ids, { storedMarkers, ownerOf, batchId: base.batchId }, report);
   const staff = staffPlan(mapped, rows, {
-    numbersReal: extract.numbersReal === true, staffIncluded: extract.staffIncluded === true, batchDate: dayOf(options.batchAt)
+    numbersReal: extract.numbersReal === true, staffIncluded: extract.staffIncluded === true, batchDate: dayOf(base.batchAt)
   });
+  const entries = [...works.entries, ...markers.entries, ...staff];
+  checkSignoff(extract, entries);
   const loaded = mapped.works.flatMap(work => (works.ids.has(keyOf(work.projectId, work.sourceKey))
     ? [{ ...work, id: works.ids.get(keyOf(work.projectId, work.sourceKey)) }] : []));
-  const lists = listsOf({ loaded, markers: markers.docs, trackWorks: options.trackWorks || new Map(), trackPublic: trackPublic || new Map(), report });
-  const entries = [...works.entries, ...markers.entries, ...staff];
+  const lists = listsOf({ loaded, markers: markers.docs, trackWorks, trackPublic: trackPublic || new Map(), report });
   return { entries, planSha256: planSha256Of(entries), report, lists };
 }
 

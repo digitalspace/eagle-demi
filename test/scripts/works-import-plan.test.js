@@ -6,18 +6,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildPlan } = require('../../src/scripts/works-import-plan');
 const { ownerOf } = require('../../src/repositories/works');
+const { mapperInputs } = require('../../src/domain/business-works-inputs');
+const { listsOf } = require('../../src/scripts/works-import-lists');
 const { CATALOG, PHASES, PROJECT, NUMBER, ref, register, amendment, trackWork } = require('../helpers/works-import-fakes');
 
 const KEY = `${NUMBER}:amendment:1`;
 const extractOf = (records, flags = {}) => ({ staffIncluded: false, numbersReal: false, ...flags, records: { projects: [register], ...records } });
 
 function plan(records, { stored = [], row = { id: PROJECT }, track = [], markers = new Map(), flags, options } = {}) {
-  return buildPlan(extractOf(records, flags), {
-    ...options,
-    catalog: CATALOG, phaseCatalog: PHASES, crosswalk: new Map([[NUMBER, PROJECT], [477, PROJECT]]), batchId: 'batch-1', batchAt: '2026-11-13T18:00:00Z',
-    trackWorks: new Map([[PROJECT, track]]), stored: new Map([[PROJECT, [...track, ...stored]]]), storedMarkers: markers,
-    rows: new Map(row ? [[PROJECT, row]] : []), trackPublic: new Map(), ownerOf
+  const rows = new Map(row ? [[PROJECT, row]] : []);
+  const works = new Map([[PROJECT, [...track, ...stored]]]);
+  const crosswalk = new Map([[NUMBER, PROJECT], [477, PROJECT]]);
+  const mapper = mapperInputs({
+    crosswalk, catalog: CATALOG, phaseCatalog: PHASES, rows, works, markers, commentPeriods: new Map(), batchId: 'batch-1', batchAt: '2026-11-13T18:00:00Z'
   });
+  mapper.base = { ...mapper.base, ...options };
+  return buildPlan(extractOf(records, flags), { mapper, stored: works, storedMarkers: markers, rows, trackPublic: new Map(), ownerOf });
 }
 
 const amended = { amendments: [amendment(1, '2010-06-01', '2010-11-07')] };
@@ -94,7 +98,7 @@ test('dry run reports trackTransitionMissing for 477 with 2025-05-21', () => {
 });
 
 test('refuses staff columns without a keepStaff sign-off ref', () => {
-  assert.throws(() => plan(amended, { flags: { staffIncluded: true, signoffRefs: { keepStaff: null } } }), /keepStaff/);
+  assert.throws(() => plan({ projects: [{ ...register, epd: 'staff-value-1' }] }, { flags: { staffIncluded: true, signoffRefs: { keepStaff: ' ' } } }), /keepStaff/);
 });
 
 test('refuses real numbers without a keepNumbers sign-off ref', () => {
@@ -121,7 +125,23 @@ test('an active stored marker the load does not rebuild is turned off', () => {
   const stored = { id: 'sheet-override', projectId: PROJECT, kind: 'override', source: 'sheet', owner: 'sheet', active: true, hidden: [], untilTrack: [] };
   const noCertificate = { projects: [{ ...register, decision: null, decisionDate: null }] };
   const [entry] = plan(noCertificate, { markers: new Map([[PROJECT, stored]]) }).entries.filter(one => one.action === 'marker');
-  assert.deepEqual([entry.doc.active, entry.doc.batchId], [false, 'batch-1']);
+  assert.deepEqual([entry.doc.active, entry.doc.deactivatedBy, entry.doc.batchId], [false, 'load', 'batch-1']);
+});
+
+const storedMarker = fields => ({ id: 'sheet-override', projectId: PROJECT, kind: 'override', source: 'sheet', owner: 'sheet', active: false, ...fields });
+
+test('a later load that rebuilds a marker it turned off turns it back on', () => {
+  const result = plan(amended, { markers: new Map([[PROJECT, storedMarker({ deactivatedBy: 'load' })]]) });
+  const [entry] = result.entries.filter(one => one.action === 'marker');
+  assert.equal(entry.doc.active, true);
+  assert.deepEqual(result.report.filter(one => one.reason === 'overrideHeldOff'), []);
+});
+
+test('a marker staff turned off stays off and is reported overrideHeldOff', () => {
+  const result = plan(amended, { markers: new Map([[PROJECT, storedMarker({})]]) });
+  const [entry] = result.entries.filter(one => one.action === 'marker');
+  assert.equal(entry.doc.active, false);
+  assert.deepEqual(result.report.filter(one => one.reason === 'overrideHeldOff').map(one => one.projectId), [PROJECT]);
 });
 
 test('the live document of a sourceKey wins over its tombstone', () => {
@@ -138,7 +158,40 @@ test('a create\'s bodySha256 is the same across two dry runs', () => {
 test('sheetShown leaves out a sheet amendment a held-off marker hides', () => {
   const heldOff = { id: 'sheet-override', projectId: PROJECT, kind: 'override', source: 'sheet', owner: 'sheet', active: false };
   const markers = new Map([[PROJECT, heldOff]]);
-  const result = plan(amended, { markers, options: { markers } });
+  const result = plan(amended, { markers });
   const loaded = result.entries.filter(entry => entry.action === 'create').length;
   assert.equal(result.lists.sheetShown, loaded - 1);
+});
+
+const STAFFED = { staffIncluded: true, signoffRefs: { keepStaff: 'so-staff' } };
+const sheetEntry = (id, sheetKey, fields) => ({ id, effectiveFrom: null, effectiveTo: null, source: 'sheet', sheetKey, ...fields });
+
+test('an open sheet staff entry the extract no longer carries is closed; a note is not', () => {
+  const row = { id: PROJECT, staffAssignments: [sheetEntry('held-lead', 'register:lead', { role: 'lead', name: 'staff-value-1' })],
+    staffNotes: [sheetEntry('held-note', 'register:notes', { text: 'staff-value-2' })] };
+  const result = plan({ projects: [{ ...register, epd: 'staff-value-3' }] }, { row, flags: STAFFED });
+  const closes = result.entries.filter(entry => entry.action === 'closeHistory');
+  assert.deepEqual(closes.map(entry => [entry.field, entry.entryId, entry.effectiveTo]), [['staffAssignments', 'held-lead', '2026-11-13']]);
+});
+
+test('real numbers need no keepNumbers ref when no external id is written', () => {
+  const row = { id: PROJECT, externalIds: [{ system: 'eao-register', value: String(NUMBER), source: 'sheet' }] };
+  const result = plan(amended, { row, flags: { numbersReal: true, signoffRefs: { keepNumbers: null } } });
+  assert.equal(result.entries.filter(entry => entry.action === 'addExternalId').length, 0);
+});
+
+test('sheetShown leaves out an untilTrack sheet work a Track work replaces', () => {
+  const sheet = { id: 'sheet-a', projectId: PROJECT, source: 'sheet', workTypeCode: 'amendment', startDate: '2025-02-01', decisionDate: null };
+  const track = { id: 'track-9', projectId: PROJECT, source: 'track', workTypeId: 7, workState: 'IN_PROGRESS', startDate: '2025-02-03' };
+  const marker = { projectId: PROJECT, active: true, hidden: [], untilTrack: ['sheet-a'], pairedTrackWorkIds: [] };
+  const lists = listsOf({ loaded: [sheet], markers: [marker], trackWorks: new Map([[PROJECT, [track]]]), trackPublic: new Map(), report: [] });
+  assert.equal(lists.sheetShown, 0);
+});
+
+test('a marker the load turns off lists no trackHidden pair', () => {
+  const sheet = { id: 'sheet-a', projectId: PROJECT, source: 'sheet', workTypeCode: 'amendment', startDate: '2020-02-01', decisionDate: '2020-06-01' };
+  const track = { id: 'track-9', projectId: PROJECT, source: 'track', workTypeId: 7, workState: 'COMPLETED', startDate: '2020-02-03', decisionDate: '2020-06-01' };
+  const marker = { projectId: PROJECT, active: false, hidden: [{ trackWorkId: 'track-9', sheetWorkId: 'sheet-a' }], untilTrack: [], pairedTrackWorkIds: ['track-9'] };
+  const lists = listsOf({ loaded: [sheet], markers: [marker], trackWorks: new Map([[PROJECT, [track]]]), trackPublic: new Map(), report: [] });
+  assert.deepEqual(lists.trackHidden, []);
 });

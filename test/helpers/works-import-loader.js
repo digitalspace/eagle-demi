@@ -61,7 +61,12 @@ function fakeDemi() {
     tombstone: async doc => saveWork({ ...doc, deleted: true }),
     addExternalId: async (_id, pair) => ({ status: 'set', etag: keep('externalIds', pair) }),
     appendHistory: async (_id, field, entry) => ({ status: 'appended', etag: keep(field, entry) }),
-    patchDerived: async (id) => { state.derived.push(id); return { status: 'patched' }; }
+    closeHistory: async (_id, field, entryId, effectiveTo) => {
+      state.projectFields.push(field);
+      state.row = { ...state.row, [field]: state.row[field].map(one => (one.id === entryId ? { ...one, effectiveTo } : one)), _etag: `"r${n += 1}"` };
+      return { status: 'closed', etag: state.row._etag };
+    },
+    patchDerived: async (id) => { state.derived.push(id); return { status: 'patched', etag: '"d"' }; }
   });
 }
 
@@ -80,7 +85,7 @@ const cell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
 /** Sealed extract and signed crosswalk on disk, and the argv of a dry run over them. */
 const NO_SIGNOFF = { staffIncluded: false, numbersReal: false, signoffRefs: { keepStaff: null, keepNumbers: null } };
 
-function inputs({ records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07')] }, crosswalkRows, flags = NO_SIGNOFF } = {}) {
+function inputs({ records = { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07')] }, crosswalkRows, flags = NO_SIGNOFF, extractEnv = ENV } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, 'in-'));
   const outDir = fs.mkdtempSync(path.join(tmp, 'out-'));
   const extractText = JSON.stringify({ schemaVersion: 1, env: ENV, ...flags, records });
@@ -93,7 +98,7 @@ function inputs({ records = { projects: [register], amendments: [amendment(1, '2
   const signature = sign(keys.ed25519, { purpose: 'crosswalk', env: ENV, sha256: crosswalkSha256 });
   const file = (name, data) => { fs.writeFileSync(path.join(dir, name), data); return path.join(dir, name); };
   const argv = [
-    '--extract', file('extract.sealed.json', toDevbox(extractText, 'extract', flags)),
+    '--extract', file('extract.sealed.json', toDevbox(extractText, 'extract', { ...flags, env: extractEnv })),
     '--expect-sha256', extractSha256,
     '--crosswalk', file('crosswalk.sealed.json', toDevbox(csv, 'crosswalk', { signature })),
     '--expect-crosswalk-sha256', crosswalkSha256, '--expect-manual-sha256', manualSha256,

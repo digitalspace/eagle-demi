@@ -7,22 +7,44 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { parseArgs } = require('util');
-const { devboxKeysFromPem } = require('../utils/import-envelope');
+const { devboxKeysFromPem, readCapped } = require('../utils/import-envelope');
 const { logger } = require('../utils/logger');
 
 const DEFAULT_DIR = '/home/demi/works-import';
 const KEY_FILE = 'devbox-key.pem';
 const RSA_BITS = 4096;
+const MAX_KEY_BYTES = 64 * 1024;
 
 const pemOf = (key, type) => key.export({ type, format: 'pem' });
 
-/** The key directory at 0700, made when absent; refused when it is a symbolic link, not a directory, or another user's. */
+/**
+ * The key directory at 0700, made when absent. Opened with O_DIRECTORY and O_NOFOLLOW and changed through that
+ * handle, so a link swapped in after the check is refused; another user's directory is refused too.
+ */
 function keyDir(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const stat = fs.lstatSync(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('key directory is not a directory');
-  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('key directory belongs to another user');
-  fs.chmodSync(dir, 0o700);
+  let fd;
+  try {
+    fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  } catch (err) {
+    throw new Error('key directory is not a directory', { cause: err });
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('key directory belongs to another user');
+    fs.fchmodSync(fd, 0o700);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** The old key's public lines, or none when it does not parse, so a broken key can still be rotated. */
+function oldKeyLines(file) {
+  try {
+    return publicLines(devboxKeysFromPem(readCapped(file, MAX_KEY_BYTES).toString('utf8')), 'old');
+  } catch {
+    return ['oldFingerprint=unreadable'];
+  }
 }
 
 /** The public keys and fingerprint of `keys`, as the operator records them. */
@@ -63,7 +85,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`) } =
   const file = path.join(dir, KEY_FILE);
   const exists = fs.existsSync(file);
   if (!values.rotate && exists) throw new Error('a devbox key exists; pass --rotate to replace it');
-  if (exists) publicLines(devboxKeysFromPem(fs.readFileSync(file, 'utf8')), 'old').forEach(write);
+  if (exists) oldKeyLines(file).forEach(write);
   const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: RSA_BITS });
   const ed = crypto.generateKeyPairSync('ed25519');
   const pem = pemOf(rsa.privateKey, 'pkcs8') + pemOf(ed.privateKey, 'pkcs8');

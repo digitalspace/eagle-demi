@@ -3,12 +3,12 @@
 // The dry-run lists of a business works plan, sealed in its report, and the count lines stdout carries.
 
 const {
-  OVERRIDE_TYPES, TRACK_FROM, compareText, dayOf, daysBetween, hiddenByOverride, overrideBoundaryOf, sameEvent,
-  settledBefore, transitionOf, untilTrackHidden, workTypeCodeOf
+  OVERRIDE_TYPES, TRACK_FROM, dayOf, daysBetween, overrideBoundaryOf, sameEvent, settledBefore, transitionOf, workTypeCodeOf
 } = require('../domain/work-model');
+const { overrideShown } = require('../domain/works-derive');
 
 const W7_LISTS = ['trackAlive', 'trackCompletedNoDate', 'sameEventChoice', 'afterBoundary', 'sheetWithoutMarker', 'investmentUseTrack'];
-const ACTIONS = ['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory'];
+const ACTIONS = ['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory'];
 
 const daysApart = (a, b) => (dayOf(a) && dayOf(b) ? Math.abs(daysBetween(dayOf(a), dayOf(b))) : null);
 
@@ -55,16 +55,12 @@ function overrideLists(marker, trackWorks, sheetWorks, lists) {
   }
 }
 
-/** Sheet works a read with track and sheet listed would show, by works-derive.js's withOverride rules. */
+/** Sheet works a read with track and sheet listed would show, under the markers the load keeps. */
 function shownCount(loaded, markers, trackWorks) {
-  const byProject = Map.groupBy(loaded, work => work.projectId);
   let shown = 0;
-  for (const [projectId, works] of byProject) {
+  for (const [projectId, works] of Map.groupBy(loaded, work => work.projectId)) {
     const marker = markers.find(one => one.projectId === projectId) || null;
-    const track = trackWorks.get(projectId) || [];
-    const sheet = [...works].sort((a, b) => compareText(a.id, b.id));
-    const replaced = untilTrackHidden(sheet, track, marker);
-    shown += sheet.filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, overrideBoundaryOf(track), [])).length;
+    shown += overrideShown(works, trackWorks.get(projectId) || [], marker).shownSheetIds.size;
   }
   return shown;
 }
@@ -78,7 +74,7 @@ function transitionsMissing(works, trackPublic) {
 
 function listsOf({ loaded, markers, trackWorks, trackPublic, report }) {
   const lists = { trackHidden: [], untilTrack: [], trackShownNoSheetMatch: [], trackShownStartedBefore: [], boundaries: [] };
-  for (const marker of markers) {
+  for (const marker of markers.filter(one => one.active === true)) {
     overrideLists(marker, trackWorks.get(marker.projectId) || [], loaded.filter(work => work.projectId === marker.projectId), lists);
   }
   W7_LISTS.forEach((reason) => { lists[reason] = report.filter(one => one.reason === reason); });

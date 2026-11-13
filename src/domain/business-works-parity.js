@@ -6,6 +6,7 @@ const { PUBLIC_ROLES } = require('../helpers/access-sql');
 const { projectOf } = require('../merge/project-of');
 const { EXTENSION_LIST_FIELDS } = require('../ownership/project');
 const { mapBusinessWorks } = require('./business-works-map');
+const { mapperInputs } = require('./business-works-inputs');
 const { idOf } = require('./extensions');
 const { overrideShown } = require('./works-derive');
 const {
@@ -195,11 +196,9 @@ function parityOf({ extract, crosswalk, catalog, phaseCatalog, rows, works, mark
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   if (!projectIds.length) refuse('crosswalk holds no project');
   const ofSource = (id, source) => listOf(works.get(id)).filter(work => sourceOf(work) === source);
-  const trackWorks = new Map(projectIds.map(id => [id, ofSource(id, 'track')]));
-  const base = {
-    catalog, phaseCatalog, crosswalk, batchId: 'parity-check', batchAt: at, storedProjects: rows,
-    eagleItems: new Map(projectIds.map(id => [id, { ...(rows.get(id) || {}), commentPeriods: listOf(commentPeriods.get(id)) }]))
-  };
+  const { base, trackWorks } = mapperInputs({
+    crosswalk, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId: 'parity-check', batchAt: at
+  });
   const all = mapBusinessWorks(extract, base);
   const fresh = mapBusinessWorks(extract, { ...base, trackWorks, markers });
   const tally = makeTally();

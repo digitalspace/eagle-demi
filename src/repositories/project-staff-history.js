@@ -169,7 +169,7 @@ async function appendHistory(id, field, entry, close, stillDue) {
   });
 }
 
-/** `closed`, `unchanged` (closed on that day), `absent`, `changed` (closed otherwise, or staff's), `conflict` or `missing`. */
+/** `closed` (with `etag`), `unchanged` (closed on that day), `absent`, `changed` (closed otherwise, or staff's), `conflict` or `missing`. */
 async function closeHistory(id, field, entryId, effectiveTo) {
   checkedField(field, CLOSEABLE_FIELDS);
   return guarded(id, async (row, set) => {
@@ -180,8 +180,8 @@ async function closeHistory(id, field, entryId, effectiveTo) {
     if (target.source === 'demi') return { status: 'changed' };
     if (target.effectiveTo === effectiveTo) return { status: 'unchanged' };
     if ((target.effectiveTo ?? null) !== null) return { status: 'changed' };
-    await set(field, list.with(index, { ...target, effectiveTo }));
-    return { status: 'closed' };
+    const written = await set(field, list.with(index, { ...target, effectiveTo }));
+    return { status: 'closed', etag: written?._etag ?? null };
   });
 }
 

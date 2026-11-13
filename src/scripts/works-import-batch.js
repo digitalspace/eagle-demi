@@ -3,18 +3,14 @@
 // The works loader's import lock, ImportBatch header and write-ahead ImportBatchEntry items, all in `lists`.
 // None carries `read[]`, so no caller-facing lists read returns them, as with the catalog items.
 
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const cosmos = require('../db/cosmos-nosql');
-const { sealEnvelope, sha256Hex, sign } = require('../utils/import-envelope');
 
 const CONTAINER = 'lists';
 const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: 'ImportBatchEntry' });
 const LOCK_ID = 'import-lock';
 const LEASE_MS = 2 * 60 * 60 * 1000;
 const RENEW_EVERY = 100;
-const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'derive']);
+const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory', 'derive']);
 // Each target names a document, a project list entry or an id system; never a sourceKey, number or staff value.
 const TARGET_SHAPES = Object.freeze([['id', 'projectId'], ['entryId', 'field', 'projectId'], ['projectId', 'system']]);
 
@@ -100,18 +96,7 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
   return writtenEtag;
 }
 
-/** Signs `plaintext` with the devbox key and seals it to `recipient` under a random name, 0600; nothing plain is written. */
-function writeSealed(dir, plaintext, { purpose, env, recipient, signingKey }) {
-  const sha256 = sha256Hex(plaintext);
-  const signature = sign(signingKey, { purpose, env, sha256 });
-  const name = `${crypto.randomUUID()}.sealed.json`;
-  fs.writeFileSync(path.join(dir, name), sealEnvelope(plaintext, {
-    purpose, env, keyFingerprint: recipient.fingerprint, recipientKey: recipient.rsa, signature
-  }), { mode: 0o600, flag: 'wx' });
-  return { name, sha256 };
-}
-
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
-  takeLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead, writeSealed
+  takeLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead
 };
