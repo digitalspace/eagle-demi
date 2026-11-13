@@ -6,8 +6,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {
-  fingerprintOf, publicKeysFromPem, sealEnvelope, openEnvelope, openExtract, sign, verify, sha256Hex
+  fingerprintOf, publicKeysFromPem, sealEnvelope, openEnvelope, openExtract, sign, verify, sha256Hex, writeSealed
 } = require('../../src/utils/import-envelope');
+const os = require('os');
 
 const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
 const ed = crypto.generateKeyPairSync('ed25519');
@@ -99,4 +100,31 @@ test('a PEM with an RSA key under 3072 bits is refused', () => {
   const small = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey;
   assert.throws(() => publicKeysFromPem(pemOf(small) + pemOf(ed.publicKey)), /under 3072 bits/);
   assert.equal(publicKeysFromPem(pemOf(rsa.publicKey)).rsa.asymmetricKeyDetails.modulusLength, 3072);
+});
+
+test('writeSealed writes one 0600 blob the operator opens and whose devbox signature verifies', (t) => {
+  const operator = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
+  const ed = crypto.generateKeyPairSync('ed25519');
+  const recipient = { rsa: operator.publicKey, fingerprint: fingerprintOf({ rsa: operator.publicKey }) };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-'));
+  const plaintext = Buffer.from('{"report":[]}');
+  const { name, sha256 } = writeSealed(dir, plaintext, { purpose: 'works-report', env: 'test', recipient, signingKey: ed.privateKey });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.deepEqual(fs.readdirSync(dir), [name]);
+  assert.equal(fs.statSync(path.join(dir, name)).mode & 0o777, 0o600);
+  const opened = openEnvelope(fs.readFileSync(path.join(dir, name)), {
+    purpose: 'works-report', env: 'test', keyFingerprint: recipient.fingerprint, privateKey: operator.privateKey
+  });
+  assert.equal(opened.plaintext.toString(), plaintext.toString());
+  assert.ok(verify(ed.publicKey, { purpose: 'works-report', env: 'test', sha256 }, opened.signature));
+});
+
+test('writeSealed refuses a folder others may write to, checked at the write', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-'));
+  fs.chmodSync(dir, 0o777);
+  const recipient = { rsa: rsa.publicKey, fingerprint: fingerprintOf({ rsa: rsa.publicKey }) };
+  const signingKey = crypto.generateKeyPairSync('ed25519').privateKey;
+  assert.throws(() => writeSealed(dir, Buffer.from('{}'), { purpose: 'works-report', env: 'test', recipient, signingKey }), /no one else may write/);
+  assert.deepEqual(fs.readdirSync(dir), []);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

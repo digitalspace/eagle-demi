@@ -115,7 +115,7 @@ async function refuseHeldExternalIds(row, staff, attempt) {
   return { error: 'an appended external id is held by another project' };
 }
 
-/** `set`, `unchanged` (the row holds it), `full`, `conflict` (another project holds it, or every try lost) or `missing`. */
+/** `set` (with the row's new `etag`), `unchanged` (the row holds it), `full`, `conflict` (held elsewhere, or every try lost) or `missing`. */
 async function addExternalId(id, { system, value, source }, recordedAt = new Date().toISOString()) {
   const pair = checkedPair({ system, value });
   checkedSource(source);
@@ -124,8 +124,8 @@ async function addExternalId(id, { system, value, source }, recordedAt = new Dat
     if (list.some(entry => holds(entry, pair))) return { status: 'unchanged' };
     if (list.length >= MAX_ENTRIES) return { status: 'full' };
     if (await heldElsewhereIndex(row, [pair]) >= 0) return { status: 'conflict' };
-    await set('externalIds', [...list, { ...pair, source, recordedAt }]);
-    return { status: 'set' };
+    const written = await set('externalIds', [...list, { ...pair, source, recordedAt }]);
+    return { status: 'set', etag: written?._etag ?? null };
   });
 }
 
@@ -143,7 +143,7 @@ async function removeExternalId(id, { system, value }) {
 }
 
 /**
- * Append `entry` (and `close` that open entry) unless `stillDue(list)` of the patch's row is false. `appended`, `unchanged`
+ * Append `entry` (and `close` that open entry) unless `stillDue(list)` of the patch's row is false. `appended` (with `etag`), `unchanged`
  * (id stored, or not due), `full`, `changed` (close target gone, closed, staff's or later), `conflict` or `missing`.
  */
 async function appendHistory(id, field, entry, close, stillDue) {
@@ -164,12 +164,12 @@ async function appendHistory(id, field, entry, close, stillDue) {
       if (!target || target.source === 'demi' || (target.effectiveTo ?? null) !== null || early) return { status: 'changed' };
       next[index] = { ...target, effectiveTo: close.effectiveTo };
     }
-    await set(field, next);
-    return { status: 'appended' };
+    const written = await set(field, next);
+    return { status: 'appended', etag: written?._etag ?? null };
   });
 }
 
-/** `closed`, `unchanged` (closed on that day), `absent`, `changed` (closed otherwise, or staff's), `conflict` or `missing`. */
+/** `closed` (with `etag`), `unchanged` (closed on that day), `absent`, `changed` (closed otherwise, or staff's), `conflict` or `missing`. */
 async function closeHistory(id, field, entryId, effectiveTo) {
   checkedField(field, CLOSEABLE_FIELDS);
   return guarded(id, async (row, set) => {
@@ -180,8 +180,8 @@ async function closeHistory(id, field, entryId, effectiveTo) {
     if (target.source === 'demi') return { status: 'changed' };
     if (target.effectiveTo === effectiveTo) return { status: 'unchanged' };
     if ((target.effectiveTo ?? null) !== null) return { status: 'changed' };
-    await set(field, list.with(index, { ...target, effectiveTo }));
-    return { status: 'closed' };
+    const written = await set(field, list.with(index, { ...target, effectiveTo }));
+    return { status: 'closed', etag: written?._etag ?? null };
   });
 }
 

@@ -235,7 +235,7 @@ test('project staff history writes', async (t) => {
     }
     assert.deepStrictEqual(projectWrites(store), []);
     assert.deepStrictEqual(await history.addExternalId('208', { system: 'orcs', value: '12345-20/AC', source: 'sheet' }),
-      { status: 'set' });
+      { status: 'set', etag: store.rows('projects').find(row => row.id === '208')._etag });
     assert.deepStrictEqual(await history.removeExternalId('208', { system: 'orcs', value: '12345-20/ac' }), { status: 'removed' },
       'remove matches the way add does');
   });
@@ -277,7 +277,8 @@ test('project staff history writes', async (t) => {
       return mirrored(...args);
     });
 
-    assert.deepStrictEqual(await history.appendHistory('207', 'staffAssignments', entry('e1')), { status: 'appended' });
+    assert.deepStrictEqual(await history.appendHistory('207', 'staffAssignments', entry('e1')),
+      { status: 'appended', etag: store.rows('projects')[0]._etag });
     const row = store.rows('projects')[0];
     assert.strictEqual(patches, 2);
     assert.deepStrictEqual([row.name, row.updatedAt, row.staffAssignments.map(e => e.id)], ['Renamed', 'u1', ['e1']]);
@@ -294,7 +295,8 @@ test('project staff history writes', async (t) => {
     assert.deepStrictEqual(store.rows('projects')[0].capitalInvestments.map(e => [e.id, e.effectiveTo]), [['old', null]]);
 
     t.mock.method(cosmos, 'patch', mirrored);
-    assert.deepStrictEqual(await history.appendHistory('207', 'capitalInvestments', amount('new'), close), { status: 'appended' });
+    assert.deepStrictEqual(await history.appendHistory('207', 'capitalInvestments', amount('new'), close),
+      { status: 'appended', etag: store.rows('projects')[0]._etag });
     assert.strictEqual(projectWrites(store).length, 1);
     assert.deepStrictEqual(store.rows('projects')[0].capitalInvestments.map(e => [e.id, e.effectiveTo]),
       [['old', '2026-11-01'], ['new', null]]);

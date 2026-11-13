@@ -425,7 +425,7 @@ function derivedOf(row, { worksForDerive, catalog } = {}) {
 
 /**
  * Re-derive the Track-built fields and patch only those that moved, under the row etag; inputs reload on each try.
- * Resolves `{status}`: `patched`, `unchanged` (no write), `missing` (no row) or `conflict` (every try lost).
+ * Resolves `{status}`: `patched` (with the row's new `etag`), `unchanged` (no write), `missing` (no row) or `conflict` (every try lost).
  */
 async function patchDerived(id, { inputsFor } = {}) {
   const key = String(id);
@@ -439,8 +439,8 @@ async function patchDerived(id, { inputsFor } = {}) {
       const ops = DERIVED_FIELDS.filter(field => Object.hasOwn(derived, field) && !isDeepStrictEqual(derived[field], row[field]))
         .map(field => ({ op: 'set', path: `/${field}`, value: derived[field] }));
       if (!ops.length) return { status: 'unchanged' };
-      await cosmos.patch(CONTAINER, key, key, ops, undefined, row._etag);
-      return { status: 'patched' };
+      const patched = await cosmos.patch(CONTAINER, key, key, ops, undefined, row._etag);
+      return { status: 'patched', etag: patched?._etag ?? null };
     }
   });
 }

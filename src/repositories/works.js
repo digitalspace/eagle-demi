@@ -135,18 +135,18 @@ async function findBySourceKey(projectId, sourceKey) {
 
 /**
  * Write for `owner` guarded on `etag` of `existing` (412), or a create (409); run inside `writeGuarded`.
- * `{ status: 'foreign' }`, never thrown, when the document is not `owner`'s; else `{ status: 'written' }`.
+ * `{ status: 'foreign' }`, never thrown, when the document is not `owner`'s; else `{ status: 'written', etag }`.
  */
 async function save(doc, { owner, etag, existing } = {}) {
   if (!etag) {
     if (!mayCreate(doc, owner)) return FOREIGN;
-    await createItem(CONTAINER, doc, LABEL);
-    return { status: WRITTEN };
+    const created = await createItem(CONTAINER, doc, LABEL);
+    return { status: WRITTEN, etag: created?._etag ?? null };
   }
   if (!existing) throw new TypeError(`[works] save of ${doc.id} with an etag needs the existing document`);
   if (!mayUpdate(doc, existing, etag, owner)) return FOREIGN;
-  await upsertWithEtag(CONTAINER, keptFrom(doc, existing, owner), { etag, label: LABEL });
-  return { status: WRITTEN };
+  const written = await upsertWithEtag(CONTAINER, keptFrom(doc, existing, owner), { etag, label: LABEL });
+  return { status: WRITTEN, etag: written?._etag ?? null };
 }
 
 /** Replaces a deleted work with its stamps and who wrote it, so an older PUT for it is still seen as stale. */

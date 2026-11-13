@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 
 const ENVELOPE_VERSION = 1;
 const MIN_RSA_BITS = 3072;
@@ -228,6 +229,29 @@ function verify(publicKey, statement, signature) {
   }
 }
 
+/** An output folder that exists, is no symbolic link, is this user's, and that no one else may write to. */
+function checkOutDir(dir) {
+  const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+  if (!stat) throw new Error('--out-dir does not exist');
+  const mine = typeof process.getuid !== 'function' || stat.uid === process.getuid();
+  if (!stat.isDirectory() || !mine || (stat.mode & 0o022) !== 0) throw new Error('--out-dir must be a folder of this user that no one else may write to');
+}
+
+/**
+ * Signs `plaintext` with the devbox Ed25519 key and seals it to `recipient` ({rsa, fingerprint}) under a random
+ * name, 0600; `dir` is checked again right before, so a swap after the start is refused. Nothing plain is written.
+ */
+function writeSealed(dir, plaintext, { purpose, env, recipient, signingKey }) {
+  checkOutDir(dir);
+  const sha256 = sha256Hex(plaintext);
+  const signature = sign(signingKey, { purpose, env, sha256 });
+  const name = `${crypto.randomUUID()}.sealed.json`;
+  fs.writeFileSync(path.join(dir, name), sealEnvelope(plaintext, {
+    purpose, env, keyFingerprint: recipient.fingerprint, recipientKey: recipient.rsa, signature
+  }), { mode: 0o600, flag: 'wx' });
+  return { name, sha256 };
+}
+
 module.exports = {
   STAFF_FIELDS,
   sha256Hex,
@@ -240,5 +264,7 @@ module.exports = {
   openEnvelope,
   openExtract,
   sign,
-  verify
+  verify,
+  checkOutDir,
+  writeSealed
 };

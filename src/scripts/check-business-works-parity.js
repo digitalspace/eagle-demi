@@ -3,9 +3,7 @@
 // Devbox, test only: `scripts/demi-devbox.sh run --env test -- node src/scripts/check-business-works-parity.js <options>`.
 // Read-only; stdout holds counts only, and listed items go sealed to the operator, as sourceKeys hold sheet numbers.
 
-const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const { parseArgs } = require('util');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
@@ -16,7 +14,7 @@ const phaseCatalog = require('../domain/phase-catalog');
 const { COUNTS, FAILING, parityOf, refuse } = require('../domain/business-works-parity');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const {
-  devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped, sealEnvelope, sha256Hex, sign
+  devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped, writeSealed
 } = require('../utils/import-envelope');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
 const { logger } = require('../utils/logger');
@@ -65,14 +63,10 @@ function openInputs(o) {
 
 /** Signs the report with the devbox key and seals it to the operator under a random name; returns the name and hash. */
 function writeReport(report, { keys, operator, outDir }) {
-  const plaintext = Buffer.from(JSON.stringify(report));
-  const sha256 = sha256Hex(plaintext);
-  const signature = sign(keys.ed25519, { purpose: REPORT_PURPOSE, env: ENV, sha256 });
-  const blob = `${crypto.randomUUID()}.sealed.json`;
-  fs.writeFileSync(path.join(outDir, blob), sealEnvelope(plaintext, {
-    purpose: REPORT_PURPOSE, env: ENV, keyFingerprint: fingerprintOf({ rsa: operator }), recipientKey: operator, signature
-  }), { mode: 0o600, flag: 'wx' });
-  return { blob, sha256 };
+  const { name, sha256 } = writeSealed(outDir, Buffer.from(JSON.stringify(report)), {
+    purpose: REPORT_PURPOSE, env: ENV, recipient: { rsa: operator, fingerprint: fingerprintOf({ rsa: operator }) }, signingKey: keys.ed25519
+  });
+  return { blob: name, sha256 };
 }
 
 /** The phase catalog, refused when a year lacks entries: W7 would then place no phase for that Act. */

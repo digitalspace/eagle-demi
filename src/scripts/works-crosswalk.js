@@ -4,14 +4,12 @@
 // decrypted is written; the CSV leaves only signed and sealed to the operator, and exit 1 still writes it.
 
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const { parseArgs } = require('util');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
 const {
-  devboxKeysFromPem, publicKeysFromPem, readCapped, fingerprintOf, sealEnvelope, openEnvelope, openExtract, sha256Hex, sign, verify
+  devboxKeysFromPem, publicKeysFromPem, readCapped, fingerprintOf, openEnvelope, openExtract, sha256Hex, verify, writeSealed
 } = require('../utils/import-envelope');
 const { logger } = require('../utils/logger');
 
@@ -335,12 +333,9 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   checkFoldPairs(manual, pool);
   const result = crosswalkOf(sheet, pool, manual);
   const csv = Buffer.from(csvOf(result.rows, { extractSha256, manualSha256: manual.sha256 }));
-  const sha256 = sha256Hex(csv);
-  const signature = sign(keys.ed25519, { purpose: PURPOSE, env: o.env, sha256 });
-  const blob = `${crypto.randomUUID()}.sealed.json`;
-  fs.writeFileSync(path.join(o['out-dir'], blob), sealEnvelope(csv, {
-    purpose: PURPOSE, env: o.env, keyFingerprint: operatorFingerprint, recipientKey: operator, signature
-  }), { mode: 0o600, flag: 'wx' });
+  const { name: blob, sha256 } = writeSealed(o['out-dir'], csv, {
+    purpose: PURPOSE, env: o.env, recipient: { rsa: operator, fingerprint: operatorFingerprint }, signingKey: keys.ed25519
+  });
   STATES.forEach(state => write(`${state}=${result.counts[state]}`));
   write(`twinsBeside=${result.twinsBeside}`);
   write(`crosswalkCsvSha256=${sha256}`);
