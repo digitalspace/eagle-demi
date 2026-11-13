@@ -715,7 +715,8 @@ test('works parity', async (t) => {
   Object.assign(config, { trackWorksSync: true, worksWrite: true });
   t.after(() => Object.assign(config, held));
 
-  await t.test('nightly logs trackMismatch=1 when a container Track work differs from the pull', async () => {
+  /** One night over work 12 of project 1, the container holding a copy that differs; resolves the parity lines. */
+  async function night(t, argv) {
     useWorks(t, fakeWorks());
     const work = { id: 12, project_id: 1, work_type_id: 7, is_active: true };
     t.mock.method(worksRepository, 'liveProjectIds', async () => ['1']);
@@ -733,11 +734,16 @@ test('works parity', async (t) => {
     };
     const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
     const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+    await sync(argv, { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+    return lines;
+  }
 
-    await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
-
-    assert.deepStrictEqual(lines, ['[works-parity] trackMismatch id=1',
+  await t.test('nightly logs trackMismatch=1 when a container Track work differs from the pull', async (t) => {
+    assert.deepStrictEqual(await night(t, ['--live']), ['[works-parity] trackMismatch id=1',
       '[works-parity] trackMismatch=1 projects=1 skipped=0 absentFromPull=0 notWritten=0']);
   });
 
+  await t.test('a dry-run night runs no parity', async (t) => {
+    assert.deepStrictEqual(await night(t, []), []);
+  });
 });

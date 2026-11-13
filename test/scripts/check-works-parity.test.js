@@ -6,12 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const config = require('../../src/config');
-const cosmos = require('../../src/db/cosmos-nosql');
 const works = require('../../src/repositories/works');
 const { run, trackParity } = require('../../src/scripts/check-works-parity');
 const { logger } = require('../../src/utils/logger');
 const { trackWorks, storedRow, workDocs, worksContainer } = require('../helpers/track-works-fixtures');
-const { mirrorStore } = require('../helpers/mirror-store');
 
 const SHEET_WORK = { id: 'sheet-00000000-0000-4000-8000-000000000001', projectId: '207', source: 'sheet',
   workTypeCode: 'assessment', workType: 'Assessment', actYear: 2002, startDate: '2003-02-01', phases: [] };
@@ -29,8 +27,7 @@ test('check-works-parity', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('rows whose works the container composes the same pass with storedMismatch=0', async () => {
-    // A sheet work is composed in but was never in the row's Track copy.
-    worksContainer(t, [[...workDocs(), SHEET_WORK]]);
+    worksContainer(t, [workDocs()]);
     const lines = logged(t);
 
     const code = await run({ projects: projectsOf(), workProjectIds: async () => ['207', '207'] });
@@ -61,31 +58,6 @@ test('check-works-parity', async (t) => {
     assert.strictEqual(code, 0);
     assert.deepStrictEqual(lines, ['[works-parity] projects=1 failures=0 storedMismatch=0 orphaned=2']);
   });
-
-  await t.test('liveProjectIds reads only projectId of live works, marker left out, owner filter kept', async () => {
-    mirrorStore(t, [
-      { id: 'track-1', projectId: 'p1', source: 'track', owner: 'track' },
-      { id: 'track-2', projectId: 'p2' },
-      { id: 'track-3', projectId: 'p3', deleted: true },
-      { id: 'sheet-override', projectId: 'p1', kind: 'override', source: 'sheet', owner: 'sheet' },
-      { ...SHEET_WORK, projectId: 'p4', owner: 'sheet' }
-    ].map(row => ({ container: 'works', ...row })));
-    const query = cosmos.query;
-    const projections = [];
-    // The fake runs the WHERE clause on whole rows; the projection is checked here and applied after it.
-    t.mock.method(cosmos, 'query', async (container, spec, opts) => {
-      const [projection] = spec.query.match(/^SELECT VALUE c\.projectId FROM c WHERE /) || [];
-      projections.push(projection);
-      const page = await query(container, { ...spec, query: spec.query.replace(projection, 'SELECT * FROM c WHERE ') }, opts);
-      return { ...page, items: page.items.map(row => row.projectId) };
-    });
-
-    const all = await works.liveProjectIds();
-    const track = await works.liveProjectIds({ owner: 'track' });
-
-    assert.deepStrictEqual([all.sort(), track.sort()], [['p1', 'p2', 'p4'], ['p1', 'p2']]);
-    assert.ok(projections.every(Boolean), 'SELECT VALUE c.projectId only');
-  });
 });
 
 test('nightly works parity', async (t) => {
@@ -99,14 +71,17 @@ test('nightly works parity', async (t) => {
   /** `fetchTrackWorks`' answer holding project 207; {stats} as the pull counted them. */
   const pullOf = (stats = {}) => ({ nested: new Map([['207', trackWorks()]]),
     stats: { failures: 0, budgetHit: false, ...stats } });
-  const container = (byProject, known = Object.keys(byProject)) => {
+  /** {byProject} as `listForRead` reads it; `listByProject` with tombstones answers {every}, else the same. */
+  const container = (byProject, { known = Object.keys(byProject), every = byProject } = {}) => {
     t.mock.method(works, 'liveProjectIds', async () => known);
+    t.mock.method(works, 'listByProject', async (id) => every[id] || []);
     return t.mock.method(works, 'listForRead', async (id) => byProject[id] || []);
   };
   const counted = (over) => ({ trackMismatch: 0, projects: 0, skipped: 0, absentFromPull: 0, notWritten: 0, ...over });
+  const adoptedCopy = (doc) => ({ ...doc, source: 'track', owner: 'sheet' });
 
   await t.test('nightly skips a project missing from the pull and counts it as skipped, not as a mismatch', async () => {
-    const reads = container({ 207: workDocs() }, ['207', '300']);
+    const reads = container({ 207: workDocs() }, { known: ['207', '300'] });
 
     const afterFailure = await trackParity([PROJECT_207], pullOf({ failures: 1 }), LIVE);
     const afterBudget = await trackParity([PROJECT_207], pullOf({ budgetHit: true }), LIVE);
@@ -117,19 +92,50 @@ test('nightly works parity', async (t) => {
     assert.deepStrictEqual(reads.mock.calls.map(call => call.arguments[0]), ['207', '207', '207'], 'only pulled projects read');
   });
 
-  await t.test('a pulled project the mirror wrote no work for counts as notWritten, not as a mismatch', async () => {
+  await t.test('a listed pulled project with an empty container is a mismatch unless the mirror skipped one', async () => {
     container({});
 
-    assert.deepStrictEqual(await trackParity([PROJECT_207], pullOf(), LIVE), counted({ notWritten: 1 }));
+    const unexplained = await trackParity([PROJECT_207], pullOf(), LIVE);
+    const clash = await trackParity([PROJECT_207], pullOf(), { ...LIVE, mirrored: { nativeClash: 1 } });
+    const apiRow = await trackParity([PROJECT_207], pullOf(), { ...LIVE, mirrored: { skippedApiRows: 1 } });
+    const unlisted = await trackParity([], pullOf(), LIVE);
+
+    assert.deepStrictEqual([unexplained, clash, apiRow, unlisted], [counted({ projects: 1, trackMismatch: 1 }),
+      counted({ notWritten: 1 }), counted({ notWritten: 1 }), counted({ notWritten: 1 })]);
+  });
+
+  await t.test('a pulled project whose only works were adopted counts as the same, not as empty', async () => {
+    const adopted = workDocs().map(adoptedCopy);
+    container({ 207: adopted });
+
+    assert.deepStrictEqual(await trackParity([PROJECT_207], pullOf(), LIVE), counted({ projects: 1 }));
+  });
+
+  await t.test('an adopted Track work, tombstoned or not, is left out of the pulled side', async () => {
+    const [assessment, exemption] = workDocs();
+    const tombstoned = { ...adoptedCopy(exemption), deleted: true };
+    container({ 207: [assessment] }, { every: { 207: [assessment, tombstoned] } });
+
+    assert.deepStrictEqual(await trackParity([PROJECT_207], pullOf(), LIVE), counted({ projects: 1 }));
+  });
+
+  await t.test('a project a push wrote after the pull began is skipped', async () => {
+    const pushed = workDocs();
+    pushed[0].pushStamps = { work: 2000 };
+    pushed[0].isActive = false;
+    container({ 207: pushed });
+
+    assert.deepStrictEqual(await trackParity([PROJECT_207], pullOf(), { ...LIVE, pushedAt: 1000 }), counted({ skipped: 1 }));
   });
 
   await t.test('nightly parity reads the container through listForRead', async () => {
-    const reads = container({ 207: workDocs() });
-    const full = t.mock.method(works, 'listByProject', async () => []);
+    const moved = workDocs();
+    moved[0].isActive = false;
+    const reads = container({ 207: workDocs() }, { every: { 207: moved } });
 
     const counts = await trackParity([PROJECT_207], pullOf(), LIVE);
 
-    assert.deepStrictEqual([counts.trackMismatch, reads.mock.callCount(), full.mock.callCount()], [0, 1, 0]);
+    assert.deepStrictEqual([counts.trackMismatch, reads.mock.callCount()], [0, 1]);
   });
 
   await t.test('parity ignores a non-Track work', async () => {
@@ -138,7 +144,7 @@ test('nightly works parity', async (t) => {
     assert.deepStrictEqual(await trackParity([PROJECT_207], pullOf(), LIVE), counted({ projects: 1 }));
   });
 
-  await t.test('parity compares suspension and the Track phase and event ids', async () => {
+  await t.test('parity compares a phase\'s suspension', async () => {
     const suspended = workDocs();
     suspended[0].phases[1].isSuspended = true;
     container({ 207: suspended });

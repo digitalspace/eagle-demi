@@ -6,13 +6,12 @@
 const { workActYear } = require('../merge/assessment-work');
 const { entryForTrackCode } = require('../domain/phase-catalog');
 const {
-  TRACK_WORK_TYPE_CODES, compareText, dayOf, sourceOf, summaryOf, transitionDateOf
+  DATE_KEYS, compareText, dayOf, sourceOf, summaryOf, transitionOf, workTypeCodeOf
 } = require('../domain/work-model');
 
 /** Track `WorkTypeEnum` ids mirrored into `works[]`; 4, 8, 12, 13 and 14 stay out. */
 const MIRRORED_WORK_TYPE_IDS = new Set([1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 16]);
 
-const workTypeCodeOfTrack = (workTypeId) => TRACK_WORK_TYPE_CODES[workTypeId] ?? null;
 
 const WORK_SCHEMA_VERSION = 1;
 
@@ -192,7 +191,7 @@ function docWorkFieldsOf(work, projectId) {
     decisionDate: pub.decisionDate,
     anticipatedDecisionDate: pub.anticipatedDecisionDate,
     schemaVersion: WORK_SCHEMA_VERSION,
-    workTypeCode: workTypeCodeOfTrack(pub.workTypeId),
+    workTypeCode: workTypeCodeOf(pub),
     actYear: workActYear(pub)
   };
 }
@@ -232,10 +231,10 @@ const listOf = (value) => (Array.isArray(value) ? value : []);
 const or = (value) => value ?? null;
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-/** Only `{notAfter}` of each entry, so nothing else stored beside a date leaves. */
+/** Only date fields, each as `{notAfter}`, so nothing else stored beside a date leaves. */
 function undatedOf(undated) {
   if (!isPlainObject(undated)) return null;
-  return Object.fromEntries(Object.entries(undated).map(([key, entry]) =>
+  return Object.fromEntries(Object.entries(undated).filter(([key]) => DATE_KEYS.includes(key)).map(([key, entry]) =>
     [key, { notAfter: isPlainObject(entry) && typeof entry.notAfter === 'string' ? entry.notAfter : null }]));
 }
 
@@ -282,7 +281,7 @@ function publicPhaseOf(doc, phase, catalog) {
     stage: entry ? or(entry.stage) : null,
     order: entry ? or(entry.order) : or(phase.sortOrder),
     isSuspended: trackOnly(doc, phase.isSuspended),
-    suspendedDate: or(phase.suspendedDate),
+    suspendedDate: trackOnly(doc, phase.suspendedDate),
     undated: undatedOf(phase.undated),
     interruptions: listOf(phase.interruptions).map(publicInterruptionOf)
   };
@@ -305,7 +304,7 @@ function publicWorkOf(doc, projectName, catalog) {
     trackWorkId: trackOnly(doc, doc.trackWorkId),
     workTypeId: trackOnly(doc, doc.workTypeId),
     // Read-time fallbacks for a Track document the nightly has not rewritten yet.
-    workTypeCode: or(doc.workTypeCode ?? (track ? workTypeCodeOfTrack(doc.workTypeId) : null)),
+    workTypeCode: track ? workTypeCodeOf(doc) : or(doc.workTypeCode),
     workType: or(doc.workType),
     title: titleOf(doc, projectName),
     eaAct: or(doc.eaAct),
@@ -328,10 +327,9 @@ function publicWorkOf(doc, projectName, catalog) {
 
 /** The resolved hand-over day and where it came from: Track's milestone, the sheet, or none. */
 function resolvedTransition(transitionOut, works, actYear) {
-  const date = transitionDateOf(transitionOut, works, actYear);
-  if (date === null) return { date: null, dateSource: 'none' };
-  const fromTrack = transitionDateOf({ dateSource: 'none' }, works, actYear);
-  return { date: dayOf(date), dateSource: date === fromTrack ? 'track' : 'sheet' };
+  const { date, source } = transitionOf(transitionOut, works, actYear);
+  const day = dayOf(date);
+  return day ? { date: day, dateSource: source } : { date: null, dateSource: 'none' };
 }
 
 /** Track documents by Track work id, then the rest by start date, then id. */

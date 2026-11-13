@@ -85,7 +85,7 @@ const sheetDoc = (n = 1, overrides = {}) => ({
   phases: [{
     id: 'pre-application', catalogId: 'list-9', name: 'Pre-Application', sourceName: 'pre app (as typed)',
     startDate: '2003-02-01', endDate: '2004-01-01', sortOrder: 1, isCompleted: true, sourceRef: SHEET_REF,
-    trackPhaseId: 3001, phaseCodeId: 6001, isSuspended: true,
+    trackPhaseId: 3001, phaseCodeId: 6001, isSuspended: true, suspendedDate: '2003-05-01',
     undated: { startDate: { notAfter: '1995-06-30' } },
     milestones: [{ id: 'act-transition', code: 'act-transition', name: 'Act transition', position: 'END', trackEventId: 4001,
       actualDate: '2004-01-01', anticipatedDate: null, endDate: null, outcomeCode: null, sourceRef: SHEET_REF,
@@ -147,7 +147,8 @@ test('sheet phase gets its stored catalogId', () => {
   assert.deepStrictEqual([bare.phases[0].catalogId, bare.phases[0].name], ['list-9', 'Pre-Application']);
   assert.deepStrictEqual([named.phases[0].name, named.phases[0].stage], ['Pre-Application Phase', 'Pre-Application']);
   assert.deepStrictEqual([bare.trackWorkId, bare.workTypeId, bare.phases[0].trackPhaseId, bare.phases[0].phaseCodeId,
-    bare.phases[0].isSuspended, bare.milestones[0].trackEventId], [null, null, null, null, null, null], 'Track-only keys');
+    bare.phases[0].isSuspended, bare.phases[0].suspendedDate, bare.milestones[0].trackEventId],
+  [null, null, null, null, null, null, null], 'Track-only keys');
 });
 
 test('a sheet work on a project with no Track source is titled by the row\'s name', () => {
@@ -197,6 +198,7 @@ test('transitionOut and undated pass through; transitionIn does not', () => {
   const doc = sheetDoc(1, { transitionOut });
   doc.phases[0].milestones.push({ id: 'odd', undated: [{ notAfter: '1995-06-30' }] });
   doc.phases[0].undated.endDate = { notAfter: 19950630 };
+  doc.phases[0].undated.staffNote = { notAfter: '1995-06-30' };
 
   const [work] = publicWorksOf([doc], ROW);
 
@@ -222,6 +224,8 @@ test('477 publishes Track\'s transition date when Track\'s milestone exists, els
 
   assert.deepStrictEqual(sheet.transitionOut, { toActYear: 2018, date: '2019-12-20', dateSource: 'sheet' },
     'no Track milestone: the stored sheet date');
+  const [undatedWork] = publicWorksOf([sheetDoc(1, { transitionOut: { toActYear: 2018, dateSource: 'track' } })], ROW);
+  assert.deepStrictEqual(undatedWork.transitionOut, { toActYear: 2018, date: null, dateSource: 'none' });
 });
 
 test('no provenance, sourceKey or sourceRef key in publicWorksOf output', () => {

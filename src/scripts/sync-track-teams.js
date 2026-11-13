@@ -296,11 +296,11 @@ async function sync(argv = [], deps = {}) {
       const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works, nested, pushedAt });
       Object.assign(summary, mirrorCounts(mirrored));
       summary.failures += mirrored.failures;
+      await trackParity(projects, pull, { live: args.live, mirrored, pushedAt });
     } catch (err) {
       summary.failures++;
       logger.error('[track-teams] project mirror failed', { error: err.message, stack: err.stack });
     }
-    await trackParity(projects, pull, { live: args.live });
 
     const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
     summary.closedProjects = closed.size;

@@ -9674,13 +9674,15 @@ components:
                   properties:
                     name:
                       type: string
+                      nullable: true
                     code:
                       type: string
                       nullable: true
                       description: The works catalog milestone code; null on a Track milestone.
                     position:
                       type: string
-                      enum: [START, INTERMEDIATE, INTERIOR, END]
+                      nullable: true
+                      enum: [START, INTERMEDIATE, INTERIOR, END, null]
                     eventType:
                       type: integer
                       nullable: true
@@ -9690,15 +9692,16 @@ components:
                       nullable: true
                     actualDate:
                       type: string
-                      format: date-time
                       nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
                     anticipatedDate:
                       type: string
-                      format: date-time
                       nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
                     endDate:
                       type: string
                       nullable: true
+                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
                     outcome:
                       type: string
                       nullable: true

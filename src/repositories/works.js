@@ -92,6 +92,7 @@ async function listByProject(projectId, { includeDeleted = false, owner } = {}) 
 /** The `projectId` of each live work in every project, one per work; `owner` keeps only that owner's. */
 async function liveProjectIds({ owner } = {}) {
   const terms = [LIVE, 'NOT IS_DEFINED(c.kind)'];
+  if (owner !== undefined && !mayWrite(owner)) throw new TypeError(`[works] owner filter must be a name, got ${owner}`);
   const byOwner = owner === undefined ? { params: [] } : ownerClause(owner);
   if (byOwner.clause) terms.push(byOwner.clause);
   return fetchAll(CONTAINER, { query: `SELECT VALUE c.projectId FROM c WHERE ${terms.join(' AND ')}`, parameters: byOwner.params });
