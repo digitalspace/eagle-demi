@@ -174,11 +174,11 @@ function checkedTarget(target) {
 
 /**
  * Records the intent entry, runs `write`, then marks the entry done. `write` resolves the written etag, or
- * `{writtenEtag, result}` to also record a `result` word; `run` is `{batchId, lease, seq}`, `seq` counting up across the batch.
+ * `{writtenEtag, result}` to also record a `result` word; `run` is `{batchId, lease, seq}`. `prior`: a marker's values before, for an undo.
  */
-async function writeAhead(run, { target, action, priorEtag = null }, write, now = Date.now()) {
+async function writeAhead(run, { target, action, priorEtag = null, prior }, write, now = Date.now()) {
   if (!ACTIONS.includes(action)) refuse(`unknown ImportBatchEntry action ${action}`);
-  const entry = { target: checkedTarget(target), action, priorEtag };
+  const entry = { target: checkedTarget(target), action, priorEtag, ...(prior !== undefined && { prior }) };
   await beforeWrite(run.lease, now);
   run.seq += 1;
   const item = { kind: KINDS.ENTRY, id: `${run.batchId}:${run.seq}`, batchId: run.batchId, seq: run.seq, ...entry, state: 'intent' };

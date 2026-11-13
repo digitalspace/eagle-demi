@@ -49,6 +49,7 @@ test('the override batch records the marker\'s prior and written etags, then re-
   const { value } = await rollback(revert, demi);
   const entry = store.get(`${value('batchId')}:1`, KINDS.ENTRY);
   assert.deepEqual([entry.action, entry.priorEtag, entry.writtenEtag, entry.state], ['marker', prior, marker(demi)._etag, 'done']);
+  assert.deepEqual(entry.prior, { active: true, deactivatedBy: null });
   assert.deepEqual(demi.derived, [PROJECT]);
   assert.equal(value('patched'), '1');
 });
@@ -98,13 +99,14 @@ function markerStore(t, projects, stored) {
   store.set({ kind: KINDS.ENTRY, id: `b1:${projects.length + 1}`, batchId: 'b1', seq: projects.length + 1, target: { projectId: '7003', id: 'sheet-a' },
     action: 'create', priorEtag: null, writtenEtag: '"a"', state: 'done' });
   const markers = new Map(stored.map(projectId => [projectId, { id: OVERRIDE_MARKER_ID, projectId, source: 'sheet', owner: 'sheet', active: true, _etag: '"m"' }]));
+  let n = 0;
   const demi = {
     markers,
     work: async projectId => markers.get(projectId) || null,
     saveWork: async (doc, { etag }) => {
       if (markers.get(doc.projectId)?._etag !== etag) return { status: 'foreign' };
-      markers.set(doc.projectId, { ...doc, _etag: '"w"' });
-      return { status: 'written', etag: '"w"' };
+      markers.set(doc.projectId, { ...doc, _etag: `"w${n += 1}"` });
+      return { status: 'written', etag: markers.get(doc.projectId)._etag };
     },
     patchDerived: async () => ({ status: 'patched' })
   };
@@ -137,11 +139,81 @@ test('revert names exactly one of --project and --all', async (t) => {
   await assert.rejects(rollback(['--revert-override'], demi), /one of --project <id> or --all/);
 });
 
-test('revert stops when the marker moved between its read and its write', async (t) => {
-  const { demi } = markerStore(t, ['7001'], ['7001']);
-  demi.saveWork = async () => ({ status: 'foreign' });
+/**
+ * A revert --all over 7001 to 7003 whose write on 7003 is refused, or with `landed` lands and then fails; 7002 was
+ * turned off by a load. Resolves the store, the fake and the pending override batch's id.
+ */
+async function stoppedRevert(t, { landed = false } = {}) {
+  const { store, demi } = markerStore(t, ['7001', '7002', '7003'], ['7001', '7002', '7003']);
+  demi.markers.set('7002', { ...demi.markers.get('7002'), active: false, deactivatedBy: 'load' });
+  const save = demi.saveWork;
+  demi.saveWork = async (doc, options) => {
+    if (doc.projectId !== '7003') return save(doc, options);
+    if (landed) await save(doc, options);
+    throw new Error('connection reset');
+  };
+  await assert.rejects(rollback(['--revert-override', '--all'], demi), /connection reset/);
+  demi.saveWork = save;
+  const [stuck] = store.all().filter(item => item.kind === KINDS.BATCH && item.batchKind === 'override');
+  assert.equal(stuck.status, 'pending');
+  return { store, demi, stuck: stuck.id };
+}
 
-  await assert.rejects(rollback(['--revert-override', '--all'], demi), /marker write on project 7001 answered foreign/);
+const markerValues = (demi, id) => [demi.markers.get(id).active, demi.markers.get(id).deactivatedBy];
+
+test('rollback-incomplete clears a pending override batch', async (t) => {
+  const { store, demi, stuck } = await stoppedRevert(t);
+  await assert.rejects(rollback(['--revert-override', '--all'], demi), /an ImportBatch is pending/);
+
+  const { code, value } = await rollback(['--rollback-incomplete', stuck], demi);
+  assert.equal(code, 0);
+  assert.deepEqual([markerValues(demi, '7001'), markerValues(demi, '7002')], [[true, undefined], [false, 'load']]);
+  assert.equal(value('markers'), '2');
+  assert.equal(value('moved'), '0', 'the 7003 write never landed, so its intent is left alone');
+  assert.equal(value('patched'), '3');
+  assert.equal(store.get(stuck, KINDS.BATCH).status, 'rolledBack');
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
+  await assert.rejects(rollback(['--rollback-incomplete', stuck], demi), /only on a pending batch/);
+  assert.equal((await rollback(['--revert-override', '--all'], demi)).code, 0);
+});
+
+test('rollback-incomplete undoes an override intent whose write landed', async (t) => {
+  const { demi, stuck } = await stoppedRevert(t, { landed: true });
+  assert.equal(demi.markers.get('7003').active, false);
+
+  assert.equal((await rollback(['--rollback-incomplete', stuck], demi)).code, 0);
+  assert.equal(demi.markers.get('7003').active, true);
+});
+
+test('rollback-incomplete keeps an override marker that moved and reports its project', async (t) => {
+  const { demi, stuck } = await stoppedRevert(t);
+  demi.markers.set('7001', { ...demi.markers.get('7001'), _etag: '"staff"' });
+
+  const { code, value } = await rollback(['--rollback-incomplete', stuck], demi);
+  assert.equal(code, 0);
+  assert.equal(value('movedProject'), '7001');
+  assert.equal(demi.markers.get('7001').active, false);
+});
+
+test('a rollback after an undone override batch expects the undo\'s etags', async (t) => {
+  const { store, demi, argv } = await loaded(t);
+  const save = demi.saveWork;
+  demi.saveWork = async (doc, options) => { await save(doc, options); throw new Error('connection reset'); };
+  await assert.rejects(rollback(revert, demi), /connection reset/);
+  demi.saveWork = save;
+  const [stuck] = store.all().filter(item => item.kind === KINDS.BATCH && item.batchKind === 'override');
+  assert.equal((await rollback(['--rollback-incomplete', stuck.id], demi)).code, 0);
+  assert.equal(marker(demi).active, true);
+
+  assert.equal((await rollback(argv, demi, { at: LATER + 1000 })).code, 0);
+  assert.equal(marker(demi), undefined);
+});
+
+test('rollback-incomplete of a pending load batch still needs its backup', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  store.set({ kind: KINDS.BATCH, id: 'b2', batchKind: 'load', status: 'pending', startedAt: new Date(LATER).toISOString() });
+
+  await assert.rejects(rollback(['--rollback-incomplete', 'b2'], demi), /of a load batch needs --backup/);
 });
 
 test('stdout, stderr and logger output of revert, reapply and rederive contain no sourceKey or number', async (t) => {

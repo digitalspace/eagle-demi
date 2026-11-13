@@ -13,7 +13,7 @@ const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
 const { stepKey, projectSteps, rederive, loggedOf, openSteps } = require('./works-rollback-steps');
 const { rederiveBatch, timedFetch } = require('./works-import-rederive');
-const { revertOverride, reapplyOverride } = require('./works-import-override');
+const { revertOverride, reapplyOverride, rollbackIncompleteOverride } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -231,6 +231,9 @@ async function rollback(o, ctx) {
 async function rollbackIncomplete(o, ctx) {
   requireDeriveEnv();
   const batchId = o['rollback-incomplete'];
+  if ((await batches.readBatch(batchId))?.batchKind === 'override') return rollbackIncompleteOverride(ctx, batchId);
+  const missingKey = BACKUP_KEYS.find(key => !o[key]);
+  if (missingKey) refuse(`--rollback-incomplete of a load batch needs --${missingKey}`);
   const seen = await pendingRollbackOf(batchId);
   const statuses = seen ? ['pending', 'rolledBack'] : ['pending'];
   const message = '--rollback-incomplete acts only on a pending load batch';
@@ -273,7 +276,7 @@ const MARKER_OPTIONS = { project: { type: 'string' }, all: { type: 'boolean' } }
 const MODES = {
   rollback: { options: { rollback: { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback', ...BACKUP_KEYS], run: rollback },
   'rollback-incomplete': {
-    options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete', ...BACKUP_KEYS], run: rollbackIncomplete
+    options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete'], run: rollbackIncomplete
   },
   'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback },
   'revert-override': { options: { 'revert-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['revert-override'], run: revertOverride },
@@ -287,7 +290,7 @@ const HELP = [
   '         --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>                 undo the latest complete load batch',
-  '  --rollback-incomplete <batchId>      undo a pending load batch whose lease expired',
+  '  --rollback-incomplete <batchId>      undo a pending load or override batch whose lease expired (no backup flags for override)',
   '  --abandon-rollback <rollbackBatchId> give up a stuck rollback batch (no backup flags); a fresh rollback then finishes',
   '  --revert-override                    turn the sheet override marker off, with --project <id> or --all',
   '  --reapply-override                   turn it back on, with --project <id> or --all',
