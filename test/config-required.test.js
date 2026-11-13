@@ -284,6 +284,13 @@ test('each works flag is on only when its variable is the exact string true', ()
   assert.deepStrictEqual(Object.entries(flags).map(read), Object.values(flags).map(() => [false, false, false, true]));
 });
 
+test('unknown source token fails start', () => {
+  const read = (value) => readConfig({ WORKS_READ_SOURCES: value }, c => c.worksReadSources);
+  assert.throws(() => read('track,sheets'), /WORKS_READ_SOURCES.*'sheets'/);
+  assert.throws(() => read('track,'), /WORKS_READ_SOURCES/);
+  assert.deepStrictEqual([read(''), read(' Track , SHEET,track ')], [['track'], ['track', 'sheet']]);
+});
+
 // Azure always sets ASSESSMENT_PASS too, as the string 'false' in prod.
 test('the nightly assessment pass runs only when ASSESSMENT_PASS is the exact string true', () => {
   const read = (value) => readConfig({ ASSESSMENT_PASS: value }, c => c.assessmentPass);
