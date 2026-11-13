@@ -245,7 +245,7 @@ test('deriveAssessments', async (t) => {
     });
   }
 
-  await t.test('a live work with no Track id is not the active work', () => {
+  await t.test('a raw live work with no Track id is not the active work', () => {
     const row = fx.only2018WithWorks();
     row.works = row.works.map(work => ({ ...work, trackWorkId: null }));
     assert.strictEqual(deriveAssessments(row).activeWork, null);

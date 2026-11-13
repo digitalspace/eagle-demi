@@ -5,7 +5,6 @@ const assert = require('node:assert');
 
 const model = require('../../src/domain/work-model');
 const override = require('../../src/domain/work-override');
-const { legislationTransitions } = require('../../src/merge/track-derived');
 
 const { childIdOf, inEffect, newWorkId, sourceKeyOf, summaryOf, transitionDateOf, validateWork } = model;
 
@@ -266,22 +265,17 @@ test('transitionDateOf', async (t) => {
     assert.strictEqual(transitionDateOf(out, [from1996], 2002), null);
   });
 
-  await t.test('Track\'s milestone date agrees with legislationTransitions on the same works', () => {
+  await t.test('Track\'s milestone counts only on an Assessment, by its name prefix and year, with a date; ' +
+    'the first wins', () => {
     const name = 'Project Transitioning FROM the EA Act (2002)';
-    const fixtures = [
-      [assessment(name, '2025-05-30')],
-      [{ ...assessment(name, '2025-05-30'), workTypeId: '6' }],
-      [{ workTypeId: 7, milestones: [{ name, actualDate: '2025-05-30' }] }],
-      [assessment(name, '   ')],
-      [assessment(name, 'soon')],
-      [assessment('project transitioning from the EA Act (2002)', '2025-05-30')],
-      [assessment(name, '2024-02-01'), assessment(name, '2025-05-30')],
-      [{ workTypeId: 6 }]
-    ];
-    for (const works of fixtures) {
-      const [pair] = legislationTransitions([2002, 2018], works);
-      assert.strictEqual(transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, works, 2002), pair.date);
-    }
+    const dateOf = (works) => transitionDateOf({ toActYear: 2018, date: null, dateSource: 'none' }, works, 2002);
+
+    assert.strictEqual(dateOf([{ ...assessment(name, '2025-05-30'), workTypeId: '6' }]), null);
+    assert.strictEqual(dateOf([{ workTypeId: 7, milestones: [{ name, actualDate: '2025-05-30' }] }]), null);
+    assert.strictEqual(dateOf([assessment(name, '   ')]), null);
+    assert.strictEqual(dateOf([assessment('project transitioning from the EA Act (2002)', '2025-05-30')]), null);
+    assert.strictEqual(dateOf([{ workTypeId: 6 }]), null);
+    assert.strictEqual(dateOf([assessment(name, '2024-02-01'), assessment(name, '2025-05-30')]), '2024-02-01');
   });
 });
 

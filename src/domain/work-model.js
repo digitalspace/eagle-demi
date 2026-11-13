@@ -6,7 +6,6 @@
 const { randomUUID } = require('node:crypto');
 const { LEGISLATIONS } = require('./project-legislation');
 const { ASSESSMENT_WORK_TYPE } = require('../merge/assessment-work');
-const { TRANSITION_MILESTONE } = require('../merge/track-derived');
 const override = require('./work-override');
 
 const {
@@ -215,7 +214,8 @@ function summaryOf(work) {
   };
 }
 
-// Accepts what legislationTransitions in merge/track-derived.js accepts, so both give one date.
+const TRANSITION_MILESTONE = 'Project Transitioning FROM';
+
 const isDated = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 
 /** Track's "Project Transitioning FROM ..." milestone date naming `fromYear`, over public-shape works. */

@@ -80,6 +80,15 @@ test('project reads and writes with WORKS_READ on', async (t) => {
     assert.deepStrictEqual(composed.phases, row.phases);
   });
 
+  await t.test('a picked sheet Assessment leaves the stored phases', () => {
+    const row = { id: '207', phases: [{ name: 'Stored' }] };
+    const sheet = { workId: 'sheet-1', source: 'sheet', workTypeCode: 'assessment', phases: [{ name: 'Pre-Application' }] };
+
+    const composed = composedRow(row, [sheet]);
+
+    assert.deepStrictEqual(composed.phases, row.phases);
+  });
+
   await t.test('an Assessment work with no phases leaves the stored phases', () => {
     const row = { id: '207', phases: [{ name: 'Stored' }] };
 
