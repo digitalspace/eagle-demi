@@ -3,19 +3,19 @@
 // One assessment per Act a project was under. Pure; the stage rules follow eagle-public's timeline
 // (`assessment-stages.ts`, `use-timeline-model.ts`), so both draw the same phases.
 
-const { LEGISLATIONS, EAGLE_DATE_FLOOR, isRegistryYear, yearOf } = require('../domain/project-legislation');
+const { LEGISLATIONS, isRegistryYear, yearOf } = require('../domain/project-legislation');
 const {
   normalizeName, phaseIdOf, phaseHistoryIds, entryForTrackCode, entryForEagleId, entryForName
 } = require('../domain/phase-catalog');
 const { redactForAccess } = require('../vis/redact');
-const { TRACK_ACT_YEAR, actYearOf, isTrackWork } = require('./assessment-work');
+const { TRACK_ACT_YEAR, actYearOf } = require('./assessment-work');
+const { datedPhases, isoOf, milestonesOf, timeOf } = require('./assessment-sheet-dates');
 const { worksOf, assessmentPhasesOf, sheetMilestonesOf, workIdsOf, activeWorkOf } = require('./track-derived');
 /** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
 const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
 const POST_DECISION_ROW = 'Post Decision';
 const OFF_RAIL_PHASES = ['Other', 'Termination', 'Withdrawal'];
-const COMMENT_PERIOD = 'Public comment period';
 const CERTIFICATE_NUMBER = /^[A-Z]\d{2}-\d{2}$/;
 
 /** Each Act's phase rows, in process order. */
@@ -56,18 +56,6 @@ function stageRank(year, stage) {
   const index = stage ? rows.indexOf(stage) : -1;
   return index < 0 ? rows.length : index;
 }
-
-/** A date's time in ms, or null for none: Eagle writes a cleared date as the epoch. */
-function timeOf(value) {
-  if (typeof value !== 'string' && !(value instanceof Date)) return null;
-  const time = new Date(value).getTime();
-  return Number.isNaN(time) || time < EAGLE_DATE_FLOOR ? null : time;
-}
-
-const isoOf = (value) => {
-  const time = timeOf(value);
-  return time === null ? null : new Date(time).toISOString();
-};
 
 const inForceOf = (year) => timeOf(LEGISLATIONS[year] && LEGISLATIONS[year].inForce);
 
@@ -209,23 +197,9 @@ const documentEntries = (year, own) => own.filter(entry => entry.commentPeriodId
     stageRank: stageRank(year, entry.stage), name: entry.name, startDate: entry.startDate,
     endDate: entry.endDate ?? null, source: 'documents', documentCount: entry.documentCount }));
 
-const trackEntry = (year, phase, stage) => ({ phaseIds: [], stage, stageRank: stageRank(year, stage),
-  name: phase.name, startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: 'track' });
-
-/**
- * Documents listed first, so Eagle wins a tie; a work phase on a stage documents date is dropped. On a 1996 or
- * 2002 block, sheet phases (`from[i]` built `phases[i]`) on that stage lend it their known dates.
- */
-function datedPhases(year, documents, phases, from) {
-  const sheet = year < TRACK_ACT_YEAR ? phases.filter((_, i) => from[i].work && !isTrackWork(from[i].work)) : [];
-  const lent = documents.map((phase) => {
-    const same = phase.stage ? sheet.filter(one => one.stage === phase.stage) : [];
-    return same.length ? { ...phase, startDate: same[0].startDate ?? phase.startDate,
-      endDate: same[same.length - 1].endDate ?? phase.endDate } : phase;
-  });
-  const documentStages = new Set(documents.map(phase => phase.stage).filter(Boolean));
-  return [...lent, ...phases.filter(phase => !(phase.stage && documentStages.has(phase.stage)))];
-}
+/** A work phase; a row work from Track's pull carries no `source`. */
+const workEntry = (year, { phase, work }, stage) => ({ phaseIds: [], stage, stageRank: stageRank(year, stage),
+  name: phase.name, startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: work?.source ?? 'track' });
 
 const finiteOr = (value, fallback) => (Number.isFinite(value) ? value : fallback);
 
@@ -240,11 +214,11 @@ const catalogDocument = (catalog, year, phase) => {
     order: entry ? entry.order ?? null : null, trackWorkId: null };
 };
 
-/** A Track phase by its Track code, then its name; one the catalog lacks keeps Track's name and sort order. */
+/** A work phase by its Track code, then its name; one the catalog lacks keeps its own name and sort order. */
 function catalogTrack(catalog, year, { phase, work }) {
   const entry = entryForTrackCode(catalog, year, phase.phaseCodeId) || entryForName(catalog, year, phase.name);
   const code = phase.phaseCodeId ?? null;
-  return { ...trackEntry(year, phase, entry ? entry.stage ?? null : null),
+  return { ...workEntry(year, { phase, work }, entry ? entry.stage ?? null : null),
     catalogId: entry ? entry.catalogId : code === null ? null : `track-${code}`,
     name: entry ? entry.name : phase.name,
     order: entry ? entry.order ?? null : phase.sortOrder ?? null,
@@ -265,14 +239,14 @@ function eagleEntries(catalog, year, block, lists, dated) {
 }
 
 /**
- * `current` is the phase the block's current phase names, by id, else by name, else the first open Track
+ * `current` is the phase the block's current phase names, by id, else by name, else the first open work
  * phase; before it is `done`, after it `planned`. With none, the current phase's catalog place splits them.
  */
 function markStatus(phases, { catalog, year, currentPhase, completed }) {
   const id = currentPhase ? currentPhase.id : null;
   const entry = entryForEagleId(catalog, year, id) || entryForName(catalog, year, currentPhase && currentPhase.name);
   let at = phases.findIndex(phase => (entry && phase.catalogId === entry.catalogId) || phase.phaseIds.includes(id));
-  if (at < 0) at = phases.findIndex(phase => phase.source === 'track' && !completed.has(phase));
+  if (at < 0) at = phases.findIndex(phase => phase.source !== 'documents' && phase.source !== 'eagle' && !completed.has(phase));
   const place = entry && { stageRank: stageRank(year, entry.stage ?? null), order: entry.order, startDate: null };
   const split = at >= 0 ? at : place ? phases.filter(phase => bySequence(phase, place) <= 0).length : 0;
   phases.forEach((phase, index) => {
@@ -286,37 +260,14 @@ function markStatus(phases, { catalog, year, currentPhase, completed }) {
 /** One Act's phase sequence: catalog names, Eagle's history beside the dated phases, and a status each. */
 function sequenceOf(year, { own, track, block, catalog, lists, currentPhase }) {
   const completed = new Set();
-  const trackPhases = track.map((one) => {
-    const phase = catalogTrack(catalog, year, one);
-    if (one.phase.isCompleted === true) completed.add(phase);
-    return phase;
+  const workPhases = track.map((one) => {
+    const entry = catalogTrack(catalog, year, one);
+    if (one.phase.isCompleted === true) completed.add(entry);
+    return { entry, work: one.work };
   });
-  const dated = datedPhases(year, documentEntries(year, own).map(phase => catalogDocument(catalog, year, phase)),
-    trackPhases, track);
+  const dated = datedPhases(year, documentEntries(year, own).map(phase => catalogDocument(catalog, year, phase)), workPhases);
   const phases = [...dated, ...eagleEntries(catalog, year, block, lists, dated)].sort(bySequence);
   return markStatus(phases, { catalog, year, currentPhase, completed });
-}
-
-const BLOCK_MILESTONES = [
-  ['Decision date', 'decisionDate'],
-  ['180-day review starts', 'review180Start'],
-  ['45-day decision period starts', 'review45Start']
-];
-
-/** Eagle's block and comment period milestones; a dated sheet milestone whose `links` name one gives its dates. */
-function milestonesOf(block, own, sheetMilestones) {
-  const linked = (key, value) => sheetMilestones.find(m => m.links && m.links[key] === value && m.actualDate);
-  return [
-    ...BLOCK_MILESTONES.flatMap(([name, field]) => {
-      const date = linked('blockField', field)?.actualDate ?? isoOf(block[field]);
-      return date ? [{ name, date }] : [];
-    }),
-    ...own.filter(entry => entry.commentPeriodId !== undefined).map((entry) => {
-      const sheet = linked('commentPeriodId', entry.commentPeriodId) || {};
-      return { name: COMMENT_PERIOD, date: sheet.actualDate ?? entry.startDate, endDate: sheet.endDate || (entry.endDate ?? null),
-        commentPeriodId: entry.commentPeriodId, label: entry.label ?? null };
-    })
-  ].sort((a, b) => timeOf(a.date) - timeOf(b.date));
 }
 
 /**
@@ -342,7 +293,7 @@ function deriveAssessments(row, { lists, previous, worksForDerive, catalog } = {
     const phases = catalog
       ? sequenceOf(year, { own, track: workPhasesIn(year), block, catalog, lists, currentPhase })
       : datedPhases(year, documentEntries(year, own),
-        workPhasesIn(year).map(({ phase }) => trackEntry(year, phase, stageRowFor(year, phase.name))), workPhasesIn(year))
+        workPhasesIn(year).map(one => ({ entry: workEntry(year, one, stageRowFor(year, one.phase.name)), work: one.work })))
         .sort((a, b) => a.stageRank - b.stageRank);
 
     const transition = transitions.find(one => Number(one.fromYear) === year);
@@ -357,7 +308,7 @@ function deriveAssessments(row, { lists, previous, worksForDerive, catalog } = {
       certificate: null,
       trackWorkIds: works.filter(work => yearOfTrack(work.eaAct) === year)
         .map(work => work.trackWorkId).filter(Number.isFinite),
-      workIds: workIdsOf(works, year),
+      workIds: workIdsOf(works, year, yearOfTrack),
       transitionDate: (transition && transition.date) || null
     };
   });

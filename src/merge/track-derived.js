@@ -70,9 +70,13 @@ function assessmentPhasesOf(view, yearOfTrack) {
     : namedPhases(view.phases).map(phase => ({ phase, year: yearOfTrack(phase.eaActName), work: null }));
 }
 
-/** The id of each work under `year`'s Act; a work from Track's pull carries none, so it reads `track-<trackWorkId>`. */
-const workIdsOf = (works, year) => works.filter(work => workActYear(work) === year)
-  .map(work => work.workId || (Number.isFinite(work.trackWorkId) ? `track-${work.trackWorkId}` : null))
+/**
+ * The id of each work under `year`'s Act, a Track work placed by `yearOfTrack` as `trackWorkIds` places it. A work
+ * from Track's pull carries no id, so it reads `track-<trackWorkId>`.
+ */
+const workIdsOf = (works, year, yearOfTrack) => works
+  .filter(work => (isTrackWork(work) ? yearOfTrack(work.eaAct) : workActYear(work)) === year)
+  .map(work => work.workId ?? (Number.isFinite(work.trackWorkId) ? `track-${work.trackWorkId}` : null))
   .filter(Boolean);
 
 /** The milestones of the sheet work a 1996 or 2002 block draws its phases from, else none. */
