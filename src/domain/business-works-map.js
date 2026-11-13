@@ -49,8 +49,6 @@ function projectOf(ctx, projectId) {
   return ctx.projects.get(projectId);
 }
 
-const groupBy = (rows, keyOfRow) => rows.reduce((map, row) => map.set(keyOfRow(row), [...(map.get(keyOfRow(row)) || []), row]), new Map());
-
 /** The one row per register id; which of several rows is right is undecided, so each is refused as `reason`. */
 function onePerId(ctx, source, byId, reason) {
   const one = new Map();
@@ -63,14 +61,13 @@ function onePerId(ctx, source, byId, reason) {
 
 /** Timelines '2002' rows carry no id, so each joins the one register row of the same name. */
 function joinTimelines(ctx, rows, registers) {
-  const byName = groupBy(registers, row => keyOf(row.name));
-  const byId = new Map();
-  for (const row of rows) {
-    const hits = byName.get(keyOf(row.name)) || [];
-    if (hits.length === 1) byId.set(hits[0].id, [...(byId.get(hits[0].id) || []), row]);
-    else listFor(ctx, 'timeline2002', null, row.ref)(hits.length ? 'timelineAmbiguous' : 'timelineUnmatched');
-  }
-  return onePerId(ctx, 'timeline2002', byId, 'timelineRepeated');
+  const byName = Map.groupBy(registers, row => keyOf(row.name));
+  const hitsOf = (row) => byName.get(keyOf(row.name)) || [];
+  const matched = rows.filter((row) => {
+    if (hitsOf(row).length === 1) return true;
+    return listFor(ctx, 'timeline2002', null, row.ref)(hitsOf(row).length ? 'timelineAmbiguous' : 'timelineUnmatched');
+  });
+  return onePerId(ctx, 'timeline2002', Map.groupBy(matched, row => hitsOf(row)[0].id), 'timelineRepeated');
 }
 
 /** Whether column A of the transitions tab holds the register id is undecided, so the caller says. */
@@ -79,7 +76,7 @@ function transitionsOf(ctx, rows) {
     rows.forEach(row => listFor(ctx, 'transitions', null, row.ref)('transitionJoinUndecided'));
     return new Map();
   }
-  return onePerId(ctx, 'transitions', groupBy(rows, row => row.id), 'transitionRepeated');
+  return onePerId(ctx, 'transitions', Map.groupBy(rows, row => row.id), 'transitionRepeated');
 }
 
 function withTimeline(row, timeline) {
@@ -90,11 +87,11 @@ function withTimeline(row, timeline) {
 
 const withoutServerKeys = (entry) => Object.fromEntries(Object.entries(entry).filter(([key]) => !SERVER_KEYS.includes(key)));
 
-/** Drops each entry W3a's validator refuses, listed by field and index only. */
+/** Drops each entry W3a's validator refuses, listed by field, index and sheet key only. */
 function validEntries(ctx, entries, list) {
   return Object.fromEntries(Object.entries(entries).map(([field, built]) => [field, built.filter((entry, index) => {
     if (!newEntryError(field, withoutServerKeys(entry), ctx.batchDate)) return true;
-    return list('staffEntryInvalid', { field, index });
+    return list('staffEntryInvalid', { field, index, sheetKey: entry.sheetKey ?? null });
   })]));
 }
 
@@ -119,7 +116,7 @@ function readRegister(ctx, records) {
   const timelines = joinTimelines(ctx, records.timeline2002 || [], records.projects || []);
   ctx.transitions = transitionsOf(ctx, records.transitions || []);
   const registers = records.projects || [];
-  const repeated = groupBy(registers, row => row.id);
+  const repeated = Map.groupBy(registers, row => row.id);
   if (!ctx.numbersReal && registers.length) listFor(ctx, 'projects', null)('investmentUseTrackUnchecked');
   const rows = [];
   for (const raw of registers) {
@@ -129,16 +126,20 @@ function readRegister(ctx, records) {
       list('notInCrosswalk');
       continue;
     }
+    const base = { projectId, number: raw.id, title: oneLine(raw.name), ref: raw.ref };
+    ctx.bases.set(raw.id, base);
+    // Which of the rows sharing a number is right is undecided, so none of them loads anything.
+    if (repeated.get(raw.id).length > 1) {
+      ctx.noWork.set(raw.id, 'registerRepeated');
+      list('registerRepeated');
+      continue;
+    }
     const row = withTimeline(raw, timelines.get(raw.id));
     UNKNOWN_FIELDS.filter(field => row[field] === UNKNOWN_DAY).forEach(field => list('unknownDate', { field }));
     compareRegister(ctx.storedProjects.get(projectId), row, ctx.substantialStart, list);
     const project = projectOf(ctx, projectId);
-    if (repeated.get(raw.id).length === 1) {
-      const entries = staffEntries(ctx, row, list);
-      STAFF_LISTS.forEach(key => project.entries[key].push(...entries[key]));
-    }
-    const base = { projectId, number: row.id, title: oneLine(row.name), ref: row.ref };
-    ctx.bases.set(row.id, base);
+    const entries = staffEntries(ctx, row, list);
+    STAFF_LISTS.forEach(key => project.entries[key].push(...entries[key]));
     rows.push({ row, base, list, project });
     const act = actOf(ctx, row);
     if (!act || act.actYear === 2018) ctx.noWork.set(row.id, act ? 'act2018' : 'noAct');
@@ -161,6 +162,10 @@ function sheetRow(ctx, source, row) {
   const base = ctx.bases.get(row.id);
   const list = listFor(ctx, source, base ? base.projectId : null, row.ref);
   if (!base) list(ctx.crosswalk.has(row.id) ? 'noRegisterRow' : 'notInCrosswalk');
+  if (base && ctx.noWork.get(row.id) === 'registerRepeated') {
+    list('registerRepeated');
+    return null;
+  }
   return base ? { base, list, project: ctx.projects.get(base.projectId), noWork: ctx.noWork.get(row.id) || 'noWork' } : null;
 }
 

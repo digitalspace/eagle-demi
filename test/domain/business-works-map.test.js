@@ -183,13 +183,13 @@ test('Notes become a staffNotes entry, never a work key', () => {
   assert.ok(!JSON.stringify(result.works).includes('first line'));
 });
 
-test('a staff entry W3a refuses is dropped and listed by field and index only', () => {
+test('a staff entry W3a refuses is dropped and listed by field, index and sheet key only', () => {
   const result = run({ projects: [register({ epd: 'Made\u200bUp', lead: 'Also Made', notes: 'x'.repeat(5000) })] });
   assert.deepStrictEqual(result.projects[0].staffAssignments.map(one => one.role), ['lead']);
   assert.deepStrictEqual(result.projects[0].staffNotes, []);
   assert.deepStrictEqual(reasons(result, 'staffEntryInvalid').map(({ ref: _ref, ...entry }) => entry), [
-    { reason: 'staffEntryInvalid', source: 'projects', projectId: PROJECT, field: 'staffAssignments', index: 0 },
-    { reason: 'staffEntryInvalid', source: 'projects', projectId: PROJECT, field: 'staffNotes', index: 0 }
+    { reason: 'staffEntryInvalid', source: 'projects', projectId: PROJECT, field: 'staffAssignments', index: 0, sheetKey: 'register:epd' },
+    { reason: 'staffEntryInvalid', source: 'projects', projectId: PROJECT, field: 'staffNotes', index: 0, sheetKey: 'register:notes' }
   ]);
 });
 
@@ -210,6 +210,12 @@ test('a Transition Order before 2025 ends the 2002 work on its date and lists la
   assert.deepStrictEqual([only.workState, only.transitionOut], ['transitioned', { toActYear: 2018, date: '2022-08-23', dateSource: 'sheet' }]);
   assert.deepStrictEqual(milestones(only).filter(one => one.code === 'act-transition').map(one => [one.position, one.actualDate]), [['END', '2022-08-23']]);
   assert.deepStrictEqual(reasons(result, 'afterTransition').map(entry => entry.milestone), ['review-start']);
+});
+
+test('a milestone after a Transition Order inside a phase that started before it is listed afterTransition', () => {
+  const result = run({ projects: [register({ s11Order: '2023-01-01', decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] },
+    { transitionIdsAreRegisterIds: true });
+  assert.deepStrictEqual(reasons(result, 'afterTransition').map(entry => entry.milestone), ['s11-order']);
 });
 
 test('a row split at 2002 that also has a Transition Order gives its 2002 work two distinct act-transition ids', () => {
@@ -296,6 +302,17 @@ test('Incomplete/Inactive is a work state, not an outcome', () => {
   assert.deepStrictEqual([only.workState, only.outcomeCode, only.isActive], ['inactive', null, false]);
 });
 
+test('an undecided assessment labelled On Hold is suspended and active', () => {
+  const [only] = assessments(run({ projects: [register({ decision: 'On Hold', decisionDate: null })] }));
+  assert.deepStrictEqual([only.workState, only.isActive], ['suspended', true]);
+});
+
+test('a decided assessment labelled with an open work state is completed and the label listed', () => {
+  const result = run({ projects: [register({ decision: 'Active' })] });
+  assert.deepStrictEqual([assessments(result)[0].workState, assessments(result)[0].isActive], ['completed', false]);
+  assert.deepStrictEqual(reasons(result, 'decisionLabelIsState').map(entry => [entry.field, entry.code]), [['decision', 'in-progress']]);
+});
+
 test('an amendment on a certificate the 2018 Act issued is skipped as Track\'s', () => {
   const result = run({ projects: [register({ determinationType: 'IPD Accepted', decisionDate: '2022-01-01' })], amendments: [amendment(1, '2023-01-01', '2023-02-01')] });
   assert.strictEqual(reasons(result, 'onCertificate2018').length, 1);
@@ -365,10 +382,12 @@ test('a comment period on a work with no phases is listed noPhase', () => {
   assert.deepStrictEqual(reasons(result, 'noPhase').map(entry => entry.ref.sheet), ['PCPs']);
 });
 
-test('an event row on a register row with no Act is listed noAct', () => {
-  const result = run({ projects: [register({ intakeType: null, intakeDate: null, determinationType: null, determinationDate: null, decision: null, decisionDate: null })],
-    commentPeriods: [pcp] });
-  assert.deepStrictEqual(result.report.filter(entry => entry.source === 'commentPeriods').map(entry => entry.reason), ['noAct']);
+test('an event row on a register row with no Act or a 2018 Act is listed noAct or act2018', () => {
+  const noAct = { intakeType: null, intakeDate: null, determinationType: null, determinationDate: null, decision: null, decisionDate: null };
+  for (const [fields, reason] of [[noAct, 'noAct'], [{ determinationType: 'IPD Accepted', determinationDate: '2021-01-01' }, 'act2018']]) {
+    const result = run({ projects: [register(fields)], commentPeriods: [pcp] });
+    assert.deepStrictEqual(result.report.filter(entry => entry.source === 'commentPeriods').map(entry => entry.reason), [reason]);
+  }
 });
 
 test('a comment period becomes a range milestone on the work and phase holding its start', () => {
@@ -377,15 +396,18 @@ test('a comment period becomes a range milestone on the work and phase holding i
   assert.deepStrictEqual([holder.name, holder.milestones.at(-1).endDate], ['Pre-EA', '2005-02-28']);
 });
 
-test('a repeated register number is refused with a report entry and writes no staff entries', () => {
-  const result = run({ projects: [register(), register({ epd: 'Made Up' })] });
-  assert.deepStrictEqual(assessments(result), []);
-  assert.strictEqual(reasons(result, 'duplicateKey').length, 2);
-  assert.deepStrictEqual([result.projects[0].externalIds, result.projects[0].staffAssignments], [[], []]);
+test('register rows sharing a number load nothing, and their child rows are listed registerRepeated', () => {
+  const ipd = { determinationType: 'IPD Accepted', determinationDate: '2021-01-01' };
+  for (const projects of [[register(), register({ determinationType: 'Pre-EAO', epd: 'Made Up' })], [register(ipd), register(ipd)]]) {
+    const result = run({ projects, amendments: [amendment(1, '2010-01-01', '2010-02-01')], commentPeriods: [pcp] });
+    assert.deepStrictEqual([result.works, result.markers, result.projects], [[], [], []]);
+    assert.deepStrictEqual(reasons(result, 'registerRepeated').map(entry => entry.source), ['projects', 'projects', 'amendments', 'commentPeriods']);
+    assert.deepStrictEqual(['act2018', 'noRegisterRow'].map(reason => reasons(result, reason).length), [0, 0]);
+  }
 });
 
 test('a certificate on a refused work gives a post-decision work nothing to act on', () => {
-  const result = run({ projects: [register(), register()], amendments: [amendment(1, '2010-01-01', '2010-02-01')] });
+  const result = run({ projects: [register({ name: 'Sample <Mine>' })], amendments: [amendment(1, '2010-01-01', '2010-02-01')] });
   assert.strictEqual(work(result, '101:amendment:1'), undefined);
   assert.strictEqual(reasons(result, 'no-certificate').length, 1);
 });
@@ -420,6 +442,12 @@ test('two matching Eagle items link nothing and are listed', () => {
   const result = linkedItem(items);
   assert.strictEqual(itemLink(result), null);
   assert.deepStrictEqual(reasons(result, 'eagleItemAmbiguous').map(entry => entry.candidates), [items.map(idOf)]);
+});
+
+test('two equal Eagle items without an id are one item', () => {
+  const item = eagleItem();
+  const result = linkedItem([item, { ...item }]);
+  assert.deepStrictEqual([itemLink(result), reasons(result, 'eagleItemAmbiguous').length], [idOf(item), 0]);
 });
 
 const linkedPeriod = (commentPeriods) => {

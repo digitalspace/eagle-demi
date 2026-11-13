@@ -214,8 +214,10 @@ function assessmentWorks(ctx, row, base, act, list) {
     if (holds || undecided) {
       if (holds) setDay(work, 'decisionDate', datedOf(row, 'decisionDate'));
       const { unknown: _unknown, ...fields } = decision;
-      Object.assign(work, fields, { isActive: !holds && (!fields.workState || OPEN_STATES.includes(fields.workState)) });
-      if (holds && !fields.workState) work.workState = 'completed';
+      const open = !fields.workState || OPEN_STATES.includes(fields.workState);
+      Object.assign(work, fields, { isActive: !holds && open });
+      if (holds && fields.workState && open) list('decisionLabelIsState', { field: 'decision', code: fields.workState });
+      if (holds && open) work.workState = 'completed';
     }
     if (part.out) Object.assign(work, { transitionOut: part.out, workState: 'transitioned', isActive: false });
     if (part.in) work.transitionIn = part.in;

@@ -12,7 +12,7 @@ const { gapWithin } = require('./work-override');
 
 const ITEM_DAYS = 1;
 const PERIOD_DAYS = 3;
-/** The Eagle item type of each interruption kind (eagle-admin extension.component.ts:54). */
+/** The Eagle item type of each interruption kind, as eagle-admin's extension form writes it. */
 const EAGLE_TYPES = Object.freeze({ extension: 'Extension', suspension: 'Suspension' });
 // [reason, register field, stored project field, reader]; status, region and subsector name no stored field.
 const COMPARISONS = Object.freeze([
@@ -33,7 +33,8 @@ function eagleItemIdFor(row, interruption, list) {
   const sameEnd = (end) => (dayOf(end) || interruption.endDate ? within(end, interruption.endDate, ITEM_DAYS) : true);
   const hits = EXTENSION_LIST_FIELDS.flatMap(field => listOf(row && row[field])).filter(item => item && typeof item === 'object' &&
     item.type === EAGLE_TYPES[interruption.kind] && within(item.start, interruption.startDate, ITEM_DAYS) && sameEnd(item.end));
-  return onlyId(hits.map(idOf), 'eagleItemAmbiguous', list);
+  // Equal Eagle items share one idOf hash, so they are one item here.
+  return onlyId([...new Set(hits.map(idOf))], 'eagleItemAmbiguous', list);
 }
 
 /** The one public Eagle comment period starting within three days of `start`, else null. */
