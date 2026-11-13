@@ -10,6 +10,7 @@ const path = require('path');
 const { openBackup } = require('../../src/scripts/works-import-backup');
 const { KINDS } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
+const { withoutSystem } = require('../../src/scripts/works-rollback-steps');
 const { fakeLists, amendment, register } = require('../helpers/works-import-fakes');
 const { T0, TRACK, keys, operator, STAFF, inputs, liveRun } = require('../helpers/works-import-loader');
 const { rollbackDemi, rollback } = require('../helpers/works-import-rollback');
@@ -18,15 +19,13 @@ const { tmp, secrets, fresh, cli } = require('../fixtures/works-import/harness')
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const DAY = 24 * 60 * 60 * 1000;
-const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 const staffEntry = (id, sheetKey) => ({ id, role: 'epd', name: 'staff-value-0', effectiveFrom: null, effectiveTo: null, source: 'sheet', sheetKey });
 
-/** What a rollback must put back: every stored work and marker, and the row's external ids and staff history. */
+/** What a rollback must put back: every stored work and marker, and the project row with its external ids and staff history. */
 function stateOf(demi) {
   const works = Object.fromEntries([...demi.docs].filter(([id]) => id !== OVERRIDE_MARKER_ID).map(([id, doc]) => [id, withoutSystem(doc)]));
   const marker = demi.docs.has(OVERRIDE_MARKER_ID) ? withoutSystem(demi.docs.get(OVERRIDE_MARKER_ID)) : null;
-  const { externalIds, staffAssignments, capitalInvestments, staffNotes } = demi.row;
-  return { works, marker, externalIds, staffAssignments, capitalInvestments, staffNotes };
+  return { works, marker, row: withoutSystem(demi.row) };
 }
 
 // The operator's key as `works:extract keygen` writes it, under the passphrase the harness keyring holds.
@@ -54,17 +53,20 @@ async function reseal(outDir, { backupBlob, backupSha256 }) {
 test('a live load, resealed by the operator and rolled back, leaves works, markers, external ids and staff history as before', async (t) => {
   const store = fakeLists(t);
   const demi = rollbackDemi();
-  await liveRun(inputs(), demi);
+  await liveRun(inputs({ records: { projects: [register], amendments: [amendment(1, '2023-06-01', '2023-11-07'), amendment(3, '2019-01-01', '2019-06-01')] } }), demi);
   demi.row = { ...demi.row, staffAssignments: [staffEntry('o1', 'register:epd'), staffEntry('o2', 'register:gone')], capitalInvestments: [], staffNotes: [] };
   const before = stateOf(demi);
 
   const given = inputs({ flags: STAFF, records: {
-    projects: [{ ...register, epd: 'staff-value-1', lead: 'staff-value-2', notes: 'staff-value-3' }],
+    projects: [{ ...register, epd: 'staff-value-1', lead: 'staff-value-2', notes: 'staff-value-3', investment: 12000000 }],
     amendments: [amendment(1, '2023-06-01', '2023-12-01'), amendment(2, '2015-03-01', '2015-05-07')]
   } });
   const batchId = (await liveRun(given, demi, { signoff: 'so-staff', at: T0 + DAY })).value('batchId');
-  const actions = new Set(store.all().filter(item => item.kind === KINDS.ENTRY && item.batchId === batchId).map(item => item.action));
-  assert.deepEqual([...actions].sort(), ['addExternalId', 'appendHistory', 'closeHistory', 'create', 'derive', 'marker', 'update'], 'the load writes every kind of entry');
+  const entries = store.all().filter(item => item.kind === KINDS.ENTRY && item.batchId === batchId);
+  assert.deepEqual([...new Set(entries.map(item => item.action))].sort(),
+    ['addExternalId', 'appendHistory', 'closeHistory', 'create', 'derive', 'marker', 'tombstone', 'update'], 'the load writes every kind of entry');
+  assert.deepEqual([...new Set(entries.filter(item => item.action === 'appendHistory').map(item => item.target.field))].sort(),
+    ['capitalInvestments', 'staffAssignments', 'staffNotes']);
 
   const header = store.get(batchId, KINDS.BATCH);
   const devboxKey = given.argv[given.argv.indexOf('--devbox-key') + 1];
