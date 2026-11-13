@@ -42,6 +42,15 @@ test('a covered Track work pushed after the load that matches a loaded sheet wor
   assert.deepStrictEqual([item.reason, item.trackWorkId, item.shown], ['matchNotHidden', 'track-500', true]);
 });
 
+test('a Track work the marker pairs with another shown sheet work is listed matchNotHidden and not shown', () => {
+  const two = extractOf(amendment('1', '2010-01-01', '2010-03-01'), amendment('2', '2015-01-01', '2015-03-01'));
+  const state = loaded(two, [settledAmendment]);
+  const other = state.works.find(work => work.sourceKey === '101:amendment:2');
+  state.markers.get(PROJECT).hidden = [{ trackWorkId: 'track-500', sheetWorkId: other.id }];
+  const [item] = parity(two, stateOf(state, { track: [settledAmendment] })).listed('hiddenDrift').filter(one => one.reason === 'matchNotHidden');
+  assert.deepStrictEqual([item.sourceKey, item.shown], [KEY, false]);
+});
+
 test('a trackAlive skip whose Track work was deleted is listed in hiddenDrift', () => {
   assert.deepStrictEqual(parity(extract, stateOf(loaded(extract, [aliveAmendment]))).listed('hiddenDrift'),
     [{ list: 'hiddenDrift', project: PROJECT, reason: 'trackAliveGone', trackWorkId: 'track-501', sourceKey: KEY }]);
@@ -76,6 +85,7 @@ const counterRows = [
     stateOf(withWorks(loaded(extract), work => (isAmendment(work) ? { ...work, decisionDate: '2010-03-01T12:00:00Z' } : work)))],
   ['mismatch', 0, 'a stored work holds as null a date the sheet work lacks', () =>
     stateOf(withWorks(loaded(extract), work => (isAmendment(work) ? { ...work, anticipatedDecisionDate: null } : work)))],
+  ['mismatch', 0, "an active marker's trackAlive work is unstored and its Track work was deleted", () => stateOf(loaded(extract, [aliveAmendment]))],
   ['markerMissing', 1, 'the extract makes a marker the store lacks', () => stateOf({ ...loaded(extract), markers: new Map() })],
   ['sheetOutsideCrosswalk', 1, 'a project outside the crosswalk holds sheet works', () =>
     stateOf(loaded(extract), { sheetProjectIds: [PROJECT, 'project-beta', 'project-beta'] })],
@@ -100,6 +110,17 @@ for (const [name, expected, label, build] of counterRows) {
 test('a stored open date that is not a date is a dateChanged mismatch', () => {
   const state = withWorks(loaded(open), work => (isAmendment(work) ? { ...work, decisionDate: 'not a date' } : work));
   assert.strictEqual(parity(open, stateOf(state)).listed('mismatch')[0].paths, '.decisionDate');
+});
+
+test('a changed milestone date inside a phase is one dateChanged mismatch named by phase and milestone id', () => {
+  const state = withWorks(loaded(extract), work => (work.workTypeCode !== 'assessment' ? work : {
+    ...work,
+    phases: work.phases.map(phase => (phase.id !== 'pre-ea' ? phase : {
+      ...phase, milestones: phase.milestones.map(one => (one.id === 'intake' ? { ...one, actualDate: '2005-01-02' } : one))
+    }))
+  }));
+  const result = parity(extract, stateOf(state));
+  assert.deepStrictEqual([result.counts.mismatch, result.listed('mismatch')[0].paths], [1, '.phases[pre-ea].milestones[intake].actualDate']);
 });
 
 test('the extract claiming an id a stored project holds is a duplicate only when its numbers are real', () => {
@@ -129,13 +150,16 @@ test('a marker with no valid boundaryAtLoad is refused', () => {
   assert.throws(() => parity(extract, stateOf(state)), { message: /no valid boundaryAtLoad/ });
 });
 
-test('an untilTrack work missing from the store is a mismatch only once its marker is reverted', () => {
-  const counts = [true, false].map((active) => {
+test('an untilTrack work missing from the store is one notStored mismatch, marker active or reverted', () => {
+  const results = [true, false].map((active) => {
     const state = loaded(open);
     state.markers.get(PROJECT).active = active;
-    return parity(open, stateOf({ ...state, works: state.works.filter(work => !isAmendment(work)) })).counts.mismatch;
+    return parity(open, stateOf({ ...state, works: state.works.filter(work => !isAmendment(work)) }));
   });
-  assert.deepStrictEqual(counts, [0, 1]);
+  assert.deepStrictEqual(results.map(result => result.listed('mismatch').map(item => [item.reason, Boolean(item.sheetWorkId), item.sourceKey])),
+    [[['notStored', true, undefined]], [['notStored', false, KEY]]]);
+  // The fresh pairing still names the work untilTrack, once and by its sourceKey.
+  assert.deepStrictEqual(results[0].listed('hiddenDrift').map(item => [item.reason, item.sourceKey]), [['untilTrackChanged', KEY]]);
 });
 
 test('a hidden pair whose Track work is no longer settled is listed once, not again as aliveNotSkipped', () => {

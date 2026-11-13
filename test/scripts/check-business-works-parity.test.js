@@ -191,9 +191,17 @@ test('liveState refuses a phase catalog with a year that holds no entries', asyn
   await assert.rejects(check(extract), { message: /^phase catalog has no entries for 2018$/ });
 });
 
-test('the script exits 2 on a refusal', () => {
-  const env = { ...process.env, NODE_ENV: 'test' };
-  delete env.COSMOS_ENDPOINT;
-  const result = spawnSync(process.execPath, [path.join(__dirname, '../../src/scripts/check-business-works-parity.js')], { env, encoding: 'utf8' });
-  assert.strictEqual(result.status, 2);
-});
+// [case, COSMOS_ENDPOINT, exit code]
+const exitRows = [['a refusal', null, 2], ['an input file it cannot read', TEST_ENDPOINT, 1]];
+for (const [label, endpoint, status] of exitRows) {
+  test(`the script exits ${status} on ${label}`, () => {
+    const env = { ...process.env, NODE_ENV: 'test' };
+    delete env.COSMOS_ENDPOINT;
+    if (endpoint) env.COSMOS_ENDPOINT = endpoint;
+    const absent = path.join(TMP, 'absent');
+    const argv = ['extract', 'expect-extract-sha256', 'crosswalk', 'expect-manual-sha256', 'devbox-key', 'operator-key', 'expect-operator-fingerprint']
+      .flatMap(name => [`--${name}`, absent]).concat(['--out-dir', TMP]);
+    const result = spawnSync(process.execPath, [path.join(__dirname, '../../src/scripts/check-business-works-parity.js'), ...argv], { env, encoding: 'utf8' });
+    assert.strictEqual(result.status, status);
+  });
+}

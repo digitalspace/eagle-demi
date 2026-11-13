@@ -13,7 +13,7 @@ const worksRepository = require('../repositories/works');
 const commentPeriodsRepository = require('../repositories/comment-periods');
 const listsRepository = require('../repositories/lists');
 const phaseCatalog = require('../domain/phase-catalog');
-const { COUNTS, FAILING, parityOf } = require('../domain/business-works-parity');
+const { COUNTS, FAILING, parityOf, refuse } = require('../domain/business-works-parity');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const {
   devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped, sealEnvelope, sha256Hex, sign
@@ -28,7 +28,6 @@ const OPTIONS = ['extract', 'expect-extract-sha256', 'crosswalk', 'expect-manual
   'expect-operator-fingerprint', 'out-dir'];
 const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 4 * 1024 * 1024, key: 64 * 1024 };
 
-const refuse = (message) => { throw new Error(message); };
 
 /** Options, refused unless COSMOS_ENDPOINT is the test account, so this check never reads prod. */
 function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
@@ -124,7 +123,7 @@ module.exports = { run };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
-    logger.error(`[business-works-parity] refused: ${err.message}`);
-    process.exitCode = 2;
+    logger.error(`[business-works-parity] ${err.refused ? 'refused: ' : ''}${err.message}`);
+    process.exitCode = err.refused ? 2 : 1;
   });
 }

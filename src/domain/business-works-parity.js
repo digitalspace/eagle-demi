@@ -3,13 +3,13 @@
 // Stored sheet works and override markers against W7's mapping of the extract; pure, so the script does all I/O.
 
 const { PUBLIC_ROLES } = require('../helpers/access-sql');
-const { eagleOnlyProjectId } = require('../merge/project');
+const { projectOf } = require('../merge/project-of');
 const { EXTENSION_LIST_FIELDS } = require('../ownership/project');
 const { mapBusinessWorks } = require('./business-works-map');
 const { idOf } = require('./extensions');
+const { overrideShown } = require('./works-derive');
 const {
-  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, overrideBoundaryOf, settledBefore, sourceOf, untilTrackHidden,
-  workTypeCodeOf
+  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, settledBefore, sourceOf, untilTrackHidden, workTypeCodeOf
 } = require('./work-model');
 
 const COUNTS = ['projects', 'works', 'mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'notInCrosswalk', 'noRegisterRow',
@@ -21,7 +21,8 @@ const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const SKIPPED_PATHS = new Set(['provenance', 'sourceRef', 'links', 'undated']);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-const refuse = (message) => { throw new Error(message); };
+/** Throws an error the script exits 2 on; any other error exits 1. */
+const refuse = (message) => { throw Object.assign(new Error(message), { refused: true }); };
 
 /** Every date a work holds by path, as a day or else the raw value; list items key on their id, so a reorder is no change. */
 function datesOf(value, path = '', out = new Map()) {
@@ -73,10 +74,18 @@ function checkWorks(tally, { all, fresh, sheetWorks, markers }) {
       if (paths.length) tally.add('mismatch', { reason: 'dateChanged', project: work.projectId, workId: work.id, sourceKey, paths: paths.join(',') });
     }
   }
-  // An active marker's trackAlive and the fresh untilTrack keys go under hiddenDrift, not here.
-  const active = fresh.markers.filter(marker => markers.get(String(marker.projectId))?.active === true);
-  const explained = new Set(active.flatMap(marker => [...marker.untilTrack,
-    ...listOf(markers.get(String(marker.projectId)).trackAlive).map(pair => pair.sourceKey)]));
+  // Under an active marker, its trackAlive keys and fresh untilTrack keys it does not name go under hiddenDrift.
+  const keyOfId = new Map(sheetWorks.map(work => [work.id, work.sourceKey]));
+  const explained = new Set();
+  for (const marker of fresh.markers) {
+    const held = markers.get(String(marker.projectId));
+    if (held?.active !== true) continue;
+    // A key the held marker names has a stored work, so only unnamed fresh untilTrack keys can reach notStored.
+    marker.untilTrack.forEach(key => explained.add(key));
+    listOf(held.trackAlive).forEach(pair => explained.add(pair.sourceKey));
+    listOf(held.untilTrack).filter(id => !keyOfId.has(id))
+      .forEach(id => tally.add('mismatch', { reason: 'notStored', project: marker.projectId, sheetWorkId: id }));
+  }
   for (const work of fresh.works.filter(one => !stored.has(one.sourceKey) && !explained.has(one.sourceKey))) {
     tally.add('mismatch', { reason: 'notStored', project: work.projectId, sourceKey: work.sourceKey });
   }
@@ -139,20 +148,16 @@ function checkPairs(drift, { marker, freshMarker, keyOf, storedKeys, trackById, 
 
 /** One active marker against W7's pairing over the extract, the stored Track works and the current boundary. */
 function checkMarker(tally, { projectId, marker, freshMarker, sheet, track }) {
-  const boundary = overrideBoundaryOf(track);
+  // The read's own rule decides which sheet works show and which untilTrack works a Track work replaced.
+  const { boundary, replaced, shownSheetIds } = overrideShown(sheet, track, marker);
   const keyOf = new Map(sheet.map(work => [work.id, work.sourceKey]));
   const trackById = new Map(track.map(work => [work.id, work]));
   const drift = (reason, fields) => tally.add('hiddenDrift', { project: projectId, reason, ...fields });
-  const hidingTrack = new Map();
-  for (const trackWork of track) {
-    for (const sheetWorkId of untilTrackHidden(sheet, [trackWork], marker)) if (!hidingTrack.has(sheetWorkId)) hidingTrack.set(sheetWorkId, trackWork.id);
+  for (const sheetWorkId of replaced) {
+    const by = track.find(trackWork => untilTrackHidden(sheet, [trackWork], marker).has(sheetWorkId));
+    tally.add('untilTrackHidden', { project: projectId, sheetWorkId, sourceKey: keyOf.get(sheetWorkId), trackWorkId: by.id });
   }
-  for (const [sheetWorkId, trackWorkId] of hidingTrack) {
-    tally.add('untilTrackHidden', { project: projectId, sheetWorkId, sourceKey: keyOf.get(sheetWorkId), trackWorkId });
-  }
-  // The read's own rule (works-derive.js withOverride): shown sheet works decide which Track works hide.
-  const shownIds = sheet.filter(work => !hidingTrack.has(work.id) && !hiddenByOverride(work, marker, boundary, [])).map(work => work.id);
-  checkPairs(drift, { marker, freshMarker, keyOf, storedKeys: new Set(keyOf.values()), trackById, boundary, shownIds });
+  checkPairs(drift, { marker, freshMarker, keyOf, storedKeys: new Set(keyOf.values()), trackById, boundary, shownIds: [...shownSheetIds] });
 
   const movedKeys = new Set();
   for (const work of sheet.filter(one => OVERRIDE_TYPES.includes(workTypeCodeOf(one)) && !listOf(marker.untilTrack).includes(one.id))) {
@@ -162,17 +167,12 @@ function checkMarker(tally, { projectId, marker, freshMarker, sheet, track }) {
       tally.add('sheetHiddenByMovedBoundary', { project: projectId, workId: work.id, sourceKey: work.sourceKey, boundary });
     }
   }
-  const replaced = new Set([...hidingTrack.keys()].map(id => keyOf.get(id)));
-  const storedUntil = new Set(listOf(marker.untilTrack).map(id => keyOf.get(id)));
+  const replacedKeys = new Set([...replaced].map(id => keyOf.get(id)));
+  // An untilTrack id with no stored work is a notStored mismatch, not drift.
+  const storedUntil = new Set(listOf(marker.untilTrack).filter(id => keyOf.has(id)).map(id => keyOf.get(id)));
   const freshUntil = new Set(freshMarker.untilTrack);
-  for (const sourceKey of [...storedUntil].filter(key => !freshUntil.has(key) && !replaced.has(key))) drift('untilTrackChanged', { sourceKey });
+  for (const sourceKey of [...storedUntil].filter(key => !freshUntil.has(key) && !replacedKeys.has(key))) drift('untilTrackChanged', { sourceKey });
   for (const sourceKey of [...freshUntil].filter(key => !storedUntil.has(key) && !movedKeys.has(key))) drift('untilTrackChanged', { sourceKey });
-}
-
-/** The project a row's ids count for: a folded twin counts as its target, as project-staff-history.js holds. */
-function holderOf(row) {
-  const twin = typeof row.eagleId === 'string' && String(row.id) === eagleOnlyProjectId(row.eagleId);
-  return String(twin && row.foldedInto != null ? row.foldedInto : row.id);
 }
 
 /** (system, value) pairs, values case-blind, that more than one project claims; surrogate extract numbers never count. */
@@ -183,7 +183,7 @@ function checkExternalIds(tally, { rows, fresh, numbersReal }) {
     const key = `${entry.system}:${entry.value.toLowerCase()}`;
     claims.set(key, (claims.get(key) || new Set()).add(String(projectId)));
   };
-  for (const row of rows.values()) listOf(row.externalIds).forEach(entry => claim(holderOf(row), entry));
+  for (const row of rows.values()) listOf(row.externalIds).forEach(entry => claim(projectOf(row), entry));
   if (numbersReal) for (const project of fresh.projects) listOf(project.externalIds).forEach(entry => claim(project.projectId, entry));
   for (const [key, projects] of claims) {
     if (projects.size > 1) tally.add('duplicateExternalId', { system: key.split(':')[0], projects: [...projects].sort().join(',') });
@@ -221,4 +221,4 @@ function parityOf({ extract, crosswalk, catalog, phaseCatalog, rows, works, mark
   return tally;
 }
 
-module.exports = { COUNTS, FAILING, parityOf };
+module.exports = { COUNTS, FAILING, parityOf, refuse };
