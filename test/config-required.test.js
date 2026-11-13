@@ -288,7 +288,7 @@ test('unknown source token fails start', () => {
   const read = (value) => readConfig({ WORKS_READ_SOURCES: value }, c => c.worksReadSources);
   assert.throws(() => read('track,sheets'), /WORKS_READ_SOURCES.*'sheets'/);
   assert.throws(() => read('track,'), /WORKS_READ_SOURCES/);
-  assert.deepStrictEqual([read(''), read(' track , sheet ')], [['track'], ['track', 'sheet']]);
+  assert.deepStrictEqual([read(''), read(' Track , SHEET,track ')], [['track'], ['track', 'sheet']]);
 });
 
 // Azure always sets ASSESSMENT_PASS too, as the string 'false' in prod.

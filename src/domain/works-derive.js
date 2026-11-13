@@ -3,11 +3,11 @@
 const config = require('../config');
 const phaseCatalog = require('./phase-catalog');
 const works = require('../repositories/works');
+const { logger } = require('../utils/logger');
 const { publicWorksOf } = require('../seed/track-mappers');
 const {
-  OVERRIDE_MARKER_ID, hiddenByOverride, overrideBoundaryOf, untilTrackHidden, validateMarker
+  OVERRIDE_MARKER_ID, compareText, hiddenByOverride, overrideBoundaryOf, sourceOf, untilTrackHidden, validateMarker
 } = require('./work-model');
-const { sourceOf } = require('./work-override');
 
 /**
  * Options to spread into deriveAssessments and the merges: `{}` while WORKS_READ is off, so they
@@ -21,15 +21,21 @@ async function deriveInputs(row) {
 /** The project's override marker, or null when it is absent or fails the validator. */
 async function markerOf(projectId) {
   const marker = await works.get(projectId, OVERRIDE_MARKER_ID);
-  return marker && validateMarker(marker).ok ? marker : null;
+  if (!marker) return null;
+  const checked = validateMarker(marker);
+  if (checked.ok) return marker;
+  logger.warn('[works] override marker refused, read as missing', { projectId, paths: checked.errors.map(e => e.path) });
+  return null;
 }
 
-/** `stored` less what the sheet override hides: sheet works first, then Track works paired with a shown one. */
-function withOverride(stored, marker) {
-  const trackWorks = stored.filter(work => sourceOf(work) === 'track');
+/**
+ * `stored` less what the sheet override hides: sheet works first, then Track works paired with a shown one.
+ * Track works move the boundary and replace untilTrack works only when listed, so an event never shows nowhere.
+ */
+function withOverride(stored, marker, sources) {
+  const trackWorks = sources.includes('track') ? stored.filter(work => sourceOf(work) === 'track') : [];
   // listForRead drops sourceKey, so untilTrackHidden breaks a tie by input order; id order keeps it stable.
-  const sheetWorks = stored.filter(work => sourceOf(work) === 'sheet')
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const sheetWorks = stored.filter(work => sourceOf(work) === 'sheet').sort((a, b) => compareText(a.id, b.id));
   const boundary = overrideBoundaryOf(trackWorks);
   const replaced = untilTrackHidden(sheetWorks, trackWorks, marker);
   const shownSheetIds = new Set(sheetWorks
@@ -40,12 +46,12 @@ function withOverride(stored, marker) {
     : !hiddenByOverride(work, marker, boundary, shownSheetIds)));
 }
 
-/** `deriveInputs` whatever WORKS_READ says, keeping only works whose source is in `sources`. */
+/** The works of `sources` in public shape; `deriveInputs` passes WORKS_READ_SOURCES, `loadWorks(row)` reads Track only. */
 async function loadWorks(row, { sources = ['track'] } = {}) {
   const loaded = await phaseCatalog.load();
   const catalog = Object.values(loaded).some(entries => entries.length) ? loaded : undefined;
   let stored = await works.listForRead(row.id);
-  if (sources.includes('sheet')) stored = withOverride(stored, await markerOf(row.id));
+  if (sources.includes('sheet')) stored = withOverride(stored, await markerOf(row.id), sources);
   const kept = stored.filter(work => sources.includes(sourceOf(work)));
   return { worksForDerive: publicWorksOf(kept, row, { catalog }), catalog };
 }

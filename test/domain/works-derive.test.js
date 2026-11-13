@@ -9,6 +9,7 @@ const config = require('../../src/config');
 const cosmos = require('../../src/db/cosmos-nosql');
 const phaseCatalog = require('../../src/domain/phase-catalog');
 const works = require('../../src/repositories/works');
+const { logger } = require('../../src/utils/logger');
 const { TRACK_ACT_YEAR } = require('../../src/merge/assessment-work');
 const { publicWorksOf } = require('../../src/seed/track-mappers');
 const { deriveInputs, loadWorks } = require('../../src/domain/works-derive');
@@ -113,11 +114,27 @@ test('loadWorks', async (t) => {
   });
 
   await t.test('publicWorksOf over listForRead equals publicWorksOf over listByProject on a Track fixture', async (t) => {
-    store(t, [trackWork(2, { sourceKey: 'track:2', provenance: { from: 'nightly' },
-      phases: [{ trackName: 'Early Engagement', phaseCodeId: 7, sourceRef: { phase: 1 },
-        milestones: [{ name: 'Start', sourceRef: { milestone: 1 } }] }] })], null);
+    const milestone = { name: 'Start', position: 1, eventType: 'Milestone', actualDate: '2021-02-01', anticipatedDate: '2021-01-25',
+      outcome: 'Done', numberOfDays: 0, trackEventId: 31, sourceRef: { milestone: 1 } };
+    const phase = { trackName: 'Early Engagement', phaseCodeId: 7, trackPhaseId: 21, startDate: '2021-02-01', endDate: '2021-05-01',
+      numberOfDays: 89, legislated: true, sortOrder: 1, isCompleted: true, isSuspended: false, suspendedDate: null,
+      sourceRef: { phase: 1 }, milestones: [milestone] };
+    store(t, [trackWork(2, { workTypeId: 6, workType: 'Assessment', eaAct: 'EA Act (2018)', eaActId: 3, startDate: '2021-02-01',
+      isActive: true, workState: 'COMPLETED', decisionDate: '2023-06-01', anticipatedDecisionDate: '2023-05-15', outcome: 'Issued',
+      sourceKey: 'track:2', provenance: { from: 'nightly' }, phases: [phase] })], null);
     const row = { id: 'p1', sources: { track: { name: 'Pine Mine' } } };
     assert.deepStrictEqual((await loadWorks(row)).worksForDerive, publicWorksOf(await works.listByProject('p1'), row));
+  });
+
+  await t.test('with track not listed, a matching Track amendment does not drop an untilTrack sheet work', async (t) => {
+    const docs = [sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })];
+    assert.deepStrictEqual(await shown(t, docs, markerDoc({ untilTrack: [sheetId(1)] }), ['sheet']), ['sheet-1']);
+  });
+
+  await t.test('a marker the validator refuses is logged by error path, never by value', async (t) => {
+    const warn = t.mock.method(logger, 'warn', () => {});
+    await shown(t, [], markerDoc({ boundaryAtLoad: '2025-06-01' }));
+    assert.deepStrictEqual(warn.mock.calls.map(call => call.arguments[1]), [{ projectId: 'p1', paths: ['boundaryAtLoad'] }]);
   });
 
   await t.test('with sheet not listed, the marker is not read', async (t) => {
