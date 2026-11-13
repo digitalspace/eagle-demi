@@ -141,7 +141,7 @@ function repeatedIdIndex(entries, from) {
 function nextEntries(field, stored, sent, now) {
   if (!Array.isArray(sent)) return { error: `${field}: must be an array` };
   if (sent.length > MAX_ENTRIES) return { error: `${field}[${MAX_ENTRIES}]: at most ${MAX_ENTRIES} entries` };
-  // Each new id costs a lookup across every project, and many at once would probe which values exist.
+  // All appended ids go to one query across every project; the cap limits probing which values exist.
   if (field === 'externalIds' && sent.length - stored.length > MAX_NEW_EXTERNAL_IDS) {
     return { error: `externalIds: at most ${MAX_NEW_EXTERNAL_IDS} new external ids per request` };
   }

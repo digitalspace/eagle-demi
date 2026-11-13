@@ -390,6 +390,8 @@ test('PUT /projects/:id staff history', async (t) => {
 
     const many = await put(t, sent(...Array.from({ length: 21 }, (_, n) => String(500 + n))));
     assert.deepStrictEqual([many.res.statusCode, many.res.body.error], [400, 'externalIds: at most 20 new external ids per request']);
+    const twenty = await put(t, sent(...Array.from({ length: 20 }, (_, n) => String(500 + n))));
+    assert.strictEqual(twenty.res.statusCode, 200, 'the stored list plus exactly 20 new ids');
 
     const { res, saved } = await put(t, sent('414'));
     assert.strictEqual(res.statusCode, 200);

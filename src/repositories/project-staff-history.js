@@ -51,11 +51,11 @@ function listOf(row, field) {
   return row[field];
 }
 
-/** JSON with object keys sorted at every depth. */
+/** JSON with object keys sorted at every depth; an `undefined` key is dropped, as `JSON.stringify` does. */
 const stableJson = (value) => {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (!isObject(value)) return JSON.stringify(value ?? null);
-  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  return `{${Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
 };
 
 /** SHA-256 of an entry, so a backup's hash matches the stored entry whatever the key order. */
@@ -76,10 +76,8 @@ async function guarded(id, attempt) {
   });
 }
 
-/**
- * The project a holder row stands for. Only a twin that folded counts for its target: linking a row to a twin
- * by `eagleId` and unlinking it again must not let that row take the twin's ids.
- */
+// Only a folded twin counts for its target, so a link-and-unlink by `eagleId` cannot take a twin's ids.
+// A relinked twin without `foldedInto` counts as a second holder beside its Track row: that fails closed.
 function projectOf(row) {
   const twin = typeof row.eagleId === 'string' && String(row.id) === eagleOnlyProjectId(row.eagleId);
   return String(twin && row.foldedInto !== undefined && row.foldedInto !== null ? row.foldedInto : row.id);
@@ -90,7 +88,7 @@ async function holdersOf(pairs) {
   const checked = pairs.map(checkedPair);
   const match = checked.map((_, n) => `(x.system = @s${n} AND StringEquals(x.value, @v${n}, true))`).join(' OR ');
   const rows = await fetchAll(CONTAINER, {
-    query: `SELECT c.id, c.eagleId, c.foldedInto, ARRAY(SELECT VALUE x FROM x IN c.externalIds WHERE ${match}) AS held ` +
+    query: `SELECT c.id, c.eagleId, c.foldedInto, ARRAY(SELECT x.system, x.value FROM x IN c.externalIds WHERE ${match}) AS held ` +
       `FROM c WHERE EXISTS(SELECT VALUE x FROM x IN c.externalIds WHERE ${match})`,
     parameters: checked.flatMap(({ system, value }, n) => [{ name: `@s${n}`, value: system }, { name: `@v${n}`, value }])
   });
@@ -102,9 +100,10 @@ async function externalIdHolders(system, value) {
   return [...new Set((await holdersOf([{ system, value }])).map(holder => holder.project))];
 }
 
-/** Index in `pairs` of the first one a project other than `row` holds, or -1; one query for all of them. */
+/** Index in `pairs` of the first one a project other than `row`'s holds, or -1; one query for all of them. */
 async function heldElsewhereIndex(row, pairs) {
-  const others = (await holdersOf(pairs)).filter(holder => holder.project !== String(row.id));
+  const own = projectOf(row);
+  const others = (await holdersOf(pairs)).filter(holder => holder.project !== own);
   return pairs.findIndex(pair => others.some(holder => holder.held.some(entry => holds(entry, pair))));
 }
 

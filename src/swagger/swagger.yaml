@@ -1366,7 +1366,7 @@ paths:
             names the unknown ids. Also `externalIds`, `staffAssignments`, `capitalInvestments`
             or `staffNotes` from a caller without `sysadmin`, `staff` or `demi-admin` (a service
             key is refused), or a staff list that breaks the rules on `ProjectInput`: the error
-            names the field and the entry index, never a value. That includes an appended external
+            names the field, and the entry index where there is one, never a value. That includes an appended external
             id already in the list, compared without case, and more than 20 new external ids.
         '401':
           description: Unauthorized.

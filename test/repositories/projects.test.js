@@ -255,7 +255,6 @@ test('project staff history writes', async (t) => {
     const add = (id, value) => history.addExternalId(id, { system: 'orcs', value, source: 'sheet' });
 
     assert.strictEqual((await add('207', '11111-01')).status, 'set', 'the row the twin folded into');
-    assert.strictEqual((await add('208', '11111-01')).status, 'conflict', 'a folded twin\'s id counts for its target');
     assert.strictEqual((await add('209', '22222-02')).status, 'conflict', 'a row linked to an unfolded twin by eagleId');
     assert.strictEqual((await add('200', '33333-03')).status, 'conflict', 'foldedInto counts only on a twin');
   });

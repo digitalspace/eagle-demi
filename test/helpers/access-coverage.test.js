@@ -36,7 +36,8 @@ const UNGATED = {
   'project-staff-history.js':
     'Write side only: the project PUT calls it to check an appended external id against every ' +
     'other project, sealed ones included. It answers that PUT with one fixed refusal, never a ' +
-    'project id or value, so there is no caller tier to filter for.',
+    'project id or value, so there is no caller tier to filter for. externalIdHolders has no route ' +
+    'caller; a route that calls it must filter its answer for that caller.',
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.',
