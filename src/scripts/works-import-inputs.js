@@ -12,7 +12,7 @@ const { devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCa
 
 const ENV = 'test';
 const TEST_DATABASE = 'demi';
-const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, key: 64 * 1024 };
+const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, backup: 64 * 1024 * 1024, key: 64 * 1024 };
 const INPUTS = ['extract', 'expect-sha256', 'crosswalk', 'expect-crosswalk-sha256', 'expect-manual-sha256', 'devbox-key',
   'expect-devbox-fingerprint', 'operator-key', 'expect-operator-fingerprint', 'out-dir'];
 const LIVE = ['operator', 'run-ref', 'signoff-ref', 'expect-plan-sha256'];
@@ -115,4 +115,4 @@ async function heldElsewhere(demi, plan) {
   return held;
 }
 
-module.exports = { HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere };
+module.exports = { ENV, MAX_BYTES, HELP, optionsOf, testEnvironment, checkKeyFile, openInputs, readStored, heldElsewhere };

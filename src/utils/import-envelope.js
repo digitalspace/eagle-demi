@@ -263,6 +263,7 @@ module.exports = {
   sealEnvelope,
   openEnvelope,
   openExtract,
+  statementOf,
   sign,
   verify,
   checkOutDir,
