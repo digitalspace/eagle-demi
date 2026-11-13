@@ -211,24 +211,23 @@ function readAmount(value) {
   return Number.isSafeInteger(rounded) ? rounded : undefined;
 }
 
-// `status` is `empty` (null, blank, 0), `unreadable`, `unchanged`, `full` or `append`; `append` carries
-// the new entry and the `close` of that source's open entry, to apply in one patch. `empty` carries the close alone.
+// `empty` (cleared, nothing open), `unreadable`, `unchanged`, `full` or `append` (new entry plus close of the open one).
+// A clear appends a closed 0, so a later return of the old value differs from the latest entry and reopens.
 function observeInvestment(entries, source, value, runDate) {
   const list = Array.isArray(entries) ? entries : [];
-  const own = list.flatMap((entry, index) => (isObject(entry) && entry.source === source ? [{ entry, index }] : []));
-  const open = own.filter(({ entry }) => isOpen(entry)).at(-1);
-  const closing = open && { close: { index: open.index, id: open.entry.id, effectiveTo: runDate } };
   const blank = value === null || value === undefined || (typeof value === 'string' && !value.trim());
   const amountCad = blank ? 0 : readAmount(value);
   if (amountCad === undefined) return { status: 'unreadable' };
-  if (amountCad === 0) return { status: 'empty', ...closing };
+  const own = list.flatMap((entry, index) => (isObject(entry) && entry.source === source ? [{ entry, index }] : []));
   if (own.length && own.at(-1).entry.amountCad === amountCad) return { status: 'unchanged' };
+  const open = own.filter(({ entry }) => isOpen(entry)).at(-1);
+  if (amountCad === 0 && !open) return { status: 'empty' };
   if (list.length >= MAX_ENTRIES) return { status: 'full' };
   return {
     status: 'append',
-    ...closing,
+    ...(open && { close: { index: open.index, id: open.entry.id, effectiveTo: runDate } }),
     append: {
-      id: randomUUID(), amountCad, effectiveFrom: own.length ? runDate : null, effectiveTo: null,
+      id: randomUUID(), amountCad, effectiveFrom: own.length ? runDate : null, effectiveTo: amountCad === 0 ? runDate : null,
       observedAt: runDate, workId: null, source, sheetKey: null, recordedAt: new Date().toISOString()
     }
   };

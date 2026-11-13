@@ -9,7 +9,7 @@ const { clientToken, fetchTrackProjects } = require('../seed/sources');
 const { HEAL_CAP, rowWriter, emptySummary, owesLink } = require('./sync-track-projects');
 const config = require('../config');
 const linksRepository = require('../repositories/links');
-const { appendHistory, closeHistory } = require('../repositories/project-staff-history');
+const { appendHistory } = require('../repositories/project-staff-history');
 const { logger } = require('../utils/logger');
 
 /** Write results that leave a row under the Track id, so its investment entries are this run's to keep. */
@@ -37,37 +37,33 @@ function indexStored(items) {
   };
 }
 
-/** The write `observeInvestment` asked for, or its status when it asked none; a dry run reports the live outcome. */
-async function writeSeen(id, seen, live, stillDue) {
-  const field = 'capitalInvestments';
-  if (seen.status === 'append') {
-    return live ? (await appendHistory(id, field, seen.append, seen.close, stillDue)).status : 'appended';
-  }
-  if (seen.status === 'empty' && seen.close) {
-    return live ? (await closeHistory(id, field, seen.close.id, seen.close.effectiveTo)).status : 'closed';
-  }
-  return seen.status;
-}
-
 /**
  * Appends a `track` entry for Track's `capital_investment` and an `eagle` one for the row's `intake.investment`
- * when either moved, closing that source's open entry in the same patch; a cleared value only closes it.
+ * when either moved, closing that source's open entry in the same patch; a clear appends a closed 0.
  */
 async function observeInvestments(apiProject, row, { live, runDate, summary }) {
   const id = String(apiProject.id);
   const counts = summary.investment;
+  // A Track row without the key is a feed change, not a clear: unreadable leaves the entries as they are.
+  const track = Object.hasOwn(apiProject, 'capital_investment') ? apiProject.capital_investment : Number.NaN;
   let full = false;
-  for (const [source, value] of [['track', apiProject.capital_investment], ['eagle', row.intake?.investment]]) {
+  for (const [source, value] of [['track', track], ['eagle', row.intake?.investment]]) {
     const seen = observeInvestment(row.capitalInvestments, source, value, runDate);
     if (seen.status === 'unreadable') counts.unreadable++;
-    // A run that overlaps this one may have appended the same move since the run-start read.
-    const stillDue = (list) => observeInvestment(list, source, value, runDate).status === 'append';
-    const status = await writeSeen(id, seen, live, stillDue);
+    // A run that overlaps this one may have written the same move, or closed its target, since the run-start read.
+    const stillDue = (list) => {
+      const fresh = observeInvestment(list, source, value, runDate);
+      return fresh.status === 'append' && fresh.close?.id === seen.close?.id;
+    };
+    let status = seen.status;
+    if (status === 'append') {
+      status = live ? (await appendHistory(id, 'capitalInvestments', seen.append, seen.close, stillDue)).status : 'appended';
+    }
     if (status === 'full') full = true;
-    if (status === 'appended') counts.appended++;
-    if (status === 'closed' || (status === 'appended' && seen.close)) counts.closed++;
+    if (status === 'appended' && seen.append.amountCad !== 0) counts.appended++;
+    if (status === 'appended' && seen.close) counts.closed++;
     // The entries stay as they were, so the next run observes the same move again.
-    if (['changed', 'absent', 'conflict', 'missing'].includes(status)) {
+    if (['changed', 'conflict', 'missing'].includes(status)) {
       summary.failures++;
       logger.error(`[investment] project ${id} ${source} entry not written`, { status });
     }

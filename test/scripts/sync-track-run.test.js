@@ -18,6 +18,7 @@ const { logger } = require('../../src/utils/logger');
 // NOW is midnight UTC, so the run's Pacific day is the day before.
 const RUN_DATE = '2026-09-01';
 const INVESTED = { ...API_PROJECT, capital_investment: 12000000 };
+const CLEARED = { ...API_PROJECT, capital_investment: null };
 const amount = (id, source, amountCad) => ({ id, amountCad, effectiveFrom: null, effectiveTo: null, source });
 
 /** {rows} in the projects fake, with the history repository's reads and patches routed to it. */
@@ -73,26 +74,46 @@ test('a project with both sources gets a track and an eagle entry', async (t) =>
   assert.deepStrictEqual([summary.investment.appended, summary.failures], [2, 0]);
 });
 
-test('a cleared Track value closes its open entry so the Eagle figure is current; an unreadable one leaves it open', async (t) => {
+test('a cleared Track value closes its open entry with a closed 0 so the Eagle figure is current', async (t) => {
   const row = storedProject({ capitalInvestments: [amount('t1', 'track', 12000000)], intake: { investment: 5000 } });
   const cleared = store(t, [row]);
 
-  const summary = await nightly(cleared, [{ ...API_PROJECT, capital_investment: null }]);
+  const summary = await nightly(cleared, [CLEARED]);
 
+  const [closed, zero] = entriesOf(cleared);
   const current = currentInvestment(entriesOf(cleared));
-  assert.strictEqual(entriesOf(cleared)[0].effectiveTo, RUN_DATE);
+  assert.strictEqual(closed.effectiveTo, RUN_DATE);
+  assert.deepStrictEqual([zero.source, zero.amountCad, zero.effectiveFrom, zero.effectiveTo], ['track', 0, RUN_DATE, RUN_DATE]);
   assert.deepStrictEqual([current.source, current.amountCad], ['eagle', 5000]);
   assert.deepStrictEqual([summary.investment.closed, summary.investment.appended], [1, 1]);
 
-  const unreadable = store(t, [row]);
-  await nightly(unreadable, [{ ...API_PROJECT, capital_investment: 'TBD' }]);
-  assert.strictEqual(entriesOf(unreadable)[0].effectiveTo, null);
+  const dry = store(t, [row]);
+  const dryRun = await nightly(dry, [CLEARED], { live: false });
+  assert.deepStrictEqual([dryRun.investment.closed, entriesOf(dry).length], [1, 1]);
+});
+
+test('a Track row without capital_investment is unreadable and leaves the open entry', async (t) => {
+  const projects = store(t, [storedProject({ capitalInvestments: [amount('t1', 'track', 12000000)] })]);
+
+  const summary = await nightly(projects, [API_PROJECT]);
+
+  assert.deepStrictEqual(entriesOf(projects), [amount('t1', 'track', 12000000)]);
+  assert.strictEqual(summary.investment.unreadable, 1);
+});
+
+test('Track A, cleared, then A again makes A current', async (t) => {
+  const projects = store(t, [storedProject()]);
+
+  for (const row of [INVESTED, CLEARED, INVESTED]) await nightly(projects, [row]);
+
+  const current = currentInvestment(entriesOf(projects));
+  assert.deepStrictEqual([current.source, current.amountCad], ['track', 12000000]);
 });
 
 test("Eagle intake.investment '$85,000,000' becomes an eagle entry of 85000000", async (t) => {
   const projects = store(t, [storedProject({ intake: { investment: '$85,000,000' } })]);
 
-  await nightly(projects, [API_PROJECT]);
+  await nightly(projects, [CLEARED]);
 
   assert.deepStrictEqual(entriesOf(projects).map(e => [e.source, e.amountCad]), [['eagle', 85000000]]);
 });
@@ -100,7 +121,7 @@ test("Eagle intake.investment '$85,000,000' becomes an eagle entry of 85000000",
 test("Eagle intake.investment 'TBD' writes nothing and counts unreadable=1", async (t) => {
   const projects = store(t, [storedProject({ intake: { investment: 'TBD' } })]);
 
-  const summary = await nightly(projects, [API_PROJECT]);
+  const summary = await nightly(projects, [CLEARED]);
 
   assert.strictEqual(entriesOf(projects), undefined);
   assert.strictEqual(summary.investment.unreadable, 1);
@@ -145,22 +166,32 @@ test('an overlapping run that already appended the move leaves one entry', async
   assert.deepStrictEqual([summary.investment.appended, summary.failures], [0, 0]);
 });
 
-test('a close target closed since the run-start read fails the append and keeps the entries', async (t) => {
+test('a close target closed since the run-start read drops the append and keeps the entries', async (t) => {
   const closed = { ...amount('t1', 'track', 10), effectiveTo: '2026-08-01' };
   const projects = store(t, [storedProject({ capitalInvestments: [amount('t1', 'track', 10)] })], (save, find) =>
     save({ ...find('207'), capitalInvestments: [closed] }));
-  t.mock.method(logger, 'error', () => {});
 
   const summary = await nightly(projects);
 
   assert.deepStrictEqual(entriesOf(projects), [closed]);
+  assert.deepStrictEqual([summary.failures, summary.investment.appended], [0, 0]);
+});
+
+test("a close dated before its target's effectiveFrom fails and keeps the entries", async (t) => {
+  const later = { ...amount('t1', 'track', 10), effectiveFrom: '2026-09-05' };
+  const projects = store(t, [storedProject({ capitalInvestments: [later] })]);
+  t.mock.method(logger, 'error', () => {});
+
+  const summary = await nightly(projects);
+
+  assert.deepStrictEqual(entriesOf(projects), [later]);
   assert.deepStrictEqual([summary.failures, summary.investment.appended], [1, 0]);
 });
 
 test("a relinked row's Eagle intake becomes an eagle entry", async (t) => {
   const projects = store(t, [eagleOnlyProject({ intake: { investment: 5000 } })]);
 
-  const summary = await nightly(projects, [API_PROJECT]);
+  const summary = await nightly(projects, [CLEARED]);
 
   assert.strictEqual(summary.relinked, 1, 'the premise');
   assert.deepStrictEqual(entriesOf(projects).map(e => [e.source, e.amountCad]), [['eagle', 5000]]);
@@ -178,7 +209,7 @@ test('a dry run counts the entries a live run would append and writes none', asy
 test("a dry run counts a relinked row's entries from the run-start twin", async (t) => {
   const projects = store(t, [eagleOnlyProject({ intake: { investment: 5000 } })]);
 
-  const summary = await nightly(projects, [API_PROJECT], { live: false });
+  const summary = await nightly(projects, [CLEARED], { live: false });
 
   assert.deepStrictEqual([summary.relinked, summary.investment.appended], [1, 1]);
 });

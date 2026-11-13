@@ -80,7 +80,7 @@
   "test/scripts/demi-devbox.test.js": {"max-lines":[1383]},
   "test/scripts/parity-eagle.test.js": {"max-lines":[1458]},
   "test/scripts/reconcile-eagle.test.js": {"max-lines":[1652]},
-  "test/scripts/sync-track-projects.test.js": {"max-lines":[1200]},
+  "test/scripts/sync-track-projects.test.js": {"max-lines":[1198]},
   "test/search/ai-search.test.js": {"max-lines":[3035]},
   "test/search/eagle-query.test.js": {"max-lines":[1095]},
   "test/seed/seed-nosql.test.js": {"max-lines":[2597]},
