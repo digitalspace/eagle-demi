@@ -33,6 +33,9 @@ const UNGATED = {
   'wildfires.js':
     'No read path at all. GET /wildfires was removed for having no consumer — the frontend reads ' +
     'the DataBC WFS directly — leaving only the admin sync.',
+  'project-staff-history.js':
+    'Write path for the loader, the nightly and the project PUT. The external-id uniqueness check ' +
+    'must see every row, sealed ones included, and it returns project ids only to server code.',
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.',

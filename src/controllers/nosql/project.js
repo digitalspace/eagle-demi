@@ -52,6 +52,7 @@ const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
 const { unwritableStaffFields, staffFieldChanges } = require('../../domain/project-staff-fields');
+const { refuseHeldExternalIds } = require('../../repositories/project-staff-history');
 const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
@@ -660,7 +661,7 @@ exports.updateProject = async (req, res) => {
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
         // Past the body check, a refusal here means the history moved under this request.
-        const staff = staffFieldChanges(current, changes, now, { id: req.params.id, attempt });
+        const staff = await refuseHeldExternalIds(current, staffFieldChanges(current, changes, now, { id: req.params.id, attempt }));
         if (staff.error) return { status: 'refused', error: staff.error };
         const eagleEdit = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key));
         // A deleted row's staff read is no level to send: restore decides whether DEMI owns it.
@@ -704,9 +705,7 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     if (written.status === 'refused') return res.status(409).json({ error: written.error });
-    if (written.status === 'repoint') {
-      return res.status(409).json({ error: 'eagleId cannot be changed through PUT on this row' });
-    }
+    if (written.status === 'repoint') return res.status(409).json({ error: 'eagleId cannot be changed through PUT on this row' });
     if (written.status === 'pins') return pinRefusal(res, written.refusal);
     const { saved, replaced, pinFields, edited } = written;
     noteTakeover(replaced, saved, 'PUT /projects/:id');

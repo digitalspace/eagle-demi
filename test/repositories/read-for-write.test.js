@@ -226,6 +226,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/lists.js',
     'repositories/notifications.js',
     'repositories/projects.js',
+    // The loader's and the nightly's staff-history writes, guarded on the row they read.
+    'repositories/project-staff-history.js',
     'repositories/updates.js',
     'repositories/users.js',
     // The archive restore: it must see a sealed row's pdfTitle record to refuse or update it.

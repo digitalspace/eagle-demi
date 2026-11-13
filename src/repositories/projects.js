@@ -412,16 +412,15 @@ async function patchVis(id, vis, { inputsFor } = {}) {
   }
 }
 
-const DERIVED_FIELDS = ['legislationTransitions', 'assessments', 'phaseIds', 'activeWork'];
+const DERIVED_FIELDS = ['legislationTransitions', 'assessments', 'phaseIds', 'activeWork', 'works'];
 
 // In mergeTrackProject's order: transitions first, since assessments read their dates. JSON form, as Cosmos stores it.
 function derivedOf(row, { worksForDerive, catalog } = {}) {
   const works = worksForDerive ?? row.works;
-  const transitions = Array.isArray(works)
-    ? legislationTransitions(row.legislationYearList, works) : row.legislationTransitions;
-  const next = { ...row, legislationTransitions: transitions };
-  return JSON.parse(JSON.stringify({ legislationTransitions: transitions,
-    ...deriveAssessments(next, { previous: row.assessments, worksForDerive, catalog }) }));
+  const transitions = Array.isArray(works) ? legislationTransitions(row.legislationYearList, works) : row.legislationTransitions;
+  const composed = Array.isArray(worksForDerive) && worksForDerive.length > 0 && { works: worksForDerive };
+  return JSON.parse(JSON.stringify({ legislationTransitions: transitions, ...composed,
+    ...deriveAssessments({ ...row, legislationTransitions: transitions }, { previous: row.assessments, worksForDerive, catalog }) }));
 }
 
 /**
@@ -437,7 +436,7 @@ async function patchDerived(id, { inputsFor } = {}) {
     attempt: async (row) => {
       if (!row) return { status: 'missing' };
       const derived = derivedOf(row, inputsFor ? await inputsFor(row) : {});
-      const ops = DERIVED_FIELDS.filter(field => !isDeepStrictEqual(derived[field], row[field]))
+      const ops = DERIVED_FIELDS.filter(field => Object.hasOwn(derived, field) && !isDeepStrictEqual(derived[field], row[field]))
         .map(field => ({ op: 'set', path: `/${field}`, value: derived[field] }));
       if (!ops.length) return { status: 'unchanged' };
       await cosmos.patch(CONTAINER, key, key, ops, undefined, row._etag);

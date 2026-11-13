@@ -14,6 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
+const cosmos = require('../../../src/db/cosmos-nosql');
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
 const { makeRes } = require('../../../src/http/router');
@@ -361,12 +362,25 @@ test('PUT /projects/:id staff history', async (t) => {
     }
   });
 
-  await t.test('PUT refuses a new external id while no cross-project check exists', async (t) => {
-    const { res, saved } = await put(t, {
-      externalIds: [...STAFF_HISTORY.externalIds, { system: 'eao-register', value: '413' }]
+  await t.test('PUT refuses an external id another project holds', async (t) => {
+    const held = { 413: '999' };
+    t.mock.method(cosmos, 'query', async (_container, spec) => {
+      const value = spec.parameters.find(p => p.name === '@value').value;
+      return { items: held[value] ? [{ id: held[value] }] : [] };
     });
-    assert.strictEqual(res.statusCode, 400);
-    assert.strictEqual(saved, undefined);
+    const sent = (...added) => ({ externalIds: [...STAFF_HISTORY.externalIds, ...added] });
+
+    const refused = await put(t, sent({ system: 'eao-register', value: '413' }));
+    assert.strictEqual(refused.res.statusCode, 409);
+    assert.deepStrictEqual(refused.res.body, { error: 'externalIds[1]: another project holds this id' }, 'the holder is never named');
+    assert.strictEqual(refused.saved, undefined);
+
+    const repeated = await put(t, sent({ system: 'orcs', value: '12345-20/AB' }, { system: 'orcs', value: '12345-20/ab' }));
+    assert.deepStrictEqual([repeated.res.statusCode, repeated.res.body.error], [400, 'externalIds[2]: this project already holds that id']);
+
+    const { res, saved } = await put(t, sent({ system: 'eao-register', value: '414' }));
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(saved.externalIds.map(entry => [entry.value, entry.source]), [['412', 'sheet'], ['414', 'demi']]);
   });
 
   await t.test('PUT refuses a 201st entry', async (t) => {
