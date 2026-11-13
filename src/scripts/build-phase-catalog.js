@@ -11,17 +11,11 @@ const { systemAccess } = require('../helpers/access-sql');
 const listsRepository = require('../repositories/lists');
 const { clientToken, fetchJson, trackFeedConfigured } = require('../seed/sources');
 const { logger } = require('../utils/logger');
+const { parseDryRunArgs, runWhenMain } = require('./catalog-cli');
 
 const PHASE_LIST_TYPE = 'projectPhase';
 
-function parseArgs(argv) {
-  const args = { dryRun: false };
-  for (const arg of argv) {
-    if (arg === '--dry-run') args.dryRun = true;
-    else throw new Error(`[phase-catalog] unknown argument: ${arg}`);
-  }
-  return args;
-}
+const parseArgs = (argv) => parseDryRunArgs('phase-catalog', argv);
 
 /** The Act a Track phase code belongs to, from its `ea_act` name such as "EA Act (2018)". */
 function trackActYear(code) {
@@ -183,11 +177,4 @@ async function run({ dryRun = false, deps = {} } = {}) {
 
 module.exports = { parseArgs, resolveCatalog, run };
 
-if (require.main === module) {
-  run(parseArgs(process.argv.slice(2)))
-    .then(summary => process.exit(summary.missing > 0 ? 1 : 0))
-    .catch((err) => {
-      logger.error(`[phase-catalog] ${err.stack || err.message}`);
-      process.exit(1);
-    });
-}
+runWhenMain(module, 'phase-catalog', run);
