@@ -34,6 +34,11 @@ const WORK_1997 = {
   id: 'sheet-00000000-0000-4000-8000-000000000001', projectId: '412', title: 'Example 1997 assessment',
   startDate: '1996-05-01', decisionDate: '1997-08-15', sourceKey: '412:assessment:1'
 };
+// Closed with no decision date: the work ends with its last phase.
+const ENDED_WORK = {
+  id: 'track-9002', projectId: '412', title: 'Example withdrawn assessment', startDate: '2019-01-01', workState: 'COMPLETED',
+  phases: [{ id: 'p1', startDate: '2019-01-01', endDate: '2021-06-30' }]
+};
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 const SERVICE_READ = { realm_access: { roles: ['demi-service-read'] } };
@@ -41,7 +46,7 @@ const IDIR = { identity_provider: 'idir' };
 
 async function call(t, user, { row = ROW, id = ROW.id } = {}) {
   const read = t.mock.method(projects, 'getById', async () => structuredClone(row));
-  t.mock.method(works, 'listForRead', async () => structuredClone([OPEN_WORK, WORK_1997]));
+  t.mock.method(works, 'listForRead', async () => structuredClone([OPEN_WORK, WORK_1997, ENDED_WORK]));
   const res = mockRes();
   await getWorksStaff({ params: { id }, query: {}, user }, res);
   return { res, reads: read.mock.callCount() };
@@ -61,6 +66,13 @@ test('staff GET returns no unknown-start EPD for a 1997 work', async (t) => {
   const { res } = await call(t, STAFF);
   const work = workOf(res.body, WORK_1997.id);
   assert.strictEqual(work.endDate, '1997-08-15');
+  assert.deepStrictEqual(work.contacts, []);
+});
+
+test('a work with no decision date ends at its last phase', async (t) => {
+  const { res } = await call(t, STAFF);
+  const work = workOf(res.body, ENDED_WORK.id);
+  assert.strictEqual(work.endDate, '2021-06-30');
   assert.deepStrictEqual(work.contacts, []);
 });
 

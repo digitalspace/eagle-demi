@@ -8,7 +8,7 @@ const works = require('../../repositories/works');
 const { resolveAccess } = require('../../helpers/access-sql');
 const { levelOf } = require('../../vis/level');
 const { redactForAccess } = require('../../vis/redact');
-const { dayOf, inEffect } = require('../../domain/work-model');
+const { inEffect, workRangeOf } = require('../../domain/work-model');
 const { currentInvestment } = require('../../domain/project-staff-fields');
 const { serverError } = require('../../helpers/response');
 
@@ -40,15 +40,18 @@ exports.getWorksStaff = async (req, res) => {
     // The row's own dials can hold a staff list narrower than the caller's level.
     const row = redactForAccess('projects', project, access);
 
-    const body = (await works.listForRead(project.id)).map(work => ({
-      workId: work.id,
-      title: work.title ?? null,
-      startDate: dayOf(work.startDate),
-      endDate: dayOf(work.decisionDate),
-      contacts: entriesFor(row.staffAssignments, work),
-      investments: entriesFor(row.capitalInvestments, work),
-      notes: entriesFor(row.staffNotes, work)
-    }));
+    const body = (await works.listForRead(project.id)).map(work => {
+      const range = workRangeOf(work);
+      return {
+        workId: work.id,
+        title: work.title ?? null,
+        startDate: range.start,
+        endDate: range.end,
+          contacts: entriesFor(row.staffAssignments, work),
+        investments: entriesFor(row.capitalInvestments, work),
+        notes: entriesFor(row.staffNotes, work)
+      };
+    });
     const current = currentInvestment(row.capitalInvestments);
     return res.json({ projectId: project.id, currentInvestment: current && shown(current), works: body });
   } catch (err) {
