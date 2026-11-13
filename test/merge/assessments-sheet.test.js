@@ -70,6 +70,12 @@ test('1996 and 2002 phase dates', async (t) => {
     assert.deepStrictEqual(reviewPhases(review('2010-02-20', '2009-01-01')).map(phase => phase[3]), [null]);
   });
 
+  await t.test('a demi work on a 2002 block lends no dates', () => {
+    const demi = { ...sheetWork(2002, [sheetPhase('Application review', '2010-02-20', '2011-05-20')]), source: 'demi',
+      milestones: [sheetMilestone('Start (180)', '2010-02-20', { links: { commentPeriodId: null, blockField: 'review180Start' } })] };
+    assert.deepStrictEqual([reviewPhases([demi]), milestonesOf([demi]).map(m => m[2])], [[EAGLE_REVIEW], [null, null]]);
+  });
+
   await t.test('a sheet phase no document dates is a sheet phase, and the first open one is current', () => {
     const row = fx.only2002();
     delete row.currentPhaseName;
@@ -111,7 +117,7 @@ test('1996 and 2002 milestones', async (t) => {
     delete row.decisionDate;
     delete row.legislation_2002.decisionDate;
     const works = [sheetWork(2002, [], { milestones: [sheetMilestone('Decision', '2011-05-18', { code: 'decision' })] })];
-    assert.deepStrictEqual(milestonesOf(works, row).map(([name]) => name), ['180-day review starts', 'Decision']);
+    assert.deepStrictEqual(milestonesOf(works, row).slice(1), [['Decision date', '2011-05-18', 'sheet']]);
   });
 });
 

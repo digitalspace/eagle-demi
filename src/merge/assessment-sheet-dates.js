@@ -4,15 +4,19 @@
 // Pure; assessments.js builds the blocks.
 
 const { EAGLE_DATE_FLOOR } = require('../domain/project-legislation');
-const { TRACK_ACT_YEAR, isTrackWork } = require('./assessment-work');
+const { TRACK_ACT_YEAR } = require('./assessment-work');
 
 const COMMENT_PERIOD = 'Public comment period';
+const DECISION = 'Decision date';
 const BLOCK_MILESTONES = [
-  ['Decision date', 'decisionDate'],
+  [DECISION, 'decisionDate'],
   ['180-day review starts', 'review180Start'],
   ['45-day decision period starts', 'review45Start']
 ];
 const FROM_SHEET = Object.freeze({ dateSource: 'sheet' });
+
+/** Only the sheet's dates win; another non-Track source, such as demi, lends none. */
+const isSheetWork = (work) => Boolean(work) && work.source === 'sheet';
 
 /** A date's time in ms, or null for none: Eagle writes a cleared date as the epoch. */
 function timeOf(value) {
@@ -40,7 +44,7 @@ function sheetSpan(startDate, endDate) {
  */
 function datedPhases(year, documents, phases) {
   const sheet = year < TRACK_ACT_YEAR
-    ? phases.filter(({ work }) => work && !isTrackWork(work)).map(({ entry }) => entry) : [];
+    ? phases.filter(({ work }) => isSheetWork(work)).map(({ entry }) => entry) : [];
   const lent = documents.map((phase) => {
     const known = phase.stage ? sheet.filter(one => one.stage === phase.stage && timeOf(one.startDate) !== null) : [];
     const span = known.length ? sheetSpan(known[0].startDate, known[known.length - 1].endDate) : null;
@@ -75,9 +79,9 @@ function milestonesOf(block, own, sheetMilestones) {
   });
   const decided = isoOf(block.decisionDate) !== null;
   const added = sheetMilestones.filter(m => !used.has(m) && !(decided && m.code === 'decision'))
-    .map(m => ({ name: m.name, span: sheetSpan(m.actualDate, m.endDate) })).filter(({ span }) => span)
+    .map(m => ({ name: m.code === 'decision' ? DECISION : m.name, span: sheetSpan(m.actualDate, m.endDate) })).filter(({ span }) => span)
     .map(({ name, span }) => ({ name, date: span.startDate, endDate: span.endDate, ...FROM_SHEET }));
   return [...eagle, ...periods, ...added].sort((a, b) => timeOf(a.date) - timeOf(b.date));
 }
 
-module.exports = { datedPhases, isoOf, milestonesOf, timeOf };
+module.exports = { datedPhases, isSheetWork, isoOf, milestonesOf, timeOf };

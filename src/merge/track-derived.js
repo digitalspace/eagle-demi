@@ -7,6 +7,7 @@ const { dayOf, transitionDateOf } = require('../domain/work-model');
 const {
   TRACK_ACT_YEAR, byIdsDesc, isAssessmentWork, isTrackWork, pickAssessmentWork, workActYear
 } = require('./assessment-work');
+const { isSheetWork } = require('./assessment-sheet-dates');
 
 const NO_TRANSITION_OUT = Object.freeze({ dateSource: 'none' });
 
@@ -82,7 +83,7 @@ const workIdsOf = (works, year, yearOfTrack) => works
 /** The milestones of the sheet work a 1996 or 2002 block draws its phases from, else none. */
 function sheetMilestonesOf(works, year) {
   const work = year < TRACK_ACT_YEAR ? pickAssessmentWork(works, { year }) : null;
-  return work && !isTrackWork(work) && Array.isArray(work.milestones) ? work.milestones.filter(Boolean) : [];
+  return isSheetWork(work) && Array.isArray(work.milestones) ? work.milestones.filter(Boolean) : [];
 }
 
 /**

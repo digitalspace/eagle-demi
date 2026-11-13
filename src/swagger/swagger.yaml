@@ -405,7 +405,7 @@ paths:
             Each assessment lists its works in `trackWorkIds` (Track work ids) and `workIds` (the
             `workId` of each work in `works[]` under that Act, from any source). A Track work with no
             `workId` in `works[]` is listed as `track-<trackWorkId>`; match it to the work with that
-            `trackWorkId`. A phase `source` is `documents`, `eagle`, `track` or `sheet`. On 1996 and
+            `trackWorkId`. A phase `source` is `documents`, `eagle`, `track`, `sheet` or `demi`. On 1996 and
             2002 assessments the sheet's known dates win: a documents phase or Eagle milestone whose
             dates came from the sheet carries `dateSource: sheet`, as does each sheet milestone
             added to `milestones`.
