@@ -6,7 +6,7 @@
 const crypto = require('crypto');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const batches = require('./works-import-batch');
-const { rederive } = require('./works-rollback-steps');
+const { rederive, requireDeriveEnv } = require('./works-rollback-steps');
 const { writeCounts } = require('./works-import-rederive');
 
 const OWNER = 'sheet';
@@ -76,6 +76,7 @@ async function deriveAndComplete({ demi, now, write }, header, lease, projectIds
 /** Sets `active` on the markers of the projects `o` names, under the import lock; ctx `ownerOf` is works.js's. */
 async function setOverride(o, ctx, active) {
   const { now, write } = ctx;
+  requireDeriveEnv();
   const projectIds = await projectsOf(o);
   const lease = await batches.takeLock(crypto.randomUUID(), now());
   try {

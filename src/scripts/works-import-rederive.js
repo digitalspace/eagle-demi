@@ -5,7 +5,7 @@
 
 const config = require('../config');
 const batches = require('./works-import-batch');
-const { rederive } = require('./works-rollback-steps');
+const { rederive, requireDeriveEnv } = require('./works-rollback-steps');
 
 // Test only: business works stay on test, so there is no prod entry.
 const API_BASE = Object.freeze({ test: 'https://demi-api-fc-test.azurewebsites.net/api' });
@@ -66,6 +66,7 @@ async function rederiveBatch(o, ctx) {
   const { demi, now, write } = ctx;
   const batchId = o.rederive;
   const unflip = o.unflip === true;
+  if (unflip) requireDeriveEnv();
   if (unflip && config.worksReadSources.includes('sheet')) refuse('--unflip needs WORKS_READ_SOURCES without sheet');
   const batch = await batches.readBatch(batchId);
   if (!batch || batch.batchKind !== 'load' || batch.status !== 'complete') refuse('--rederive acts only on a complete load batch');

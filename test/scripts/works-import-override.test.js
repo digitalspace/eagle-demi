@@ -216,6 +216,21 @@ test('rollback-incomplete of a pending load batch still needs its backup', async
   await assert.rejects(rollback(['--rollback-incomplete', 'b2'], demi), /of a load batch needs --backup/);
 });
 
+test('revert, reapply, --unflip and an override undo refuse while WORKS_READ_SOURCES is unset', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  store.set({ kind: KINDS.BATCH, id: 'ov1', batchKind: 'override', status: 'pending', startedAt: new Date(LATER).toISOString() });
+  const sources = process.env.WORKS_READ_SOURCES;
+  delete process.env.WORKS_READ_SOURCES;
+  t.after(() => { process.env.WORKS_READ_SOURCES = sources; });
+  const unset = /WORKS_READ_SOURCES is not set/;
+
+  await assert.rejects(rollback(['--revert-override', '--all'], demi), unset);
+  await assert.rejects(rollback(['--reapply-override', '--all'], demi), unset);
+  await assert.rejects(rollback(['--rederive', 'b1', '--unflip'], demi), unset);
+  await assert.rejects(rollback(['--rollback-incomplete', 'ov1'], demi), unset);
+  assert.equal(demi.markers.get('7001')._etag, '"m"');
+});
+
 test('stdout, stderr and logger output of revert, reapply and rederive contain no sourceKey or number', async (t) => {
   const said = [];
   for (const level of ['error', 'warn', 'info', 'debug']) t.mock.method(logger, level, (...args) => { said.push(JSON.stringify(args)); });

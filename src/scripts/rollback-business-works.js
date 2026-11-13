@@ -11,7 +11,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { deriveInputs, loadWorks } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
-const { stepKey, projectSteps, rederive, loggedOf, openSteps } = require('./works-rollback-steps');
+const { stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv } = require('./works-rollback-steps');
 const { rederiveBatch, timedFetch } = require('./works-import-rederive');
 const { revertOverride, reapplyOverride, rollbackIncompleteOverride } = require('./works-import-override');
 const { logger } = require('../utils/logger');
@@ -329,12 +329,6 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
   }
   const env = testEnvironment();
   return mode.run(o, { demi, openBackup, now, write, fetchFn, env, ownerOf: works.ownerOf });
-}
-
-/** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
-function requireDeriveEnv(env = process.env) {
-  const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
-  if (unset) refuse(`${unset} is not set`);
 }
 
 /** The command line; the backup reader loads only when a mode opens a backup. */

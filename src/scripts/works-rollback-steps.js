@@ -86,6 +86,12 @@ async function rederive(demi, projectIds, lease, now) {
   return { counts, ok: counts.patched + counts.unchanged === projectIds.length };
 }
 
+/** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
+function requireDeriveEnv(env = process.env) {
+  const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
+  if (unset) refuse(`${unset} is not set`);
+}
+
 /** Per step key: how many of its entries are done and whether one is an intent. */
 function loggedOf(log) {
   const logged = new Map();
@@ -105,4 +111,4 @@ function openSteps(log) {
     !log.slice(index + 1).some(later => later.state === 'done' && stepKey(later.action, later.target) === stepKey(entry.action, entry.target)));
 }
 
-module.exports = { stepKey, projectSteps, rederive, loggedOf, openSteps };
+module.exports = { stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv };
