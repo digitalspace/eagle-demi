@@ -23,8 +23,8 @@ const {
 const { SOURCE_FIRST } = require('../../src/ownership/project');
 const { redactForAccess } = require('../../src/vis/redact');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
-const { trackWorks: pulledWorks, workDocs } = require('../helpers/track-works-fixtures');
-const { publicWorksOf, trackWorkToPublic, phaseEventsOf, withoutAdded } = require('../../src/seed/track-mappers');
+const { trackWorks: pulledWorks, storedWorks, workDocs } = require('../helpers/track-works-fixtures');
+const { publicWorksOf, withoutAdded } = require('../../src/seed/track-mappers');
 const { composedRow } = require('../../src/controllers/nosql/project-compose');
 
 const inBC = (lng, lat) =>
@@ -367,11 +367,10 @@ test('Track works', async (t) => {
     assert.deepStrictEqual(merged.works, trackWorks());
   });
 
-  await t.test('project list works equal GET works with a hidden Track work', () => {
+  await t.test('the container\'s subset of the works wins over Track\'s list and equals the GET works', () => {
     const [shown] = pulledWorks();
     const worksForDerive = publicWorksOf(workDocs([shown]), { id: '207' });
-    const stored = mergeTrackProject(TRACK_207, twoActs(),
-      { ...OPTS, works: pulledWorks().map(work => trackWorkToPublic(work, phaseEventsOf(work))), worksForDerive });
+    const stored = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: storedWorks(), worksForDerive });
 
     const got = composedRow(stored, worksForDerive);
 

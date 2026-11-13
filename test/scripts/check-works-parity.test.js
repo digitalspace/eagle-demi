@@ -9,6 +9,7 @@ const config = require('../../src/config');
 const works = require('../../src/repositories/works');
 const { run, trackParity } = require('../../src/scripts/check-works-parity');
 const { logger } = require('../../src/utils/logger');
+const { publicWorksOf } = require('../../src/seed/track-mappers');
 const { trackWorks, storedRow, workDocs, worksContainer } = require('../helpers/track-works-fixtures');
 
 const SHEET_WORK = { id: 'sheet-00000000-0000-4000-8000-000000000001', projectId: '207', source: 'sheet',
@@ -47,6 +48,21 @@ test('check-works-parity', async (t) => {
     assert.strictEqual(code, 1);
     assert.deepStrictEqual(lines, ['[works-parity] storedMismatch id=207',
       '[works-parity] projects=1 failures=0 storedMismatch=1 orphaned=0']);
+  });
+
+  await t.test('with WORKS_READ on, a row storing its sheet works too has storedMismatch=0', async (t) => {
+    const held = { worksRead: config.worksRead, worksReadSources: config.worksReadSources };
+    t.after(() => Object.assign(config, held));
+    Object.assign(config, { worksRead: true, worksReadSources: ['track', 'sheet'] });
+    const docs = [...workDocs(), SHEET_WORK];
+    worksContainer(t, [docs]);
+    t.mock.method(works, 'get', async () => null);
+    const row = { ...storedRow(), works: publicWorksOf(docs, storedRow()) };
+    const lines = logged(t);
+
+    const code = await run({ projects: { listVisible: async () => ({ items: [row] }) }, workProjectIds: async () => [] });
+
+    assert.deepStrictEqual([code, lines], [0, ['[works-parity] projects=1 failures=0 storedMismatch=0 orphaned=0']]);
   });
 
   await t.test('a live work whose project has no row counts as orphaned and does not fail the run', async () => {

@@ -490,12 +490,13 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
 
   // Phases and works are omitted, not emptied, when none came, so an absent feed never blanks a stored list; the
   // public works win, as the GET composes them. Any fetched list rebuilds the transitions: empty means no Track date.
-  const nonEmpty = (list) => Array.isArray(list) && list.length > 0;
-  if (nonEmpty(opts.phases)) merged.phases = opts.phases;
-  const storedWorks = [opts.worksForDerive, opts.works].find(nonEmpty);
+  if (hasValue(opts.phases)) merged.phases = opts.phases;
+  const storedWorks = [opts.worksForDerive, opts.works].find(hasValue);
   if (storedWorks) merged.works = storedWorks;
   const transitionWorks = opts.worksForDerive ?? opts.works;
-  if (Array.isArray(transitionWorks)) merged.legislationTransitions = legislationTransitions(merged.legislationYearList, transitionWorks);
+  if (Array.isArray(transitionWorks)) {
+    merged.legislationTransitions = legislationTransitions(merged.legislationYearList, transitionWorks);
+  }
   nullEagleJunkDates(merged);
   trimLabels(merged);
 
