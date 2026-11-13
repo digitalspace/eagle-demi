@@ -199,17 +199,17 @@ test('project staff history writes', async (t) => {
     source: 'sheet', sheetKey: 'k1', ...extra });
   const projectWrites = (store) => store.writes.filter(w => w.container === 'projects');
 
-  /** The mirror, plus the holder query evaluated over its rows: case-blind on the value, as StringEquals(…, true). */
+  /** The mirror, plus the holder query over its rows: each `@sN`/`@vN` pair, the value case-blind as StringEquals(…, true). */
   const storeWithHolders = (rows) => {
     const store = mirrorStore(t, rows.map(row => ({ container: 'projects', read: ['public'], ...row })));
     const mirrored = cosmos.query;
     t.mock.method(cosmos, 'query', async (container, spec, opts) => {
-      if (!spec.query.includes('StringEquals(x.value, @value, true)')) return mirrored(container, spec, opts);
+      if (!spec.query.includes('StringEquals(x.value, @v0, true)')) return mirrored(container, spec, opts);
       const param = (name) => spec.parameters.find(p => p.name === name).value;
-      const items = store.rows(container)
-        .filter(row => (row.externalIds || []).some(x => x.system === param('@system') &&
-          x.value.toLowerCase() === param('@value').toLowerCase()))
-        .map(({ id, eagleId, foldedInto }) => ({ id, eagleId, foldedInto }));
+      const pairs = spec.parameters.filter(p => p.name.startsWith('@s')).map(p => [p.value, param(`@v${p.name.slice(2)}`)]);
+      const items = store.rows(container).map(({ id, eagleId, foldedInto, externalIds = [] }) => ({ id, eagleId, foldedInto,
+        held: externalIds.filter(x => pairs.some(([system, value]) => x.system === system && x.value.toLowerCase() === value.toLowerCase())) }))
+        .filter(row => row.held.length);
       return { items };
     });
     return store;
@@ -221,7 +221,7 @@ test('project staff history writes', async (t) => {
 
     assert.deepStrictEqual(await history.externalIdHolders(ORCS.system, ORCS.value), []);
     assert.ok(!spec.query.includes(ORCS.value) && !spec.query.includes(`'${ORCS.system}'`), spec.query);
-    assert.deepStrictEqual(spec.parameters, [{ name: '@system', value: 'orcs' }, { name: '@value', value: ORCS.value }]);
+    assert.deepStrictEqual(spec.parameters, [{ name: '@s0', value: 'orcs' }, { name: '@v0', value: ORCS.value }]);
     for (const [system, value] of [['orcs', ' 12345-20/AB'], ['eao-register', 412], ['orcs', '12345 20'], ['ORCS', ORCS.value], ['constructor', '1']]) {
       await assert.rejects(history.externalIdHolders(system, value), TypeError, `${system} ${value}: a padded, untyped or unknown pair could dodge the match`);
     }
@@ -236,28 +236,28 @@ test('project staff history writes', async (t) => {
     assert.deepStrictEqual(projectWrites(store), []);
     assert.deepStrictEqual(await history.addExternalId('208', { system: 'orcs', value: '12345-20/AC', source: 'sheet' }),
       { status: 'set' });
+    assert.deepStrictEqual(await history.removeExternalId('208', { system: 'orcs', value: '12345-20/ac' }), { status: 'removed' },
+      'remove matches the way add does');
   });
 
   await t.test("a folded twin's external id is not a conflict", async () => {
-    const [folded, linked, other] = ['a', 'b', 'c'].map(letter => letter.repeat(24));
+    const [folded, linked] = ['a', 'b'].map(letter => letter.repeat(24));
     const holding = (value) => ({ externalIds: [{ system: 'orcs', value, source: 'sheet' }] });
-    const track = (id) => ({ sources: { track: { track_project_id: Number(id) } } });
     storeWithHolders([
       { id: `eagle-${folded}`, eagleId: folded, foldedInto: '207', ...holding('11111-01') },
       { id: '207' },
       { id: '208' },
       { id: `eagle-${linked}`, eagleId: linked, ...holding('22222-02') },
-      { id: '209', eagleId: linked, ...track(209) },
-      { id: '210', eagleId: other, ...track(210), ...holding('33333-03') },
-      { id: '200', eagleId: other, ...track(200) }
+      { id: '209', eagleId: linked },
+      { id: '210', foldedInto: '200', ...holding('33333-03') },
+      { id: '200' }
     ]);
     const add = (id, value) => history.addExternalId(id, { system: 'orcs', value, source: 'sheet' });
 
-    assert.deepStrictEqual((await add('207', '11111-01')).status, 'set', 'the row a twin folded into');
-    assert.deepStrictEqual((await add('209', '22222-02')).status, 'set', 'the row a twin\'s Eagle id names');
-    assert.deepStrictEqual((await add('208', '22222-02')).status, 'conflict', 'a twin\'s id is still held');
-    assert.deepStrictEqual((await add('200', '33333-03')).status, 'conflict',
-      'an Eagle id set on another row must not hide a non-twin holder');
+    assert.strictEqual((await add('207', '11111-01')).status, 'set', 'the row the twin folded into');
+    assert.strictEqual((await add('208', '11111-01')).status, 'conflict', 'a folded twin\'s id counts for its target');
+    assert.strictEqual((await add('209', '22222-02')).status, 'conflict', 'a row linked to an unfolded twin by eagleId');
+    assert.strictEqual((await add('200', '33333-03')).status, 'conflict', 'foldedInto counts only on a twin');
   });
 
   await t.test('a full list takes no loader append', async () => {
@@ -312,6 +312,9 @@ test('project staff history writes', async (t) => {
     assert.deepStrictEqual(await history.removeHistory('207', 'staffNotes', 'e2', history.historyEntrySha256(e2)),
       { status: 'removed' });
     assert.deepStrictEqual(store.rows('projects')[0].staffNotes.map(e => e.name), ['Pat Edited']);
+    const sha = history.historyEntrySha256;
+    assert.strictEqual(sha({ id: 'e3', ref: { a: 1, b: 2 } }), sha({ ref: { b: 2, a: 1 }, id: 'e3' }), 'key order at any depth');
+    assert.notStrictEqual(sha({ id: 'e3', ref: { a: 1 } }), sha({ id: 'e3', ref: { a: 2 } }), 'a nested edit changes the hash');
   });
 
   await t.test('loader calls never touch an entry with source demi', async () => {

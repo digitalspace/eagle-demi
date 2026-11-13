@@ -9,7 +9,7 @@ const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { eagleOnlyProjectId } = require('../merge/project');
 const { fetchAll } = require('./_sql');
-const { CONTAINER, readByEagleId, readForWrite } = require('./projects');
+const { CONTAINER, readForWrite } = require('./projects');
 
 /** The id systems and the shape of each value; the PUT (src/domain/project-staff-fields.js) holds to them too. */
 const SYSTEMS = Object.freeze({
@@ -51,8 +51,15 @@ function listOf(row, field) {
   return row[field];
 }
 
-/** SHA-256 of an entry with its keys sorted, so a backup's hash matches the stored entry whatever the key order. */
-const historyEntrySha256 = (entry) => createHash('sha256').update(JSON.stringify(entry, Object.keys(entry).sort())).digest('hex');
+/** JSON with object keys sorted at every depth. */
+const stableJson = (value) => {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (!isObject(value)) return JSON.stringify(value ?? null);
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+};
+
+/** SHA-256 of an entry, so a backup's hash matches the stored entry whatever the key order. */
+const historyEntrySha256 = (entry) => createHash('sha256').update(stableJson(entry)).digest('hex');
 
 /** `attempt(row, set)` under the row etag; `set(field, list)` writes one list. `missing` when there is no row. */
 async function guarded(id, attempt) {
@@ -70,40 +77,50 @@ async function guarded(id, attempt) {
 }
 
 /**
- * The project a holder row stands for: a twin's ids belong to the row it folded into, or the row its Eagle id names.
- * Only a twin moves: an Eagle id a PUT can set on any other row must not hide that row's ids.
+ * The project a holder row stands for. Only a twin that folded counts for its target: linking a row to a twin
+ * by `eagleId` and unlinking it again must not let that row take the twin's ids.
  */
-async function projectOf(row) {
-  if (row.foldedInto !== undefined && row.foldedInto !== null) return String(row.foldedInto);
-  if (typeof row.eagleId !== 'string' || String(row.id) !== eagleOnlyProjectId(row.eagleId)) return String(row.id);
-  const named = await readByEagleId(row.eagleId);
-  return String(named ? named.id : row.id);
+function projectOf(row) {
+  const twin = typeof row.eagleId === 'string' && String(row.id) === eagleOnlyProjectId(row.eagleId);
+  return String(twin && row.foldedInto !== undefined && row.foldedInto !== null ? row.foldedInto : row.id);
 }
 
-/** Ids of the projects holding (system, value), the value matched case-blind, from every partition and unfiltered. */
-async function externalIdHolders(system, value) {
-  const pair = checkedPair({ system, value });
+/** `{project, held}` for each row holding any of `pairs`, values matched case-blind, from every partition unfiltered. */
+async function holdersOf(pairs) {
+  const checked = pairs.map(checkedPair);
+  const match = checked.map((_, n) => `(x.system = @s${n} AND StringEquals(x.value, @v${n}, true))`).join(' OR ');
   const rows = await fetchAll(CONTAINER, {
-    query: 'SELECT c.id, c.eagleId, c.foldedInto FROM c WHERE EXISTS(SELECT VALUE x FROM x IN c.externalIds ' +
-      'WHERE x.system = @system AND StringEquals(x.value, @value, true))',
-    parameters: [{ name: '@system', value: pair.system }, { name: '@value', value: pair.value }]
+    query: `SELECT c.id, c.eagleId, c.foldedInto, ARRAY(SELECT VALUE x FROM x IN c.externalIds WHERE ${match}) AS held ` +
+      `FROM c WHERE EXISTS(SELECT VALUE x FROM x IN c.externalIds WHERE ${match})`,
+    parameters: checked.flatMap(({ system, value }, n) => [{ name: `@s${n}`, value: system }, { name: `@v${n}`, value }])
   });
-  const holders = new Set();
-  for (const row of rows) holders.add(await projectOf(row));
-  return [...holders];
+  return rows.map(row => ({ project: projectOf(row), held: Array.isArray(row.held) ? row.held : [] }));
 }
 
-const heldElsewhere = async (row, { system, value }) =>
-  (await externalIdHolders(system, value)).some(holder => holder !== String(row.id));
+/** Ids of the projects holding (system, value), the value matched case-blind. */
+async function externalIdHolders(system, value) {
+  return [...new Set((await holdersOf([{ system, value }])).map(holder => holder.project))];
+}
 
-/** The PUT's `staffFieldChanges` result, or a refusal naming the first appended external id another project holds. */
-async function refuseHeldExternalIds(row, staff) {
+/** Index in `pairs` of the first one a project other than `row` holds, or -1; one query for all of them. */
+async function heldElsewhereIndex(row, pairs) {
+  const others = (await holdersOf(pairs)).filter(holder => holder.project !== String(row.id));
+  return pairs.findIndex(pair => others.some(holder => holder.held.some(entry => holds(entry, pair))));
+}
+
+/**
+ * The PUT's `staffFieldChanges` result, or one fixed refusal when another project holds an appended external id:
+ * the answer names no index, so one request cannot learn which of many values exists. Only the log keeps it.
+ */
+async function refuseHeldExternalIds(row, staff, attempt) {
   if (staff.error || !staff.values || !staff.values.externalIds) return staff;
   const stored = Array.isArray(row.externalIds) ? row.externalIds.length : 0;
-  for (const [index, entry] of staff.values.externalIds.entries()) {
-    if (index >= stored && await heldElsewhere(row, entry)) return { error: `externalIds[${index}]: another project holds this id` };
-  }
-  return staff;
+  const appended = staff.values.externalIds.slice(stored);
+  const held = appended.length ? await heldElsewhereIndex(row, appended) : -1;
+  if (held < 0) return staff;
+  logger.info('[project history] PUT refused: an appended external id is held by another project',
+    { id: String(row.id), attempt, index: stored + held });
+  return { error: 'an appended external id is held by another project' };
 }
 
 /** `set`, `unchanged` (the row holds it), `full`, `conflict` (another project holds it, or every try lost) or `missing`. */
@@ -114,18 +131,18 @@ async function addExternalId(id, { system, value, source }, recordedAt = new Dat
     const list = listOf(row, 'externalIds');
     if (list.some(entry => holds(entry, pair))) return { status: 'unchanged' };
     if (list.length >= MAX_ENTRIES) return { status: 'full' };
-    if (await heldElsewhere(row, pair)) return { status: 'conflict' };
+    if (await heldElsewhereIndex(row, [pair]) >= 0) return { status: 'conflict' };
     await set('externalIds', [...list, { ...pair, source, recordedAt }]);
     return { status: 'set' };
   });
 }
 
-/** `removed`, `absent`, `changed` (staff wrote it), `conflict` or `missing`; the value must match exactly. */
+/** `removed`, `absent`, `changed` (staff wrote it), `conflict` or `missing`; the value matches case-blind, as on add. */
 async function removeExternalId(id, { system, value }) {
   const pair = checkedPair({ system, value });
   return guarded(id, async (row, set) => {
     const list = listOf(row, 'externalIds');
-    const index = list.findIndex(entry => isObject(entry) && entry.system === pair.system && entry.value === pair.value);
+    const index = list.findIndex(entry => holds(entry, pair));
     if (index < 0) return { status: 'absent' };
     if (list[index].source === 'demi') return { status: 'changed' };
     await set('externalIds', list.toSpliced(index, 1));

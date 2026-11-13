@@ -1366,7 +1366,8 @@ paths:
             names the unknown ids. Also `externalIds`, `staffAssignments`, `capitalInvestments`
             or `staffNotes` from a caller without `sysadmin`, `staff` or `demi-admin` (a service
             key is refused), or a staff list that breaks the rules on `ProjectInput`: the error
-            names the field and the entry index, never a value.
+            names the field and the entry index, never a value. That includes an appended external
+            id already in the list, compared without case, and more than 20 new external ids.
         '401':
           description: Unauthorized.
         '403':
@@ -1386,7 +1387,8 @@ paths:
             changes `eagleId` on a project mirrored from Eagle or taken over from it. Or a staff
             list in the body appends to an older copy of the stored list, which has gained entries
             since the caller read it, or another write changed it while this request ran; read the
-            project again. Nothing is written.
+            project again. Or an appended external id is held by another project; the answer is one
+            fixed message that names neither the id nor the project. Nothing is written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
@@ -10253,8 +10255,10 @@ components:
             no string may hold a control, bidi, zero-width or line separator character. The four
             lists together may hold at most 256 KB of JSON. A change to these lists alone does
             not set `dateUpdated` or queue the project for Eagle. External ids are `{system, value}`:
-            `system` is `eao-register` (digits, no leading zero) or `orcs`. A new external id is
-            refused (400) until it can be checked against other projects.
+            `system` is `eao-register` (digits, no leading zero) or `orcs`. An external id belongs to
+            one project: an appended id another project holds is refused (409). An appended id
+            already in the list, compared without case, is refused (400). One request may append
+            at most 20 external ids (400 above that).
           items:
             type: object
             properties:

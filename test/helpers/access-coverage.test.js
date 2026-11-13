@@ -34,8 +34,9 @@ const UNGATED = {
     'No read path at all. GET /wildfires was removed for having no consumer — the frontend reads ' +
     'the DataBC WFS directly — leaving only the admin sync.',
   'project-staff-history.js':
-    'Write path for the loader, the nightly and the project PUT. The external-id uniqueness check ' +
-    'must see every row, sealed ones included, and it returns project ids only to server code.',
+    'Write side only: the project PUT calls it to check an appended external id against every ' +
+    'other project, sealed ones included. It answers that PUT with one fixed refusal, never a ' +
+    'project id or value, so there is no caller tier to filter for.',
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.',

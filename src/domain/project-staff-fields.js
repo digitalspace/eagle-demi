@@ -15,6 +15,7 @@ const ROLES = Object.freeze(['epd', 'lead']);
 
 // Keeps the row well under the Cosmos 2 MB item limit whatever else it holds.
 const MAX_BYTES = 256 * 1024;
+const MAX_NEW_EXTERNAL_IDS = 20;
 
 /** Which source's open entry is the current investment, first wins. */
 const INVESTMENT_ORDER = Object.freeze(['demi', 'track', 'eagle', 'sheet']);
@@ -140,6 +141,10 @@ function repeatedIdIndex(entries, from) {
 function nextEntries(field, stored, sent, now) {
   if (!Array.isArray(sent)) return { error: `${field}: must be an array` };
   if (sent.length > MAX_ENTRIES) return { error: `${field}[${MAX_ENTRIES}]: at most ${MAX_ENTRIES} entries` };
+  // Each new id costs a lookup across every project, and many at once would probe which values exist.
+  if (field === 'externalIds' && sent.length - stored.length > MAX_NEW_EXTERNAL_IDS) {
+    return { error: `externalIds: at most ${MAX_NEW_EXTERNAL_IDS} new external ids per request` };
+  }
   const today = pacificDay(now);
   const entries = [];
   for (const [index, given] of sent.entries()) {
@@ -161,7 +166,7 @@ function nextEntries(field, stored, sent, now) {
   if (sent.length < stored.length) return { error: `${field}[${sent.length}]: a stored entry cannot be removed` };
   // Other projects are checked against the store when the write runs (project-staff-history.js).
   const repeat = field === 'externalIds' ? repeatedIdIndex(entries, stored.length) : -1;
-  if (repeat >= 0) return { error: `externalIds[${repeat}]: this project already holds that id` };
+  if (repeat >= 0) return { error: `externalIds[${repeat}]: the list already holds this id (compared without case)` };
   return { entries };
 }
 

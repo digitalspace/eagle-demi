@@ -226,7 +226,7 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/lists.js',
     'repositories/notifications.js',
     'repositories/projects.js',
-    // The loader's and the nightly's staff-history writes, guarded on the row they read.
+    // Staff-history writes, each guarded on the row it read; no route calls them yet.
     'repositories/project-staff-history.js',
     'repositories/updates.js',
     'repositories/users.js',

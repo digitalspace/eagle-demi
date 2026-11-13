@@ -661,7 +661,7 @@ exports.updateProject = async (req, res) => {
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
         // Past the body check, a refusal here means the history moved under this request.
-        const staff = await refuseHeldExternalIds(current, staffFieldChanges(current, changes, now, { id: req.params.id, attempt }));
+        const staff = await refuseHeldExternalIds(current, staffFieldChanges(current, changes, now, { id: req.params.id, attempt }), attempt);
         if (staff.error) return { status: 'refused', error: staff.error };
         const eagleEdit = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key));
         // A deleted row's staff read is no level to send: restore decides whether DEMI owns it.

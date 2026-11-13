@@ -363,24 +363,50 @@ test('PUT /projects/:id staff history', async (t) => {
   });
 
   await t.test('PUT refuses an external id another project holds', async (t) => {
-    const held = { 413: '999' };
+    const HELD = { error: 'an appended external id is held by another project' };
+    const holder = { queries: 0, heldFrom: 1, unexpected: [] };
+    // Project 999 holds 413 from the `heldFrom`th holder query on; any other query is recorded and thrown.
     t.mock.method(cosmos, 'query', async (_container, spec) => {
-      const value = spec.parameters.find(p => p.name === '@value').value;
-      return { items: held[value] ? [{ id: held[value] }] : [] };
+      if (!spec.query.includes('StringEquals(x.value, @v0, true)')) {
+        holder.unexpected.push(spec.query);
+        throw new Error(`unexpected query: ${spec.query}`);
+      }
+      holder.queries += 1;
+      const held = holder.queries >= holder.heldFrom ? spec.parameters.filter(p => p.value === '413') : [];
+      return { items: held.length ? [{ id: '999', held: [{ system: 'eao-register', value: '413' }] }] : [] };
     });
-    const sent = (...added) => ({ externalIds: [...STAFF_HISTORY.externalIds, ...added] });
+    const sent = (...values) => ({ externalIds: [...STAFF_HISTORY.externalIds, ...values.map(value => ({ system: 'eao-register', value }))] });
 
-    const refused = await put(t, sent({ system: 'eao-register', value: '413' }));
-    assert.strictEqual(refused.res.statusCode, 409);
-    assert.deepStrictEqual(refused.res.body, { error: 'externalIds[1]: another project holds this id' }, 'the holder is never named');
+    const refused = await put(t, sent('415', '413'));
+    assert.deepStrictEqual(holder.unexpected, []);
+    assert.deepStrictEqual([refused.res.statusCode, refused.res.body], [409, HELD], 'one fixed text: no index, no holder');
     assert.strictEqual(refused.saved, undefined);
+    assert.strictEqual(holder.queries, 1, 'every appended id in one query');
 
-    const repeated = await put(t, sent({ system: 'orcs', value: '12345-20/AB' }, { system: 'orcs', value: '12345-20/ab' }));
-    assert.deepStrictEqual([repeated.res.statusCode, repeated.res.body.error], [400, 'externalIds[2]: this project already holds that id']);
+    const repeated = await put(t, { externalIds: [...STAFF_HISTORY.externalIds,
+      { system: 'orcs', value: '12345-20/AB' }, { system: 'orcs', value: '12345-20/ab' }] });
+    assert.deepStrictEqual([repeated.res.statusCode, repeated.res.body.error],
+      [400, 'externalIds[2]: the list already holds this id (compared without case)']);
 
-    const { res, saved } = await put(t, sent({ system: 'eao-register', value: '414' }));
+    const many = await put(t, sent(...Array.from({ length: 21 }, (_, n) => String(500 + n))));
+    assert.deepStrictEqual([many.res.statusCode, many.res.body.error], [400, 'externalIds: at most 20 new external ids per request']);
+
+    const { res, saved } = await put(t, sent('414'));
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(saved.externalIds.map(entry => [entry.value, entry.source]), [['412', 'sheet'], ['414', 'demi']]);
+
+    // A lost race re-runs the check: the holder appears only on the retry, after the first write got a 412.
+    Object.assign(holder, { queries: 0, heldFrom: 2 });
+    t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async (doc) => {
+      if (++upserts === 1) throw Object.assign(new Error('precondition failed'), { code: 412 });
+      return doc;
+    });
+    const raced = mockRes();
+    await projectController.updateProject({ params: { id: ROW.id }, query: {}, user: STAFF, body: sent('413') }, raced);
+    assert.deepStrictEqual(holder.unexpected, []);
+    assert.deepStrictEqual([raced.statusCode, raced.body, upserts, holder.queries], [409, HELD, 1, 2]);
   });
 
   await t.test('PUT refuses a 201st entry', async (t) => {
