@@ -16,7 +16,7 @@ const { deriveAssessments } = require('../../src/merge/assessments');
 const phaseCatalog = require('../../src/domain/phase-catalog');
 const config = require('../../src/config');
 const { readForLevel } = require('../../src/helpers/access-sql');
-const { workDocOf } = require('../../src/seed/track-mappers');
+const { publicWorksOf, workDocOf } = require('../../src/seed/track-mappers');
 const { logger } = require('../../src/utils/logger');
 const {
   NOW, API_PROJECT, storedProject, eagleOnlyProject, fakeLinks, fakeProjects, fakeWorks, useWorks
@@ -208,6 +208,33 @@ test('derived values repaired from the works container', async (t) => {
     const summary = await syncProjects([RENAMED], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
     assert.deepStrictEqual([summary.derivedDrift, summary.updated], [0, 1]);
+  });
+
+  await t.test('the second nightly after the flip writes nothing', async (t) => {
+    const docs = [workDocOf(nestedWork(), { projectId: '207' })];
+    readOn(t, docs);
+    const first = fakeProjects([settled()]);
+    await nightly(first);
+    assert.deepStrictEqual(first.writes[0].works, publicWorksOf(docs, first.writes[0]));
+    const projects = fakeProjects([first.writes[0]]);
+
+    const summary = await nightly(projects);
+
+    assert.deepStrictEqual([projects.writes, summary.derivedDrift], [[], 0]);
+  });
+
+  await t.test('a nightly after WORKS_READ is turned off puts Track\'s works back as drift', async (t) => {
+    readOn(t, [workDocOf(nestedWork(), { projectId: '207' })]);
+    const first = fakeProjects([settled()]);
+    await nightly(first);
+    config.worksRead = false;
+    const projects = fakeProjects([first.writes[0]]);
+    const rowWorks = [{ trackWorkId: 2001, workTypeId: 6, phases: [], milestones: [] }];
+
+    const summary = await nightly(projects, { works: new Map([['207', rowWorks]]) });
+
+    assert.deepStrictEqual([summary.derivedDrift, summary.updated], [1, 0]);
+    assert.deepStrictEqual([projects.writes[0].works, projects.writes[0].updatedAt], [rowWorks, first.writes[0].updatedAt]);
   });
 
   await t.test('a row the works agree with is not written', async (t) => {
