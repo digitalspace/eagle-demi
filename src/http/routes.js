@@ -118,6 +118,8 @@ const routes = [
   { method: 'get', path: '/projects/:id/summary', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getProjectSummary },
   // A read-only credential must not store prose that renders as EAO's account of a project.
   { method: 'put', path: '/projects/:id/summary', guards: [authMiddleware, requireWrite], load: () => projectSummaryController().putProjectSummary },
+  // The controller also refuses any caller above level 2.
+  { method: 'get', path: '/projects/:id/works-staff', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getWorksStaff },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
   { method: 'put', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().updateProject },
   // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
