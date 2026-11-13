@@ -11,8 +11,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { deriveInputs, loadWorks } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
-const { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv } = require('./works-rollback-steps');
-const { rederiveBatch, timedFetch, writeCounts } = require('./works-import-rederive');
+const { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv, writeCounts } = require('./works-rollback-steps');
+const { rederiveBatch, timedFetch } = require('./works-import-rederive');
 const { revertOverride, reapplyOverride, undoOverrideBatch } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
@@ -230,7 +230,8 @@ async function rollbackIncomplete(o, ctx) {
   requireDeriveEnv();
   const batchId = o['rollback-incomplete'];
   // An override batch is undone from the prior values its entries hold, so it takes no backup.
-  const kind = (await batches.readBatch(batchId))?.batchKind === 'override' ? 'override' : 'load';
+  const kind = (await batches.readBatch(batchId))?.batchKind;
+  if (kind !== 'load' && kind !== 'override') refuse('--rollback-incomplete acts only on a pending load or override batch');
   const missingKey = BACKUP_KEYS.find(key => !o[key]);
   if (kind === 'override' && BACKUP_KEYS.some(key => o[key])) refuse('--rollback-incomplete of an override batch takes no backup flags');
   if (kind === 'load' && missingKey) refuse(`--rollback-incomplete of a load batch needs --${missingKey}`);
@@ -294,7 +295,8 @@ const MODES = {
 };
 
 const HELP = [
-  'Usage: rollback-business-works.js <mode>; --rollback and --rollback-incomplete of a load batch need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex>',
+  'Usage: rollback-business-works.js <mode>;',
+  '  --rollback and --rollback-incomplete of a load batch need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>                 undo the latest complete load batch',
   '  --rollback-incomplete <batchId>      undo a pending load or override batch whose lease expired',

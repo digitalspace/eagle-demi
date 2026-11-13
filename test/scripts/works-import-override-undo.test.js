@@ -192,10 +192,42 @@ test('a rollback after an undone override batch expects the undo\'s etags', asyn
   assert.equal(demi.docs.get(OVERRIDE_MARKER_ID), undefined);
 });
 
+test('a rollback after an undone override batch that only dropped a null deactivatedBy expects the batch\'s etag', async (t) => {
+  const { store, demi, argv } = await loaded(t);
+  demi.docs.set(OVERRIDE_MARKER_ID, { ...demi.docs.get(OVERRIDE_MARKER_ID), active: false, deactivatedBy: null });
+  // The process dies after the marker write is logged done, before the batch completes.
+  t.mock.method(batches, 'completeBatch', async () => { throw new Error('killed'); }, { times: 1 });
+  await assert.rejects(rollback(['--revert-override', '--project', PROJECT], demi), /killed/);
+  const [stuck] = batchesOf(store, 'override');
+  assert.equal((await rollback(undo(stuck.id), demi)).code, 0);
+
+  assert.equal((await rollback(argv, demi, { at: LATER + 1000 })).code, 0);
+  assert.equal(demi.docs.get(OVERRIDE_MARKER_ID), undefined);
+});
+
+test('rollback-incomplete refuses an override entry with no prior marker values', async (t) => {
+  const { store, demi, stuck } = await stopped(t);
+  const entry = store.all().find(item => item.kind === KINDS.ENTRY && item.batchId === stuck);
+  const { prior, ...without } = entry;
+  store.set(without);
+
+  await assert.rejects(rollback(undo(stuck), demi), /records no prior marker values; this run wrote nothing/);
+  assert.ok(prior);
+  assert.deepEqual(batchesOf(store, 'rollback'), []);
+});
+
 test('rollback-incomplete of an override batch refuses backup flags; a load batch still needs them', async (t) => {
   const { store, demi, stuck } = await stopped(t);
   store.set({ kind: KINDS.BATCH, id: 'b2', batchKind: 'load', status: 'pending', startedAt: new Date(LATER).toISOString() });
 
   await assert.rejects(rollback([...undo(stuck), '--backup', 'x'], demi), /an override batch takes no backup flags/);
   await assert.rejects(rollback(undo('b2'), demi), /of a load batch needs --backup/);
+});
+
+test('rollback-incomplete refuses a batch that is neither a load nor an override batch', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  store.set({ kind: KINDS.BATCH, id: 'rb1', batchKind: 'rollback', targetBatchId: 'b1', status: 'pending', startedAt: new Date(LATER).toISOString() });
+
+  await assert.rejects(rollback(undo('rb1'), demi), /acts only on a pending load or override batch/);
+  await assert.rejects(rollback(undo('absent'), demi), /acts only on a pending load or override batch/);
 });

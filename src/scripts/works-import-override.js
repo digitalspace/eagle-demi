@@ -6,8 +6,7 @@
 const crypto = require('crypto');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const batches = require('./works-import-batch');
-const { withoutSystem, stepKey, rederive, loggedOf, requireDeriveEnv } = require('./works-rollback-steps');
-const { writeCounts } = require('./works-import-rederive');
+const { withoutSystem, stepKey, rederive, loggedOf, requireDeriveEnv, writeCounts } = require('./works-rollback-steps');
 
 const OWNER = 'sheet';
 
@@ -118,13 +117,15 @@ async function restoreSteps({ demi, ownerOf }, target, entries, logged, note) {
   const moved = new Set();
   for (const entry of entries.filter(one => one.action === 'marker')) {
     const { projectId, id } = entry.target;
+    if (!entry.prior) refuse(`an entry on project ${projectId} records no prior marker values; ${note}`);
     const log = logged.get(stepKey('restore', entry.target));
     if (log?.done) continue;
     const current = await demi.work(projectId, id);
     if (current && ownerOf(current) !== OWNER) refuse(`the override marker on project ${projectId} is not owned by ${OWNER}; ${note}`);
-    // A resumed restore whose write landed is logged done with the etag it left, so a later rollback can chain on it.
+    // Logged done with the etag it holds, so a later rollback chains on it: a resumed restore that landed, or a write
+    // of the batch that left the prior values (it only dropped a null deactivatedBy).
     if (current && holds(current, entry.prior)) {
-      if (log?.intent) steps.push({ target: entry.target, priorEtag: null, run: async () => current._etag });
+      if (log?.intent || landed(entry, current, target)) steps.push({ target: entry.target, priorEtag: null, run: async () => current._etag });
       continue;
     }
     if (landed(entry, current, target)) steps.push({ target: entry.target, priorEtag: current._etag, run: () => restoreMarker(demi, current, entry.prior) });

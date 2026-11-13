@@ -205,7 +205,7 @@ test('stdout, stderr and logger output of revert, reapply and rederive contain n
   const { demi, batchId } = await loaded(t, staffed(), undefined, { signoff: 'so-staff' });
   demi.row = { ...demi.row, read: ['public'] };
   const sheetIds = [...demi.docs.values()].filter(isSheet).map(doc => doc.id);
-  const fetchFn = async () => ({ ok: true, status: 200, json: async () => ({ works: sheetIds.map(workId => ({ workId })) }) });
+  const fetchFn = async () => ({ ok: true, status: 200, json: async () => ({ id: PROJECT, works: sheetIds.map(workId => ({ workId })) }) });
   const runs = [await rollback(['--revert-override', '--all'], demi), await rollback(reapply, demi), await rollback(['--rederive', batchId], demi, { fetchFn })];
   assert.deepEqual(runs.map(one => one.code), [0, 0, 0]);
   said.push(...runs.flatMap(one => one.lines));

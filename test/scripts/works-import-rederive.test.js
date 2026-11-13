@@ -33,7 +33,8 @@ async function published(t, options) {
 function publicRead(workIds, { storedIds = workIds, requests = [] } = {}) {
   const fetchFn = async (url, init) => {
     requests.push({ url, init });
-    return { ok: true, status: 200, json: async () => ({ id: PROJECT, works: workIds.map(workId => ({ workId })), assessments: [{ workIds: storedIds }] }) };
+    const id = decodeURIComponent(url.split('/').pop());
+    return { ok: true, status: 200, json: async () => ({ id, works: workIds.map(workId => ({ workId })), assessments: [{ workIds: storedIds }] }) };
   };
   return { fetchFn, requests };
 }
@@ -107,6 +108,17 @@ test('rederive with no public batch project records it and re-derives', async (t
   assert.equal(demi.derives.length, 1);
 });
 
+test('rederive with public batch projects whose sheet works a sheet read hides records no probe-able project', async (t) => {
+  const { demi, batchId } = await published(t);
+  demi.readWorkIds = async () => [];
+  const { fetchFn, requests } = publicRead([]);
+
+  const { code, value } = await rollback(rederive(batchId), demi, { fetchFn });
+  assert.equal(code, 0);
+  assert.equal(value('flipProbe'), 'no probe-able project');
+  assert.equal(requests.length, 0);
+});
+
 test('the probe skips a public project whose sheet works a sheet read hides and uses the next one', async (t) => {
   configure(t);
   const store = fakeLists(t);
@@ -169,7 +181,7 @@ test('--unflip refuses while WORKS_READ_SOURCES still holds sheet', async (t) =>
   await assert.rejects(rollback(rederive(batchId, '--unflip'), demi, publicRead([])), /WORKS_READ_SOURCES without sheet/);
 });
 
-test('rederive refuses when the probe answers an error or no JSON body', async (t) => {
+test('rederive refuses when the probe answers an error, no JSON body or no works of the project', async (t) => {
   const { demi, batchId } = await published(t);
   const answer = res => ({ fetchFn: async () => res });
 
@@ -177,6 +189,10 @@ test('rederive refuses when the probe answers an error or no JSON body', async (
   await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); } })),
     /probe of project 7001 answered 200 with no JSON body/);
   await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => null })), /answered 200 with no JSON body/);
+  const body = { id: PROJECT, works: [] };
+  for (const wrong of [{ ...body, id: '7002' }, { ...body, works: { workId: 'x' } }]) {
+    await assert.rejects(rollback(rederive(batchId), demi, answer({ ok: true, status: 200, json: async () => wrong })), /answered 200 with no works of that project/);
+  }
   assert.deepEqual(demi.derives, []);
 });
 

@@ -88,6 +88,12 @@ async function rederive(demi, projectIds, lease, now) {
   return { counts, ok: counts.patched + counts.unchanged === projectIds.length };
 }
 
+/** Writes the count check's counts and the project count. */
+function writeCounts(write, counts, projectCount) {
+  Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
+  write(`projects=${projectCount}`);
+}
+
 /** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
 function requireDeriveEnv(env = process.env) {
   const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
@@ -113,4 +119,4 @@ function openSteps(log) {
     !log.slice(index + 1).some(later => later.state === 'done' && stepKey(later.action, later.target) === stepKey(entry.action, entry.target)));
 }
 
-module.exports = { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv };
+module.exports = { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv, writeCounts };

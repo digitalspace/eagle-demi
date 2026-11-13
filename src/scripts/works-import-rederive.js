@@ -5,7 +5,7 @@
 
 const config = require('../config');
 const batches = require('./works-import-batch');
-const { rederive, requireDeriveEnv } = require('./works-rollback-steps');
+const { rederive, requireDeriveEnv, writeCounts } = require('./works-rollback-steps');
 
 // Test only: business works stay on test, so there is no prod entry.
 const API_BASE = Object.freeze({ test: 'https://demi-api-fc-test.azurewebsites.net/api' });
@@ -17,12 +17,6 @@ const refuse = (message) => { throw new Error(message); };
 
 /** global fetch with a timeout; tests pass their own. */
 const timedFetch = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-
-/** Writes the count check's counts and the project count. */
-function writeCounts(write, counts, projectCount) {
-  Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
-  write(`projects=${projectCount}`);
-}
 
 /** Sheet work ids the batch created or updated, by project. */
 function sheetWorkIds(entries) {
@@ -38,24 +32,28 @@ function sheetWorkIds(entries) {
  * `assessments[].workIds`: those are stored, so they keep sheet ids until this re-derive runs.
  */
 function workIdsOf(body) {
-  return new Set((Array.isArray(body.works) ? body.works : []).map(work => work && work.workId));
+  return new Set(body.works.map(work => work && work.workId));
 }
 
-/** The response body as JSON; refused, naming only the project and status, when it is not an object. */
+/** The response body as JSON; refused, naming only the project and status, unless it is this project with a works list. */
 async function bodyOf(res, projectId) {
   const body = await res.json().catch(() => null);
-  return body && typeof body === 'object' ? body : refuse(`the probe of project ${projectId} answered ${res.status} with no JSON body`);
+  if (!body || typeof body !== 'object') refuse(`the probe of project ${projectId} answered ${res.status} with no JSON body`);
+  if (String(body.id) !== String(projectId) || !Array.isArray(body.works)) refuse(`the probe of project ${projectId} answered ${res.status} with no works of that project`);
+  return body;
 }
 
 /**
  * The first public batch project whose batch sheet works a sheet read shows (a reverted marker shows none), read with no
- * Authorization header; resolves `{projectId, shown}`, the ones the response holds, or null.
+ * Authorization header; resolves `{projectId, shown}`, the ones the response holds, or `{none}` saying why there is none.
  */
 async function probe({ demi, fetchFn, env }, entries) {
   const base = API_BASE[env] || refuse(`no API base for ${env}`);
+  let none = 'no public project';
   for (const [projectId, ids] of sheetWorkIds(entries)) {
     const row = await demi.project(projectId);
     if (!row || !Array.isArray(row.read) || !row.read.includes('public')) continue;
+    none = 'no probe-able project';
     const readable = new Set(await demi.readWorkIds(row, FLIP_SOURCES));
     const expected = ids.filter(id => readable.has(id));
     if (!expected.length) continue;
@@ -64,7 +62,7 @@ async function probe({ demi, fetchFn, env }, entries) {
     const held = workIdsOf(await bodyOf(res, projectId));
     return { projectId, shown: expected.filter(id => held.has(id)) };
   }
-  return null;
+  return { none };
 }
 
 /** The lock for `batchId`: taken fresh, or taken over once a run of this batch left it expired. */
@@ -90,7 +88,7 @@ async function rederiveBatch(o, ctx) {
   const entries = await batches.listEntries(batchId);
 
   const seen = await probe(ctx, entries);
-  if (!seen) write('flipProbe=no public project');
+  if (seen.none) write(`flipProbe=${seen.none}`);
   else if (!unflip && !seen.shown.length) refuse(`the probe of project ${seen.projectId} holds no sheet work of the batch; nothing was re-derived`);
   else if (unflip && seen.shown.length) refuse(`the probe of project ${seen.projectId} still holds ${seen.shown.length} sheet works of the batch; nothing was re-derived`);
   else write(`flipProbe=${seen.projectId}`);
@@ -107,4 +105,4 @@ async function rederiveBatch(o, ctx) {
   }
 }
 
-module.exports = { API_BASE, rederiveBatch, timedFetch, writeCounts };
+module.exports = { API_BASE, rederiveBatch, timedFetch };
