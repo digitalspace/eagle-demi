@@ -14,12 +14,11 @@ const batchesOf = (store, kind) => store.all().filter(item => item.kind === KIND
 const markerValues = (demi, id) => [demi.markers.get(id).active, demi.markers.get(id).deactivatedBy];
 
 /**
- * A revert --all over 7001 to 7003 whose write on 7003 throws, after landing with `landed`; 7002 was turned off by
- * a load. Resolves the store, the fake and the pending override batch's id.
+ * A revert --all over 7001 to 7003 whose write on 7003 throws, after landing with `landed`. Resolves the store, the
+ * fake and the pending override batch's id.
  */
 async function stopped(t, options) {
   const { store, demi } = markerStore(t, ['7001', '7002', '7003'], ['7001', '7002', '7003']);
-  demi.markers.set('7002', { ...demi.markers.get('7002'), active: false, deactivatedBy: 'load' });
   const save = demi.saveWork;
   demi.saveWork = async (doc, opts) => {
     if (doc.projectId !== '7003') return save(doc, opts);
@@ -39,7 +38,7 @@ test('rollback-incomplete clears a pending override batch', async (t) => {
 
   const { code, value } = await rollback(undo(stuck), demi);
   assert.equal(code, 0);
-  assert.deepEqual([markerValues(demi, '7001'), markerValues(demi, '7002')], [[true, undefined], [false, 'load']]);
+  assert.deepEqual([markerValues(demi, '7001'), markerValues(demi, '7002')], [[true, undefined], [true, undefined]]);
   assert.equal(value('markers'), '2');
   assert.equal(value('moved'), '0', 'the 7003 write never landed, so its intent is left alone');
   assert.equal(value('patched'), '3');
@@ -48,6 +47,19 @@ test('rollback-incomplete clears a pending override batch', async (t) => {
   assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
   await assert.rejects(rollback(undo(stuck), demi), /only on a pending override batch/);
   assert.equal((await rollback(['--revert-override', '--all'], demi)).code, 0);
+});
+
+test('rollback-incomplete puts back the deactivatedBy a load set', async (t) => {
+  const { store, demi } = markerStore(t, ['7002'], ['7002']);
+  demi.markers.set('7002', { ...demi.markers.get('7002'), active: false, deactivatedBy: 'load' });
+  const save = demi.saveWork;
+  demi.saveWork = async (doc, options) => { await save(doc, options); throw new Error('connection reset'); };
+  await assert.rejects(rollback(['--revert-override', '--project', '7002'], demi), /connection reset/);
+  demi.saveWork = save;
+  assert.deepEqual(markerValues(demi, '7002'), [false, undefined]);
+
+  assert.equal((await rollback(undo(batchesOf(store, 'override')[0].id), demi)).code, 0);
+  assert.deepEqual(markerValues(demi, '7002'), [false, 'load']);
 });
 
 test('rollback-incomplete undoes an override intent whose write landed', async (t) => {
@@ -103,7 +115,7 @@ test('rollback-incomplete of an override batch resumes after its undo stopped on
   const { code, value } = await rollback(undo(stuck), demi);
   assert.equal(code, 0);
   assert.equal(value('moved'), '0');
-  assert.deepEqual(markerValues(demi, '7002'), [false, 'load']);
+  assert.deepEqual(markerValues(demi, '7002'), [true, undefined]);
   assert.equal(store.get(stuck, KINDS.BATCH).status, 'rolledBack');
   assert.deepEqual(batchesOf(store, 'rollback').map(one => one.status), ['complete']);
 });
@@ -152,7 +164,7 @@ test('--abandon-rollback clears a stuck override undo, and a fresh run finishes 
   assert.equal(store.get(stuckUndo.id, KINDS.BATCH).status, 'abandoned');
   assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
   assert.equal((await rollback(undo(stuck), demi)).code, 0);
-  assert.deepEqual([markerValues(demi, '7001'), markerValues(demi, '7002')], [[true, undefined], [false, 'load']]);
+  assert.deepEqual([markerValues(demi, '7001'), markerValues(demi, '7002')], [[true, undefined], [true, undefined]]);
 });
 
 test('a rollback after an undone override batch expects the undo\'s etags', async (t) => {

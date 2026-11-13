@@ -100,6 +100,48 @@ test('revert --all turns off every marker of the latest load batch', async (t) =
   assert.equal(value('projects'), '2');
 });
 
+const loadTurnedOff = demi => demi.markers.set('7002', { ...demi.markers.get('7002'), active: false, deactivatedBy: 'load' });
+
+test('revert --all and reapply --all skip a marker a load turned off and list it', async (t) => {
+  const { demi } = markerStore(t, ['7001', '7002'], ['7001', '7002']);
+  loadTurnedOff(demi);
+
+  const reverted = await rollback(['--revert-override', '--all'], demi);
+  assert.deepEqual([reverted.value('skippedProject'), reverted.value('projects')], ['7002', '1']);
+  const reapplied = await rollback(['--reapply-override', '--all'], demi);
+  assert.deepEqual([reapplied.value('skippedProject'), reapplied.value('markers')], ['7002', '1']);
+  assert.deepEqual([demi.markers.get('7001').active, demi.markers.get('7002').deactivatedBy], [true, 'load']);
+});
+
+test('revert --project of a marker a load turned off drops deactivatedBy, so the next load keeps it off', async (t) => {
+  const { demi } = await loaded(t);
+  demi.docs.set(OVERRIDE_MARKER_ID, { ...marker(demi), active: false, deactivatedBy: 'load' });
+
+  assert.equal((await rollback(revert, demi)).code, 0);
+  assert.equal(marker(demi).deactivatedBy, undefined);
+  await liveRun(inputs(), demi, { at: LATER + 1000 });
+  assert.equal(marker(demi).active, false);
+});
+
+test('revert writes no marker already off and counts it unchanged', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  demi.markers.set('7001', { ...demi.markers.get('7001'), active: false });
+
+  const { code, value } = await rollback(['--revert-override', '--project', '7001'], demi);
+  assert.deepEqual([code, value('markers')], [0, '0']);
+  assert.equal(demi.markers.get('7001')._etag, '"m"');
+  assert.equal(store.all().filter(item => item.kind === KINDS.ENTRY && item.action === 'marker' && item.batchId !== 'b1').length, 0);
+});
+
+test('revert and reapply exit 1 when the count check fails, with their batch complete', async (t) => {
+  const { store, demi } = markerStore(t, ['7001'], ['7001']);
+  demi.patchDerived = async () => ({ status: 'missing' });
+
+  assert.equal((await rollback(['--revert-override', '--all'], demi)).code, 1);
+  assert.equal((await rollback(['--reapply-override', '--all'], demi)).code, 1);
+  assert.deepEqual(store.all().filter(item => item.batchKind === 'override').map(one => one.status), ['complete', 'complete']);
+});
+
 test('revert refuses before any write when a named project has no sheet marker', async (t) => {
   const { store, demi } = markerStore(t, ['7001', '7002'], ['7001']);
   demi.markers.set('7002', { ...demi.markers.get('7001'), projectId: '7002', owner: 'track' });

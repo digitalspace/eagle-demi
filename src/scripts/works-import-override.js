@@ -25,19 +25,20 @@ async function projectsOf(o) {
 }
 
 /**
- * The live marker of each project, as read now; refuses before any write when one is absent or not the sheet's.
- * `deactivatedBy` goes, so a later load keeps a staff revert off (works-import-plan.js turns on only `'load'` ones).
+ * Each project's live marker, refused before any write when absent or not the sheet's. `deactivatedBy` goes, so a later
+ * load keeps a revert off (the plan turns on only `'load'` ones); --all skips a marker a load turned off.
  */
-async function markerWrites({ demi, ownerOf }, projectIds, active) {
+async function markerWrites({ demi, ownerOf }, projectIds, active, all) {
   const writes = [];
+  const skipped = [];
   for (const projectId of projectIds) {
     const current = await demi.work(projectId, OVERRIDE_MARKER_ID);
     if (!current) refuse(`project ${projectId} has no override marker; nothing was written`);
     if (ownerOf(current) !== OWNER) refuse(`the override marker on project ${projectId} is not owned by ${OWNER}; nothing was written`);
-    if (current.active === active && current.deactivatedBy === undefined) continue;
-    writes.push({ projectId, current, values: { active, deactivatedBy: null } });
+    if (all && current.deactivatedBy === 'load') skipped.push(projectId);
+    else if (current.active !== active || current.deactivatedBy !== undefined) writes.push({ projectId, current, values: { active, deactivatedBy: null } });
   }
-  return writes;
+  return { writes, skipped };
 }
 
 /** `current` with `values`; a null `deactivatedBy` is left out. */
@@ -66,7 +67,7 @@ async function setOverride(o, ctx, active) {
   const projectIds = await projectsOf(o);
   const lease = await batches.takeLock(crypto.randomUUID(), now());
   try {
-    const writes = await markerWrites(ctx, projectIds, active);
+    const { writes, skipped } = await markerWrites(ctx, projectIds, active, o.all === true);
     const batchId = lease.batchId;
     const header = await batches.createBatch(batchId, { batchKind: 'override', active }, now());
     write(`batchId=${batchId}`);
@@ -79,12 +80,14 @@ async function setOverride(o, ctx, active) {
         throw err;
       }
     }
-    const { counts, ok } = await rederive(demi, projectIds, lease, now);
+    const derived = projectIds.filter(projectId => !skipped.includes(projectId));
+    const { counts, ok } = await rederive(demi, derived, lease, now);
     // Complete even when the count check fails: every write landed, and a pending batch blocks every run.
     await batches.completeBatch(header, lease, now());
     lease.released = true;
     write(`markers=${writes.length}`);
-    writeCounts(write, counts, projectIds.length);
+    skipped.forEach(projectId => write(`skippedProject=${projectId}`));
+    writeCounts(write, counts, derived.length);
     return ok ? 0 : 1;
   } finally {
     await batches.releaseQuietly(lease);
