@@ -12,7 +12,7 @@ const { fakeLists } = require('../helpers/works-import-fakes');
 const { run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
-const { ENV, T0, PROJECT, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
+const { ENV, T0, PROJECT, DERIVE_ENV, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
 
 const DAY = 24 * 60 * 60 * 1000;
 const entriesOf = store => store.all().filter(item => item.kind === KINDS.ENTRY).sort((a, b) => a.seq - b.seq);
@@ -22,6 +22,14 @@ test('a missing --out-dir refuses before the lock', async (t) => {
   const given = inputs();
   const argv = given.argv.map(arg => (arg === given.outDir ? path.join(given.outDir, 'absent') : arg));
   await assert.rejects(load([...argv, ...liveArgs('0'.repeat(64))]), /--out-dir does not exist/);
+  assert.deepEqual(store.all(), []);
+});
+
+test('a live run refuses while WORKS_READ is unset, before the lock', async (t) => {
+  const store = fakeLists(t);
+  t.after(() => Object.assign(process.env, DERIVE_ENV));
+  delete process.env.WORKS_READ;
+  await assert.rejects(load([...inputs().argv, ...liveArgs('0'.repeat(64))]), /^Error: WORKS_READ is not set$/);
   assert.deepEqual(store.all(), []);
 });
 

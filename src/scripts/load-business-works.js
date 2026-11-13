@@ -19,6 +19,7 @@ const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, hel
 const { mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
+const { requireDeriveEnv } = require('./works-rollback-steps');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -145,7 +146,7 @@ async function live(o, ctx) {
   const batchId = crypto.randomUUID();
   const lease = await batches.takeLock(batchId, now());
   const { plan, stored, backup, batch } = await startBatch(o, ctx, batchId, lease);
-  // Printed before any write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
+  // Printed before any works or project write, so a run that stops midway still leaves the operator the batch id and the backup's sha.
   write(`batchId=${batchId}`);
   write(`backupBlob=${backup.name}`);
   write(`backupSha256=${backup.sha256}`);
@@ -197,6 +198,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
     return 0;
   }
   const env = testEnvironment();
+  if (o.live) requireDeriveEnv();
   checkOutDir(o['out-dir']);
   const ctx = { demi, inputs: openInputs(o, env), env, now, runAt: new Date(now()).toISOString(), write };
   if (o.live) await live(o, ctx);
