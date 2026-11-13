@@ -14,9 +14,9 @@ const {
   EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS, DEMI_OWNED_AT, EXTENSION_LIST_FIELDS, CAC_FIELDS,
   withoutBlockLists
 } = require('../ownership/project');
+// The row id of a project DEMI holds from Eagle alone, before Track matched it.
+const { eagleOnlyProjectId } = require('./project-of');
 
-/** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
-const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
 const isEagleOnlyProjectId = (id) => String(id).startsWith(eagleOnlyProjectId(''));
 
 /** A project DEMI created: neither Eagle's own row nor a Track one. */

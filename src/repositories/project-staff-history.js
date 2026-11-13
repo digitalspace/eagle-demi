@@ -7,7 +7,7 @@ const { createHash } = require('node:crypto');
 const cosmos = require('../db/cosmos-nosql');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
-const { eagleOnlyProjectId } = require('../merge/project');
+const { projectOf } = require('../merge/project-of');
 const { fetchAll } = require('./_sql');
 const { CONTAINER, readForWrite } = require('./projects');
 
@@ -74,13 +74,6 @@ async function guarded(id, attempt) {
     },
     onLost: (_row, tryNumber) => logger.warn('[project history] patch lost its etag race', { id: key, tryNumber })
   });
-}
-
-// Only a folded twin counts for its target, so a link-and-unlink by `eagleId` cannot take a twin's ids.
-// A relinked twin without `foldedInto` counts as a second holder beside its Track row: that fails closed.
-function projectOf(row) {
-  const twin = typeof row.eagleId === 'string' && String(row.id) === eagleOnlyProjectId(row.eagleId);
-  return String(twin && row.foldedInto !== undefined && row.foldedInto !== null ? row.foldedInto : row.id);
 }
 
 /** `{project, held}` for each row holding any of `pairs`, values matched case-blind, from every partition unfiltered. */

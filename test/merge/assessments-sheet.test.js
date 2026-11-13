@@ -155,6 +155,17 @@ test('1996 and 2002 blocks', async (t) => {
     const derive = (works) => yearOf(deriveAssessments(row, { worksForDerive: works, catalog: CATALOG }), 2018);
     assert.deepStrictEqual(derive([...row.works, sheet]), derive(row.works));
   });
+
+  await t.test('a 2018 sheet work on a 2018-only row lends no phase dates and adds no milestones', () => {
+    const row = dated(fx.prod2018(), [fx.document(fx.PHASES.earlyEngagement, '2021-01-10T00:00:00.000Z'),
+      fx.document(fx.PHASES.earlyEngagement, '2021-03-10T00:00:00.000Z')]);
+    const sheet = sheetWork(2018, [sheetPhase('Early Engagement', '2020-11-02', '2021-04-01')],
+      { milestones: [sheetMilestone('Draft AIR', '2021-02-01')] });
+    const block = yearOf(deriveAssessments(row, { worksForDerive: [sheet] }), 2018);
+    assert.deepStrictEqual([block.phases.map(phase => [phase.name, phase.source, phase.startDate, phase.endDate,
+      phase.dateSource ?? null]), block.milestones], [[['Early Engagement', 'documents', '2021-01-10T00:00:00.000Z',
+      '2021-03-10T00:00:00.000Z', null]], []]);
+  });
 });
 
 test('assessments[].workIds', async (t) => {

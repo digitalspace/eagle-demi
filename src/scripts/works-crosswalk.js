@@ -349,7 +349,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   return result.rows.every(r => PASSING.has(r.state)) ? 0 : 1;
 }
 
-module.exports = { run, readCrosswalk, COLUMNS };
+module.exports = { run, readCrosswalk, COLUMNS, COSMOS_HOST };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
