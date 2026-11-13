@@ -9,7 +9,7 @@ const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
 const { fakeLists } = require('../helpers/works-import-fakes');
-const { main } = require('../../src/scripts/load-business-works');
+const { main, run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
 const { ENV, T0, PROJECT, operator, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveRun } = require('../helpers/works-import-loader');
@@ -43,14 +43,38 @@ test('a failed lock release keeps the first error', async (t) => {
   assert.equal(store.get(LOCK_ID, KINDS.LOCK).kind, KINDS.LOCK);
 });
 
-test('a works-backup too big for a rollback to read refuses before the backup or the batch header is written', async (t) => {
-  const store = fakeLists(t);
+function shrinkBackupCap(t) {
   const cap = MAX_BYTES.backup;
   MAX_BYTES.backup = 16 * 1024;
   t.after(() => { MAX_BYTES.backup = cap; });
+}
+
+test('a dry run refuses a works-backup too big for a rollback to read, before its report is written', async (t) => {
+  fakeLists(t);
+  const given = inputs();
+  shrinkBackupCap(t);
+  await assert.rejects(load(given.argv), /works-backup would be over the size a rollback reads/);
+  assert.deepEqual(fs.readdirSync(given.outDir), []);
+});
+
+test('a live run that stops after the batch header has printed the backup blob and its sha', async (t) => {
+  const store = fakeLists(t);
+  const demi = fakeDemi();
+  const given = inputs();
+  const planSha256 = (await load(given.argv, demi)).value('planSha256');
+  demi.saveWork = async () => { throw new Error('save failed'); };
+  const lines = [];
+  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0 }), /save failed/);
+  const { backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
+  assert.deepEqual(lines, [`backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`]);
+});
+
+test('a works-backup too big for a rollback to read refuses before the backup or the batch header is written', async (t) => {
+  const store = fakeLists(t);
   const given = inputs();
   const planSha256 = (await load(given.argv)).value('planSha256');
   const files = fs.readdirSync(given.outDir);
+  shrinkBackupCap(t);
   await assert.rejects(load([...given.argv, ...liveArgs(planSha256)]), /works-backup would be over the size a rollback reads/);
   assert.deepEqual(fs.readdirSync(given.outDir), files);
   assert.deepEqual(store.all(), []);
