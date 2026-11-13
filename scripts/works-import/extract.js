@@ -9,7 +9,7 @@ const { parseArgs } = require('util');
 const { readFolder } = require('./cells');
 const { openSurrogates, surrogateOf } = require('./surrogates');
 const {
-  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, sha256Hex, statementOf, verify
+  STAFF_FIELDS, fingerprintOf, recipientFromPem, sealEnvelope, openEnvelope, sha256Hex, verify
 } = require('../../src/utils/import-envelope');
 
 const ENVS = ['test', 'prod'];
@@ -20,9 +20,6 @@ const SEAL_PURPOSES = ['crosswalk', 'manual-match', 'works-backup'];
 const OPEN_PURPOSES = ['crosswalk', 'works-parity', 'works-report', 'works-backup'];
 // Blobs the devbox wrote and gets back: seal refuses them unless the devbox signature from `open` still verifies.
 const DEVBOX_SIGNED = ['crosswalk', 'works-backup'];
-// The operator key is RSA only, so the operator signs works-backup with RSA-PSS; works-import-backup.js verifies it.
-const OPERATOR_SIGNED = 'works-backup';
-const RSA_PSS = { padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST };
 
 function keyringCommand(ref) {
   if (ref.startsWith('op://')) return ['op', ['read', '--no-newline', ref]];
@@ -69,10 +66,6 @@ function need(opts, ...names) {
 }
 
 const recipientOf = (pemFile, expectFingerprint) => recipientFromPem(fs.readFileSync(pemFile, 'utf8'), expectFingerprint, pemFile);
-
-const operatorKeyOf = (o, io) => crypto.createPrivateKey({
-  key: fs.readFileSync(o.key), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
-});
 
 const shaLabel = purpose => `${purpose.replace(/-(\w)/g, (_, c) => c.toUpperCase())}Sha256`;
 
@@ -141,7 +134,6 @@ function seal(o, io) {
   need(o, 'env', 'purpose', 'in', 'recipient-key', 'expect-fingerprint', 'out');
   if (!SEAL_PURPOSES.includes(o.purpose)) throw new Error(`--purpose must be one of ${SEAL_PURPOSES.join(', ')}`);
   if (DEVBOX_SIGNED.includes(o.purpose)) need(o, 'signature');
-  if (o.purpose === OPERATOR_SIGNED) need(o, 'key', 'passphrase-ref');
   refuseExisting(sealedOut(o.out));
   const { keys, fingerprint } = recipientOf(o['recipient-key'], o['expect-fingerprint']);
   const plaintext = fs.readFileSync(o.in);
@@ -150,9 +142,6 @@ function seal(o, io) {
   if (DEVBOX_SIGNED.includes(o.purpose)) {
     signature = fs.readFileSync(o.signature, 'utf8').trim();
     if (!keys.ed25519 || !verify(keys.ed25519, statement, signature)) throw new Error(`${o.purpose} signature does not verify`);
-  }
-  if (o.purpose === OPERATOR_SIGNED) {
-    signature = crypto.sign('sha256', statementOf(statement), { key: operatorKeyOf(o, io), ...RSA_PSS }).toString('base64');
   }
   writeNew(o.out, sealEnvelope(plaintext, {
     purpose: o.purpose, env: o.env, keyFingerprint: fingerprint, recipientKey: keys.rsa, signature
@@ -165,7 +154,9 @@ function open(o, io) {
   if (!OPEN_PURPOSES.includes(o.purpose)) throw new Error(`--purpose must be one of ${OPEN_PURPOSES.join(', ')}`);
   refuseExisting(o.out, `${o.out}.sig`);
   const devbox = recipientOf(o['devbox-key'], o['devbox-fingerprint']).keys;
-  const privateKey = operatorKeyOf(o, io);
+  const privateKey = crypto.createPrivateKey({
+    key: fs.readFileSync(o.key), passphrase: passphraseFrom(o['passphrase-ref'], io.env)
+  });
   const keyFingerprint = fingerprintOf({ rsa: crypto.createPublicKey(privateKey) });
   const opened = openEnvelope(fs.readFileSync(o.in), { purpose: o.purpose, env: o.env, keyFingerprint, privateKey });
   const sha256 = sha256Hex(opened.plaintext);

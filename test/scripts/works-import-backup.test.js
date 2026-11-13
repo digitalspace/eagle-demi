@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { openBackup } = require('../../src/scripts/works-import-backup');
-const { fingerprintOf, sealEnvelope, sha256Hex, statementOf, writeSealed } = require('../../src/utils/import-envelope');
+const { fingerprintOf, sealEnvelope, sha256Hex, sign, writeSealed } = require('../../src/utils/import-envelope');
 const { tmp, fresh, devbox, cli } = require('../fixtures/works-import/harness');
 
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -31,8 +31,7 @@ function devboxKeyFile() {
 async function roundTrip() {
   const keysDir = fresh('operator');
   await cli(['keygen', '--env', 'test', '--out-dir', keysDir, '--passphrase-ref', 'operator']);
-  const operatorKeyPath = path.join(keysDir, 'operator-test.pub.pem');
-  const rsa = crypto.createPublicKey(fs.readFileSync(operatorKeyPath));
+  const rsa = crypto.createPublicKey(fs.readFileSync(path.join(keysDir, 'operator-test.pub.pem')));
   const outDir = fresh('backup');
   fs.chmodSync(outDir, 0o700);
   const written = writeSealed(outDir, plaintext, {
@@ -44,12 +43,8 @@ async function roundTrip() {
     '--devbox-fingerprint', devbox.fingerprint, '--expect-sha256', written.sha256]);
   const sealedPath = path.join(fresh('back'), 'works-backup.sealed.json');
   await cli(['seal', '--env', 'test', '--purpose', 'works-backup', '--in', review, '--signature', `${review}.sig`,
-    '--key', path.join(keysDir, 'operator-test.key.pem'), '--passphrase-ref', 'operator',
     '--recipient-key', devbox.pemFile, '--expect-fingerprint', devbox.fingerprint, '--out', sealedPath]);
-  return {
-    sealedPath, expectSha256: written.sha256, devboxKeyPath: devboxKeyFile(), operatorKeyPath,
-    expectOperatorFingerprint: fingerprintOf({ rsa }), batchBackupSha256: written.sha256
-  };
+  return { sealedPath, expectSha256: written.sha256, devboxKeyPath: devboxKeyFile(), batchBackupSha256: written.sha256 };
 }
 
 let given;
@@ -67,20 +62,14 @@ test('refuses a works-backup whose SHA-256 is not the batch header backupSha256'
   assert.throws(() => openBackup({ ...given, batchBackupSha256: sha256Hex('other') }), /does not match the batch header backupSha256/);
 });
 
-test('refuses an operator key whose fingerprint is not expectOperatorFingerprint', () => {
-  assert.throws(() => openBackup({ ...given, expectOperatorFingerprint: '0'.repeat(64) }), /fingerprint of operator key does not match/);
-});
-
 test('refuses a works-backup another key signed', () => {
-  const other = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-  const signature = crypto.sign('sha256', statementOf({ purpose: 'works-backup', env: 'test', sha256 }), {
-    key: other.privateKey, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
-  }).toString('base64');
+  const other = crypto.generateKeyPairSync('ed25519');
   const sealedPath = path.join(fresh('forged'), 'works-backup.sealed.json');
   fs.writeFileSync(sealedPath, sealEnvelope(plaintext, {
-    purpose: 'works-backup', env: 'test', keyFingerprint: devbox.fingerprint, recipientKey: devbox.rsa.publicKey, signature
+    purpose: 'works-backup', env: 'test', keyFingerprint: devbox.fingerprint, recipientKey: devbox.rsa.publicKey,
+    signature: sign(other.privateKey, { purpose: 'works-backup', env: 'test', sha256 })
   }));
-  assert.throws(() => openBackup({ ...given, sealedPath }), /operator signature on the works-backup does not verify/);
+  assert.throws(() => openBackup({ ...given, sealedPath }), /works-backup signature does not verify/);
 });
 
 test('refuses a devbox key file that group or others may read', () => {

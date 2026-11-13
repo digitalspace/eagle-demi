@@ -373,14 +373,13 @@ test('seal refuses a crosswalk whose devbox signature does not verify', async ()
 });
 
 test('seal refuses a works-backup whose devbox signature does not verify', async () => {
-  const op = await operator();
   const dir = fresh('works-backup');
   const file = path.join(dir, 'works-backup.json');
   fs.writeFileSync(file, '{"batchId":"b-1","documents":[],"projects":[]}');
   const sha256 = sha256Hex(fs.readFileSync(file));
   fs.writeFileSync(path.join(dir, 'bad.sig'), sign(devbox.ed.privateKey, { purpose: 'works-report', env: 'test', sha256 }));
   const out = path.join(dir, 'works-backup.sealed.json');
-  await assert.rejects(cli(sealArgs('works-backup', file, out, '--signature', path.join(dir, 'bad.sig'),
-    '--key', op.keyFile, '--passphrase-ref', 'operator')), /works-backup signature does not verify/);
+  await assert.rejects(cli(sealArgs('works-backup', file, out, '--signature', path.join(dir, 'bad.sig'))),
+    /works-backup signature does not verify/);
   assert.equal(fs.existsSync(out), false);
 });
