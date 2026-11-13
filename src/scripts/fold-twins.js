@@ -10,7 +10,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { systemAccess } = require('../helpers/access-sql');
 const { eagleOnlyProjectId } = require('../merge/project');
 const { deriveInputs } = require('../domain/works-derive');
-const { foldTwin } = require('./sync-track-projects');
+const { foldTwin, settleTwin } = require('./sync-track-projects');
 const { logger } = require('../utils/logger');
 
 const PAIR = /^(\d+):([0-9a-f]{24})$/i;
@@ -18,16 +18,20 @@ const SHA256 = /^[0-9a-f]{64}$/;
 
 function parseArgs(argv) {
   const args = { live: false, pairs: null, expect: null };
+  const once = (key, value) => {
+    if (args[key] !== null) throw new Error(`[fold-twins] ${key} given twice`);
+    args[key] = value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
-    else if (a === '--pairs') args.pairs = parsePairs(argv[++i]);
-    else if (a === '--expect-plan-sha256') args.expect = String(argv[++i] || '').toLowerCase();
+    else if (a === '--pairs') once('pairs', parsePairs(argv[++i]));
+    else if (a === '--expect-plan-sha256') once('expect', String(argv[++i] || '').toLowerCase());
     else throw new Error(`[fold-twins] unknown argument: ${a}`);
   }
   if (!args.pairs) throw new Error('[fold-twins] --pairs <trackId:eagleId,...> is required');
-  if (args.live && !SHA256.test(args.expect || '')) {
-    throw new Error('[fold-twins] --live needs --expect-plan-sha256 <hex> from a dry run');
+  if (args.live !== SHA256.test(args.expect || '')) {
+    throw new Error('[fold-twins] --live and --expect-plan-sha256 <hex> from a dry run go together');
   }
   return args;
 }
@@ -59,13 +63,17 @@ async function planPair(repo, { trackId, eagleId }) {
   // Track's merge writes `eagleId: null` until `epic_guid` is set in Track; folding before that splits the project.
   if (String(trackRow.eagleId).toLowerCase() !== eagleId) return refused('eagleIdUnset');
   if (!twin || twin.sourceSystem !== 'eagle') return refused('noTwin');
+  const planned = (row, settled) => ({
+    trackId, eagleId, row, twin: settled, rowFields: changedFields(trackRow, row), twinFields: changedFields(twin, settled)
+  });
   if (twin.foldedInto !== undefined && String(twin.foldedInto) !== trackId) return refused('foldedElsewhere');
+  // Staff own the Track row's DEMI fields after a fold, so a re-run carries nothing back and only settles the twin.
+  if (twin.foldedInto !== undefined) return planned(trackRow, settleTwin(twin, trackId, trackRow));
+  // A fold would carry one row's delete state onto the other: staff decide which stands first.
+  if ((trackRow.isDeleted === true) !== (twin.isDeleted === true)) return refused('deleteMismatch');
   const fold = foldTwin(trackRow, twin, await deriveInputs(trackRow));
   if (fold.clash.length) return refused('clash', fold.clash);
-  return {
-    trackId, eagleId, row: fold.row, twin: fold.twin,
-    rowFields: changedFields(trackRow, fold.row), twinFields: changedFields(twin, fold.twin)
-  };
+  return planned(fold.row, fold.twin);
 }
 
 /** The hash a live run must be handed: it covers each row as it will be written, etag included. */
@@ -81,9 +89,20 @@ function logPlan(plan) {
   }
 }
 
-async function writePlan(repo, plan, now) {
-  if (plan.rowFields.length) await repo.upsert({ ...plan.row, updatedAt: now }, { etag: plan.row._etag });
-  if (plan.twinFields.length) await repo.upsert(plan.twin, { etag: plan.twin._etag });
+/** The Track row, then the twin; a twin that fails after its row landed counts `partial`, which a re-run settles. */
+async function writePlan(repo, plan, now, summary) {
+  let step = 'Track row';
+  try {
+    if (plan.rowFields.length) await repo.upsert({ ...plan.row, updatedAt: now }, { etag: plan.row._etag });
+    step = 'twin';
+    if (plan.twinFields.length) await repo.upsert(plan.twin, { etag: plan.twin._etag });
+    summary.written++;
+  } catch (err) {
+    const partial = step === 'twin' && plan.rowFields.length > 0;
+    summary[partial ? 'partial' : 'failed']++;
+    logger.error(`[fold-twins] ${plan.trackId}:${plan.eagleId} ${step} not written${partial ? ' after its Track row landed' : ''}`,
+      { error: err.message, stack: err.stack });
+  }
 }
 
 /** {deps} test seam: {projects, now}. Resolves the summary; nothing is written unless every pair folds cleanly. */
@@ -98,26 +117,19 @@ async function foldTwins(argv = [], deps = {}) {
   const folds = plans.filter(plan => !plan.refused && (plan.rowFields.length || plan.twinFields.length));
   const summary = {
     mode: args.live ? 'live' : 'dry-run', pairs: plans.length, folds: folds.length,
-    refused: plans.filter(plan => plan.refused).length, planChanged: false, written: 0, failed: 0, planSha256: sha
+    refused: plans.filter(plan => plan.refused).length, planChanged: false, written: 0, partial: 0, failed: 0, planSha256: sha
   };
   if (args.live && !summary.refused) {
     summary.planChanged = sha !== args.expect;
-    for (const plan of summary.planChanged ? [] : folds) {
-      try {
-        await writePlan(repo, plan, deps.now || new Date().toISOString());
-        summary.written++;
-      } catch (err) {
-        summary.failed++;
-        logger.error(`[fold-twins] ${plan.trackId}:${plan.eagleId} not written`, { error: err.message, stack: err.stack });
-      }
-    }
+    for (const plan of summary.planChanged ? [] : folds) await writePlan(repo, plan, deps.now || new Date().toISOString(), summary);
   }
   logger.info(`[fold-twins] mode=${summary.mode} pairs=${summary.pairs} folds=${summary.folds} refused=${summary.refused} ` +
-    `planChanged=${summary.planChanged} written=${summary.written} failed=${summary.failed} planSha256=${sha}`);
+    `planChanged=${summary.planChanged} written=${summary.written} partial=${summary.partial} failed=${summary.failed} ` +
+    `planSha256=${sha}`);
   return summary;
 }
 
-const exitCodeFor = (summary) => (summary.refused || summary.planChanged || summary.failed ? 1 : 0);
+const exitCodeFor = (summary) => (summary.refused || summary.planChanged || summary.partial || summary.failed ? 1 : 0);
 
 module.exports = { foldTwins, parseArgs, exitCodeFor };
 

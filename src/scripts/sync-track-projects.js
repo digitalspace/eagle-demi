@@ -65,13 +65,14 @@ const drifted = (inputs, changes, row, stored) => Boolean(inputs.worksForDerive)
   Object.keys(changes).every(field => DRIFT_FIELDS.includes(field)) &&
   DRIFT_FIELDS.some(field => JSON.stringify(row[field] ?? null) !== JSON.stringify(stored[field] ?? null));
 
-/** The twin disowned and, once folded into {trackId}, stamped `foldedInto` without the staff lists. */
-function settleTwin(twin, trackId) {
+/** The twin disowned; with {trackId}, stamped `foldedInto` without its staff lists unless one differs from {carried}'s. */
+function settleTwin(twin, trackId, carried = {}) {
   const owned = isDemiOwnedProject(twin);
-  const drop = (k) => (owned && (k === DEMI_OWNED_AT || SYNC_STATE_FIELDS.includes(k))) ||
-    (trackId !== undefined && STAFF_ROLE_FIELDS.includes(k));
+  const fold = trackId !== undefined &&
+    STAFF_ROLE_FIELDS.every(k => !hasValue(twin[k]) || isDeepStrictEqual(twin[k], carried[k]));
+  const drop = (k) => (owned && (k === DEMI_OWNED_AT || SYNC_STATE_FIELDS.includes(k))) || (fold && STAFF_ROLE_FIELDS.includes(k));
   const row = Object.fromEntries(Object.entries(twin).filter(([k]) => !drop(k)));
-  return trackId === undefined ? row : { ...row, foldedInto: String(trackId) };
+  return fold ? { ...row, foldedInto: String(trackId) } : row;
 }
 
 /**
@@ -88,8 +89,12 @@ function foldTwin(trackRow, twin, derive = {}) {
       twin), twin, derive);
   row.read = capRead(capRead(row.read, trackRow.read), twin.read);
   row.isPublished = row.read.includes('public');
-  return { row, twin: settleTwin(twin, trackRow.id), clash };
+  return { row, twin: settleTwin(twin, trackRow.id, row), clash };
 }
+
+const unfolded = 'still owned or holding staff lists beside its Track row; fold-twins settles it';
+// A twin folded into another Track project is that project's: relinking would move it.
+const ownTwin = (twin, id) => (twin && [undefined, id].includes(twin.foldedInto) ? twin : null);
 
 /** A row with a public page and no code yet, or still on a pre-slug random one. */
 const owesLink = (row) => Boolean(row.eagleId) && (!row.shortCode || needsSlugMigration(row));
@@ -109,10 +114,8 @@ function dryLinks(links) {
     },
     repoint: async (code, url) => {
       const record = made.get(code) || await links.getById(code);
-      if (!record) return null;
-      const moved = { ...record, url, updatedAt: new Date().toISOString() };
-      made.set(code, moved);
-      return moved;
+      if (record) made.set(code, { ...record, url, updatedAt: new Date().toISOString() });
+      return record ? made.get(code) : null;
     }
   };
 }
@@ -208,35 +211,33 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
   };
 
   /** Disown the twin, folded into {trackId} when given, or sync-out sends it and the Track row to one Eagle project. */
-  const disownTwin = async (twinId, trackId) => {
+  const disownTwin = async (twinId, trackId, carried) => {
     const written = await writeGuarded({
       existing: await repo.getById(systemAccess(), twinId),
       reread: reread(twinId),
       attempt: async (twin) => {
-        const row = twin && settleTwin(twin, trackId);
-        if (!row || isDeepStrictEqual(row, twin)) return { status: 'none' };
+        const row = twin && settleTwin(twin, trackId, carried);
+        if (!row || isDeepStrictEqual(row, twin)) return { status: 'none', row };
         await repo.upsert(row, { etag: twin._etag });
-        return { status: 'saved' };
+        return { status: 'saved', row };
       },
       onLost: lost(twinId)
     });
-    if (written.status === 'conflict') {
+    if (written.status === 'conflict' || (trackId !== undefined && written.row && !written.row.foldedInto)) {
       summary.failures++;
-      logger.error(`[track-projects] project ${twinId} still owned beside its Track row`, { status: written.status });
+      logger.error(`[track-projects] project ${twinId} ${unfolded}`, { status: written.status });
     }
     return written.status;
   };
 
   /** A push that leaves the twin owned fails, so Track and the alert see it; a run logs it and goes on. */
-  const disownFailure = async (twinId, trackId) => {
-    if (!push) {
-      await disownTwin(twinId, trackId);
-      return null;
-    }
+  const disownFailure = async (twinId, trackId, carried) => {
+    if (!push) return disownTwin(twinId, trackId, carried).then(() => null);
     try {
-      if (await disownTwin(twinId, trackId) !== 'conflict') return null;
+      if (await disownTwin(twinId, trackId, carried) !== 'conflict') return null;
     } catch (err) {
-      logger.error(`[track-push] twin not disowned id=${twinId}`, { error: err.message, stack: err.stack });
+      summary.failures++;
+      logger.error(`[track-push] twin not disowned id=${twinId}, ${unfolded}`, { error: err.message, stack: err.stack });
     }
     return { action: 'failed', status: 'twinConflict' };
   };
@@ -255,7 +256,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     const id = String(track.track_project_id);
     const existing = await lookup.stored(id);
     const guid = track.epic_guid ? String(track.epic_guid) : null;
-    const relink = !existing && guid ? await lookup.eagleOnly(guid) : null;
+    const relink = ownTwin(!existing && guid ? await lookup.eagleOnly(guid) : null, id);
     const mergeOpts = { now, phases, works };
     // Before the row, so its derived values read the documents this run wrote.
     const writeDocs = async () => {
@@ -271,7 +272,8 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       const row = withDerived(stamp({ ...current, ...changes, sources: { ...current.sources, track } }, pushedAt, current),
         current, derive);
       const drift = drifted(derive, changes, row, current);
-      return { changes, held, row, drift, moved: Object.keys(changes).length > 0 && !drift };
+      const moved = Object.keys(changes).length > 0 && !drift;
+      return { changes, held, row, drift, moved, rewrite: moved || drift };
     };
     const countLists = () => { if (phases) summary.phases++; if (works) summary.works++; };
     const landed = (inserted) => !live || inserted === 'saved';
@@ -284,8 +286,9 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       await heal(relink);
       await writeDocs();
       // The twin as stored now, not at run start: a tags PUT or a narrowing since must carry.
+      let twin;
       const inserted = await insert(id, async () => {
-        const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
+        twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
         const derive = await inputs();
         const merged = mergeTrackProject(track, eagleOf(twin), { ...mergeOpts, ...derive });
         // The Track row is a new record: it must not inherit the twin's sync-out state.
@@ -296,7 +299,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       if (inserted === 'conflict') return { action: 'failed', status: 'conflict' };
       if (inserted === 'exists') return { action: 'skipped', reason: 'createdBehind' };
       if (landed(inserted)) { summary.relinked++; countLists(); }
-      const failure = inserted === 'saved' && await disownFailure(relink.id, id);
+      const failure = inserted === 'saved' && await disownFailure(relink.id, id, twin);
       return failure ? { ...failure, written: true } : { action: 'relinked' };
     }
 
@@ -329,14 +332,14 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       return { action: 'skipped', reason: 'apiRow' };
     }
     await heal(existing);
-    // A retry repairs a relink whose first try left the twin owned.
+    // A retry repairs a relink whose first try left the twin owned; its staff lists wait for fold-twins.
     const twinOwed = push && guid ? await disownFailure(eagleOnlyProjectId(guid)) : null;
     if (twinOwed) return twinOwed;
     await writeDocs();
     if (isStalePush(pushedAt, existing, TRACK_PUSHED_AT)) return stale();
     if (push && existing.isDeleted === true) logger.warn(`[track-push] push on a deleted row id=${id}`);
 
-    const { changes: found, held, drift, moved: changed } = await rebuild(existing);
+    const { changes: found, held, drift, moved: changed, rewrite } = await rebuild(existing);
     const stateMove = 'projectState' in found
       ? `${JSON.stringify(existing.projectState ?? null)} -> ${JSON.stringify(found.projectState)}`
       : null;
@@ -349,7 +352,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
     };
     // A row owing a slug code is written even when Track says nothing new; the migration stamps
     // `shortCodeSource`, so the next night skips it.
-    if (!changed && !drift && !owes(existing)) {
+    if (!rewrite && !owes(existing)) {
       tally();
       return { action: 'unchanged', ...result };
     }
@@ -358,7 +361,7 @@ function rowWriter({ repo, links, live, now, skipLinkUpkeep, summary, lookup, on
       if (changed) summary.updated++;
       // A migration with no free slug keeps its code, so only a real move counts.
       if (owesLink(existing) && await mint({ ...existing })) summary.shortLinks++;
-      return { action: changed ? 'updated' : 'unchanged', ...result };
+      return { action: rewrite ? 'updated' : 'unchanged', ...result };
     }
 
     // Rebuilt off the row that stored, guarded on its revision: a whole-item write from the
@@ -400,14 +403,8 @@ async function writeTrackProject(apiProject, { phases, works, pushedAt = null, d
     summary: emptySummary(0),
     lookup: {
       stored: (id) => repo.getById(systemAccess(), id),
-      eagleOnly: async (guid) => {
-        const row = await repo.readForWrite(eagleOnlyProjectId(guid));
-        return row && row.sourceSystem === 'eagle' ? row : null;
-      },
-      native: async (guid) => {
-        const row = await repo.readForWriteByEagleId(guid);
-        return isNativeProject(row) ? row : null;
-      }
+      eagleOnly: (guid) => repo.readForWrite(eagleOnlyProjectId(guid)).then(row => (row?.sourceSystem === 'eagle' ? row : null)),
+      native: (guid) => repo.readForWriteByEagleId(guid).then(row => (isNativeProject(row) ? row : null))
     }
   });
   const result = await writer.write(apiProject, { phases, works, pushedAt });
@@ -420,4 +417,4 @@ const emptySummary = (trackProjects) => ({
   shortLinks: 0, healed: 0, nativeClash: 0, held: 0, stateMoved: 0, stale: 0, adopted: 0, derivedDrift: 0, failures: 0
 });
 
-module.exports = { HEAL_CAP, trackChanges, writeTrackProject, rowWriter, emptySummary, owesLink, foldTwin };
+module.exports = { HEAL_CAP, trackChanges, writeTrackProject, rowWriter, emptySummary, owesLink, foldTwin, settleTwin };
