@@ -134,9 +134,8 @@ async function restoreSteps({ demi, ownerOf }, target, entries, logged, note) {
 }
 
 /**
- * `--rollback-incomplete` of a pending override batch `target`, as rollback-business-works.js undoes a load: restore
- * steps written ahead in a rollback batch (or resuming `resumed`), then the re-derive; `target` is marked rolledBack
- * only once the count check passes. Resolves the exit code.
+ * `--rollback-incomplete` of a pending override batch, as a load is undone: restores written ahead in a rollback batch,
+ * then the re-derive; `target` is marked rolledBack only once the count check passes.
  */
 async function undoOverrideBatch(ctx, { target, entries, lease, resumed }) {
   const { demi, now, write } = ctx;

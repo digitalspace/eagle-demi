@@ -48,9 +48,8 @@ async function bodyOf(res, projectId) {
 }
 
 /**
- * The first public batch project, tried in turn, with a batch sheet work a sheet read would show (a reverted marker
- * shows none), read anonymously with no Authorization header; resolves `{projectId, shown}` (those works the response
- * holds), or null.
+ * The first public batch project whose batch sheet works a sheet read shows (a reverted marker shows none), read with no
+ * Authorization header; resolves `{projectId, shown}`, the ones the response holds, or null.
  */
 async function probe({ demi, fetchFn, env }, entries) {
   const base = API_BASE[env] || refuse(`no API base for ${env}`);
