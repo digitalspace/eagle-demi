@@ -239,6 +239,8 @@ function currentInvestment(entries) {
 }
 
 module.exports = {
+  ENTRY_SCHEMAS,
+  SERVER_KEYS,
   unwritableStaffFields,
   staffFieldChanges,
   observeInvestment,
