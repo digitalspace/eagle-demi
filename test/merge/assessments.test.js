@@ -389,7 +389,7 @@ test('the merge derives assessments', async (t) => {
     const merged = carryDemiOnlyFields(mergeTrackProject({ track_project_id: 9001 }, raw, opts), null, undefined, opts);
     assert.deepStrictEqual([merged.works, merged.legislationTransitions,
       yearOf(merged, 2018).phases.map(phase => phase.source), merged.activeWork.trackWorkId],
-    [undefined, [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }], ['track', 'track'], 1102]);
+    [opts.worksForDerive, [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }], ['track', 'track'], 1102]);
   });
 
   await t.test('a push rebuild keeps carried documentPhases', () => {
