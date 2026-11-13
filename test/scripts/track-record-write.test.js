@@ -15,7 +15,7 @@ const { writeTrackRecord } = require('../../src/scripts/track-record-write');
 const PROJECT = '1001';
 const LATER = 1762675200000 + 1000;
 const TRANSITION = 'Project Transitioning FROM the EA Act (2002)';
-const DERIVED_PATHS = ['/legislationTransitions', '/assessments', '/phaseIds', '/activeWork'];
+const DERIVED_PATHS = ['/legislationTransitions', '/assessments', '/phaseIds', '/activeWork', '/works'];
 
 const fixture = (name) => structuredClone(require(`../fixtures/track-records/${name}.json`));
 
@@ -77,7 +77,7 @@ test('track record writer', async (t) => {
     assert.strictEqual(storedWork(store).updatedAt, '2026-01-01T00:00:00.000Z');
   });
 
-  await t.test('a phase PUT that moves no derived value writes the work document and not the row', async (t) => {
+  await t.test('a phase PUT that moves no assessment value writes the work document and only the row works', async (t) => {
     const store = await seeded(t);
     const { events: _events, ...phase } = fixture('new_work').work.phases[0];
 
@@ -85,7 +85,8 @@ test('track record writer', async (t) => {
       { pushedAt: LATER, workTypeId: 6, phase: { ...phase, number_of_days: 120, work_id: 2001 } });
 
     assert.strictEqual(result.status, 'applied');
-    assert.deepStrictEqual([writesTo(store, 'works').length, writesTo(store, 'projects').length], [1, 0]);
+    const rowPaths = writesTo(store, 'projects').flatMap(write => write.operations.map(op => op.path));
+    assert.deepStrictEqual([writesTo(store, 'works').length, rowPaths], [1, ['/works']]);
   });
 
   await t.test('a record sent again skips the document save and still repairs the row', async (t) => {
