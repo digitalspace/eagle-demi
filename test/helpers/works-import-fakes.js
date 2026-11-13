@@ -46,9 +46,15 @@ function fakeLists(t) {
     if (current && current._etag !== etag) throw coded(412, 'precondition');
     return items.delete(keyOf(id, kind));
   });
-  t.mock.method(cosmos, 'query', async (_c, spec, { partitionKey }) => ({
-    items: [...items.values()].filter(item => item.kind === partitionKey && item.status === spec.parameters[0].value).map(item => item.id)
-  }));
+  t.mock.method(cosmos, 'query', async (_c, spec, { partitionKey }) => {
+    const [{ value }] = spec.parameters;
+    const kept = [...items.values()].filter(item => item.kind === partitionKey);
+    if (spec.query.includes('MAX(c.seq)')) {
+      const seqs = kept.filter(item => item.batchId === value).map(item => item.seq);
+      return { items: seqs.length ? [Math.max(...seqs)] : [] };
+    }
+    return { items: kept.filter(item => item.status === value).map(item => item.id) };
+  });
   return { get: (id, kind) => items.get(keyOf(id, kind)), all: () => [...items.values()], set: put };
 }
 

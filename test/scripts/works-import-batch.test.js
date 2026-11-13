@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const batches = require('../../src/scripts/works-import-batch');
+const cosmos = require('../../src/db/cosmos-nosql');
 const { fakeLists } = require('../helpers/works-import-fakes');
 const lists = require('../../src/repositories/lists');
 const { resolveAccess } = require('../../src/helpers/access-sql');
@@ -100,4 +101,58 @@ test('lists reads return no ImportBatch, ImportBatchEntry or ImportLock item', a
   const reads = [[LOCK_ID, KINDS.LOCK], ['b1', KINDS.BATCH], ['b1:1', KINDS.ENTRY]]
     .flatMap(([id, kind]) => [resolveAccess({}), staff].map(access => lists.getById(access, id, kind)));
   assert.deepEqual(await Promise.all(reads), [null, null, null, null, null, null]);
+});
+
+test('takeOverLock refuses a lock with no readable expiry or held by another batch', async (t) => {
+  const store = fakeLists(t);
+  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: 'b1', expiresAt: 'soon' });
+  await assert.rejects(batches.takeOverLock('b1', T0), /no readable expiry/);
+  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: 'other', expiresAt: new Date(T0 - 1).toISOString() });
+  await assert.rejects(batches.takeOverLock('b1', T0), /another batch/);
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK).batchId, 'other');
+});
+
+test('listEntries refuses a batch with a missing entry below its highest seq', async (t) => {
+  const { store, run } = await started(t);
+  await batches.writeAhead(run, { target, action: 'create' }, async () => '"w1"', T0);
+  await batches.writeAhead(run, { target, action: 'update' }, async () => '"w2"', T0);
+  assert.deepEqual((await batches.listEntries('b1')).map(entry => entry.seq), [1, 2]);
+  await cosmos.remove(batches.CONTAINER, 'b1:1', KINDS.ENTRY, { etag: store.get('b1:1', KINDS.ENTRY)._etag });
+  await assert.rejects(batches.listEntries('b1'), /missing an entry/);
+});
+
+test('listEntries refuses a complete batch that lost its last entry', async (t) => {
+  const { store, lease, batch, run } = await started(t);
+  await batches.writeAhead(run, { target, action: 'create' }, async () => '"w1"', T0);
+  await batches.writeAhead(run, { target, action: 'update' }, async () => '"w2"', T0);
+  await batches.completeBatch(batch, lease, T0);
+  assert.equal(store.get('b1', KINDS.BATCH).entryCount, 2);
+  await cosmos.remove(batches.CONTAINER, 'b1:2', KINDS.ENTRY, { etag: store.get('b1:2', KINDS.ENTRY)._etag });
+  await assert.rejects(batches.listEntries('b1'), /not the 2 it completed with/);
+});
+
+test('listEntries reads at most 100 entries at a time', async (t) => {
+  const store = fakeLists(t);
+  for (let seq = 1; seq <= 150; seq += 1) store.set({ kind: KINDS.ENTRY, id: `b1:${seq}`, batchId: 'b1', seq, state: 'done' });
+  const read = cosmos.readItem;
+  let inFlight = 0;
+  let most = 0;
+  t.mock.method(cosmos, 'readItem', async (...args) => {
+    inFlight += 1;
+    most = Math.max(most, inFlight);
+    await new Promise(resolve => setImmediate(resolve));
+    inFlight -= 1;
+    return read(...args);
+  });
+  assert.equal((await batches.listEntries('b1')).length, 150);
+  assert.equal(most, 100);
+});
+
+test('two takers of an expired lock, one wins', async (t) => {
+  const store = fakeLists(t);
+  store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: 'b1', expiresAt: new Date(T0 - 1).toISOString() });
+  const results = await Promise.allSettled([batches.takeOverLock('b1', T0), batches.takeOverLock('b1', T0)]);
+  assert.deepEqual(results.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.match(results.find(result => result.status === 'rejected').reason.message, /another run took/);
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK)._etag, results.find(result => result.status === 'fulfilled').value.etag);
 });

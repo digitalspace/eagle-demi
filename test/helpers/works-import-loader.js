@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { run } = require('../../src/scripts/load-business-works');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
+const { keptFrom } = require('../../src/repositories/works');
 const { devboxKeysFromPem, fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
 const { COLUMNS } = require('../../src/scripts/works-crosswalk');
 const { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, register, amendment, trackWork } = require('./works-import-fakes');
@@ -42,8 +43,9 @@ function fakeDemi() {
     return state.row._etag;
   };
   let n = 0;
-  const saveWork = async (doc) => {
-    const stored = { ...doc, _etag: `"w${n += 1}"` };
+  // As works.save: an update keeps `source`, `owner` and the adopt fields of the document it replaces.
+  const saveWork = async (doc, { owner, existing } = {}) => {
+    const stored = { ...(existing ? keptFrom(doc, existing, owner) : doc), _etag: `"w${n += 1}"` };
     docs.set(doc.id, stored);
     state.saves += 1;
     return { status: 'written', etag: stored._etag };
