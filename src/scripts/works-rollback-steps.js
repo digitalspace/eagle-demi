@@ -10,6 +10,8 @@ const PROJECT_ACTIONS = new Set(['addExternalId', 'appendHistory', 'closeHistory
 const PROJECT_DONE = new Set(['removed', 'restored', 'unchanged', 'absent']);
 
 const refuse = (message) => { throw new Error(message); };
+/** `doc` without the Cosmos system keys (`_etag`, `_ts`, ...). */
+const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 const stepKey = (action, target) => `${action}|${JSON.stringify(Object.entries(target).sort())}`;
 const sameValue = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
@@ -86,6 +88,18 @@ async function rederive(demi, projectIds, lease, now) {
   return { counts, ok: counts.patched + counts.unchanged === projectIds.length };
 }
 
+/** Writes the count check's counts and the project count. */
+function writeCounts(write, counts, projectCount) {
+  Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
+  write(`projects=${projectCount}`);
+}
+
+/** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
+function requireDeriveEnv(env = process.env) {
+  const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
+  if (unset) refuse(`${unset} is not set`);
+}
+
 /** Per step key: how many of its entries are done and whether one is an intent. */
 function loggedOf(log) {
   const logged = new Map();
@@ -105,4 +119,4 @@ function openSteps(log) {
     !log.slice(index + 1).some(later => later.state === 'done' && stepKey(later.action, later.target) === stepKey(entry.action, entry.target)));
 }
 
-module.exports = { stepKey, projectSteps, rederive, loggedOf, openSteps };
+module.exports = { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv, writeCounts };

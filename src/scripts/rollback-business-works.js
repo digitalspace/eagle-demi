@@ -1,17 +1,19 @@
 'use strict';
 
-// Undoes a business works load on test: `--rollback <batchId>` for the latest complete load batch,
-// `--rollback-incomplete <batchId>` for a pending one whose lease expired. Output names project and document ids and counts only.
+// Undoes or adjusts a business works load on test; HELP lists the modes. Output names project and document ids and counts only.
 
 const crypto = require('crypto');
 const { isDeepStrictEqual, parseArgs } = require('util');
 const works = require('../repositories/works');
 const projects = require('../repositories/projects');
 const history = require('../repositories/project-staff-history');
-const { deriveInputs } = require('../domain/works-derive');
+const { systemAccess } = require('../helpers/access-sql');
+const { deriveInputs, loadWorks } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
-const { stepKey, projectSteps, rederive, loggedOf, openSteps } = require('./works-rollback-steps');
+const { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv, writeCounts } = require('./works-rollback-steps');
+const { rederiveBatch, timedFetch } = require('./works-import-rederive');
+const { revertOverride, reapplyOverride, undoOverrideBatch } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -25,7 +27,6 @@ const BACKUP_KEYS = ['backup', 'expect-backup-sha256', 'devbox-key', 'expect-dev
 
 const refuse = (message) => { throw new Error(message); };
 const docKey = ({ projectId, id }) => `${projectId}|${id}`;
-const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 const endedAt = batch => String(batch.completedAt ?? batch.abandonedAt);
 
 /** `doc` without the keys works.save copies from the document it replaces: system keys, `source`, `owner` and the adopt fields. */
@@ -44,6 +45,8 @@ function liveDemi() {
     removeExternalId: (projectId, pair) => history.removeExternalId(projectId, pair),
     removeHistory: (projectId, field, entryId, expectedSha256) => history.removeHistory(projectId, field, entryId, expectedSha256),
     restoreHistory: (projectId, field, prior, expectedSha256) => history.restoreHistory(projectId, field, prior, expectedSha256),
+    project: projectId => projects.getById(systemAccess(), projectId),
+    readWorkIds: async (row, sources) => (await loadWorks(row, { sources })).worksForDerive.map(work => work.workId),
     patchDerived: projectId => projects.patchDerived(projectId, { inputsFor: deriveInputs })
   };
 }
@@ -162,23 +165,12 @@ async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed
   write(`undone=${steps.length}`);
   write(`changed=${changed.size}`);
   changed.forEach(projectId => write(`changedProject=${projectId}`));
-  Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
-  write(`projects=${touched.length}`);
+  writeCounts(write, counts, touched.length);
   if (!ok) return 1;
   await batches.markBatch(target, 'rolledBack', now());
   await batches.completeBatch(header, lease, now());
   lease.released = true;
   return 0;
-}
-
-/** Frees the lock unless the run completed; a failed release is logged so the first error stands. */
-async function releaseQuietly(lease) {
-  if (lease.released) return;
-  try {
-    await batches.releaseLock(lease);
-  } catch (err) {
-    logger.warn('[rollback-business-works] import lock release failed', { error: err.message });
-  }
 }
 
 /** The pending rollback batch of `batchId` that a failed run left, or null. */
@@ -199,9 +191,9 @@ async function stillResumed(batchId, resumed) {
   return now;
 }
 
-async function loadBatch(batchId, statuses, message) {
+async function loadBatch(batchId, statuses, message, batchKind = 'load') {
   const batch = await batches.readBatch(batchId);
-  return batch && batch.batchKind === 'load' && statuses.includes(batch.status) ? batch : refuse(message);
+  return batch && batch.batchKind === batchKind && statuses.includes(batch.status) ? batch : refuse(message);
 }
 
 /** Done entries of the override and rollback batches that started after `target`, in the order they ended; a rollback's carry `undoes`. */
@@ -230,24 +222,32 @@ async function rollback(o, ctx) {
     if (!target || target.id !== batchId) refuse('--rollback acts only on the latest complete load batch');
     return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
 async function rollbackIncomplete(o, ctx) {
   requireDeriveEnv();
   const batchId = o['rollback-incomplete'];
+  // An override batch is undone from the prior values its entries hold, so it takes no backup.
+  const kind = (await batches.readBatch(batchId))?.batchKind;
+  if (kind !== 'load' && kind !== 'override') refuse('--rollback-incomplete acts only on a pending load or override batch');
+  const missingKey = BACKUP_KEYS.find(key => !o[key]);
+  if (kind === 'override' && BACKUP_KEYS.some(key => o[key])) refuse('--rollback-incomplete of an override batch takes no backup flags');
+  if (kind === 'load' && missingKey) refuse(`--rollback-incomplete of a load batch needs --${missingKey}`);
   const seen = await pendingRollbackOf(batchId);
   const statuses = seen ? ['pending', 'rolledBack'] : ['pending'];
-  const message = '--rollback-incomplete acts only on a pending load batch';
-  await loadBatch(batchId, statuses, message);
+  const message = `--rollback-incomplete acts only on a pending ${kind} batch`;
+  await loadBatch(batchId, statuses, message, kind);
   const lease = await batches.takeOverLock(batchId, ctx.now(), [batchId, seen?.id].filter(Boolean));
   try {
     const resumed = await stillResumed(batchId, seen);
-    const target = await loadBatch(batchId, statuses, message);
-    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
+    const target = await loadBatch(batchId, statuses, message, kind);
+    const entries = await batches.listEntries(batchId);
+    if (kind === 'override') return await undoOverrideBatch(ctx, { target, entries, lease, resumed });
+    return await undoBatch(o, ctx, { target, entries, laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
@@ -269,27 +269,45 @@ async function abandonRollback(o, { now, write }) {
     write(`abandoned=${rollbackId}`);
     return 0;
   } finally {
-    await releaseQuietly(lease);
+    await batches.releaseQuietly(lease);
   }
 }
 
+/** Frees a lock a stopped run left with no pending batch behind it. */
+async function clearLock(o, { now, write }) {
+  write(`clearedLock=${await batches.clearStaleLock(now())}`);
+  return 0;
+}
+
 const BACKUP_OPTIONS = Object.fromEntries(BACKUP_KEYS.map(name => [name, { type: 'string' }]));
+const MARKER_OPTIONS = { project: { type: 'string' }, all: { type: 'boolean' } };
 // One entry per mode: its flags, the ones it needs, and its runner, which resolves the exit code.
 const MODES = {
   rollback: { options: { rollback: { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback', ...BACKUP_KEYS], run: rollback },
   'rollback-incomplete': {
-    options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete', ...BACKUP_KEYS], run: rollbackIncomplete
+    options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete'], run: rollbackIncomplete
   },
-  'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback }
+  'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback },
+  'revert-override': { options: { 'revert-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['revert-override'], run: revertOverride },
+  'reapply-override': { options: { 'reapply-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['reapply-override'], run: reapplyOverride },
+  rederive: { options: { rederive: { type: 'string' }, unflip: { type: 'boolean' } }, required: ['rederive'], run: rederiveBatch },
+  'clear-stale-lock': { options: { 'clear-stale-lock': { type: 'boolean' } }, required: ['clear-stale-lock'], run: clearLock }
 };
 
 const HELP = [
-  'Usage: rollback-business-works.js <mode> --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem>',
-  '         --expect-devbox-fingerprint <hex>',
+  'Usage: rollback-business-works.js <mode>;',
+  '  --rollback and --rollback-incomplete of a load batch need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>                 undo the latest complete load batch',
-  '  --rollback-incomplete <batchId>      undo a pending load batch whose lease expired',
+  '  --rollback-incomplete <batchId>      undo a pending load or override batch whose lease expired',
   '  --abandon-rollback <rollbackBatchId> give up a stuck rollback batch (no backup flags); a fresh rollback then finishes',
+  '  --revert-override                    turn the sheet override marker off, with --project <id> or --all',
+  '  --reapply-override                   turn it back on, with --project <id> or --all',
+  '      --all: every marker the latest complete load batch wrote',
+  '      a failed revert or reapply leaves its override batch pending: clear it with --rollback-incomplete <id>',
+  '  --rederive <batchId>                 after sheet joins WORKS_READ_SOURCES: the public read must show a batch sheet work',
+  '  --rederive <batchId> --unflip        after sheet leaves WORKS_READ_SOURCES: the public read must show none',
+  '  --clear-stale-lock                   delete an expired lock a stopped run left, when its batch is not pending',
   'A failed run leaves its rollback batch pending; the same command resumes it.',
   'Export WORKS_READ and WORKS_READ_SOURCES with the API\'s values first: the devbox shell has no app settings.'
 ];
@@ -308,26 +326,20 @@ function optionsOf(argv) {
   const mode = MODES[named[0]];
   const stray = Object.keys(values).find(key => !Object.hasOwn(mode.options, key));
   if (stray) refuse(`--${stray} does not apply to --${named[0]}`);
-  const missing = mode.required.find(key => typeof values[key] !== 'string' || values[key] === '');
+  const missing = mode.required.find(key => values[key] === undefined || values[key] === '');
   if (missing) refuse(`--${named[0]} needs --${missing}`);
   return { mode, o: values };
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {write, demi, openBackup, now} */
-async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), openBackup, now = Date.now } = {}) {
+/** Resolves the exit code. @param {object} [deps] test seam {write, demi, openBackup, now, fetchFn} */
+async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), openBackup, now = Date.now, fetchFn = timedFetch } = {}) {
   const { help, mode, o } = optionsOf(argv);
   if (help) {
     HELP.forEach(write);
     return 0;
   }
-  testEnvironment();
-  return mode.run(o, { demi, openBackup, now, write });
-}
-
-/** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
-function requireDeriveEnv(env = process.env) {
-  const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
-  if (unset) refuse(`${unset} is not set`);
+  const env = testEnvironment();
+  return mode.run(o, { demi, openBackup, now, write, fetchFn, env, ownerOf: works.ownerOf });
 }
 
 /** The command line; the backup reader loads only when a mode opens a backup. */
@@ -335,7 +347,7 @@ function main(argv) {
   return run(argv, { openBackup: args => require('./works-import-backup').openBackup(args) });
 }
 
-module.exports = { run, main, liveDemi, requireDeriveEnv };
+module.exports = { run, main, liveDemi };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {

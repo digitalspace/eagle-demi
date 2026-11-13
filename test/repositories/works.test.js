@@ -249,7 +249,7 @@ test('works repository', async (t) => {
   });
 
   await t.test('findBySourceKey finds a tombstone and refuses a missing key or one held twice', async (t) => {
-    const cosmosStore = store(t, [{ ...SHEET, deleted: true }, TRACK]);
+    store(t, [{ ...SHEET, deleted: true }, TRACK]);
 
     assert.strictEqual((await works.findBySourceKey('p1', '8:assessment:x')).id, 'sheet-a');
     assert.strictEqual(await works.findBySourceKey('p1', 'none'), null);

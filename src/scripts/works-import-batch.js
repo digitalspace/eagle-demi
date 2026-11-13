@@ -4,6 +4,7 @@
 // None carries `read[]`, so no caller-facing lists read returns them, as with the catalog items.
 
 const cosmos = require('../db/cosmos-nosql');
+const { logger } = require('../utils/logger');
 
 const CONTAINER = 'lists';
 const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: 'ImportBatchEntry' });
@@ -26,7 +27,8 @@ function leaseLost(message, cause) {
 
 /** Takes the lock for `batchId`; refused while any lock item exists, expired or not, or any batch is pending. */
 async function takeLock(batchId, now = Date.now()) {
-  if (await readLock()) refuse('the import lock exists, expired or not');
+  const held = await readLock();
+  if (held) refuse(`the import lock exists, expired or not (batch ${held.batchId}, expires ${held.expiresAt}); see --clear-stale-lock`);
   if ((await batchIdsWithStatus('pending')).length) refuse('an ImportBatch is pending');
   const expiresAt = new Date(now + LEASE_MS).toISOString();
   try {
@@ -100,6 +102,30 @@ async function releaseLock(lease) {
   await cosmos.remove(CONTAINER, LOCK_ID, KINDS.LOCK, { etag: lease.etag });
 }
 
+/**
+ * Deletes a lock a hard stop left behind, under its etag; resolves its batchId. Refused while the lease is fresh, or
+ * while its batch, or a rollback of that batch, is pending: --rollback-incomplete or --abandon-rollback clears those.
+ */
+async function clearStaleLock(now = Date.now()) {
+  const lock = await readLock();
+  if (!lock) refuse('there is no import lock');
+  if (now < Date.parse(lock.expiresAt)) refuse(`the import lease of batch ${lock.batchId} is fresh until ${lock.expiresAt}`);
+  const pending = (await batchesWithStatus('pending')).find(one => one.id === lock.batchId || one.targetBatchId === lock.batchId);
+  if (pending) refuse(`batch ${pending.id} is pending; clear it with --rollback-incomplete or --abandon-rollback`);
+  await cosmos.remove(CONTAINER, LOCK_ID, KINDS.LOCK, { etag: lock._etag });
+  return lock.batchId;
+}
+
+/** releaseLock in a `finally`, unless the run completed (`lease.released`); a failed release is logged so the first error stands. */
+async function releaseQuietly(lease) {
+  if (lease.released) return;
+  try {
+    await releaseLock(lease);
+  } catch (err) {
+    logger.warn('[works-import] import lock release failed', { error: err.message });
+  }
+}
+
 /** The ImportBatch header with its `_etag`; null when absent. */
 async function readBatch(batchId) {
   return cosmos.readItem(CONTAINER, batchId, KINDS.BATCH);
@@ -163,11 +189,11 @@ function checkedTarget(target) {
 
 /**
  * Records the intent entry, runs `write`, then marks the entry done. `write` resolves the written etag, or
- * `{writtenEtag, result}` to also record a `result` word; `run` is `{batchId, lease, seq}`, `seq` counting up across the batch.
+ * `{writtenEtag, result}` to also record a `result` word; `run` is `{batchId, lease, seq}`. `prior`: a marker's values before, for an undo.
  */
-async function writeAhead(run, { target, action, priorEtag = null }, write, now = Date.now()) {
+async function writeAhead(run, { target, action, priorEtag = null, prior }, write, now = Date.now()) {
   if (!ACTIONS.includes(action)) refuse(`unknown ImportBatchEntry action ${action}`);
-  const entry = { target: checkedTarget(target), action, priorEtag };
+  const entry = { target: checkedTarget(target), action, priorEtag, ...(prior !== undefined && { prior }) };
   await beforeWrite(run.lease, now);
   run.seq += 1;
   const item = { kind: KINDS.ENTRY, id: `${run.batchId}:${run.seq}`, batchId: run.batchId, seq: run.seq, ...entry, state: 'intent' };
@@ -180,6 +206,6 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
-  takeLock, takeOverLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead,
+  takeLock, takeOverLock, beforeWrite, releaseLock, releaseQuietly, clearStaleLock, createBatch, completeBatch, writeAhead,
   readLock, readBatch, batchesWithStatus, latestCompleteBatch, listEntries, markBatch
 };
