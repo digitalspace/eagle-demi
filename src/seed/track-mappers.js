@@ -5,7 +5,9 @@
 
 const { workActYear } = require('../merge/assessment-work');
 const { entryForTrackCode } = require('../domain/phase-catalog');
-const { TRACK_WORK_TYPE_CODES, dayOf, summaryOf, transitionDateOf } = require('../domain/work-model');
+const {
+  TRACK_WORK_TYPE_CODES, compareText, dayOf, sourceOf, summaryOf, transitionDateOf
+} = require('../domain/work-model');
 
 /** Track `WorkTypeEnum` ids mirrored into `works[]`; 4, 8, 12, 13 and 14 stay out. */
 const MIRRORED_WORK_TYPE_IDS = new Set([1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 16]);
@@ -299,7 +301,7 @@ function publicWorkOf(doc, projectName, catalog) {
   const track = isTrackDoc(doc);
   return {
     workId: doc.id,
-    source: doc.source ?? (track ? 'track' : null),
+    source: sourceOf(doc),
     trackWorkId: trackOnly(doc, doc.trackWorkId),
     workTypeId: trackOnly(doc, doc.workTypeId),
     // Read-time fallbacks for a Track document the nightly has not rewritten yet.
@@ -332,12 +334,10 @@ function resolvedTransition(transitionOut, works, actYear) {
   return { date: dayOf(date), dateSource: date === fromTrack ? 'track' : 'sheet' };
 }
 
-const textOrder = (a, b) => (String(a ?? '') < String(b ?? '') ? -1 : String(a ?? '') > String(b ?? '') ? 1 : 0);
-
 /** Track documents by Track work id, then the rest by start date, then id. */
 const byPublicOrder = (a, b) => isTrackDoc(b) - isTrackDoc(a) || (isTrackDoc(a)
   ? a.trackWorkId - b.trackWorkId
-  : textOrder(a.startDate, b.startDate) || textOrder(a.id, b.id));
+  : compareText(a.startDate, b.startDate) || compareText(a.id, b.id));
 
 /**
  * Stored work documents as the public `works[]`: an allow-list at every level, flat `milestones`,

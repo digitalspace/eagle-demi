@@ -165,6 +165,6 @@ async function remove({ projectId, id }, { owner, etag } = {}) {
 }
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, ownerOf, listByProject, listForRead, liveProjectIds, get, findBySourceKey, save, tombstone,
-  remove
+  CONTAINER, PARTITION_FIELD, PRIVATE_KEYS, ownerOf, listByProject, listForRead, liveProjectIds, get, findBySourceKey,
+  save, tombstone, remove
 };

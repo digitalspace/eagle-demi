@@ -220,6 +220,9 @@ param worksWrite bool = false
 @description('Compose project works from the `works` container instead of the project row. Off until the parity check passes.')
 param worksRead bool = false
 
+@description('Sources whose works a read keeps: a comma list of track, sheet and demi. Any other token stops the app.')
+param worksReadSources string = 'track'
+
 @description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
 param assessmentPass bool = false
 
@@ -779,6 +782,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'WORKS_READ'
           value: worksRead ? 'true' : 'false'
+        }
+        {
+          name: 'WORKS_READ_SOURCES'
+          value: worksReadSources
         }
         {
           name: 'ASSESSMENT_PASS'
