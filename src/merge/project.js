@@ -452,7 +452,7 @@ function applyTrackPrecedence(merged, track, eagle) {
  * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
  * @param {Array}       [opts.works]   stored Track works; absent leaves `legislationTransitions` out
- * @param {Array}       [opts.worksForDerive] public-shape works; beat `works` for transitions
+ * @param {Array}       [opts.worksForDerive] public-shape works; beat `works` for transitions, and stored when non-empty
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
@@ -488,12 +488,11 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // Eagle fills the gaps Track cannot.
   if (eagle) Object.assign(merged, pickEagleBlocks(eagle));
 
-  // Track's dated phases, beside Eagle's own `currentPhaseName` and `phaseHistory`; omitted, not
-  // emptied, when Track has none, so an absent feed never blanks a stored one.
-  if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
-  // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
-  // since an empty list still says Track has no transition date.
-  if (Array.isArray(opts.works) && opts.works.length) merged.works = opts.works;
+  // Phases and works are omitted, not emptied, when none came, so an absent feed never blanks a stored list; the
+  // public works win, as the GET composes them. Any fetched list rebuilds the transitions: empty means no Track date.
+  if (hasValue(opts.phases)) merged.phases = opts.phases;
+  const storedWorks = [opts.worksForDerive, opts.works].find(hasValue);
+  if (storedWorks) merged.works = storedWorks;
   const transitionWorks = opts.worksForDerive ?? opts.works;
   if (Array.isArray(transitionWorks)) {
     merged.legislationTransitions = legislationTransitions(merged.legislationYearList, transitionWorks);

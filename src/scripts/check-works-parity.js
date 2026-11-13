@@ -22,7 +22,7 @@ const listOf = (value) => (Array.isArray(value) ? value : []);
 const holdsWorks = (row) => Array.isArray(row.works) && row.works.length > 0;
 const comparable = (row) => withoutAdded({ works: row.works, phases: row.phases });
 
-/** Whether the composed works and phases equal the row's; an empty container never does. `loadWorks(row)` reads Track only. */
+/** Whether the composed works and phases equal the row's; an empty container never does. */
 function matches(row, worksForDerive) {
   return worksForDerive.length > 0 && isDeepStrictEqual(comparable(composedRow(row, worksForDerive)), comparable(row));
 }
@@ -30,7 +30,8 @@ function matches(row, worksForDerive) {
 /** Resolves the exit code. @param {object} [deps] test seam {projects, loadWorks, workProjectIds} */
 async function run(deps = {}) {
   const projects = deps.projects || projectsRepository;
-  const load = deps.loadWorks || loadWorks;
+  // With WORKS_READ on the row stores the works of WORKS_READ_SOURCES, so parity composes from the same ones.
+  const load = deps.loadWorks || ((row) => loadWorks(row, config.worksRead ? { sources: config.worksReadSources } : {}));
   const workProjectIds = deps.workProjectIds || (() => worksRepository.liveProjectIds());
   const summary = { projects: 0, failures: 0, storedMismatch: 0, orphaned: 0 };
   try {

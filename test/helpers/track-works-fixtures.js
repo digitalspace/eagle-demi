@@ -48,11 +48,13 @@ const eagleDoc = () => ({
 
 const TRACK = { track_project_id: 207, name: 'Nicomen Wind Energy', epic_guid: PROJECT_EAGLE_ID };
 
+/** Track's nested works as the row stores them with WORKS_READ off. */
+const storedWorks = () => trackWorks().map(work => trackWorkToPublic(work, phaseEventsOf(work)));
+
 /** The row as the nightly stores it, `works` and `phases` included unless `bare`. */
 function storedRow({ bare = false } = {}) {
-  const works = trackWorks().map(work => trackWorkToPublic(work, phaseEventsOf(work)));
   const phases = phaseEventsOf(trackWorks()[0]).map(p => p.phase);
-  return { ...mergeTrackProject(TRACK, eagleDoc(), bare ? {} : { phases, works }), _etag: '"0x1"' };
+  return { ...mergeTrackProject(TRACK, eagleDoc(), bare ? {} : { phases, works: storedWorks() }), _etag: '"0x1"' };
 }
 
 const workDocs = (works = trackWorks()) => works.map(work => workDocOf(work, { projectId: '207' }));
@@ -67,4 +69,4 @@ function worksContainer(t, reads) {
   t.mock.method(phaseCatalog, 'load', async () => ({}));
 }
 
-module.exports = { trackWorks, eagleDoc, storedRow, workDocs, worksContainer };
+module.exports = { trackWorks, eagleDoc, storedRow, storedWorks, workDocs, worksContainer };
