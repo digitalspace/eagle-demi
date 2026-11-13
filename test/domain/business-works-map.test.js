@@ -452,6 +452,10 @@ test('a comment period links only to an Eagle period whose read includes the pub
   assert.strictEqual(link, 'cp-public');
 });
 
+test('a deleted public Eagle period is not linked', () => {
+  assert.strictEqual(linkedPeriod([{ id: 'cp-public', dateStarted: '2005-02-01', read: ['public'], isDeleted: true }]).link, null);
+});
+
 test('an Eagle period starting more than three days off is not linked', () => {
   assert.strictEqual(linkedPeriod([{ id: 'cp-public', dateStarted: '2005-02-05', read: ['public'] }]).link, null);
 });

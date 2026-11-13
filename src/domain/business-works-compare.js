@@ -37,9 +37,9 @@ function eagleItemIdFor(row, interruption, list) {
   return onlyId([...new Set(hits.map(idOf))], 'eagleItemAmbiguous', list);
 }
 
-/** The one public Eagle comment period starting within three days of `start`, else null. */
+/** The one public, undeleted Eagle comment period starting within three days of `start`, else null. */
 function commentPeriodIdFor(items, start, list) {
-  const hits = listOf(items && items.commentPeriods).filter(period =>
+  const hits = listOf(items && items.commentPeriods).filter(period => period.isDeleted !== true &&
     listOf(period.read).some(role => PUBLIC_ROLES.includes(role)) && within(period.dateStarted, start, PERIOD_DAYS));
   return onlyId(hits.map(hit => hit.id), 'commentPeriodAmbiguous', list);
 }
