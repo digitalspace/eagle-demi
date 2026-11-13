@@ -694,6 +694,34 @@ grant. CLI: `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line
 Alert `demi-track-teams-<env>` fires when that line is missing for 26 hours or reports failures
 (see [Alerts](#alerts)).
 
+The nightly run also records capital investment. It compares Track's `capital_investment` and the row's
+Eagle `intake.investment` with the row's `capitalInvestments`. A moved figure appends an entry and closes
+that source's open entry, dated the Pacific day of the run.
+
+The five-minute poll leaves this step to the nightly run.
+
+The step logs one line: `[investment] appended=N closed=M unreadable=K full=F`.
+
+| Field | Counts |
+|---|---|
+| `appended` | Entries written with a non-zero amount |
+| `closed` | Open entries closed, including a close that records a cleared value as 0 |
+| `unreadable` | Figures that are not a readable amount, and Track rows with no `capital_investment` key |
+| `full` | Projects already holding 200 entries, which get no write |
+
+An unreadable figure leaves the entries as they are, so a renamed Track field closes nothing. A second
+run with no change logs `appended=0 closed=0`. A dry run reports the counts without writing.
+
+### Staff works route
+
+`GET /api/projects/{id}/works-staff` returns a project's works with the contacts, investments and notes
+that apply to each. It needs a staff-level role or a `demi-service-read` key, and answers 403 to anonymous
+and IDIR-only callers. The response never carries `sourceKey` or `sheetKey`; field shapes are in
+`src/swagger/swagger.yaml`.
+
+`currentInvestment` sits beside `works` in the response. It is the open entry of the first source that
+has one, in the order `demi`, `track`, `eagle`, `sheet`, and `null` when no entry is open.
+
 ### Track project poll
 
 Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five
