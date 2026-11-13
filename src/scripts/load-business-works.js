@@ -23,8 +23,6 @@ const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
 const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
-// Refused until W8b lands the restore path, since nothing can open a works-backup yet.
-const LIVE_REFUSED = '--live is refused until the rollback (W8b) can open the works-backup it writes; run the dry run';
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
 const DERIVED = new Set(['patched', 'unchanged']);
 // The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
@@ -206,16 +204,10 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
   return 0;
 }
 
-/** The command line: `run`, except that `--live` is refused (LIVE_REFUSED). */
-function main(argv) {
-  if (argv.includes('--live')) return Promise.reject(new Error(LIVE_REFUSED));
-  return run(argv);
-}
-
-module.exports = { run, main, liveDemi };
+module.exports = { run, liveDemi };
 
 if (require.main === module) {
-  main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
+  run(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
     logger.error('[load-business-works] failed', { error: err.message, code: err.code, stack: err.stack });
     process.exitCode = 1;
   });
