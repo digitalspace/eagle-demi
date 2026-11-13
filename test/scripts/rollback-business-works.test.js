@@ -137,6 +137,158 @@ function failingRemove(demi, n, { landed = false } = {}) {
   };
 }
 
+/** `demi.saveWork` that throws on its `n`th call, once, after the save landed. */
+function failingSave(demi, n) {
+  const save = demi.saveWork;
+  let calls = 0;
+  demi.saveWork = async (doc, options) => {
+    calls += 1;
+    const result = await save(doc, options);
+    if (calls === n) throw new Error('the undo stopped');
+    return result;
+  };
+}
+
+const coded412 = () => Object.assign(new Error('precondition failed'), { code: 412 });
+
+test('rolling back two loads in turn puts back a document both updated', async (t) => {
+  const demi = rollbackDemi();
+  const store = fakeLists(t);
+  const loadOf = endDate => inputs({ records: { projects: [register], amendments: [amendment(1, '2023-06-01', endDate)] } });
+  await liveRun(loadOf('2023-11-07'), demi);
+  const id = [...demi.docs.values()].find(doc => doc.sourceKey === '101:amendment:1').id;
+  const { _etag: _first, ...original } = demi.docs.get(id);
+  const middle = loadOf('2023-11-08');
+  const firstUpdate = (await liveRun(middle, demi, { at: T0 + 1000 })).value('batchId');
+  const last = loadOf('2023-11-09');
+  const secondUpdate = (await liveRun(last, demi, { at: T0 + 2000 })).value('batchId');
+  assert.equal((await rollback(loadedBatch(store, last, secondUpdate).argv, demi)).code, 0);
+
+  assert.equal((await rollback(loadedBatch(store, middle, firstUpdate).argv, demi, { at: LATER + 1000 })).code, 0);
+  const { _etag: _now, ...restored } = demi.docs.get(id);
+  assert.deepEqual(restored, original);
+});
+
+test('a 412 race on the second undo, a re-run that still refuses, then --abandon-rollback frees the pipeline', async (t) => {
+  const { store, demi, batchId, argv } = await loaded(t);
+  const remove = demi.removeWork;
+  let calls = 0;
+  demi.removeWork = async (target, options) => {
+    calls += 1;
+    if (calls !== 2) return remove(target, options);
+    demi.docs.set(target.id, { ...demi.docs.get(target.id), _etag: '"race"' });
+    throw coded412();
+  };
+  await assert.rejects(rollback(argv, demi), /precondition failed; rollback batch [0-9a-f-]{36} stays pending/);
+  const [{ id: rollbackId }] = rollbackBatches(store);
+  await assert.rejects(rollback(argv, demi), new RegExp(`moved since the batch wrote it; this run wrote nothing; rollback batch ${rollbackId} stays pending`));
+  await assert.rejects(batches.takeLock('next', LATER), /pending/);
+
+  const { code, lines } = await rollback(['--abandon-rollback', rollbackId], demi);
+  assert.equal(code, 0);
+  assert.equal(lines.filter(line => line.startsWith('openStep=')).length, 1);
+  assert.equal(store.get(rollbackId, KINDS.BATCH).status, 'abandoned');
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
+  assert.equal(store.get(batchId, KINDS.BATCH).status, 'complete');
+  assert.equal((await batches.takeLock('next', LATER)).batchId, 'next');
+});
+
+test('a fresh rollback after an abandoned one finishes the undo', async (t) => {
+  const { store, demi, batchId, argv } = await loaded(t);
+  failingRemove(demi, 2);
+  await assert.rejects(rollback(argv, demi), /the undo stopped/);
+  const [{ id: rollbackId }] = rollbackBatches(store);
+  assert.equal((await rollback(['--abandon-rollback', rollbackId], demi)).code, 0);
+
+  assert.equal((await rollback(argv, demi)).code, 0);
+  assert.deepEqual([...demi.docs.keys()].sort(), ['track-43', 'track-45']);
+  assert.equal(store.get(batchId, KINDS.BATCH).status, 'rolledBack');
+});
+
+test('a resume that logs a landed restore lets the previous load roll back after it', async (t) => {
+  const demi = rollbackDemi();
+  const store = fakeLists(t);
+  const given = inputs();
+  const first = (await liveRun(given, demi)).value('batchId');
+  const later = second();
+  const latest = (await liveRun(later, demi, { at: T0 + 1000 })).value('batchId');
+  failingSave(demi, 1);
+  await assert.rejects(rollback(loadedBatch(store, later, latest).argv, demi), /the undo stopped/);
+  assert.equal((await rollback(loadedBatch(store, later, latest).argv, demi)).code, 0);
+
+  assert.equal((await rollback(loadedBatch(store, given, first).argv, demi, { at: LATER + 1000 })).code, 0);
+  assert.deepEqual([...demi.docs.keys()].sort(), ['track-43', 'track-45']);
+});
+
+test('a restore that landed before its run stopped counts as done on re-run, for an update and a tombstone', async (t) => {
+  seeded(t, { status: 'pending', lock: expiredLock, entries: [
+    { target: { projectId: PROJECT, id: 'sheet-u' }, action: 'update', priorEtag: '"u0"', writtenEtag: '"u1"' },
+    { target: { projectId: PROJECT, id: 'sheet-t' }, action: 'tombstone', priorEtag: '"t0"', writtenEtag: '"t1"' }
+  ] });
+  const demi = rollbackDemi();
+  const adopted = { provenance: { batchId: 'b1', adoptedBy: 'staff', adoptedAt: '2026-11-14T00:00:00Z' } };
+  demi.docs.set('sheet-u', sheetDoc('sheet-u', { startDate: '2013-01-01', ...adopted, _etag: '"u1"' }));
+  demi.docs.set('sheet-t', sheetDoc('sheet-t', { deleted: true, ...adopted, _etag: '"t1"' }));
+  const priorOf = id => sheetDoc(id, { startDate: '2012-02-01', provenance: { batchId: 'b0' }, _etag: '"x0"' });
+  const backup = backupOf({ documents: [priorOf('sheet-u'), priorOf('sheet-t')] });
+  failingSave(demi, 1);
+  await assert.rejects(rollback(argsOf('rollback-incomplete', 'b1'), demi, { backup }), /the undo stopped/);
+  failingSave(demi, 1);
+  await assert.rejects(rollback(argsOf('rollback-incomplete', 'b1'), demi, { backup }), /the undo stopped/);
+
+  assert.equal((await rollback(argsOf('rollback-incomplete', 'b1'), demi, { backup })).code, 0);
+  assert.deepEqual(['sheet-u', 'sheet-t'].map(id => [demi.docs.get(id).startDate, demi.docs.get(id).deleted]), [['2012-02-01', undefined], ['2012-02-01', undefined]]);
+});
+
+test('a resumed rollback still reports a project a failed run kept as changed', async (t) => {
+  seeded(t, { entries: [appendEntry, externalIdEntry()] });
+  const demi = rollbackDemi();
+  demi.row = { ...demi.row, staffAssignments: [staffEntry('n1', { effectiveTo: '2026-11-20' })],
+    externalIds: [{ system: 'eao-register', value: '101', source: 'sheet' }] };
+  const remove = demi.removeExternalId;
+  let calls = 0;
+  demi.removeExternalId = async (...args) => { calls += 1; if (calls === 1) throw new Error('the undo stopped'); return remove(...args); };
+  const backup = backupOf({ projectEntries: [appended(null), plannedId('101')] });
+  await assert.rejects(rollback(argsOf('rollback', 'b1'), demi, { backup }), /the undo stopped/);
+
+  const { code, value } = await rollback(argsOf('rollback', 'b1'), demi, { backup });
+  assert.equal(code, 0);
+  assert.equal(value('changedProject'), PROJECT);
+});
+
+test('a resumed rollback skips an external id value a failed run removed', async (t) => {
+  seeded(t, { entries: [externalIdEntry(), externalIdEntry()] });
+  const demi = rollbackDemi();
+  demi.row = { ...demi.row, externalIds: ['101', '102'].map(value => ({ system: 'eao-register', value, source: 'sheet' })) };
+  const asked = [];
+  const remove = demi.removeExternalId;
+  demi.removeExternalId = async (projectId, pair) => {
+    asked.push(pair.value);
+    if (asked.length === 2) throw new Error('the undo stopped');
+    return remove(projectId, pair);
+  };
+  const backup = backupOf({ projectEntries: [plannedId('101'), plannedId('102')] });
+  await assert.rejects(rollback(argsOf('rollback', 'b1'), demi, { backup }), /the undo stopped/);
+
+  assert.equal((await rollback(argsOf('rollback', 'b1'), demi, { backup })).code, 0);
+  assert.deepEqual(asked, ['101', '102', '102']);
+  assert.deepEqual(demi.row.externalIds, []);
+});
+
+test('rollback refuses when another run starts a rollback of the batch while it takes the lock', async (t) => {
+  const store = seeded(t, { entries: [{ target: { projectId: PROJECT, id: 'sheet-a' }, action: 'create', writtenEtag: '"a1"' }] });
+  const takeLock = batches.takeLock;
+  t.mock.method(batches, 'takeLock', async (...args) => {
+    const lease = await takeLock(...args);
+    store.set({ kind: KINDS.BATCH, id: 'rb-other', batchKind: 'rollback', status: 'pending', targetBatchId: 'b1', startedAt: new Date(LATER).toISOString() });
+    return lease;
+  });
+  const demi = rollbackDemi();
+
+  await assert.rejects(rollback(argsOf('rollback', 'b1'), demi, { backup: backupOf() }), /another run changed the pending rollback/);
+  assert.equal(demi.reads, 0);
+});
+
 test('rollback removes the batch\'s markers, so Track\'s works show', async (t) => {
   const { store, demi, batchId, argv } = await loaded(t);
   assert.ok(!shownTrackIds(demi.docs).includes('track-43'), 'the load hides track-43 behind its sheet copy');

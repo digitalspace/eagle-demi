@@ -10,6 +10,7 @@ const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: '
 const LOCK_ID = 'import-lock';
 const LEASE_MS = 2 * 60 * 60 * 1000;
 const RENEW_EVERY = 100;
+const READ_CHUNK = 100;
 const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory', 'derive',
   'remove', 'restore', 'removeExternalId', 'removeHistory', 'restoreHistory']);
 // Each target names a document, a project list entry or an id system; never a sourceKey, number or staff value.
@@ -88,8 +89,9 @@ async function createBatch(batchId, fields, now = Date.now()) {
 
 /** Marks the batch complete under its etag, then deletes the lock under the lease's etag. */
 async function completeBatch(batch, lease, now = Date.now()) {
+  const entryCount = await highestSeq(batch.item.id);
   await cosmos.replace(CONTAINER, batch.item.id, KINDS.BATCH,
-    { ...batch.item, status: 'complete', completedAt: new Date(now).toISOString() }, batch.etag);
+    { ...batch.item, status: 'complete', completedAt: new Date(now).toISOString(), entryCount }, batch.etag);
   await releaseLock(lease);
 }
 
@@ -110,10 +112,12 @@ async function batchIdsWithStatus(status) {
   return ids.items;
 }
 
-/** Every header of `status`, earliest completion first; batches are few, so one id query, then a point read each. */
+const endedAt = batch => String(batch.completedAt ?? batch.abandonedAt ?? batch.startedAt);
+
+/** Every header of `status`, earliest end first; batches are few, so one id query, then a point read each. */
 async function batchesWithStatus(status) {
   const headers = (await Promise.all((await batchIdsWithStatus(status)).map(readBatch))).filter(Boolean);
-  return headers.sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
+  return headers.sort((a, b) => endedAt(a).localeCompare(endedAt(b)));
 }
 
 /** The latest `complete` batch of `batchKind`, or null. */
@@ -123,19 +127,31 @@ async function latestCompleteBatch(batchKind = 'load') {
 
 /** The batch's entries by seq, point reads up to the highest seq stored; refused when one in between is missing. */
 async function listEntries(batchId) {
-  const max = await cosmos.query(CONTAINER, {
-    query: 'SELECT VALUE MAX(c.seq) FROM c WHERE c.batchId = @batchId', parameters: [{ name: '@batchId', value: batchId }]
-  }, { partitionKey: KINDS.ENTRY });
-  const count = max.items[0] ?? 0;
-  const entries = await Promise.all(Array.from({ length: count }, (_, n) => cosmos.readItem(CONTAINER, `${batchId}:${n + 1}`, KINDS.ENTRY)));
+  const count = await highestSeq(batchId);
+  const header = await readBatch(batchId);
+  if (header && header.status === 'complete' && header.entryCount !== undefined && header.entryCount !== count) {
+    refuse(`batch ${batchId} holds ${count} entries, not the ${header.entryCount} it completed with`);
+  }
+  const entries = [];
+  for (let from = 1; from <= count; from += READ_CHUNK) {
+    const seqs = Array.from({ length: Math.min(READ_CHUNK, count - from + 1) }, (_, n) => from + n);
+    entries.push(...await Promise.all(seqs.map(seq => cosmos.readItem(CONTAINER, `${batchId}:${seq}`, KINDS.ENTRY))));
+  }
   if (entries.some(entry => !entry)) refuse(`batch ${batchId} is missing an entry below seq ${count}`);
   return entries;
 }
 
-/** Marks the batch `rolledBack` under the etag `batch` was read with. */
-async function markRolledBack(batch, now = Date.now()) {
+async function highestSeq(batchId) {
+  const max = await cosmos.query(CONTAINER, {
+    query: 'SELECT VALUE MAX(c.seq) FROM c WHERE c.batchId = @batchId', parameters: [{ name: '@batchId', value: batchId }]
+  }, { partitionKey: KINDS.ENTRY });
+  return max.items[0] ?? 0;
+}
+
+/** Sets the batch's `status` (`rolledBack`, `abandoned`) and `<status>At` under the etag `batch` was read with. */
+async function markBatch(batch, status, now = Date.now()) {
   const { _etag: etag, ...item } = batch;
-  await cosmos.replace(CONTAINER, item.id, KINDS.BATCH, { ...item, status: 'rolledBack', rolledBackAt: new Date(now).toISOString() }, etag);
+  await cosmos.replace(CONTAINER, item.id, KINDS.BATCH, { ...item, status, [`${status}At`]: new Date(now).toISOString() }, etag);
 }
 
 function checkedTarget(target) {
@@ -146,8 +162,8 @@ function checkedTarget(target) {
 }
 
 /**
- * Records the intent entry, runs `write` (resolving the written etag), then marks the entry done.
- * `run` is `{batchId, lease, seq}`; `seq` counts up across the batch.
+ * Records the intent entry, runs `write`, then marks the entry done. `write` resolves the written etag, or
+ * `{writtenEtag, result}` to also record a `result` word; `run` is `{batchId, lease, seq}`, `seq` counting up across the batch.
  */
 async function writeAhead(run, { target, action, priorEtag = null }, write, now = Date.now()) {
   if (!ACTIONS.includes(action)) refuse(`unknown ImportBatchEntry action ${action}`);
@@ -156,13 +172,14 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
   run.seq += 1;
   const item = { kind: KINDS.ENTRY, id: `${run.batchId}:${run.seq}`, batchId: run.batchId, seq: run.seq, ...entry, state: 'intent' };
   const created = await cosmos.create(CONTAINER, item);
-  const writtenEtag = await write();
-  await cosmos.replace(CONTAINER, item.id, KINDS.ENTRY, { ...item, writtenEtag: writtenEtag ?? null, state: 'done' }, created._etag);
+  const answer = await write();
+  const { writtenEtag = null, result } = answer !== null && typeof answer === 'object' ? answer : { writtenEtag: answer ?? null };
+  await cosmos.replace(CONTAINER, item.id, KINDS.ENTRY, { ...item, writtenEtag, ...(result && { result }), state: 'done' }, created._etag);
   return writtenEtag;
 }
 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
   takeLock, takeOverLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead,
-  readLock, readBatch, batchesWithStatus, latestCompleteBatch, listEntries, markRolledBack
+  readLock, readBatch, batchesWithStatus, latestCompleteBatch, listEntries, markBatch
 };

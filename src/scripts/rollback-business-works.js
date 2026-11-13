@@ -11,6 +11,7 @@ const history = require('../repositories/project-staff-history');
 const { deriveInputs } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
+const { stepKey, projectSteps, rederive, loggedOf, openSteps } = require('./works-rollback-steps');
 const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
@@ -18,15 +19,21 @@ const DOC_ACTIONS = new Set(['create', 'update', 'tombstone', 'marker']);
 // Writes of a later batch that move a document's etag: a revert or reapply of a marker, or a rollback's undo.
 const LATER_DOC_ACTIONS = new Set([...DOC_ACTIONS, 'remove', 'restore']);
 const LATER_KINDS = new Set(['override', 'rollback']);
-const PROJECT_ACTIONS = new Set(['addExternalId', 'appendHistory', 'closeHistory']);
-const PROJECT_DONE = new Set(['removed', 'restored', 'unchanged', 'absent']);
+// An abandoned rollback's done undos still moved etags, so later batches include it.
+const LATER_STATUSES = ['complete', 'abandoned'];
 const BACKUP_KEYS = ['backup', 'expect-backup-sha256', 'devbox-key', 'expect-devbox-fingerprint'];
 
 const refuse = (message) => { throw new Error(message); };
 const docKey = ({ projectId, id }) => `${projectId}|${id}`;
-const stepKey = (action, target) => `${action}|${JSON.stringify(Object.entries(target).sort())}`;
 const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
-const sameValue = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+const endedAt = batch => String(batch.completedAt ?? batch.abandonedAt);
+
+/** `doc` without the keys works.save copies from the document it replaces: system keys, `source`, `owner` and the adopt fields. */
+function asSaved(doc) {
+  const { source: _source, owner: _owner, provenance, ...rest } = withoutSystem(doc);
+  const { adoptedBy: _by, adoptedAt: _at, ...kept } = provenance || {};
+  return { ...rest, provenance: kept };
+}
 
 /** The repositories a rollback reads and writes; tests pass a fake. */
 function liveDemi() {
@@ -41,8 +48,8 @@ function liveDemi() {
   };
 }
 
-/** Each document the batch wrote, its entries in seq order, and the writtenEtag of the latest later write to it. */
-function documentsOf(entries, laterEntries) {
+/** Each document `targetId` wrote, its entries in seq order, and the latest later write to it, flagged when an earlier undo of `targetId` made it. */
+function documentsOf(entries, laterEntries, targetId) {
   const docs = new Map();
   for (const entry of entries.filter(one => DOC_ACTIONS.has(one.action))) {
     const key = docKey(entry.target);
@@ -51,7 +58,7 @@ function documentsOf(entries, laterEntries) {
   }
   for (const entry of laterEntries.filter(one => LATER_DOC_ACTIONS.has(one.action) && one.state === 'done')) {
     const doc = docs.get(docKey(entry.target));
-    if (doc) doc.laterEtag = entry.writtenEtag;
+    if (doc) Object.assign(doc, { laterEtag: entry.writtenEtag, undoneBefore: entry.undoes === targetId });
   }
   return [...docs.values()];
 }
@@ -75,104 +82,32 @@ async function undoDocument(demi, target, current, prior) {
 }
 
 /** One undo per document, all checked before any write: refused when one moved, is gone, is not the sheet's or has no copy to restore. */
-async function documentSteps(demi, docs, priors, logged) {
+async function documentSteps(demi, docs, { priors, logged, note }) {
   const steps = [];
   for (const doc of docs) {
     const { projectId, id } = doc.target;
     const where = `document ${id} on project ${projectId}`;
     const prior = priors.get(docKey(doc.target));
-    if (!prior && doc.entries[0].priorEtag !== null) refuse(`the backup holds no prior copy of ${where}; nothing was undone`);
+    if (!prior && doc.entries[0].priorEtag !== null) refuse(`the backup holds no prior copy of ${where}; ${note}`);
     const action = prior ? 'restore' : 'remove';
     const log = logged.get(stepKey(action, doc.target));
-    if (log === 'done') continue;
+    if (log?.done) continue;
     const current = await demi.work(projectId, id);
-    // A resumed undo whose write landed: the document is gone, or holds the backup copy again.
-    if (log === 'intent' && (prior ? current && isDeepStrictEqual(withoutSystem(current), withoutSystem(prior)) : !current)) continue;
+    const landed = prior ? current && isDeepStrictEqual(asSaved(current), asSaved(prior)) : !current;
+    // A resumed undo whose write landed is logged done with the etag it left, so a later rollback can chain on it.
+    if (log?.intent && landed) {
+      steps.push({ action, target: doc.target, priorEtag: null, run: async () => (current ? current._etag : null) });
+      continue;
+    }
+    if (doc.undoneBefore && (prior ? current && current._etag === doc.laterEtag : !current)) continue;
     const expected = expectedEtag(doc, current);
     if (expected === undefined) continue;
-    if (!current) refuse(`${where} is gone; nothing was undone`);
-    if (works.ownerOf(current) !== OWNER) refuse(`${where} is not owned by ${OWNER}; nothing was undone`);
-    if (current._etag !== expected) refuse(`${where} moved since the batch wrote it; nothing was undone`);
+    if (!current) refuse(`${where} is gone; ${note}`);
+    if (works.ownerOf(current) !== OWNER) refuse(`${where} is not owned by ${OWNER}; ${note}`);
+    if (current._etag !== expected) refuse(`${where} moved since the batch wrote it; ${note}`);
     steps.push({ action, target: doc.target, priorEtag: current._etag, run: () => undoDocument(demi, doc.target, current, prior) });
   }
   return steps;
-}
-
-/** Undo steps for the project entries the batch wrote, from the plan values and prior lists the backup holds. */
-function projectSteps(demi, entries, backup, changed) {
-  const priorProject = projectId => backup.projects.find(one => one.projectId === projectId) || {};
-  const priorEntry = (projectId, field, entryId) => (priorProject(projectId)[field] || []).find(one => one.id === entryId) ||
-    refuse(`the backup holds no prior copy of a ${field} entry on project ${projectId}`);
-  const outcome = (projectId, status) => {
-    if (status === 'changed') changed.add(projectId);
-    else if (!PROJECT_DONE.has(status)) refuse(`a project entry undo on project ${projectId} answered ${status}`);
-    return status;
-  };
-  const reopen = (projectId, field, close) => {
-    const prior = priorEntry(projectId, field, close.id);
-    const expected = history.historyEntrySha256({ ...prior, effectiveTo: close.effectiveTo });
-    return async () => outcome(projectId, (await demi.restoreHistory(projectId, field, prior, expected)).status);
-  };
-  const steps = [];
-  const removals = new Map();
-  const seen = new Map();
-  for (const entry of entries.filter(one => PROJECT_ACTIONS.has(one.action))) {
-    const { projectId, field, entryId, system } = entry.target;
-    const planned = backup.projectEntries.filter(one => one.action === entry.action && one.projectId === projectId);
-    // A done entry with no written etag found the row already holding it, so it wrote nothing.
-    const wrote = entry.state === 'intent' || entry.writtenEtag !== null;
-    if (entry.action === 'addExternalId') {
-      const key = `${projectId}|${system}`;
-      const n = seen.get(key) ?? 0;
-      seen.set(key, n + 1);
-      const value = planned.filter(one => one.pair.system === system)[n]?.pair.value ?? refuse(`the backup holds no addExternalId values for project ${projectId}`);
-      const held = (priorProject(projectId).externalIds || []).some(one => one.system === system && sameValue(one.value, value));
-      if (!wrote || held) continue;
-      if (!removals.has(key)) {
-        removals.set(key, []);
-        steps.push({ action: 'removeExternalId', target: { projectId, system }, run: async () => {
-          for (const one of removals.get(key)) outcome(projectId, (await demi.removeExternalId(projectId, { system, value: one })).status);
-          return null;
-        } });
-      }
-      if (!removals.get(key).some(one => sameValue(one, value))) removals.get(key).push(value);
-      continue;
-    }
-    if (!wrote) continue;
-    const one = planned.find(item => item.field === field && (item.entryId ?? item.entry?.id) === entryId) ||
-      refuse(`the backup holds no ${entry.action} values for project ${projectId}`);
-    if (entry.action === 'closeHistory') {
-      const undo = reopen(projectId, field, { id: entryId, effectiveTo: one.effectiveTo });
-      steps.push({ action: 'restoreHistory', target: entry.target, run: async () => { await undo(); return null; } });
-      continue;
-    }
-    const sha = history.historyEntrySha256(one.entry);
-    const undoClose = one.close ? reopen(projectId, field, one.close) : null;
-    steps.push({ action: 'removeHistory', target: entry.target, run: async () => {
-      const status = outcome(projectId, (await demi.removeHistory(projectId, field, entryId, sha)).status);
-      // A kept staff-edited entry stays the open one, so the entry it closed stays closed.
-      if (undoClose && status !== 'changed') await undoClose();
-      return null;
-    } });
-  }
-  return steps;
-}
-
-/** `patchDerived` on every project, a throw counted as conflict; ok only when patched + unchanged is the project count. */
-async function rederive(demi, projectIds, lease, now) {
-  const counts = { patched: 0, unchanged: 0, missing: 0, conflict: 0 };
-  for (const projectId of projectIds) {
-    await batches.beforeWrite(lease, now());
-    let status;
-    try {
-      ({ status } = await demi.patchDerived(projectId));
-    } catch (err) {
-      logger.warn('[rollback-business-works] patchDerived failed', { projectId, code: err.code });
-      status = 'conflict';
-    }
-    counts[status] = (counts[status] ?? 0) + 1;
-  }
-  return { counts, ok: counts.patched + counts.unchanged === projectIds.length };
 }
 
 /** Undoes `target` under its own write-ahead rollback batch (or resumes `resumed`) and re-derives; resolves the exit code. */
@@ -186,21 +121,38 @@ async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed
   });
   if (!backup || backup.batchId !== target.id) refuse('the backup is not this batch\'s');
   const log = resumed ? await batches.listEntries(resumed.id) : [];
-  const logged = new Map();
-  for (const entry of log) if (logged.get(stepKey(entry.action, entry.target)) !== 'done') logged.set(stepKey(entry.action, entry.target), entry.state);
+  const logged = loggedOf(log);
+  const changed = new Set(log.filter(entry => entry.state === 'done' && entry.result === 'changed').map(entry => entry.target.projectId));
+  const pending = resumed ? `; rollback batch ${resumed.id} stays pending` : '';
+  const note = `this run wrote nothing${pending}`;
 
-  const changed = new Set();
   const priors = new Map(backup.documents.map(doc => [docKey(doc), doc]));
+  const nth = new Map();
   const steps = [
-    ...await documentSteps(demi, documentsOf(entries, laterEntries), priors, logged),
-    ...projectSteps(demi, entries, backup, changed).filter(step => logged.get(stepKey(step.action, step.target)) !== 'done')
+    ...await documentSteps(demi, documentsOf(entries, laterEntries, target.id), { priors, logged, note }),
+    // Steps of one key run in order, so the first `done` of them finished in an earlier run.
+    ...projectSteps(demi, entries, backup).filter((step) => {
+      const key = stepKey(step.action, step.target);
+      const n = nth.get(key) ?? 0;
+      nth.set(key, n + 1);
+      return n >= (logged.get(key)?.done ?? 0);
+    })
   ];
   const header = resumed
     ? { item: withoutSystem(resumed), etag: resumed._etag }
     : await batches.createBatch(crypto.randomUUID(), { batchKind: 'rollback', targetBatchId: target.id }, now());
   const run = { batchId: header.item.id, lease, seq: log.length };
   for (const step of steps) {
-    await batches.writeAhead(run, { target: step.target, action: step.action, priorEtag: step.priorEtag ?? null }, step.run, now());
+    try {
+      await batches.writeAhead(run, { target: step.target, action: step.action, priorEtag: step.priorEtag ?? null }, async () => {
+        const answer = await step.run();
+        if (answer?.result === 'changed') changed.add(step.target.projectId);
+        return answer;
+      }, now());
+    } catch (err) {
+      err.message = `${err.message}; rollback batch ${header.item.id} stays pending`;
+      throw err;
+    }
   }
 
   const touched = [...new Set(entries.map(entry => entry.target.projectId))];
@@ -213,7 +165,7 @@ async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed
   Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
   write(`projects=${touched.length}`);
   if (!ok) return 1;
-  await batches.markRolledBack(target, now());
+  await batches.markBatch(target, 'rolledBack', now());
   await batches.completeBatch(header, lease, now());
   lease.released = true;
   return 0;
@@ -240,39 +192,82 @@ async function lockFor(batchId, resumed, now) {
   return batches.takeOverLock(batchId, now, [batchId, resumed?.id].filter(Boolean));
 }
 
+/** The pending rollback read again under the lock; refused when another run started or finished one meanwhile. */
+async function stillResumed(batchId, resumed) {
+  const now = await pendingRollbackOf(batchId);
+  if ((now?.id ?? null) !== (resumed?.id ?? null)) refuse('another run changed the pending rollback of this batch; this run wrote nothing');
+  return now;
+}
+
 async function loadBatch(batchId, statuses, message) {
   const batch = await batches.readBatch(batchId);
   return batch && batch.batchKind === 'load' && statuses.includes(batch.status) ? batch : refuse(message);
 }
 
+/** Done entries of the override and rollback batches that started after `target`, in the order they ended; a rollback's carry `undoes`. */
+async function laterEntriesOf(target) {
+  const headers = (await Promise.all(LATER_STATUSES.map(status => batches.batchesWithStatus(status)))).flat()
+    .filter(one => LATER_KINDS.has(one.batchKind) && one.startedAt > target.startedAt)
+    .sort((a, b) => endedAt(a).localeCompare(endedAt(b)));
+  const entries = [];
+  for (const one of headers) {
+    const undoes = one.batchKind === 'rollback' ? one.targetBatchId : null;
+    entries.push(...(await batches.listEntries(one.id)).map(entry => ({ ...entry, undoes })));
+  }
+  return entries;
+}
+
 async function rollback(o, ctx) {
+  requireDeriveEnv();
   const batchId = o.rollback;
-  const resumed = await pendingRollbackOf(batchId);
-  const lease = await lockFor(batchId, resumed, ctx.now());
+  const seen = await pendingRollbackOf(batchId);
+  const lease = await lockFor(batchId, seen, ctx.now());
   try {
+    const resumed = await stillResumed(batchId, seen);
     const target = resumed
       ? await loadBatch(batchId, ['complete', 'rolledBack'], 'the pending rollback names a batch that is not a load')
       : await batches.latestCompleteBatch('load');
     if (!target || target.id !== batchId) refuse('--rollback acts only on the latest complete load batch');
-    const later = (await batches.batchesWithStatus('complete')).filter(one => LATER_KINDS.has(one.batchKind) && one.startedAt > target.startedAt);
-    const laterEntries = [];
-    for (const one of later) laterEntries.push(...await batches.listEntries(one.id));
-    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries, lease, resumed });
+    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
   } finally {
     await releaseQuietly(lease);
   }
 }
 
 async function rollbackIncomplete(o, ctx) {
+  requireDeriveEnv();
   const batchId = o['rollback-incomplete'];
-  const resumed = await pendingRollbackOf(batchId);
-  const statuses = resumed ? ['pending', 'rolledBack'] : ['pending'];
+  const seen = await pendingRollbackOf(batchId);
+  const statuses = seen ? ['pending', 'rolledBack'] : ['pending'];
   const message = '--rollback-incomplete acts only on a pending load batch';
   await loadBatch(batchId, statuses, message);
-  const lease = await batches.takeOverLock(batchId, ctx.now(), [batchId, resumed?.id].filter(Boolean));
+  const lease = await batches.takeOverLock(batchId, ctx.now(), [batchId, seen?.id].filter(Boolean));
   try {
+    const resumed = await stillResumed(batchId, seen);
     const target = await loadBatch(batchId, statuses, message);
-    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: [], lease, resumed });
+    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: await laterEntriesOf(target), lease, resumed });
+  } finally {
+    await releaseQuietly(lease);
+  }
+}
+
+/** Gives up a pending rollback batch a refusal keeps stuck: prints its open steps, marks it abandoned and frees the lock. */
+async function abandonRollback(o, { now, write }) {
+  const rollbackId = o['abandon-rollback'];
+  const pending = async () => {
+    const batch = await batches.readBatch(rollbackId);
+    return batch && batch.batchKind === 'rollback' && batch.status === 'pending' ? batch : refuse('--abandon-rollback acts only on a pending rollback batch');
+  };
+  const { targetBatchId } = await pending();
+  const lease = await batches.takeOverLock(targetBatchId, now(), [targetBatchId, rollbackId]);
+  try {
+    const batch = await pending();
+    const open = openSteps(await batches.listEntries(rollbackId));
+    open.forEach(({ seq, target }) => write(`openStep=${seq} project=${target.projectId} target=${target.id ?? target.entryId ?? target.system}`));
+    write(`open=${open.length}`);
+    await batches.markBatch(batch, 'abandoned', now());
+    write(`abandoned=${rollbackId}`);
+    return 0;
   } finally {
     await releaseQuietly(lease);
   }
@@ -284,15 +279,17 @@ const MODES = {
   rollback: { options: { rollback: { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback', ...BACKUP_KEYS], run: rollback },
   'rollback-incomplete': {
     options: { 'rollback-incomplete': { type: 'string' }, ...BACKUP_OPTIONS }, required: ['rollback-incomplete', ...BACKUP_KEYS], run: rollbackIncomplete
-  }
+  },
+  'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback }
 };
 
 const HELP = [
   'Usage: rollback-business-works.js <mode> --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem>',
   '         --expect-devbox-fingerprint <hex>',
   'Modes:',
-  '  --rollback <batchId>             undo the latest complete load batch',
-  '  --rollback-incomplete <batchId>  undo a pending load batch whose lease expired',
+  '  --rollback <batchId>                 undo the latest complete load batch',
+  '  --rollback-incomplete <batchId>      undo a pending load batch whose lease expired',
+  '  --abandon-rollback <rollbackBatchId> give up a stuck rollback batch (no backup flags); a fresh rollback then finishes',
   'A failed run leaves its rollback batch pending; the same command resumes it.',
   'Export WORKS_READ and WORKS_READ_SOURCES with the API\'s values first: the devbox shell has no app settings.'
 ];
@@ -324,7 +321,6 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
     return 0;
   }
   testEnvironment();
-  requireDeriveEnv();
   return mode.run(o, { demi, openBackup, now, write });
 }
 

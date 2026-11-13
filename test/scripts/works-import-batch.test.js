@@ -121,6 +121,33 @@ test('listEntries refuses a batch with a missing entry below its highest seq', a
   await assert.rejects(batches.listEntries('b1'), /missing an entry/);
 });
 
+test('listEntries refuses a complete batch that lost its last entry', async (t) => {
+  const { store, lease, batch, run } = await started(t);
+  await batches.writeAhead(run, { target, action: 'create' }, async () => '"w1"', T0);
+  await batches.writeAhead(run, { target, action: 'update' }, async () => '"w2"', T0);
+  await batches.completeBatch(batch, lease, T0);
+  assert.equal(store.get('b1', KINDS.BATCH).entryCount, 2);
+  await cosmos.remove(batches.CONTAINER, 'b1:2', KINDS.ENTRY, { etag: store.get('b1:2', KINDS.ENTRY)._etag });
+  await assert.rejects(batches.listEntries('b1'), /not the 2 it completed with/);
+});
+
+test('listEntries reads at most 100 entries at a time', async (t) => {
+  const store = fakeLists(t);
+  for (let seq = 1; seq <= 150; seq += 1) store.set({ kind: KINDS.ENTRY, id: `b1:${seq}`, batchId: 'b1', seq, state: 'done' });
+  const read = cosmos.readItem;
+  let inFlight = 0;
+  let most = 0;
+  t.mock.method(cosmos, 'readItem', async (...args) => {
+    inFlight += 1;
+    most = Math.max(most, inFlight);
+    await new Promise(resolve => setImmediate(resolve));
+    inFlight -= 1;
+    return read(...args);
+  });
+  assert.equal((await batches.listEntries('b1')).length, 150);
+  assert.equal(most, 100);
+});
+
 test('two takers of an expired lock, one wins', async (t) => {
   const store = fakeLists(t);
   store.set({ kind: KINDS.LOCK, id: LOCK_ID, batchId: 'b1', expiresAt: new Date(T0 - 1).toISOString() });
