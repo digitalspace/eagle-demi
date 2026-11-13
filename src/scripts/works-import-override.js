@@ -6,13 +6,12 @@
 const crypto = require('crypto');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const batches = require('./works-import-batch');
-const { stepKey, rederive, loggedOf, requireDeriveEnv } = require('./works-rollback-steps');
+const { withoutSystem, stepKey, rederive, loggedOf, requireDeriveEnv } = require('./works-rollback-steps');
 const { writeCounts } = require('./works-import-rederive');
 
 const OWNER = 'sheet';
 
 const refuse = (message) => { throw new Error(message); };
-const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 
 /** `--project <id>`, or with `--all` every project whose marker the latest complete load batch wrote. */
 async function projectsOf(o) {

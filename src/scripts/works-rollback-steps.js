@@ -10,6 +10,8 @@ const PROJECT_ACTIONS = new Set(['addExternalId', 'appendHistory', 'closeHistory
 const PROJECT_DONE = new Set(['removed', 'restored', 'unchanged', 'absent']);
 
 const refuse = (message) => { throw new Error(message); };
+/** `doc` without the Cosmos system keys (`_etag`, `_ts`, ...). */
+const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 const stepKey = (action, target) => `${action}|${JSON.stringify(Object.entries(target).sort())}`;
 const sameValue = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
@@ -111,4 +113,4 @@ function openSteps(log) {
     !log.slice(index + 1).some(later => later.state === 'done' && stepKey(later.action, later.target) === stepKey(entry.action, entry.target)));
 }
 
-module.exports = { stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv };
+module.exports = { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv };

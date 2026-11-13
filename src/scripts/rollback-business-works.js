@@ -11,8 +11,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { deriveInputs, loadWorks } = require('../domain/works-derive');
 const { testEnvironment } = require('./works-import-inputs');
 const batches = require('./works-import-batch');
-const { stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv } = require('./works-rollback-steps');
-const { rederiveBatch, timedFetch } = require('./works-import-rederive');
+const { withoutSystem, stepKey, projectSteps, rederive, loggedOf, openSteps, requireDeriveEnv } = require('./works-rollback-steps');
+const { rederiveBatch, timedFetch, writeCounts } = require('./works-import-rederive');
 const { revertOverride, reapplyOverride, undoOverrideBatch } = require('./works-import-override');
 const { logger } = require('../utils/logger');
 
@@ -27,7 +27,6 @@ const BACKUP_KEYS = ['backup', 'expect-backup-sha256', 'devbox-key', 'expect-dev
 
 const refuse = (message) => { throw new Error(message); };
 const docKey = ({ projectId, id }) => `${projectId}|${id}`;
-const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
 const endedAt = batch => String(batch.completedAt ?? batch.abandonedAt);
 
 /** `doc` without the keys works.save copies from the document it replaces: system keys, `source`, `owner` and the adopt fields. */
@@ -166,8 +165,7 @@ async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed
   write(`undone=${steps.length}`);
   write(`changed=${changed.size}`);
   changed.forEach(projectId => write(`changedProject=${projectId}`));
-  Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
-  write(`projects=${touched.length}`);
+  writeCounts(write, counts, touched.length);
   if (!ok) return 1;
   await batches.markBatch(target, 'rolledBack', now());
   await batches.completeBatch(header, lease, now());
@@ -289,12 +287,10 @@ const MODES = {
 };
 
 const HELP = [
-  'Usage: rollback-business-works.js <mode>',
-  '  --rollback and --rollback-incomplete need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem>',
-  '         --expect-devbox-fingerprint <hex>',
+  'Usage: rollback-business-works.js <mode>; --rollback and --rollback-incomplete of a load batch need --backup <sealed> --expect-backup-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>                 undo the latest complete load batch',
-  '  --rollback-incomplete <batchId>      undo a pending load or override batch whose lease expired (no backup flags for override)',
+  '  --rollback-incomplete <batchId>      undo a pending load or override batch whose lease expired',
   '  --abandon-rollback <rollbackBatchId> give up a stuck rollback batch (no backup flags); a fresh rollback then finishes',
   '  --revert-override                    turn the sheet override marker off, with --project <id> or --all',
   '  --reapply-override                   turn it back on, with --project <id> or --all',
@@ -341,7 +337,7 @@ function main(argv) {
   return run(argv, { openBackup: args => require('./works-import-backup').openBackup(args) });
 }
 
-module.exports = { run, main, liveDemi, requireDeriveEnv };
+module.exports = { run, main, liveDemi };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
