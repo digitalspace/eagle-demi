@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 
 const { main } = require('../../src/scripts/copy-to-env');
+const { logger } = require('../../src/utils/logger');
 
 const TARGET = 'https://target.example/';
 
@@ -56,6 +57,18 @@ function onePage() {
   };
 }
 
+function staffPage() {
+  const staff = {
+    externalIds: [{ system: 'track', value: '1' }], staffAssignments: [{ role: 'epd' }],
+    capitalInvestments: [{ amountCad: 1 }], staffNotes: [{ text: 'note' }]
+  };
+  const row = {
+    id: 'p1', name: 'Mine', intake: 'x', ...staff, legislation_2002: { name: 'Mine', intake: 'x' },
+    sources: { eagle: { name: 'Mine', intake: 'x', legislation_1996: { name: 'Mine', intake: 'x' } } }
+  };
+  return { start: { resources: [row], continuationToken: undefined, hasMoreResults: false } };
+}
+
 function tmpCheckpoint(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copy-to-env-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -63,7 +76,10 @@ function tmpCheckpoint(t) {
 }
 
 test('copy-to-env', async (t) => {
-  t.beforeEach((tt) => tt.mock.method(console, 'log', () => {}));
+  t.beforeEach((tt) => {
+    tt.mock.method(logger, 'info', () => {});
+    tt.mock.method(logger, 'warn', () => {});
+  });
 
   await t.test('a dry run counts the source and writes nothing to the target', async (tt) => {
     const source = fakeContainer(onePage(), 2);
@@ -126,6 +142,47 @@ test('copy-to-env', async (t) => {
       { client: fakeClient(source, target) });
     assert.deepStrictEqual(source.reads.map((r) => r.query), ['SELECT VALUE COUNT(1) FROM c']);
     assert.deepStrictEqual(target.stored, []);
+  });
+
+  await t.test('copy-to-env refuses works, ImportBatch, ImportBatchEntry and ImportLock', async (tt) => {
+    await tt.test('--containers naming works throws before any read', async (ttt) => {
+      const source = fakeContainer(onePage(), 2);
+      await assert.rejects(main(['--target', TARGET, '--containers', 'projects,works', '--checkpoint', tmpCheckpoint(ttt), '--live'],
+        { client: fakeClient(source, fakeContainer({})) }), { message: 'Refusing to copy container works' });
+      assert.deepStrictEqual(source.reads, []);
+    });
+
+    await tt.test('lists rows of the import kinds are not upserted', async (ttt) => {
+      const kinds = ['List', 'ImportBatch', 'ImportBatchEntry', 'ImportLock', 'WorksCatalog'];
+      const pages = { start: { resources: kinds.map(kind => ({ id: kind, kind })), continuationToken: undefined, hasMoreResults: false } };
+      const target = fakeContainer({});
+      await main(['--target', TARGET, '--containers', 'lists', '--checkpoint', tmpCheckpoint(ttt), '--live'],
+        { client: fakeClient(fakeContainer(pages, kinds.length), target) });
+      assert.deepStrictEqual(target.stored.map((r) => r.kind), ['List', 'WorksCatalog']);
+    });
+  });
+
+  await t.test('copy strips the four staff-only fields and every intake copy (top level, legislation blocks, sources.eagle)', async (tt) => {
+    const target = fakeContainer({});
+    await main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt), '--live'],
+      { client: fakeClient(fakeContainer(staffPage(), 1), target) });
+    assert.deepStrictEqual(target.stored[0], {
+      id: 'p1', name: 'Mine', legislation_2002: { name: 'Mine' }, sources: { eagle: { name: 'Mine', legislation_1996: { name: 'Mine' } } }
+    });
+  });
+
+  await t.test('copy keeps them with --keep-staff', async (tt) => {
+    const target = fakeContainer({});
+    await main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt), '--keep-staff', 'SIGNOFF-1', '--live'],
+      { client: fakeClient(fakeContainer(staffPage(), 1), target) });
+    assert.deepStrictEqual(target.stored[0], staffPage().start.resources[0]);
+  });
+
+  await t.test('--keep-staff with no sign-off reference throws before any read', async (tt) => {
+    const source = fakeContainer(staffPage(), 1);
+    await assert.rejects(main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt), '--keep-staff', '--live'],
+      { client: fakeClient(source, fakeContainer({})) }), { message: '--keep-staff needs a sign-off reference' });
+    assert.deepStrictEqual(source.reads, []);
   });
 
   await t.test('a run with no --target throws', async (tt) => {
