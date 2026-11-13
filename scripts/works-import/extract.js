@@ -17,7 +17,7 @@ const MIN_PASSPHRASE = 20;
 const KEYRING_SERVICE = 'eagle-demi-works-import';
 const SEALED_SUFFIX = '.sealed.json';
 const SEAL_PURPOSES = ['crosswalk', 'manual-match'];
-const OPEN_PURPOSES = ['crosswalk', 'report'];
+const OPEN_PURPOSES = ['crosswalk', 'report', 'works-parity', 'works-report', 'works-backup'];
 
 function keyringCommand(ref) {
   if (ref.startsWith('op://')) return ['op', ['read', '--no-newline', ref]];
