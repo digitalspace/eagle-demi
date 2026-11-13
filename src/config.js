@@ -2,8 +2,7 @@
 
 // No database settings: src/db/cosmos-nosql.js reads its own and uses a managed identity.
 
-// Throws at load: a cap that parsed to NaN compares false against every value, so a silent
-// parse would remove the limit.
+// Throws at load: a cap parsed to NaN compares false against every value, so it would remove the limit.
 function intFromEnv(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -38,8 +37,7 @@ const { isKeyVaultReference } = require('./utils/key-vault-reference');
 // Names only. The logger requires this module, so src/utils/logger.js reports them, not this file.
 const unresolvedSecrets = [];
 
-// A failed Key Vault reference reaches the app as its literal text; read it as unset and record
-// only the setting's name, never the value.
+// A failed Key Vault reference arrives as its literal text: read it as unset, record only the name, never the value.
 function secretFromEnv(name) {
   const raw = process.env[name];
   if (raw === undefined) return '';
@@ -78,12 +76,10 @@ const config = {
   minioSecret:  secretFromEnv('MINIO_SECRET_KEY'),
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
-  // Stored keys are the prod bucket's; a non-prod bucket may nest that copy under one more segment,
-  // which this prefix adds. Empty in prod.
+  // Stored keys are the prod bucket's; a non-prod copy may sit under this extra segment. Empty in prod.
   minioKeyPrefix: process.env.MINIO_KEY_PREFIX || '',
 
-  // 'minio' or 'azure'. Explicit, never inferred from which credentials are present; src/storage/
-  // throws on an unknown value.
+  // 'minio' or 'azure', never inferred from which credentials are present; src/storage/ throws on others.
   storageBackend: process.env.STORAGE_BACKEND || 'minio',
 
   // Keyless (managed identity). Each environment has its own container, so no key prefix exists.
@@ -323,6 +319,7 @@ const config = {
   trackWorksSync:            process.env.TRACK_WORKS_SYNC === 'true',
   worksWrite:                process.env.WORKS_WRITE === 'true',
   worksRead:                 process.env.WORKS_READ === 'true',
+  worksReadSources:          (envTrim('WORKS_READ_SOURCES') || 'track').split(',').map(s => s.trim()),
   assessmentPass:            process.env.ASSESSMENT_PASS === 'true',
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
   keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),
@@ -392,8 +389,7 @@ const config = {
   },
 };
 
-// For backfill-objects.js: the test credentials cannot read the prod bucket. Host and port
-// default to the target's, since both buckets sit on one host.
+// For backfill-objects.js: test credentials cannot read the prod bucket. Host and port default to the target's (one host).
 config.sourceMinioAccess = secretFromEnv('SOURCE_MINIO_ACCESS_KEY');
 config.sourceMinioSecret = secretFromEnv('SOURCE_MINIO_SECRET_KEY');
 config.sourceMinioHost = process.env.SOURCE_MINIO_HOST || config.minioHost;
@@ -414,6 +410,10 @@ if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
 if (!EDGE_GATE_MODES.includes(config.edgeGate)) {
   throw new Error(`EDGE_GATE must be empty, 'log' or 'enforce', got '${config.edgeGate}'.`);
 }
+
+// A typo would otherwise hide that source's works without a word.
+const badWorksSource = config.worksReadSources.find(source => !['track', 'sheet', 'demi'].includes(source));
+if (badWorksSource !== undefined) throw new Error(`WORKS_READ_SOURCES takes only track, sheet and demi, got '${badWorksSource}'.`);
 
 // With Keycloak off every Bearer token is refused, so a deployed API would serve no signed-in user.
 if ((config.environmentName === 'test' || config.environmentName === 'prod') && !config.keycloakEnabled) {

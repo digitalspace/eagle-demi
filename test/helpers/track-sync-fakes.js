@@ -177,13 +177,16 @@ function fakeWorks(rows = []) {
     docs.set(doc.id, { ...structuredClone(doc), _etag: `"w${++revision}"` });
     return { status: 'written' };
   };
+  const live = (projectId, { includeDeleted = false, owner } = {}) => [...docs.values()]
+    .filter(doc => doc.projectId === projectId && doc.kind === undefined && (includeDeleted || doc.deleted !== true) &&
+      (owner === undefined || worksRepository().ownerOf(doc) === owner)).map(doc => structuredClone(doc));
+  const privateKey = new Set(['sourceKey', 'sourceRef', 'provenance']);
   return {
     docs, calls, saved,
-    listByProject: async (projectId, { includeDeleted = false, owner } = {}) => {
-      calls.push('listByProject');
-      return [...docs.values()].filter(doc => doc.projectId === projectId && doc.kind === undefined &&
-        (includeDeleted || doc.deleted !== true) &&
-        (owner === undefined || worksRepository().ownerOf(doc) === owner)).map(doc => structuredClone(doc));
+    listByProject: async (projectId, opts) => { calls.push('listByProject'); return live(projectId, opts); },
+    listForRead: async (projectId) => {
+      calls.push('listForRead');
+      return JSON.parse(JSON.stringify(live(projectId)), (key, value) => (privateKey.has(key) ? undefined : value));
     },
     get: async (_projectId, id) => { calls.push('get'); return structuredClone(docs.get(id) || null); },
     save,
@@ -194,7 +197,7 @@ function fakeWorks(rows = []) {
 /** Swaps the works repository's methods for {fake}'s for this test. */
 function useWorks(t, fake) {
   const works = worksRepository();
-  for (const name of ['listByProject', 'get', 'save', 'tombstone']) t.mock.method(works, name, fake[name]);
+  for (const name of ['listByProject', 'listForRead', 'get', 'save', 'tombstone']) t.mock.method(works, name, fake[name]);
   return fake;
 }
 
