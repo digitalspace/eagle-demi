@@ -272,6 +272,12 @@ async function abandonRollback(o, { now, write }) {
   }
 }
 
+/** Frees a lock a stopped run left with no pending batch behind it. */
+async function clearLock(o, { now, write }) {
+  write(`clearedLock=${await batches.clearStaleLock(now())}`);
+  return 0;
+}
+
 const BACKUP_OPTIONS = Object.fromEntries(BACKUP_KEYS.map(name => [name, { type: 'string' }]));
 const MARKER_OPTIONS = { project: { type: 'string' }, all: { type: 'boolean' } };
 // One entry per mode: its flags, the ones it needs, and its runner, which resolves the exit code.
@@ -283,7 +289,8 @@ const MODES = {
   'abandon-rollback': { options: { 'abandon-rollback': { type: 'string' } }, required: ['abandon-rollback'], run: abandonRollback },
   'revert-override': { options: { 'revert-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['revert-override'], run: revertOverride },
   'reapply-override': { options: { 'reapply-override': { type: 'boolean' }, ...MARKER_OPTIONS }, required: ['reapply-override'], run: reapplyOverride },
-  rederive: { options: { rederive: { type: 'string' }, unflip: { type: 'boolean' } }, required: ['rederive'], run: rederiveBatch }
+  rederive: { options: { rederive: { type: 'string' }, unflip: { type: 'boolean' } }, required: ['rederive'], run: rederiveBatch },
+  'clear-stale-lock': { options: { 'clear-stale-lock': { type: 'boolean' } }, required: ['clear-stale-lock'], run: clearLock }
 };
 
 const HELP = [
@@ -298,6 +305,7 @@ const HELP = [
   '      a failed revert or reapply leaves its override batch pending: clear it with --rollback-incomplete <id>',
   '  --rederive <batchId>                 after sheet joins WORKS_READ_SOURCES: the public read must show a batch sheet work',
   '  --rederive <batchId> --unflip        after sheet leaves WORKS_READ_SOURCES: the public read must show none',
+  '  --clear-stale-lock                   delete an expired lock a stopped run left, when its batch is not pending',
   'A failed run leaves its rollback batch pending; the same command resumes it.',
   'Export WORKS_READ and WORKS_READ_SOURCES with the API\'s values first: the devbox shell has no app settings.'
 ];
