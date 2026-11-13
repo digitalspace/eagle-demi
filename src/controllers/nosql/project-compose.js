@@ -4,7 +4,7 @@
 
 const worksDerive = require('../../domain/works-derive');
 const { deriveAssessments } = require('../../merge/assessments');
-const { pickAssessmentWork } = require('../../merge/assessment-work');
+const { isTrackWork, pickAssessmentWork } = require('../../merge/assessment-work');
 
 /** Derive inputs per try, so a retry after a lost race reads the works again; a push creating its row has none. */
 const deriveInputs = async (row) => (row ? worksDerive.deriveInputs(row) : {});
@@ -17,14 +17,15 @@ const withPlanned = (phase, now) => ({
 });
 
 /**
- * `row` with `works` swapped for `worksForDerive`, and `phases` for the picked Assessment work's, as the nightly
- * stores them. No works leaves the row as stored, as the nightly leaves a row Track holds none for.
+ * `row` with `works` swapped for `worksForDerive`, and `phases` for the picked Track Assessment work's, as the
+ * nightly stores them. No works, or a picked work from another source, leaves the stored `phases`.
  */
 function composedRow(row, worksForDerive, now = Date.now()) {
   if (!Array.isArray(worksForDerive) || !worksForDerive.length) return row;
   const works = worksForDerive.map(work => ({ ...work, phases: work.phases.map(phase => withPlanned(phase, now)) }));
   const picked = pickAssessmentWork(works);
-  return { ...row, works, ...(picked && picked.phases.length ? { phases: picked.phases } : {}) };
+  const swap = picked && isTrackWork(picked) && picked.phases.length;
+  return { ...row, works, ...(swap ? { phases: picked.phases } : {}) };
 }
 
 /** The row the project GET answers from; untouched while WORKS_READ is off. */

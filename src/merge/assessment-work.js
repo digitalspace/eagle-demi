@@ -1,6 +1,6 @@
 'use strict';
 
-// Which Track Assessment work stands for a project, so every reader of its phases picks the same one.
+// Which Assessment work stands for a project, so every reader of its phases picks the same one.
 
 const { LEGISLATIONS, isRegistryYear } = require('../domain/project-legislation');
 
@@ -17,8 +17,19 @@ function actYearOf(label) {
   return isRegistryYear(year) ? year : null;
 }
 
-/** The Act a Track work is under; one naming none is under the Track Act. */
-const workActYear = (work) => actYearOf(work.eaAct) ?? TRACK_ACT_YEAR;
+/** A public work whose `source` is track, or a row work from Track's pull, which carries no `source`. */
+const isTrackWork = (work) => work.source === undefined || work.source === null || work.source === 'track';
+
+/** The work's `actYear`, else the Act its `eaAct` names; only a Track work naming none is under the Track Act. */
+function workActYear(work) {
+  if (isRegistryYear(work.actYear)) return work.actYear;
+  return actYearOf(work.eaAct) ?? (isTrackWork(work) ? TRACK_ACT_YEAR : null);
+}
+
+/** An Assessment by `workTypeCode`; a Track work with no code by its Track work type. */
+const isAssessmentWork = (work) => (typeof work.workTypeCode === 'string'
+  ? work.workTypeCode === 'assessment'
+  : isTrackWork(work) && work.workTypeId === ASSESSMENT_WORK_TYPE);
 
 /** Start time in ms; a work with no start sorts before every dated one. */
 function startOf(work) {
@@ -26,17 +37,26 @@ function startOf(work) {
   return Number.isNaN(time) ? -Infinity : time;
 }
 
+const idOf = (work) => String(work.workId ?? work.id ?? '');
+
+/** The highest Track work id first, then the highest work id. */
+const byIdsDesc = (a, b) => (Number(b.trackWorkId) || 0) - (Number(a.trackWorkId) || 0) ||
+  (idOf(b) > idOf(a)) - (idOf(b) < idOf(a));
+
 /**
  * Among the Assessment works, under the `year` Act when given: the active one, else the latest
- * start, ties to the highest Track work id. Null when there is none.
+ * start, ties by `byIdsDesc`. Null when there is none.
  */
 function pickAssessmentWork(works, { year } = {}) {
   const candidates = (Array.isArray(works) ? works : []).filter(work => work && typeof work === 'object' &&
-    work.workTypeId === ASSESSMENT_WORK_TYPE && (year === undefined || workActYear(work) === Number(year)));
-  // Two missing starts give NaN, which falls through `||` to the id.
+    isAssessmentWork(work) && (year === undefined || workActYear(work) === Number(year)));
+  // Two missing starts give NaN, which falls through `||` to the ids.
   candidates.sort((a, b) => (b.isActive === true) - (a.isActive === true) || startOf(b) - startOf(a) ||
-    (Number(b.trackWorkId) || 0) - (Number(a.trackWorkId) || 0));
+    byIdsDesc(a, b));
   return candidates[0] ?? null;
 }
 
-module.exports = { ASSESSMENT_WORK_TYPE, TRACK_ACT_YEAR, actYearOf, workActYear, pickAssessmentWork };
+module.exports = {
+  ASSESSMENT_WORK_TYPE, TRACK_ACT_YEAR, actYearOf, byIdsDesc, isAssessmentWork, isTrackWork, pickAssessmentWork,
+  workActYear
+};
