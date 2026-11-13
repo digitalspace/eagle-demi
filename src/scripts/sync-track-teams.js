@@ -48,7 +48,7 @@ const countRoles = (entries) => entries.reduce((n, e) => n + e.roles.length, 0);
 /** Summary field and the mirror count it shows. */
 const MIRROR_FIELDS = [['trackProjects', 'trackProjects'], ['created', 'created'], ['updated', 'updated'],
   ['orphaned', 'orphaned'], ['relinked', 'relinked'], ['skippedApiRows', 'skippedApiRows'], ['trackPhases', 'phases'],
-  ['shortLinks', 'shortLinks'], ['stale', 'stale'], ['derivedDrift', 'derivedDrift']];
+  ['shortLinks', 'shortLinks'], ['stale', 'stale'], ['adopted', 'adopted'], ['derivedDrift', 'derivedDrift']];
 const mirrorCounts = (mirrored) => Object.fromEntries(MIRROR_FIELDS.map(([to, from]) => [to, mirrored[from] || 0]));
 const byUsername = (a, b) => a.username.localeCompare(b.username);
 
@@ -360,7 +360,7 @@ function summaryLine(s) {
     `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
     `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
     `trackPhases=${s.trackPhases} trackWorks=${s.trackWorks} trackWorksFailed=${s.trackWorksFailed} ` +
-    `stale=${s.stale} derivedDrift=${s.derivedDrift} failures=${s.failures}`;
+    `stale=${s.stale} adopted=${s.adopted} derivedDrift=${s.derivedDrift} failures=${s.failures}`;
 }
 
 /**

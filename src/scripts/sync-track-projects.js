@@ -60,8 +60,8 @@ const withDerived = (row, stored, inputs = {}) =>
   Object.assign(row, deriveAssessments(row, { previous: stored && stored.assessments, ...inputs }));
 
 const DRIFT_FIELDS = ['assessments', 'phaseIds', 'activeWork', 'legislationTransitions', 'works'];
-/** The works derive other values than stored while Track moved nothing else. Never with WORKS_READ off. */
-const drifted = (inputs, changes, row, stored) => Boolean(inputs.worksForDerive) &&
+/** The works derive other values than stored while Track moved nothing else; with WORKS_READ off, only off composed works. */
+const drifted = (inputs, changes, row, stored) => Boolean(inputs.worksForDerive || (stored.works || []).some(work => work?.source)) &&
   Object.keys(changes).every(field => DRIFT_FIELDS.includes(field)) &&
   DRIFT_FIELDS.some(field => JSON.stringify(row[field] ?? null) !== JSON.stringify(stored[field] ?? null));
 
