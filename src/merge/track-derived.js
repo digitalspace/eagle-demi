@@ -4,7 +4,9 @@
 
 const { isRegistryYear } = require('../domain/project-legislation');
 const { dayOf, transitionDateOf } = require('../domain/work-model');
-const { byIdsDesc, isAssessmentWork, isTrackWork, pickAssessmentWork, workActYear } = require('./assessment-work');
+const {
+  TRACK_ACT_YEAR, byIdsDesc, isAssessmentWork, isTrackWork, pickAssessmentWork, workActYear
+} = require('./assessment-work');
 
 const NO_TRANSITION_OUT = Object.freeze({ dateSource: 'none' });
 
@@ -57,7 +59,7 @@ const namedPhases = (phases) =>
  * Each assessment phase as `{ phase, year, work }`: the phases of each Act's picked Assessment work, else the
  * row's own `phases` under the Act each names.
  */
-function trackPhasesOf(view, yearOfTrack) {
+function assessmentPhasesOf(view, yearOfTrack) {
   const works = worksOf(view);
   const years = [...new Set(works.filter(isAssessmentWork).map(workActYear))]
     .filter(year => year !== null)
@@ -66,6 +68,17 @@ function trackPhasesOf(view, yearOfTrack) {
     .flatMap(work => namedPhases(work.phases).map(phase => ({ phase, year: workActYear(work), work })));
   return fromWorks.length ? fromWorks
     : namedPhases(view.phases).map(phase => ({ phase, year: yearOfTrack(phase.eaActName), work: null }));
+}
+
+/** The id of each work under `year`'s Act; a work from Track's pull carries none, so it reads `track-<trackWorkId>`. */
+const workIdsOf = (works, year) => works.filter(work => workActYear(work) === year)
+  .map(work => work.workId || (Number.isFinite(work.trackWorkId) ? `track-${work.trackWorkId}` : null))
+  .filter(Boolean);
+
+/** The milestones of the sheet work a 1996 or 2002 block draws its phases from, else none. */
+function sheetMilestonesOf(works, year) {
+  const work = year < TRACK_ACT_YEAR ? pickAssessmentWork(works, { year }) : null;
+  return work && !isTrackWork(work) && Array.isArray(work.milestones) ? work.milestones.filter(Boolean) : [];
 }
 
 /**
@@ -92,4 +105,4 @@ function activeWorkOf(view, current) {
   };
 }
 
-module.exports = { legislationTransitions, worksOf, trackPhasesOf, activeWorkOf };
+module.exports = { legislationTransitions, worksOf, assessmentPhasesOf, sheetMilestonesOf, workIdsOf, activeWorkOf };

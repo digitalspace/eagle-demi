@@ -8,8 +8,8 @@ const {
   normalizeName, phaseIdOf, phaseHistoryIds, entryForTrackCode, entryForEagleId, entryForName
 } = require('../domain/phase-catalog');
 const { redactForAccess } = require('../vis/redact');
-const { TRACK_ACT_YEAR, actYearOf } = require('./assessment-work');
-const { worksOf, trackPhasesOf, activeWorkOf } = require('./track-derived');
+const { TRACK_ACT_YEAR, actYearOf, isTrackWork } = require('./assessment-work');
+const { worksOf, assessmentPhasesOf, sheetMilestonesOf, workIdsOf, activeWorkOf } = require('./track-derived');
 /** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
 const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
@@ -94,16 +94,16 @@ function listedYears(view) {
   return year === null ? [] : [year];
 }
 
-/** The years an assessment can be under, and the Act each Track phase or work belongs to. */
+/** The years an assessment can be under, and the Act each work phase or Track work belongs to. */
 function actContext(view) {
   const listed = listedYears(view);
   const currentYear = listed.length ? listed[listed.length - 1] : null;
   // A phase that names no Act belongs to the Track Act, else to the current block the row has.
   const trackYear = listed.includes(TRACK_ACT_YEAR) ? TRACK_ACT_YEAR : currentYear;
   const yearOfTrack = (actName) => actYearOf(actName) ?? trackYear;
-  const trackPhases = trackPhasesOf(view, yearOfTrack);
-  const blocks = ascending([...listed, ...trackPhases.map(one => one.year)]);
-  return { currentYear, yearOfTrack, trackPhases, blocks };
+  const workPhases = assessmentPhasesOf(view, yearOfTrack);
+  const blocks = ascending([...listed, ...workPhases.map(one => one.year)]);
+  return { currentYear, yearOfTrack, workPhases, blocks };
 }
 
 /** First and last posting; a leading run under a tenth of the dates, over two years early, is dropped. */
@@ -212,10 +212,19 @@ const documentEntries = (year, own) => own.filter(entry => entry.commentPeriodId
 const trackEntry = (year, phase, stage) => ({ phaseIds: [], stage, stageRank: stageRank(year, stage),
   name: phase.name, startDate: phase.startDate ?? null, endDate: phase.endDate ?? null, source: 'track' });
 
-/** Documents listed first, so Eagle wins a tie; a Track phase on a stage documents date is dropped. */
-function datedPhases(documents, track) {
+/**
+ * Documents listed first, so Eagle wins a tie; a work phase on a stage documents date is dropped. On a 1996 or
+ * 2002 block, sheet phases (`from[i]` built `phases[i]`) on that stage lend it their known dates.
+ */
+function datedPhases(year, documents, phases, from) {
+  const sheet = year < TRACK_ACT_YEAR ? phases.filter((_, i) => from[i].work && !isTrackWork(from[i].work)) : [];
+  const lent = documents.map((phase) => {
+    const same = phase.stage ? sheet.filter(one => one.stage === phase.stage) : [];
+    return same.length ? { ...phase, startDate: same[0].startDate ?? phase.startDate,
+      endDate: same[same.length - 1].endDate ?? phase.endDate } : phase;
+  });
   const documentStages = new Set(documents.map(phase => phase.stage).filter(Boolean));
-  return [...documents, ...track.filter(phase => !(phase.stage && documentStages.has(phase.stage)))];
+  return [...lent, ...phases.filter(phase => !(phase.stage && documentStages.has(phase.stage)))];
 }
 
 const finiteOr = (value, fallback) => (Number.isFinite(value) ? value : fallback);
@@ -282,7 +291,8 @@ function sequenceOf(year, { own, track, block, catalog, lists, currentPhase }) {
     if (one.phase.isCompleted === true) completed.add(phase);
     return phase;
   });
-  const dated = datedPhases(documentEntries(year, own).map(phase => catalogDocument(catalog, year, phase)), trackPhases);
+  const dated = datedPhases(year, documentEntries(year, own).map(phase => catalogDocument(catalog, year, phase)),
+    trackPhases, track);
   const phases = [...dated, ...eagleEntries(catalog, year, block, lists, dated)].sort(bySequence);
   return markStatus(phases, { catalog, year, currentPhase, completed });
 }
@@ -293,6 +303,22 @@ const BLOCK_MILESTONES = [
   ['45-day decision period starts', 'review45Start']
 ];
 
+/** Eagle's block and comment period milestones; a dated sheet milestone whose `links` name one gives its dates. */
+function milestonesOf(block, own, sheetMilestones) {
+  const linked = (key, value) => sheetMilestones.find(m => m.links && m.links[key] === value && m.actualDate);
+  return [
+    ...BLOCK_MILESTONES.flatMap(([name, field]) => {
+      const date = linked('blockField', field)?.actualDate ?? isoOf(block[field]);
+      return date ? [{ name, date }] : [];
+    }),
+    ...own.filter(entry => entry.commentPeriodId !== undefined).map((entry) => {
+      const sheet = linked('commentPeriodId', entry.commentPeriodId) || {};
+      return { name: COMMENT_PERIOD, date: sheet.actualDate ?? entry.startDate, endDate: sheet.endDate || (entry.endDate ?? null),
+        commentPeriodId: entry.commentPeriodId, label: entry.label ?? null };
+    })
+  ].sort((a, b) => timeOf(a.date) - timeOf(b.date));
+}
+
 /**
  * `assessments`, `phaseIds` and `activeWork` from the anonymous view, so a dial removes what it fed.
  * `documentPhases` comes off the raw row: the view drops it, and the pass built it from public rows.
@@ -301,8 +327,8 @@ function deriveAssessments(row, { lists, previous, worksForDerive, catalog } = {
   const source = row || {};
   const view = redactForAccess('projects', { ...source, works: worksForDerive ?? source.works }, null);
   const stored = Array.isArray(row && row.documentPhases) ? row.documentPhases : [];
-  const { currentYear, yearOfTrack, trackPhases, blocks } = actContext(view);
-  const trackOf = (year) => trackPhases.filter(one => one.year === year);
+  const { currentYear, yearOfTrack, workPhases, blocks } = actContext(view);
+  const workPhasesIn = (year) => workPhases.filter(one => one.year === year);
   const years = ascending([...blocks, ...stored.map(entry => Number(entry.legislationYear))]);
   const transitions = transitionsOf(view);
   const kept = lists ? [] : (Array.isArray(previous) ? previous : []).filter(Boolean);
@@ -314,34 +340,24 @@ function deriveAssessments(row, { lists, previous, worksForDerive, catalog } = {
     const before = kept.find(one => Number(one.legislationYear) === year) || {};
     const currentPhase = refOf(block.currentPhaseName, lists, before.currentPhase);
     const phases = catalog
-      ? sequenceOf(year, { own, track: trackOf(year), block, catalog, lists, currentPhase })
-      : datedPhases(documentEntries(year, own),
-        trackOf(year).map(({ phase }) => trackEntry(year, phase, stageRowFor(year, phase.name))))
+      ? sequenceOf(year, { own, track: workPhasesIn(year), block, catalog, lists, currentPhase })
+      : datedPhases(year, documentEntries(year, own),
+        workPhasesIn(year).map(({ phase }) => trackEntry(year, phase, stageRowFor(year, phase.name))), workPhasesIn(year))
         .sort((a, b) => a.stageRank - b.stageRank);
-
-    const milestones = [
-      ...BLOCK_MILESTONES.flatMap(([name, field]) => {
-        const date = isoOf(block[field]);
-        return date ? [{ name, date }] : [];
-      }),
-      ...own.filter(entry => entry.commentPeriodId !== undefined).map(entry => ({
-        name: COMMENT_PERIOD, date: entry.startDate, endDate: entry.endDate ?? null,
-        commentPeriodId: entry.commentPeriodId, label: entry.label ?? null
-      }))
-    ].sort((a, b) => timeOf(a.date) - timeOf(b.date));
 
     const transition = transitions.find(one => Number(one.fromYear) === year);
     return {
       legislationYear: year,
       act: LEGISLATIONS[year].label,
       phases,
-      milestones,
+      milestones: milestonesOf(block, own, sheetMilestonesOf(works, year)),
       currentPhase,
       decision: refOf(block.eacDecision, lists, before.decision),
       decisionDate: isoOf(block.decisionDate),
       certificate: null,
       trackWorkIds: works.filter(work => yearOfTrack(work.eaAct) === year)
         .map(work => work.trackWorkId).filter(Number.isFinite),
+      workIds: workIdsOf(works, year),
       transitionDate: (transition && transition.date) || null
     };
   });

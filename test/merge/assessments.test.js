@@ -7,6 +7,10 @@ const assert = require('node:assert');
 
 const { datePhasesFromDocuments, deriveAssessments, actBlocks } = require('../../src/merge/assessments');
 const { pickAssessmentWork } = require('../../src/merge/assessment-work');
+const { legislationTransitions } = require('../../src/merge/track-derived');
+const cosmos = require('../../src/db/cosmos-nosql');
+const phaseCatalog = require('../../src/domain/phase-catalog');
+const { loadWorks } = require('../../src/domain/works-derive');
 const { mergeEagleOnlyProject, mergeTrackProject, carryDemiOnlyFields } = require('../../src/merge/project');
 const fx = require('../fixtures/act-assessments');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
@@ -424,5 +428,100 @@ test('the merge derives assessments', async (t) => {
     const stored = { ...fx.only2002(), assessments: [{ legislationYear: 1996 }], phaseIds: ['stale'] };
     const merged = carryDemiOnlyFields(mergeEagleOnlyProject(RAW), stored);
     assert.deepStrictEqual([merged.assessments.map(one => one.legislationYear), merged.phaseIds], [[2002], []]);
+  });
+});
+
+const SHEET_LINKS = Object.freeze({ commentPeriodId: null, blockField: null });
+const sheetPhase = (name, startDate, endDate, extra) => ({ name, startDate, endDate, isCompleted: Boolean(endDate), ...extra });
+/** A sheet assessment work in public shape. */
+const sheetWork = (actYear, phases, fields) => ({ workId: `sheet-${actYear}`, source: 'sheet', workTypeCode: 'assessment',
+  actYear, isActive: false, phases, milestones: [], ...fields });
+const handOver = (toActYear, date) => ({ transitionOut: { toActYear, date, dateSource: 'sheet' } });
+/** `row` with the transitions `patchDerived` stores for `works`, then dated by `documents`. */
+const withWorks = (row, works, documents = []) =>
+  dated({ ...row, legislationTransitions: legislationTransitions(row.legislationYearList, works) }, documents);
+const datesOf = (assessment) => assessment.phases.map(phase => [phase.name, phase.startDate, phase.endDate]);
+
+test('the 1996 and 2002 timeline', async (t) => {
+  const review = (startDate, endDate, extra) => [sheetWork(2002, [sheetPhase('Application review', startDate, endDate, extra)])];
+  const reviewPhases = (works) => yearOf(deriveAssessments(dated(fx.only2002(), fx.only2002Documents()), { worksForDerive: works }), 2002)
+    .phases.filter(phase => phase.stage === 'Application Review')
+    .map(phase => [phase.name, phase.source, phase.startDate, phase.endDate]);
+
+  await t.test('no duplicate 180-day milestone', () => {
+    const works = [sheetWork(2002, [], { milestones: [{ name: 'Start (180)', actualDate: '2010-02-20', endDate: null,
+      links: { ...SHEET_LINKS, blockField: 'review180Start' } }] })];
+    assert.deepStrictEqual(yearOf(deriveAssessments(fx.only2002(), { worksForDerive: works }), 2002).milestones
+      .map(m => [m.name, m.date]), [['180-day review starts', '2010-02-20'], ['Decision date', '2011-05-20T00:00:00.000Z']]);
+  });
+
+  await t.test('sheet date beats Eagle date for the same 2002 phase start; Eagle phase name kept', () => {
+    assert.deepStrictEqual(reviewPhases(review('2010-02-20', '2011-05-20')),
+      [['Application Review', 'documents', '2010-02-20', '2011-05-20']]);
+  });
+
+  await t.test('unknown sheet date keeps Eagle\'s date', () => {
+    const unknown = review(null, null, { undated: { startDate: { notAfter: '1995-06-30' } } });
+    assert.deepStrictEqual(reviewPhases(unknown),
+      [['Application Review', 'documents', '2010-03-02T00:00:00.000Z', '2010-12-01T00:00:00.000Z']]);
+  });
+
+  await t.test('1996 and 2002 blocks meet on 2002-12-30 for a transitioned project', () => {
+    const works = [sheetWork(1996, [sheetPhase('Pre-EA', '1999-01-04', '2002-12-30')], handOver(2002, '2002-12-30')),
+      sheetWork(2002, [sheetPhase('Application Review', '2002-12-30', null)])];
+    const row = withWorks(fx.movedFrom1996(null), works, [fx.document(fx.PHASES.applicationReview, '2003-03-01T00:00:00.000Z')]);
+    const [old, next] = deriveAssessments(row, { worksForDerive: works }).assessments;
+    assert.deepStrictEqual([old.transitionDate, old.phases.at(-1).endDate, next.phases[0].startDate],
+      ['2002-12-30', '2002-12-30', '2002-12-30']);
+  });
+
+  await t.test('sheet 2002 block ends and Track 2018 block starts on 2022-08-23 with no phase in both', () => {
+    const [track] = trackWorks();
+    track.milestones = [];
+    track.phases = [{ ...track.phases[1], startDate: '2022-08-23', endDate: '2023-10-10' }];
+    const works = [sheetWork(2002, [sheetPhase('Application Review', '2019-01-07', '2022-08-23')], handOver(2018, '2022-08-23')), track];
+    const derived = deriveAssessments(withWorks(fx.cariboo(), works), { worksForDerive: works });
+    assert.deepStrictEqual([yearOf(derived, 2002).transitionDate, datesOf(yearOf(derived, 2002)), datesOf(yearOf(derived, 2018))], [
+      '2022-08-23', [['Application Review', '2019-01-07', '2022-08-23']], [['EAC Decision', '2022-08-23', '2023-10-10']]]);
+  });
+
+  await t.test('a Pre-EAO row with an unknown intake that moved to 2002 on 2002-12-30 gives a 1996 block then a 2002 block', () => {
+    const works = [sheetWork(1996, [sheetPhase('Pre-EA', null, '2002-12-30', { undated: { startDate: { notAfter: '1995-06-30' } } })],
+      handOver(2002, '2002-12-30')), sheetWork(2002, [sheetPhase('Application Review', '2002-12-30', null)])];
+    const derived = deriveAssessments(withWorks(fx.only2002(), works), { worksForDerive: works });
+    assert.deepStrictEqual(derived.assessments.map(one => [one.legislationYear, one.transitionDate]), [[1996, '2002-12-30'], [2002, null]]);
+  });
+
+  await t.test('2018 sequence unchanged', () => {
+    const sheet = sheetWork(2002, [sheetPhase('Effects Assessment', '2019-01-07', '2021-01-20')], { milestones: [{ name: 'Start (180)',
+      actualDate: '2019-01-07', endDate: null, links: { ...SHEET_LINKS, blockField: 'review180Start' } }] });
+    const derive = (works) => yearOf(deriveAssessments(sequenceRow(), { worksForDerive: works, catalog: CATALOG }), 2018);
+    assert.deepStrictEqual(derive([...sequenceWorks(), sheet]), derive(sequenceWorks()));
+  });
+
+  await t.test('with WORKS_READ off, workIds lists the same works as trackWorkIds, as track- ids', () => {
+    const block = yearOf(deriveAssessments(fx.cariboo()), 2018);
+    assert.deepStrictEqual([block.trackWorkIds, block.workIds], [[1101, 1102], ['track-1101', 'track-1102']]);
+  });
+
+  await t.test('a hidden Track amendment is in no block\'s trackWorkIds and the sheet amendment is in the 2002 block\'s workIds', async (t) => {
+    const amendmentId = 'sheet-00000000-0000-4000-8000-000000000001';
+    const docs = [
+      { id: 'track-7', projectId: 'p1', trackWorkId: 7, source: 'track', owner: 'track', workTypeId: 7, eaAct: '2018 Act',
+        decisionDate: '2024-06-01', phases: [] },
+      { id: amendmentId, projectId: 'p1', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment', actYear: 2002,
+        decisionDate: '2024-06-01', sourceKey: 'key-1', phases: [] }
+    ];
+    const marker = { id: 'sheet-override', projectId: 'p1', kind: 'override', source: 'sheet', owner: 'sheet', active: true,
+      boundaryAtLoad: '2025-01-01', certificates: [], hidden: [{ trackWorkId: 'track-7', sheetWorkId: amendmentId }],
+      trackAlive: [], untilTrack: [], pairedTrackWorkIds: ['track-7'], batchId: 'batch-1', provenance: {}, schemaVersion: 1 };
+    t.mock.method(phaseCatalog, 'load', async () => ({}));
+    t.mock.method(cosmos, 'query', async () => ({ items: structuredClone(docs), continuationToken: undefined }));
+    t.mock.method(cosmos, 'readItem', async (_container, id) => (id === marker.id ? structuredClone(marker) : null));
+    const row = { ...fx.cariboo(), id: 'p1' };
+
+    const derived = deriveAssessments(row, await loadWorks(row, { sources: ['track', 'sheet'] }));
+
+    assert.deepStrictEqual([derived.assessments.flatMap(one => one.trackWorkIds), yearOf(derived, 2002).workIds], [[], [amendmentId]]);
   });
 });
