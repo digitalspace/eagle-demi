@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const { SOURCES, D, T } = require('./sources');
+const { readCapped } = require('../../src/utils/import-envelope');
 
 const SENTINEL_DATE = '1995-06-30';
 const NULL_TEXT = new Set(['', '---', 'n/a']);
@@ -169,32 +170,11 @@ function checkInflatedSize(buf, file) {
   }
 }
 
-/** Reads one regular file, refusing a symbolic link or more than the size cap even if the file grows. */
+/** Reads one workbook under the size cap, then refuses one that would inflate past the caps. */
 function readInput(dir, file, noFollow = fs.constants.O_NOFOLLOW) {
-  const full = path.join(dir, file);
-  if (!noFollow && fs.lstatSync(full).isSymbolicLink()) throw new Error(`${file} is a symbolic link`);
-  let fd;
-  try {
-    fd = fs.openSync(full, fs.constants.O_RDONLY | (noFollow || 0));
-  } catch (err) {
-    throw new Error(err.code === 'ELOOP' ? `${file} is a symbolic link` : `${file} cannot be opened`, { cause: err });
-  }
-  try {
-    if (!fs.fstatSync(fd).isFile()) throw new Error(`${file} is not a regular file`);
-    const chunks = [];
-    const chunk = Buffer.alloc(1024 * 1024);
-    let total = 0;
-    for (let n = fs.readSync(fd, chunk); n > 0; n = fs.readSync(fd, chunk)) {
-      total += n;
-      if (total > MAX_INPUT_BYTES) throw new Error(`${file} is over ${MAX_INPUT_BYTES} bytes`);
-      chunks.push(Buffer.from(chunk.subarray(0, n)));
-    }
-    const buf = Buffer.concat(chunks, total);
-    checkInflatedSize(buf, file);
-    return buf;
-  } finally {
-    fs.closeSync(fd);
-  }
+  const buf = readCapped(path.join(dir, file), MAX_INPUT_BYTES, { label: file, noFollow });
+  checkInflatedSize(buf, file);
+  return buf;
 }
 
 /** Reads the mapped columns of every workbook in `dir`, in memory. */
