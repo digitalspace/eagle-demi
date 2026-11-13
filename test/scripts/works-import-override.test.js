@@ -216,18 +216,32 @@ test('rollback-incomplete of a pending load batch still needs its backup', async
   await assert.rejects(rollback(['--rollback-incomplete', 'b2'], demi), /of a load batch needs --backup/);
 });
 
-test('revert, reapply, --unflip and an override undo refuse while WORKS_READ_SOURCES is unset', async (t) => {
+/** Unsets `name` for the test, as on a devbox shell. */
+function unsetEnv(t, name) {
+  const value = process.env[name];
+  delete process.env[name];
+  t.after(() => { process.env[name] = value; });
+}
+
+test('revert, reapply, rederive, --unflip and an override undo refuse while WORKS_READ_SOURCES is unset', async (t) => {
   const { store, demi } = markerStore(t, ['7001'], ['7001']);
   store.set({ kind: KINDS.BATCH, id: 'ov1', batchKind: 'override', status: 'pending', startedAt: new Date(LATER).toISOString() });
-  const sources = process.env.WORKS_READ_SOURCES;
-  delete process.env.WORKS_READ_SOURCES;
-  t.after(() => { process.env.WORKS_READ_SOURCES = sources; });
+  unsetEnv(t, 'WORKS_READ_SOURCES');
   const unset = /WORKS_READ_SOURCES is not set/;
 
   await assert.rejects(rollback(['--revert-override', '--all'], demi), unset);
   await assert.rejects(rollback(['--reapply-override', '--all'], demi), unset);
+  await assert.rejects(rollback(['--rederive', 'b1'], demi), unset);
   await assert.rejects(rollback(['--rederive', 'b1', '--unflip'], demi), unset);
   await assert.rejects(rollback(['--rollback-incomplete', 'ov1'], demi), unset);
+  assert.equal(demi.markers.get('7001')._etag, '"m"');
+});
+
+test('a derive refuses while WORKS_READ is unset', async (t) => {
+  const { demi } = markerStore(t, ['7001'], ['7001']);
+  unsetEnv(t, 'WORKS_READ');
+
+  await assert.rejects(rollback(['--revert-override', '--all'], demi), /WORKS_READ is not set/);
   assert.equal(demi.markers.get('7001')._etag, '"m"');
 });
 

@@ -66,7 +66,7 @@ async function rederiveBatch(o, ctx) {
   const { demi, now, write } = ctx;
   const batchId = o.rederive;
   const unflip = o.unflip === true;
-  if (unflip) requireDeriveEnv();
+  requireDeriveEnv();
   if (unflip && config.worksReadSources.includes('sheet')) refuse('--unflip needs WORKS_READ_SOURCES without sheet');
   const batch = await batches.readBatch(batchId);
   if (!batch || batch.batchKind !== 'load' || batch.status !== 'complete') refuse('--rederive acts only on a complete load batch');
