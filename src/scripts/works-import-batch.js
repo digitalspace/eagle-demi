@@ -10,7 +10,8 @@ const KINDS = Object.freeze({ LOCK: 'ImportLock', BATCH: 'ImportBatch', ENTRY: '
 const LOCK_ID = 'import-lock';
 const LEASE_MS = 2 * 60 * 60 * 1000;
 const RENEW_EVERY = 100;
-const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory', 'derive']);
+const ACTIONS = Object.freeze(['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory', 'derive',
+  'remove', 'restore', 'removeExternalId', 'removeHistory', 'restoreHistory']);
 // Each target names a document, a project list entry or an id system; never a sourceKey, number or staff value.
 const TARGET_SHAPES = Object.freeze([['id', 'projectId'], ['entryId', 'field', 'projectId'], ['projectId', 'system']]);
 
@@ -24,11 +25,8 @@ function leaseLost(message, cause) {
 
 /** Takes the lock for `batchId`; refused while any lock item exists, expired or not, or any batch is pending. */
 async function takeLock(batchId, now = Date.now()) {
-  if (await cosmos.readItem(CONTAINER, LOCK_ID, KINDS.LOCK)) refuse('the import lock exists, expired or not');
-  const pending = await cosmos.query(CONTAINER, {
-    query: 'SELECT VALUE c.id FROM c WHERE c.status = @status', parameters: [{ name: '@status', value: 'pending' }]
-  }, { partitionKey: KINDS.BATCH });
-  if (pending.items.length) refuse('an ImportBatch is pending');
+  if (await readLock()) refuse('the import lock exists, expired or not');
+  if ((await batchIdsWithStatus('pending')).length) refuse('an ImportBatch is pending');
   const expiresAt = new Date(now + LEASE_MS).toISOString();
   try {
     const created = await cosmos.create(CONTAINER, lockItem(batchId, expiresAt));
@@ -39,13 +37,20 @@ async function takeLock(batchId, now = Date.now()) {
   }
 }
 
-/**
- * Takes the lock of a stopped run for `batchId`: refused while its lease is fresh. An expired lock is replaced under
- * its etag, so of two takers one wins and the other is refused; with no lock item it is created, as by takeLock.
- */
-async function takeOverLock(batchId, now = Date.now()) {
-  const lock = await cosmos.readItem(CONTAINER, LOCK_ID, KINDS.LOCK);
-  if (lock && now < Date.parse(lock.expiresAt)) refuse('the import lease is fresh');
+/** The lock item with its `_etag`; null when absent. */
+async function readLock() {
+  return cosmos.readItem(CONTAINER, LOCK_ID, KINDS.LOCK);
+}
+
+/** Takes over an expired lock held by one of `heldBy` (replace under its etag, one taker wins), or creates it when absent. */
+async function takeOverLock(batchId, now = Date.now(), heldBy = [batchId]) {
+  const lock = await readLock();
+  if (lock) {
+    const expires = Date.parse(lock.expiresAt);
+    if (Number.isNaN(expires)) refuse('the import lock has no readable expiry');
+    if (!heldBy.includes(lock.batchId)) refuse('the import lock belongs to another batch');
+    if (now < expires) refuse('the import lease is fresh');
+  }
   const expiresAt = new Date(now + LEASE_MS).toISOString();
   try {
     const taken = lock
@@ -74,9 +79,9 @@ async function beforeWrite(lease, now = Date.now()) {
   lease.writes += 1;
 }
 
-/** The `pending` ImportBatch header; `fields` holds operator, refs, hashes and the sealed backup's name and SHA-256. */
+/** The `pending` ImportBatch header, `batchKind` 'load' unless `fields` names another; a load's `fields` hold refs, hashes and the backup's name. */
 async function createBatch(batchId, fields, now = Date.now()) {
-  const item = { ...fields, kind: KINDS.BATCH, id: batchId, batchKind: 'load', status: 'pending', startedAt: new Date(now).toISOString() };
+  const item = { batchKind: 'load', ...fields, kind: KINDS.BATCH, id: batchId, status: 'pending', startedAt: new Date(now).toISOString() };
   const created = await cosmos.create(CONTAINER, item);
   return { item, etag: created._etag };
 }
@@ -98,28 +103,33 @@ async function readBatch(batchId) {
   return cosmos.readItem(CONTAINER, batchId, KINDS.BATCH);
 }
 
-/** Every `complete` header, earliest completion first; batches are few, so one id query, then a point read each. */
-async function completeBatches() {
+async function batchIdsWithStatus(status) {
   const ids = await cosmos.query(CONTAINER, {
-    query: 'SELECT VALUE c.id FROM c WHERE c.status = @status', parameters: [{ name: '@status', value: 'complete' }]
+    query: 'SELECT VALUE c.id FROM c WHERE c.status = @status', parameters: [{ name: '@status', value: status }]
   }, { partitionKey: KINDS.BATCH });
-  const headers = (await Promise.all(ids.items.map(readBatch))).filter(Boolean);
+  return ids.items;
+}
+
+/** Every header of `status`, earliest completion first; batches are few, so one id query, then a point read each. */
+async function batchesWithStatus(status) {
+  const headers = (await Promise.all((await batchIdsWithStatus(status)).map(readBatch))).filter(Boolean);
   return headers.sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
 }
 
 /** The latest `complete` batch of `batchKind`, or null. */
 async function latestCompleteBatch(batchKind = 'load') {
-  return (await completeBatches()).filter(batch => batch.batchKind === batchKind).at(-1) || null;
+  return (await batchesWithStatus('complete')).filter(batch => batch.batchKind === batchKind).at(-1) || null;
 }
 
-/** The batch's entries by seq; writeAhead numbers them 1, 2, 3 with no gap, so the walk ends at the first absent seq. */
+/** The batch's entries by seq, point reads up to the highest seq stored; refused when one in between is missing. */
 async function listEntries(batchId) {
-  const entries = [];
-  for (let seq = 1; ; seq += 1) {
-    const entry = await cosmos.readItem(CONTAINER, `${batchId}:${seq}`, KINDS.ENTRY);
-    if (!entry) return entries;
-    entries.push(entry);
-  }
+  const max = await cosmos.query(CONTAINER, {
+    query: 'SELECT VALUE MAX(c.seq) FROM c WHERE c.batchId = @batchId', parameters: [{ name: '@batchId', value: batchId }]
+  }, { partitionKey: KINDS.ENTRY });
+  const count = max.items[0] ?? 0;
+  const entries = await Promise.all(Array.from({ length: count }, (_, n) => cosmos.readItem(CONTAINER, `${batchId}:${n + 1}`, KINDS.ENTRY)));
+  if (entries.some(entry => !entry)) refuse(`batch ${batchId} is missing an entry below seq ${count}`);
+  return entries;
 }
 
 /** Marks the batch `rolledBack` under the etag `batch` was read with. */
@@ -154,5 +164,5 @@ async function writeAhead(run, { target, action, priorEtag = null }, write, now 
 module.exports = {
   CONTAINER, KINDS, LOCK_ID, LEASE_MS, RENEW_EVERY, ACTIONS,
   takeLock, takeOverLock, beforeWrite, releaseLock, createBatch, completeBatch, writeAhead,
-  readBatch, completeBatches, latestCompleteBatch, listEntries, markRolledBack
+  readLock, readBatch, batchesWithStatus, latestCompleteBatch, listEntries, markRolledBack
 };

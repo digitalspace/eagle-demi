@@ -3,7 +3,8 @@
 // Undoes a business works load on test: `--rollback <batchId>` for the latest complete load batch,
 // `--rollback-incomplete <batchId>` for a pending one whose lease expired. Output names project and document ids and counts only.
 
-const { parseArgs } = require('util');
+const crypto = require('crypto');
+const { isDeepStrictEqual, parseArgs } = require('util');
 const works = require('../repositories/works');
 const projects = require('../repositories/projects');
 const history = require('../repositories/project-staff-history');
@@ -14,13 +15,18 @@ const { logger } = require('../utils/logger');
 
 const OWNER = 'sheet';
 const DOC_ACTIONS = new Set(['create', 'update', 'tombstone', 'marker']);
+// Writes of a later batch that move a document's etag: a revert or reapply of a marker, or a rollback's undo.
+const LATER_DOC_ACTIONS = new Set([...DOC_ACTIONS, 'remove', 'restore']);
+const LATER_KINDS = new Set(['override', 'rollback']);
 const PROJECT_ACTIONS = new Set(['addExternalId', 'appendHistory', 'closeHistory']);
-const PROJECT_UNDONE = new Set(['removed', 'restored', 'absent']);
+const PROJECT_DONE = new Set(['removed', 'restored', 'unchanged', 'absent']);
 const BACKUP_KEYS = ['backup', 'expect-backup-sha256', 'devbox-key', 'expect-devbox-fingerprint'];
 
 const refuse = (message) => { throw new Error(message); };
 const docKey = ({ projectId, id }) => `${projectId}|${id}`;
+const stepKey = (action, target) => `${action}|${JSON.stringify(Object.entries(target).sort())}`;
 const withoutSystem = doc => Object.fromEntries(Object.entries(doc).filter(([key]) => !key.startsWith('_')));
+const sameValue = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
 /** The repositories a rollback reads and writes; tests pass a fake. */
 function liveDemi() {
@@ -35,7 +41,7 @@ function liveDemi() {
   };
 }
 
-/** Each document the batch wrote, its entries in seq order, and the writtenEtag of a later override batch's latest entry on it. */
+/** Each document the batch wrote, its entries in seq order, and the writtenEtag of the latest later write to it. */
 function documentsOf(entries, laterEntries) {
   const docs = new Map();
   for (const entry of entries.filter(one => DOC_ACTIONS.has(one.action))) {
@@ -43,126 +49,179 @@ function documentsOf(entries, laterEntries) {
     if (!docs.has(key)) docs.set(key, { target: entry.target, entries: [] });
     docs.get(key).entries.push(entry);
   }
-  for (const entry of laterEntries) {
-    const doc = entry.target.id && entry.state === 'done' && docs.get(docKey(entry.target));
-    if (doc) doc.overrideEtag = entry.writtenEtag;
+  for (const entry of laterEntries.filter(one => LATER_DOC_ACTIONS.has(one.action) && one.state === 'done')) {
+    const doc = docs.get(docKey(entry.target));
+    if (doc) doc.laterEtag = entry.writtenEtag;
   }
   return [...docs.values()];
 }
 
-/**
- * The etag `current` must carry, or `undefined` when the batch never wrote the document. An intent entry is read now:
- * its write landed when the document moved off the etag recorded before it.
- */
+/** The etag the document must carry, or `undefined` when an intent's write never landed (it still holds the etag before it). */
 function expectedEtag(doc, current) {
   const last = doc.entries.at(-1);
-  if (last.state === 'done') return doc.overrideEtag ?? last.writtenEtag;
+  if (last.state === 'done') return doc.laterEtag !== undefined ? doc.laterEtag : last.writtenEtag;
   const before = doc.entries.length > 1 ? doc.entries.at(-2).writtenEtag : last.priorEtag;
   const now = current ? current._etag : null;
   return now === before && doc.entries.length === 1 ? undefined : now;
 }
 
-/** The documents to undo, each with its current copy; refuses before any write when one moved or is not the sheet's. */
-async function checkedDocuments(demi, docs) {
-  const checked = [];
-  for (const doc of docs) {
-    const { projectId, id } = doc.target;
-    const current = await demi.work(projectId, id);
-    const expected = expectedEtag(doc, current);
-    if (expected === undefined) continue;
-    if (current && works.ownerOf(current) !== OWNER) refuse(`document ${id} on project ${projectId} is not owned by ${OWNER}; nothing was undone`);
-    if ((current ? current._etag : null) !== expected) refuse(`document ${id} on project ${projectId} moved since the batch wrote it; nothing was undone`);
-    checked.push({ ...doc, current });
-  }
-  return checked;
-}
-
-/** A created document is removed; one the backup holds is put back as it was, tombstones included. */
-async function undoDocument(demi, { target, current }, prior) {
+/** A created document is removed; one the backup holds is put back as it was, tombstones included. Resolves the written etag. */
+async function undoDocument(demi, target, current, prior) {
   const result = prior
     ? await demi.saveWork(withoutSystem(prior), { owner: OWNER, etag: current._etag, existing: current })
     : await demi.removeWork(target, { owner: OWNER, etag: current._etag });
   if (result.status !== (prior ? 'written' : 'removed')) refuse(`undo of ${target.id} on project ${target.projectId} answered ${result.status}`);
+  return prior ? result.etag ?? null : null;
 }
 
-/** The repository calls that undo one project entry, from the plan values the backup holds. */
-function projectUndos(demi, entry, backup) {
-  const { projectId, field, entryId, system } = entry.target;
-  const planned = backup.projectEntries.filter(one => one.action === entry.action && one.projectId === projectId);
-  const priorOf = (id) => {
-    const project = (backup.projects || []).find(one => one.projectId === projectId) || {};
-    return (project[field] || []).find(one => one.id === id) || refuse(`the backup holds no prior copy of a ${field} entry on project ${projectId}`);
-  };
-  const reopen = (id, effectiveTo) => {
-    const prior = priorOf(id);
-    return () => demi.restoreHistory(projectId, field, prior, history.historyEntrySha256({ ...prior, effectiveTo }));
-  };
-  if (entry.action === 'addExternalId') {
-    return planned.filter(one => one.pair.system === system)
-      .map(one => () => demi.removeExternalId(projectId, { system, value: one.pair.value }));
+/** One undo per document, all checked before any write: refused when one moved, is gone, is not the sheet's or has no copy to restore. */
+async function documentSteps(demi, docs, priors, logged) {
+  const steps = [];
+  for (const doc of docs) {
+    const { projectId, id } = doc.target;
+    const where = `document ${id} on project ${projectId}`;
+    const prior = priors.get(docKey(doc.target));
+    if (!prior && doc.entries[0].priorEtag !== null) refuse(`the backup holds no prior copy of ${where}; nothing was undone`);
+    const action = prior ? 'restore' : 'remove';
+    const log = logged.get(stepKey(action, doc.target));
+    if (log === 'done') continue;
+    const current = await demi.work(projectId, id);
+    // A resumed undo whose write landed: the document is gone, or holds the backup copy again.
+    if (log === 'intent' && (prior ? current && isDeepStrictEqual(withoutSystem(current), withoutSystem(prior)) : !current)) continue;
+    const expected = expectedEtag(doc, current);
+    if (expected === undefined) continue;
+    if (!current) refuse(`${where} is gone; nothing was undone`);
+    if (works.ownerOf(current) !== OWNER) refuse(`${where} is not owned by ${OWNER}; nothing was undone`);
+    if (current._etag !== expected) refuse(`${where} moved since the batch wrote it; nothing was undone`);
+    steps.push({ action, target: doc.target, priorEtag: current._etag, run: () => undoDocument(demi, doc.target, current, prior) });
   }
-  const one = planned.find(item => item.field === field && (item.entryId ?? item.entry?.id) === entryId) ||
-    refuse(`the backup holds no ${entry.action} values for project ${projectId}`);
-  if (entry.action === 'closeHistory') return [reopen(entryId, one.effectiveTo)];
-  return [
-    () => demi.removeHistory(projectId, field, entryId, history.historyEntrySha256(one.entry)),
-    ...(one.close ? [reopen(one.close.id, one.close.effectiveTo)] : [])
-  ];
+  return steps;
 }
 
-/** `patchDerived` on each project; ok only when patched + unchanged is the project count, so missing and conflict are 0. */
+/** Undo steps for the project entries the batch wrote, from the plan values and prior lists the backup holds. */
+function projectSteps(demi, entries, backup, changed) {
+  const priorProject = projectId => backup.projects.find(one => one.projectId === projectId) || {};
+  const priorEntry = (projectId, field, entryId) => (priorProject(projectId)[field] || []).find(one => one.id === entryId) ||
+    refuse(`the backup holds no prior copy of a ${field} entry on project ${projectId}`);
+  const outcome = (projectId, status) => {
+    if (status === 'changed') changed.add(projectId);
+    else if (!PROJECT_DONE.has(status)) refuse(`a project entry undo on project ${projectId} answered ${status}`);
+    return status;
+  };
+  const reopen = (projectId, field, close) => {
+    const prior = priorEntry(projectId, field, close.id);
+    const expected = history.historyEntrySha256({ ...prior, effectiveTo: close.effectiveTo });
+    return async () => outcome(projectId, (await demi.restoreHistory(projectId, field, prior, expected)).status);
+  };
+  const steps = [];
+  const removals = new Map();
+  const seen = new Map();
+  for (const entry of entries.filter(one => PROJECT_ACTIONS.has(one.action))) {
+    const { projectId, field, entryId, system } = entry.target;
+    const planned = backup.projectEntries.filter(one => one.action === entry.action && one.projectId === projectId);
+    // A done entry with no written etag found the row already holding it, so it wrote nothing.
+    const wrote = entry.state === 'intent' || entry.writtenEtag !== null;
+    if (entry.action === 'addExternalId') {
+      const key = `${projectId}|${system}`;
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      const value = planned.filter(one => one.pair.system === system)[n]?.pair.value ?? refuse(`the backup holds no addExternalId values for project ${projectId}`);
+      const held = (priorProject(projectId).externalIds || []).some(one => one.system === system && sameValue(one.value, value));
+      if (!wrote || held) continue;
+      if (!removals.has(key)) {
+        removals.set(key, []);
+        steps.push({ action: 'removeExternalId', target: { projectId, system }, run: async () => {
+          for (const one of removals.get(key)) outcome(projectId, (await demi.removeExternalId(projectId, { system, value: one })).status);
+          return null;
+        } });
+      }
+      if (!removals.get(key).some(one => sameValue(one, value))) removals.get(key).push(value);
+      continue;
+    }
+    if (!wrote) continue;
+    const one = planned.find(item => item.field === field && (item.entryId ?? item.entry?.id) === entryId) ||
+      refuse(`the backup holds no ${entry.action} values for project ${projectId}`);
+    if (entry.action === 'closeHistory') {
+      const undo = reopen(projectId, field, { id: entryId, effectiveTo: one.effectiveTo });
+      steps.push({ action: 'restoreHistory', target: entry.target, run: async () => { await undo(); return null; } });
+      continue;
+    }
+    const sha = history.historyEntrySha256(one.entry);
+    const undoClose = one.close ? reopen(projectId, field, one.close) : null;
+    steps.push({ action: 'removeHistory', target: entry.target, run: async () => {
+      const status = outcome(projectId, (await demi.removeHistory(projectId, field, entryId, sha)).status);
+      // A kept staff-edited entry stays the open one, so the entry it closed stays closed.
+      if (undoClose && status !== 'changed') await undoClose();
+      return null;
+    } });
+  }
+  return steps;
+}
+
+/** `patchDerived` on every project, a throw counted as conflict; ok only when patched + unchanged is the project count. */
 async function rederive(demi, projectIds, lease, now) {
   const counts = { patched: 0, unchanged: 0, missing: 0, conflict: 0 };
   for (const projectId of projectIds) {
     await batches.beforeWrite(lease, now());
-    const { status } = await demi.patchDerived(projectId);
+    let status;
+    try {
+      ({ status } = await demi.patchDerived(projectId));
+    } catch (err) {
+      logger.warn('[rollback-business-works] patchDerived failed', { projectId, code: err.code });
+      status = 'conflict';
+    }
     counts[status] = (counts[status] ?? 0) + 1;
   }
   return { counts, ok: counts.patched + counts.unchanged === projectIds.length };
 }
 
-/** Undoes `entries` of `batch` under `lease`, marks it rolledBack, re-derives every touched project; resolves the exit code. */
-async function undoBatch(o, ctx, { batch, entries, laterEntries = [], lease }) {
+/** Undoes `target` under its own write-ahead rollback batch (or resumes `resumed`) and re-derives; resolves the exit code. */
+async function undoBatch(o, ctx, { target, entries, laterEntries, lease, resumed }) {
   const { demi, openBackup, now, write } = ctx;
-  if (o['expect-backup-sha256'].toLowerCase() !== batch.backupSha256) refuse('--expect-backup-sha256 is not the backup SHA-256 the batch recorded');
+  const expectSha256 = o['expect-backup-sha256'].toLowerCase();
+  if (expectSha256 !== target.backupSha256) refuse('--expect-backup-sha256 is not the backup SHA-256 the batch recorded');
   const backup = await openBackup({
-    sealedPath: o.backup, expectSha256: o['expect-backup-sha256'].toLowerCase(), devboxKeyPath: o['devbox-key'],
-    expectDevboxFingerprint: o['expect-devbox-fingerprint'], batchId: batch.id, batchBackupSha256: batch.backupSha256
+    sealedPath: o.backup, expectSha256, devboxKeyPath: o['devbox-key'],
+    expectDevboxFingerprint: o['expect-devbox-fingerprint'], batchId: target.id, batchBackupSha256: target.backupSha256
   });
-  if (!backup || backup.batchId !== batch.id) refuse('the backup is not this batch\'s');
-  const docs = await checkedDocuments(demi, documentsOf(entries, laterEntries));
-  const projectEntries = entries.filter(one => PROJECT_ACTIONS.has(one.action) && (one.state === 'intent' || one.writtenEtag !== null));
-  if (projectEntries.length && !Array.isArray(backup.projectEntries)) refuse('the backup holds no projectEntries, so project entries cannot be undone');
-  const undos = projectEntries.flatMap(entry => projectUndos(demi, entry, backup).map(call => ({ projectId: entry.target.projectId, call })));
+  if (!backup || backup.batchId !== target.id) refuse('the backup is not this batch\'s');
+  const log = resumed ? await batches.listEntries(resumed.id) : [];
+  const logged = new Map();
+  for (const entry of log) if (logged.get(stepKey(entry.action, entry.target)) !== 'done') logged.set(stepKey(entry.action, entry.target), entry.state);
 
-  const priors = new Map((backup.documents || []).map(doc => [docKey(doc), doc]));
-  for (const doc of docs) {
-    await batches.beforeWrite(lease, now());
-    await undoDocument(demi, doc, priors.get(docKey(doc.target)));
-  }
   const changed = new Set();
-  for (const { projectId, call } of undos) {
-    await batches.beforeWrite(lease, now());
-    const { status } = await call();
-    if (status === 'changed') changed.add(projectId);
-    else if (!PROJECT_UNDONE.has(status)) refuse(`a project entry undo on project ${projectId} answered ${status}`);
+  const priors = new Map(backup.documents.map(doc => [docKey(doc), doc]));
+  const steps = [
+    ...await documentSteps(demi, documentsOf(entries, laterEntries), priors, logged),
+    ...projectSteps(demi, entries, backup, changed).filter(step => logged.get(stepKey(step.action, step.target)) !== 'done')
+  ];
+  const header = resumed
+    ? { item: withoutSystem(resumed), etag: resumed._etag }
+    : await batches.createBatch(crypto.randomUUID(), { batchKind: 'rollback', targetBatchId: target.id }, now());
+  const run = { batchId: header.item.id, lease, seq: log.length };
+  for (const step of steps) {
+    await batches.writeAhead(run, { target: step.target, action: step.action, priorEtag: step.priorEtag ?? null }, step.run, now());
   }
-  await batches.markRolledBack(batch, now());
 
   const touched = [...new Set(entries.map(entry => entry.target.projectId))];
   const { counts, ok } = await rederive(demi, touched, lease, now);
-  write(`batchId=${batch.id}`);
-  write(`documents=${docs.length}`);
-  write(`projectEntries=${undos.length}`);
+  write(`batchId=${target.id}`);
+  write(`rollbackBatchId=${header.item.id}`);
+  write(`undone=${steps.length}`);
   write(`changed=${changed.size}`);
   changed.forEach(projectId => write(`changedProject=${projectId}`));
   Object.entries(counts).forEach(([status, n]) => write(`${status}=${n}`));
   write(`projects=${touched.length}`);
-  return ok ? 0 : 1;
+  if (!ok) return 1;
+  await batches.markRolledBack(target, now());
+  await batches.completeBatch(header, lease, now());
+  lease.released = true;
+  return 0;
 }
 
-/** Frees the lock; a failed release is logged so the first error stands. */
+/** Frees the lock unless the run completed; a failed release is logged so the first error stands. */
 async function releaseQuietly(lease) {
+  if (lease.released) return;
   try {
     await batches.releaseLock(lease);
   } catch (err) {
@@ -170,16 +229,35 @@ async function releaseQuietly(lease) {
   }
 }
 
+/** The pending rollback batch of `batchId` that a failed run left, or null. */
+async function pendingRollbackOf(batchId) {
+  return (await batches.batchesWithStatus('pending')).find(one => one.batchKind === 'rollback' && one.targetBatchId === batchId) || null;
+}
+
+/** The lock for undoing `batchId`: taken fresh, or taken over once expired when `batchId` or its pending rollback holds it. */
+async function lockFor(batchId, resumed, now) {
+  if (!resumed && !await batches.readLock()) return batches.takeLock(batchId, now);
+  return batches.takeOverLock(batchId, now, [batchId, resumed?.id].filter(Boolean));
+}
+
+async function loadBatch(batchId, statuses, message) {
+  const batch = await batches.readBatch(batchId);
+  return batch && batch.batchKind === 'load' && statuses.includes(batch.status) ? batch : refuse(message);
+}
+
 async function rollback(o, ctx) {
   const batchId = o.rollback;
-  const lease = await batches.takeLock(batchId, ctx.now());
+  const resumed = await pendingRollbackOf(batchId);
+  const lease = await lockFor(batchId, resumed, ctx.now());
   try {
-    const latest = await batches.latestCompleteBatch('load');
-    if (!latest || latest.id !== batchId) refuse('--rollback acts only on the latest complete load batch');
-    const later = (await batches.completeBatches()).filter(one => one.batchKind === 'override' && one.startedAt > latest.startedAt);
+    const target = resumed
+      ? await loadBatch(batchId, ['complete', 'rolledBack'], 'the pending rollback names a batch that is not a load')
+      : await batches.latestCompleteBatch('load');
+    if (!target || target.id !== batchId) refuse('--rollback acts only on the latest complete load batch');
+    const later = (await batches.batchesWithStatus('complete')).filter(one => LATER_KINDS.has(one.batchKind) && one.startedAt > target.startedAt);
     const laterEntries = [];
     for (const one of later) laterEntries.push(...await batches.listEntries(one.id));
-    return await undoBatch(o, ctx, { batch: latest, entries: await batches.listEntries(batchId), laterEntries, lease });
+    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries, lease, resumed });
   } finally {
     await releaseQuietly(lease);
   }
@@ -187,14 +265,14 @@ async function rollback(o, ctx) {
 
 async function rollbackIncomplete(o, ctx) {
   const batchId = o['rollback-incomplete'];
-  const pending = async () => {
-    const batch = await batches.readBatch(batchId);
-    return batch && batch.batchKind === 'load' && batch.status === 'pending' ? batch : refuse('--rollback-incomplete acts only on a pending load batch');
-  };
-  await pending();
-  const lease = await batches.takeOverLock(batchId, ctx.now());
+  const resumed = await pendingRollbackOf(batchId);
+  const statuses = resumed ? ['pending', 'rolledBack'] : ['pending'];
+  const message = '--rollback-incomplete acts only on a pending load batch';
+  await loadBatch(batchId, statuses, message);
+  const lease = await batches.takeOverLock(batchId, ctx.now(), [batchId, resumed?.id].filter(Boolean));
   try {
-    return await undoBatch(o, ctx, { batch: await pending(), entries: await batches.listEntries(batchId), lease });
+    const target = await loadBatch(batchId, statuses, message);
+    return await undoBatch(o, ctx, { target, entries: await batches.listEntries(batchId), laterEntries: [], lease, resumed });
   } finally {
     await releaseQuietly(lease);
   }
@@ -214,7 +292,9 @@ const HELP = [
   '         --expect-devbox-fingerprint <hex>',
   'Modes:',
   '  --rollback <batchId>             undo the latest complete load batch',
-  '  --rollback-incomplete <batchId>  undo a pending load batch whose lease expired'
+  '  --rollback-incomplete <batchId>  undo a pending load batch whose lease expired',
+  'A failed run leaves its rollback batch pending; the same command resumes it.',
+  'Export WORKS_READ and WORKS_READ_SOURCES with the API\'s values first: the devbox shell has no app settings.'
 ];
 
 function optionsOf(argv) {
@@ -244,7 +324,14 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
     return 0;
   }
   testEnvironment();
+  requireDeriveEnv();
   return mode.run(o, { demi, openBackup, now, write });
+}
+
+/** Refuses unless the API's derive settings are exported; the config defaults would derive from other works than the API reads. */
+function requireDeriveEnv(env = process.env) {
+  const unset = ['WORKS_READ', 'WORKS_READ_SOURCES'].find(name => !env[name]?.trim());
+  if (unset) refuse(`${unset} is not set`);
 }
 
 /** The command line; the backup reader loads only when a mode opens a backup. */
@@ -252,7 +339,7 @@ function main(argv) {
   return run(argv, { openBackup: args => require('./works-import-backup').openBackup(args) });
 }
 
-module.exports = { run, main, liveDemi };
+module.exports = { run, main, liveDemi, requireDeriveEnv };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; }, (err) => {
