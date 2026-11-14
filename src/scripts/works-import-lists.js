@@ -3,9 +3,9 @@
 // The dry-run lists of a business works plan, sealed in its report, and the count lines stdout carries.
 
 const {
-  OVERRIDE_TYPES, TRACK_FROM, dayOf, daysBetween, overrideBoundaryOf, sameEvent, settledBefore, transitionOf, workTypeCodeOf
+  OVERRIDE_TYPES, TRACK_FROM, dayOf, daysBetween, overrideBoundaryOf, overrideShown, sameEvent, settledBefore, transitionOf,
+  workTypeCodeOf
 } = require('../domain/work-model');
-const { overrideShown } = require('../domain/works-derive');
 
 const W7_LISTS = ['trackAlive', 'trackCompletedNoDate', 'sameEventChoice', 'afterBoundary', 'sheetWithoutMarker', 'investmentUseTrack'];
 const ACTIONS = ['create', 'update', 'tombstone', 'marker', 'addExternalId', 'appendHistory', 'closeHistory'];

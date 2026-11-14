@@ -7,7 +7,7 @@ const assert = require('node:assert');
 
 const { parityOf } = require('../../src/domain/business-works-parity');
 const { idOf } = require('../../src/domain/extensions');
-const { overrideShown } = require('../../src/domain/works-derive');
+const { overrideShown } = require('../../src/domain/work-model');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { eagleOnlyProjectId } = require('../../src/merge/project');
 const {

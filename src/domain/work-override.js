@@ -203,6 +203,18 @@ function untilTrackHidden(sheetWorks, trackWorks, marker) {
   return hidden;
 }
 
+/** The read's boundary, the untilTrack sheet ids a Track work replaced, and the sheet ids that show. */
+function overrideShown(sheetWorks, trackWorks, marker) {
+  // listForRead drops sourceKey, so ties break by id order; dropping it here keeps every caller on that rule.
+  const sorted = [...sheetWorks].sort((a, b) => compareText(a.id, b.id));
+  const boundary = overrideBoundaryOf(trackWorks);
+  const replaced = untilTrackHidden(sorted.map(({ sourceKey, ...work }) => work), trackWorks, marker);
+  const shownSheetIds = new Set(sorted
+    .filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, boundary, []))
+    .map(work => work.id));
+  return { boundary, replaced, shownSheetIds };
+}
+
 const isTrackId = (id) => typeof id === 'string' && WORK_ID_PATTERNS.track.test(id);
 const isSheetId = (id) => typeof id === 'string' && WORK_ID_PATTERNS.sheet.test(id);
 const hasRepeat = (values) => new Set(values).size !== values.length;
@@ -260,6 +272,6 @@ function validateMarker(marker) {
 module.exports = {
   OVERRIDE_MARKER_ID, OVERRIDE_TYPES, TRACK_FROM, TRACK_WORK_TYPE_CODES, WORK_ID_PATTERNS,
   compareText, controlErrors, dayOf, daysBetween, eachString, gapWithin, given, hasControl, isObject, listOf, sourceOf,
-  hiddenByOverride, matchEvents, overrideBoundaryOf, sameEvent, settledBefore, untilTrackHidden, validateMarker,
+  hiddenByOverride, matchEvents, overrideBoundaryOf, overrideShown, sameEvent, settledBefore, untilTrackHidden, validateMarker,
   workTypeCodeOf
 };

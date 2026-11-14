@@ -8,9 +8,8 @@ const { EXTENSION_LIST_FIELDS } = require('../ownership/project');
 const { mapBusinessWorks } = require('./business-works-map');
 const { mapperInputs } = require('./business-works-inputs');
 const { idOf } = require('./extensions');
-const { overrideShown } = require('./works-derive');
 const {
-  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, settledBefore, sourceOf, workTypeCodeOf
+  DATE_KEYS, OVERRIDE_TYPES, dayOf, hiddenByOverride, listOf, overrideShown, settledBefore, sourceOf, workTypeCodeOf
 } = require('./work-model');
 
 const COUNTS = ['projects', 'works', 'mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'notInCrosswalk', 'noRegisterRow',
