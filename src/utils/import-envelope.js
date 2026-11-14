@@ -83,6 +83,17 @@ function recipientFromPem(pemText, expectFingerprint, label) {
 }
 
 /**
+ * The operator's RSA key read from `file` as a writeSealed recipient, refused unless its fingerprint is
+ * `expectFingerprint`. RSA only, as `extract.js keygen` prints it and `extract.js open` rebuilds it.
+ */
+function operatorRecipientOf(file, expectFingerprint, refuse = (message) => { throw new Error(message); }) {
+  const { rsa } = publicKeysFromPem(readCapped(file, MAX_KEY_BYTES).toString('utf8'));
+  const fingerprint = fingerprintOf({ rsa });
+  if (fingerprint !== String(expectFingerprint).toLowerCase()) refuse('fingerprint of operator key does not match');
+  return { rsa, fingerprint };
+}
+
+/**
  * Reads one regular file of at most `max` bytes, refusing a symbolic link, a FIFO, or growth past the cap.
  * `check` gets the fstat of the open file, so its checks and the read see the same file.
  */
@@ -269,6 +280,7 @@ module.exports = {
   publicKeysFromPem,
   devboxKeysFromPem,
   recipientFromPem,
+  operatorRecipientOf,
   readCapped,
   sealEnvelope,
   openEnvelope,

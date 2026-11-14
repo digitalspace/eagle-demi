@@ -14,7 +14,7 @@ const phaseCatalog = require('../domain/phase-catalog');
 const { COUNTS, FAILING, parityOf, refuse } = require('../domain/business-works-parity');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
 const {
-  devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped, writeSealed
+  devboxKeysFromPem, openExtract, operatorRecipientOf, readCapped, writeSealed
 } = require('../utils/import-envelope');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
 const { logger } = require('../utils/logger');
@@ -50,21 +50,20 @@ function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
 /** The keys, the decrypted extract and the crosswalk Map of register number to project id; nothing touches disk. */
 function openInputs(o) {
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
-  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
-  if (fingerprintOf({ rsa: operator }) !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
+  const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint'], refuse);
   const { extract, sha256 } = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env: ENV, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-extract-sha256']
   });
   const { rows } = readCrosswalk(readCapped(o.crosswalk, MAX_BYTES.crosswalk), {
     env: ENV, keys, expectExtractSha256: sha256, expectManualSha256: o['expect-manual-sha256']
   });
-  return { keys, operator, extract, extractSha256: sha256, crosswalk: new Map(rows.map(row => [Number(row.sheetId), row.targetId])) };
+  return { keys, recipient, extract, extractSha256: sha256, crosswalk: new Map(rows.map(row => [Number(row.sheetId), row.targetId])) };
 }
 
 /** Signs the report with the devbox key and seals it to the operator under a random name; returns the name and hash. */
-function writeReport(report, { keys, operator, outDir }) {
+function writeReport(report, { keys, recipient, outDir }) {
   const { name, sha256 } = writeSealed(outDir, Buffer.from(JSON.stringify(report)), {
-    purpose: REPORT_PURPOSE, env: ENV, recipient: { rsa: operator, fingerprint: fingerprintOf({ rsa: operator }) }, signingKey: keys.ed25519
+    purpose: REPORT_PURPOSE, env: ENV, recipient, signingKey: keys.ed25519
   });
   return { blob: name, sha256 };
 }
@@ -102,11 +101,11 @@ async function run(argv, deps = {}) {
   if (deps.endpoint && !deps.state) refuse('a test endpoint needs a test state');
   const write = deps.write || (line => process.stdout.write(`${line}\n`));
   const o = optionsOf(argv, deps.endpoint);
-  const { keys, operator, extract, extractSha256, crosswalk } = openInputs(o);
+  const { keys, recipient, extract, extractSha256, crosswalk } = openInputs(o);
   const state = await (deps.state || liveState)(crosswalk);
   const at = (deps.now || new Date()).toISOString();
   const { counts, items } = parityOf({ extract, crosswalk, ...state, at });
-  const { blob, sha256 } = writeReport({ kind: REPORT_PURPOSE, extractSha256, at, counts, items }, { keys, operator, outDir: o['out-dir'] });
+  const { blob, sha256 } = writeReport({ kind: REPORT_PURPOSE, extractSha256, at, counts, items }, { keys, recipient, outDir: o['out-dir'] });
   COUNTS.forEach(name => write(`${name}=${counts[name]}`));
   write(`reportSha256=${sha256}`);
   write(`blob=${blob}`);
