@@ -134,7 +134,7 @@ test('a wrong --expect-extract-sha256 refuses before the store is read', async (
 });
 
 test('refuses an operator key whose fingerprint is not the expected one', async () => {
-  await assert.rejects(check(extract, stateOf(loaded(extract)), { operatorFp: 'c'.repeat(64) }), { message: 'fingerprint of operator key does not match' });
+  await assert.rejects(check(extract, stateOf(loaded(extract)), { operatorFp: 'c'.repeat(64) }), { message: 'fingerprint of operator key does not match', refused: true });
 });
 
 test('refuses a test endpoint with no test state', async () => {

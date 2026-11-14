@@ -9,7 +9,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
 const {
-  devboxKeysFromPem, publicKeysFromPem, readCapped, fingerprintOf, openEnvelope, openExtract, sha256Hex, verify, writeSealed
+  devboxKeysFromPem, readCapped, openEnvelope, openExtract, operatorRecipientOf, sha256Hex, verify, writeSealed
 } = require('../utils/import-envelope');
 const { logger } = require('../utils/logger');
 
@@ -319,10 +319,7 @@ async function liveRows() {
 async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows } = {}) {
   const o = optionsOf(argv);
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
-  // RSA only, as `extract.js keygen` prints it and `extract.js open` rebuilds it.
-  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
-  const operatorFingerprint = fingerprintOf({ rsa: operator });
-  if (operatorFingerprint !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
+  const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint']);
   const manual = openManual(o, keys);
   const { extract, numbersReal, sha256: extractSha256 } = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env: o.env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-extract-sha256']
@@ -334,7 +331,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   const result = crosswalkOf(sheet, pool, manual);
   const csv = Buffer.from(csvOf(result.rows, { extractSha256, manualSha256: manual.sha256 }));
   const { name: blob, sha256 } = writeSealed(o['out-dir'], csv, {
-    purpose: PURPOSE, env: o.env, recipient: { rsa: operator, fingerprint: operatorFingerprint }, signingKey: keys.ed25519
+    purpose: PURPOSE, env: o.env, recipient, signingKey: keys.ed25519
   });
   STATES.forEach(state => write(`${state}=${result.counts[state]}`));
   write(`twinsBeside=${result.twinsBeside}`);

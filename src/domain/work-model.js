@@ -278,6 +278,7 @@ module.exports = {
   hiddenByOverride: override.hiddenByOverride,
   matchEvents: override.matchEvents,
   overrideBoundaryOf: override.overrideBoundaryOf,
+  overrideShown: override.overrideShown,
   sameEvent: override.sameEvent,
   settledBefore: override.settledBefore,
   sourceOf: override.sourceOf,

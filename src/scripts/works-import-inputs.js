@@ -9,7 +9,7 @@ const { parseArgs } = require('util');
 const cosmos = require('../db/cosmos-nosql');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
 const {
-  MAX_BACKUP_BYTES, MAX_KEY_BYTES, devboxKeysFromPem, fingerprintOf, openExtract, publicKeysFromPem, readCapped
+  MAX_BACKUP_BYTES, MAX_KEY_BYTES, devboxKeysFromPem, openExtract, operatorRecipientOf, readCapped
 } = require('../utils/import-envelope');
 
 const ENV = 'test';
@@ -109,9 +109,7 @@ function devboxKeysOf(file, expectFingerprint) {
 
 function openInputs(o, env) {
   const keys = devboxKeysOf(o['devbox-key'], o['expect-devbox-fingerprint']);
-  const operator = publicKeysFromPem(readCapped(o['operator-key'], MAX_BYTES.key).toString('utf8')).rsa;
-  const recipient = { rsa: operator, fingerprint: fingerprintOf({ rsa: operator }) };
-  if (recipient.fingerprint !== o['expect-operator-fingerprint'].toLowerCase()) refuse('fingerprint of operator key does not match');
+  const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint']);
   const opened = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-sha256']
   });

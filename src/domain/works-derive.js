@@ -6,7 +6,7 @@ const works = require('../repositories/works');
 const { logger } = require('../utils/logger');
 const { publicWorksOf } = require('../seed/track-mappers');
 const {
-  OVERRIDE_MARKER_ID, compareText, hiddenByOverride, overrideBoundaryOf, sourceOf, untilTrackHidden, validateMarker
+  OVERRIDE_MARKER_ID, hiddenByOverride, overrideShown, sourceOf, validateMarker
 } = require('./work-model');
 
 /**
@@ -26,18 +26,6 @@ async function markerOf(projectId) {
   if (checked.ok) return marker;
   logger.warn('[works] override marker refused, read as missing', { projectId, paths: checked.errors.map(e => e.path) });
   return null;
-}
-
-/** The read's boundary, the untilTrack sheet ids a Track work replaced, and the sheet ids that show. */
-function overrideShown(sheetWorks, trackWorks, marker) {
-  // listForRead drops sourceKey, so ties break by id order; dropping it here keeps every caller on that rule.
-  const sorted = [...sheetWorks].sort((a, b) => compareText(a.id, b.id));
-  const boundary = overrideBoundaryOf(trackWorks);
-  const replaced = untilTrackHidden(sorted.map(({ sourceKey, ...work }) => work), trackWorks, marker);
-  const shownSheetIds = new Set(sorted
-    .filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, boundary, []))
-    .map(work => work.id));
-  return { boundary, replaced, shownSheetIds };
 }
 
 /**
@@ -62,4 +50,4 @@ async function loadWorks(row, { sources = ['track'] } = {}) {
   return { worksForDerive: publicWorksOf(kept, row, { catalog }), catalog };
 }
 
-module.exports = { deriveInputs, loadWorks, overrideShown };
+module.exports = { deriveInputs, loadWorks };
