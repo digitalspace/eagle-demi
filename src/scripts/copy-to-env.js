@@ -55,10 +55,17 @@ function parseArgs(argv) {
   };
 }
 
+// Any `prod` in the target or its decoded host refuses, so `production`, `%70rod` and regional or privatelink hosts do too.
+function namesProd(target) {
+  const host = URL.canParse(target) ? new URL(target).hostname : '';
+  return /prod/i.test(target) || host.includes('prod');
+}
+
 // Thrown so callers can catch it; the script entry below logs err.message and exits 1.
 function checkedArgs(argv) {
   const args = parseArgs(argv);
   if (!args.target) throw new Error('Missing --target <endpoint>');
+  if (namesProd(args.target)) throw new Error('Refusing to copy to a prod target');
   if (!process.env.COSMOS_ENDPOINT) throw new Error('COSMOS_ENDPOINT not set');
   // No sign-off ref format exists elsewhere, so one token with no spaces is the rule.
   if (argv.includes('--keep-staff') && !/^\S+$/.test(args.keepStaff)) throw new Error('--keep-staff needs a sign-off reference');

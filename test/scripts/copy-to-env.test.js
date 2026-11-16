@@ -190,6 +190,19 @@ test('copy-to-env', async (t) => {
       { client: fakeClient(fakeContainer(staffPage(), 1), fakeContainer({})) }), { message: '--keep-staff needs a sign-off reference' });
   });
 
+  await t.test('a prod --target throws before any read', async (tt) => {
+    for (const target of ['prod', 'https://demi-cosmos-%70rod.documents.azure.com/']) {
+      for (const mode of [[], ['--live']]) {
+        await tt.test(`${target} ${mode.join('') || 'dry run'}`, async (ttt) => {
+          const source = fakeContainer(onePage(), 2);
+          await assert.rejects(main(['--target', target, '--containers', 'projects', '--checkpoint', tmpCheckpoint(ttt), ...mode],
+            { client: fakeClient(source, fakeContainer({})) }), { message: 'Refusing to copy to a prod target' });
+          assert.deepStrictEqual(source.reads, []);
+        });
+      }
+    }
+  });
+
   await t.test('a run with no --target throws', async (tt) => {
     await assert.rejects(main(['--containers', 'projects', '--checkpoint', tmpCheckpoint(tt)],
       { client: fakeClient(fakeContainer({}), fakeContainer({})) }), { message: 'Missing --target <endpoint>' });

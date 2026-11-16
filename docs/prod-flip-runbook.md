@@ -97,7 +97,7 @@ fields from every Eagle-mirrored container.
 `copy-to-env.js` drops `externalIds`, `staffAssignments`, `capitalInvestments`, `staffNotes` and every
 `intake` copy from `projects` rows. `--keep-staff <sign-off reference>` keeps them; the reference is one
 token with no spaces, and the business gives it. It never copies the `works` container or the
-`ImportBatch`, `ImportBatchEntry` and `ImportLock` items.
+`ImportBatch`, `ImportBatchEntry` and `ImportLock` items, and it refuses any `--target` naming prod.
 
 These scripts leave a file behind rather than only printing:
 
