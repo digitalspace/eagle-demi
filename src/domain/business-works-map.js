@@ -30,7 +30,7 @@ function contextOf(extract, options = {}) {
     throw new Error('mapBusinessWorks needs catalog, phaseCatalog, crosswalk (a Map), batchId and batchAt');
   }
   return {
-    catalog, phaseCatalog, crosswalk, skipped: options.skipped || new Map(), batchId, batchAt, batchDate: dayOf(batchAt),
+    catalog, phaseCatalog, crosswalk, skipped: new Map(options.skipped), batchId, batchAt, batchDate: dayOf(batchAt),
     numbersReal: Boolean(extract) && extract.numbersReal === true,
     trackWorks: options.trackWorks || new Map(), markers: options.markers || new Map(),
     transitionIdsAreRegisterIds: options.transitionIdsAreRegisterIds === true,
@@ -42,9 +42,6 @@ function contextOf(extract, options = {}) {
 const listFor = (ctx, source, projectId, ref) => (reason, extra = {}) => {
   ctx.report.push({ reason, source, projectId, ...(ref && { ref: refOf(ref) }), ...extra });
 };
-
-/** The crosswalk state that skips register number `id`, else undefined; Track stands for that project. */
-const skippedState = (ctx, id) => (sheetIdOf(id) ? ctx.skipped.get(id) : 'badId');
 
 function projectOf(ctx, projectId) {
   if (!ctx.projects.has(projectId)) {
@@ -118,7 +115,7 @@ function staffEntries(ctx, row, list) {
 
 /** The project a register row loads into, else null with the row listed as skipped or not in the crosswalk. */
 function registerProjectOf(ctx, raw) {
-  const skipped = skippedState(ctx, raw.id);
+  const skipped = ctx.skipped.get(raw.id)?.state;
   const projectId = skipped ? null : ctx.crosswalk.get(raw.id) ?? null;
   const list = listFor(ctx, 'projects', null, raw.ref);
   if (skipped) list('crosswalkSkipped', { state: skipped });
@@ -130,6 +127,8 @@ function readRegister(ctx, records) {
   const timelines = joinTimelines(ctx, records.timeline2002 || [], records.projects || []);
   ctx.transitions = transitionsOf(ctx, records.transitions || []);
   const registers = records.projects || [];
+  // As the crosswalk counts it: an unusable id is `badId` only when a register row holds it.
+  registers.filter(row => !sheetIdOf(row.id)).forEach(row => ctx.skipped.set(row.id, { state: 'badId' }));
   const repeated = Map.groupBy(registers, row => row.id);
   if (!ctx.numbersReal && registers.length) listFor(ctx, 'projects', null)('investmentUseTrackUnchecked');
   const rows = [];
@@ -162,17 +161,21 @@ function readRegister(ctx, records) {
       if (kind && kind.code === 'certificate-issued') project.certificates.push({ actYear: 2018, ...datedOf(row, 'decisionDate') });
     }
   }
-  for (const [id, row] of ctx.transitions) {
-    if (!ctx.bases.has(id)) listFor(ctx, 'transitions', null, row.ref)('transitionUnmatched');
-  }
+  ctx.transitions.forEach((row, id) => listUnjoinedTransition(ctx, row, id));
   return rows;
+}
+
+function listUnjoinedTransition(ctx, row, id) {
+  const skipped = ctx.skipped.get(id)?.state;
+  if (skipped) listFor(ctx, 'transitions', null, row.ref)('crosswalkSkipped', { state: skipped });
+  else if (!ctx.bases.has(id)) listFor(ctx, 'transitions', null, row.ref)('transitionUnmatched');
 }
 
 /** Joins a 02-06 row to its project through the register row of the same number. */
 function sheetRow(ctx, source, row) {
   const base = ctx.bases.get(row.id);
   const list = listFor(ctx, source, base ? base.projectId : null, row.ref);
-  const skipped = skippedState(ctx, row.id);
+  const skipped = ctx.skipped.get(row.id)?.state;
   if (skipped) return list('crosswalkSkipped', { state: skipped });
   if (!base) list(ctx.crosswalk.has(row.id) ? 'noRegisterRow' : 'notInCrosswalk');
   if (base && ctx.noWork.get(row.id) === 'registerRepeated') {

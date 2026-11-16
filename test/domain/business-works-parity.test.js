@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parityOf } = require('../../src/domain/business-works-parity');
+const { FAILING, parityOf } = require('../../src/domain/business-works-parity');
 const { idOf } = require('../../src/domain/extensions');
 const { overrideShown } = require('../../src/domain/work-model');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
@@ -142,11 +142,13 @@ test('sheet rows outside the crosswalk or without a register row fail as notInCr
   assert.deepStrictEqual([counts.notInCrosswalk, counts.noRegisterRow], [1, 1]);
 });
 
-test('register rows the crosswalk skips, and their sheet rows, count nothing', () => {
+test('rows the crosswalk skips are listed crosswalkSkipped and fail nothing', () => {
   const skips = { records: { projects: [register(), register(103), register(0)],
     amendments: [amendment('1', '2010-01-01', '2010-03-01'), amendment('2', '2010-01-01', '2010-03-01', 103)] } };
-  const { counts } = parity(skips, stateOf(loaded(extract)), CROSSWALK, new Map([[103, 'unfolded']]));
-  assert.deepStrictEqual(Object.entries(counts).filter(([, n]) => n > 0).map(([name]) => name), ['projects', 'works']);
+  const result = parity(skips, stateOf(loaded(extract)), CROSSWALK, new Map([[103, { state: 'unfolded', targetId: 'project-gamma' }]]));
+  assert.deepStrictEqual(FAILING.filter(name => result.counts[name] > 0), []);
+  assert.deepStrictEqual(result.listed('crosswalkSkipped').map(item => `${item.source}:${item.state}`).sort(),
+    ['amendments:unfolded', 'projects:badId', 'projects:unfolded']);
 });
 
 test('an empty crosswalk is refused', () => {

@@ -13,11 +13,11 @@ const {
 } = require('./work-model');
 
 const COUNTS = ['projects', 'works', 'mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'notInCrosswalk', 'noRegisterRow',
-  'sheetOutsideCrosswalk', 'markerMissing', 'danglingEagleItemId', 'commentPeriodMissing', 'commentPeriodNotPublic', 'undatedDates',
+  'crosswalkSkipped', 'sheetOutsideCrosswalk', 'markerMissing', 'danglingEagleItemId', 'commentPeriodMissing', 'commentPeriodNotPublic', 'undatedDates',
   'hiddenDrift', 'untilTrackHidden', 'sheetHiddenByMovedBoundary', 'overrideHeldOff'];
 const FAILING = ['mismatch', 'duplicateSourceKey', 'duplicateExternalId', 'notInCrosswalk', 'noRegisterRow', 'sheetOutsideCrosswalk',
   'markerMissing'];
-const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
+const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow', 'crosswalkSkipped'];
 const SKIPPED_PATHS = new Set(['provenance', 'sourceRef', 'links', 'undated']);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -204,7 +204,7 @@ function parityOf({ extract, crosswalk, skipped, catalog, phaseCatalog, rows, wo
   const sheetWorks = projectIds.flatMap(id => ofSource(id, 'sheet'));
   Object.assign(tally.counts, { projects: projectIds.length, works: sheetWorks.length });
   all.report.filter(entry => CROSSWALK_REASONS.includes(entry.reason))
-    .forEach(entry => tally.add(entry.reason, { source: entry.source, ...(entry.ref && { ref: entry.ref }) }));
+    .forEach(entry => tally.add(entry.reason, { source: entry.source, ...(entry.ref && { ref: entry.ref }), ...(entry.state && { state: entry.state }) }));
   [...new Set(sheetProjectIds.map(String))].filter(id => !projectIds.includes(id)).forEach(id => tally.add('sheetOutsideCrosswalk', { project: id }));
   checkWorks(tally, { all, fresh, sheetWorks, markers });
   checkLinks(tally, { sheetWorks, rows, commentPeriods });

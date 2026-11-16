@@ -187,6 +187,13 @@ function matchOf(sheetId, names, pool, manual) {
   return single(targets, 'eagle', { eagleId });
 }
 
+/** The state of a matched row; a target whose Track row has no Eagle id is `unfolded` beside an unfolded twin, else `unlinked`. */
+function linkedState(state, { eagleId, targetEagleId, fold, targetId, unfolded }) {
+  if ((targetEagleId && targetEagleId !== eagleId) || (fold && fold !== targetId)) return 'unlinked';
+  if (unfolded) return 'unfolded';
+  return eagleId && !targetEagleId ? 'unlinked' : state;
+}
+
 /** A twin beside the target is `unfolded` when it is a fold-pair twin not folded into that pair's Track row, or DEMI-owned. */
 function linkStateOf(match, pool, manual) {
   const target = pool.byId.get(match.targetId);
@@ -195,9 +202,7 @@ function linkStateOf(match, pool, manual) {
   const twin = eagleId ? pool.twins.get(eagleOnlyProjectId(eagleId)) : null;
   const fold = manual.foldTrackOf.get(eagleId);
   const unfolded = Boolean(twin) && ((fold && String(twin.foldedInto ?? '') !== fold) || isDemiOwnedProject(twin));
-  let { state } = match;
-  if ((eagleId && targetEagleId !== eagleId) || (fold && fold !== match.targetId)) state = 'unlinked';
-  else if (unfolded) state = 'unfolded';
+  const state = linkedState(match.state, { eagleId, targetEagleId, fold, targetId: match.targetId, unfolded });
   return {
     ...match, state, eagleId, targetEagleId, twinBeside: Boolean(twin) && !unfolded,
     trackName: textOf(target.sources.track.name), eagleName: textOf(target.sources?.eagle?.name) || textOf(twin?.sources?.eagle?.name)
@@ -256,7 +261,7 @@ function cellsOf(line) {
 /**
  * Opens a crosswalk the operator sealed to the devbox, verifies the devbox signature over
  * {purpose: 'crosswalk', env, sha256} and the input hashes in its header. Returns its exact and manual rows, and
- * `skipped`, the state by register number of each skipped row that has one.
+ * `skipped`, `{state, targetId}` by register number of each skipped row that has one.
  */
 function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha256 }) {
   const opened = openEnvelope(sealed, { purpose: PURPOSE, env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa });
@@ -274,7 +279,7 @@ function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha
   if (head[1] !== String(expectExtractSha256).toLowerCase()) refuse('crosswalk was not built from the expected extract');
   if (head[3] !== String(expectManualSha256).toLowerCase()) refuse('crosswalk was not built from the expected manual-match file');
   const all = lines.map(cells => Object.fromEntries(COLUMNS.map((c, i) => [c, cells[i]])));
-  const skipped = new Map(all.filter(r => SKIPPED.has(r.state) && r.sheetId).map(r => [Number(r.sheetId), r.state]));
+  const skipped = new Map(all.filter(r => SKIPPED.has(r.state) && r.sheetId).map(r => [Number(r.sheetId), { state: r.state, targetId: r.targetId }]));
   return { sha256, extractSha256: head[1], manualSha256: head[3], rows: all.filter(r => PASSING.has(r.state)), skipped };
 }
 

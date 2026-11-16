@@ -149,7 +149,12 @@ The owner guard in `src/repositories/works.js` stops one source overwriting anot
    ```
 
 4. Seal the manual-match file with `yarn works:extract seal --purpose manual-match …` and record its SHA-256. Upload the extract and the sealed manual-match file to the `works-import` container with `--auth-mode login`.
-5. Build the crosswalk on the devbox; it prints one count per state and `crosswalkCsvSha256=`. It exits 1 on any row other than `exact`, `manual`, `badId` or `unfolded`, so expect `unmatched=0 unlinked=0 ambiguous=0`. The load skips each `badId` and `unfolded` row and lists it as `crosswalkSkipped` in the dry-run report; Track stands for those projects.
+
+   Keep each fold pair in the manual-match file, so the crosswalk skips the row as `unfolded`. Without it, a Track-name match is `exact` and loads onto the Track row.
+
+5. Build the crosswalk on the devbox; it prints one count per state and `crosswalkCsvSha256=`. It exits 1 unless `unmatched`, `unlinked`, `ambiguous`, `collision` and `unnamedRow` are all 0.
+
+   The load skips each `badId` and `unfolded` row and lists it as `crosswalkSkipped` in the dry-run report. Track stands for an `unfolded` row's project; a `badId` row names no project.
 
    ```
    yarn works:crosswalk --env test --extract <sealed> --expect-extract-sha256 <hex> \
@@ -223,6 +228,8 @@ Every mode below except `--abandon-rollback` and `--clear-stale-lock` refuses un
 A failed run leaves its rollback batch pending, and the same command resumes it. A failed revert or reapply leaves its override batch pending; clear it with `--rollback-incomplete <id>`.
 
 After a `WORKS_READ` rollback, the first nightly run writes Track's works back onto the project rows as drift. It leaves `updatedAt` alone.
+
+The load refuses with `skippedHoldsSheetWorks` when an `unfolded` row's project still holds sheet works or an active marker; roll back that batch first. A `badId` row names no project, so its check is the nightly parity `sheetOutsideCrosswalk` count.
 
 ### Check the staff works route
 

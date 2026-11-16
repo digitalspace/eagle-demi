@@ -58,8 +58,8 @@ function fakeDemi() {
   return Object.assign(state, {
     worksCatalog: async () => CATALOG,
     phaseCatalog: async () => PHASES,
-    works: async () => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID),
-    marker: async () => docs.get(OVERRIDE_MARKER_ID) || null,
+    works: async id => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID && doc.projectId === id),
+    marker: async id => (docs.get(OVERRIDE_MARKER_ID)?.projectId === id ? docs.get(OVERRIDE_MARKER_ID) : null),
     project: async id => (id === PROJECT ? { ...state.row } : null),
     externalIdHolders: async () => [],
     commentPeriods: async () => [],

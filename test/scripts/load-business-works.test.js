@@ -36,21 +36,32 @@ test('a sheet number missing from the crosswalk fails the dry run', async () => 
   await assert.rejects(load(argv), /not in the signed crosswalk/);
 });
 
-test('a row the crosswalk skips loads nothing for its project and is listed crosswalkSkipped', async (t) => {
-  fakeLists(t);
-  const rows = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },
-    { row: 7, sheetId: '', state: 'badId' }];
-  const records = { projects: [register, { ...register, id: 102 }, { ...register, id: 0 }],
-    amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }] };
-  const { argv, outDir } = inputs({ records, crosswalkRows: rows });
+const SKIPPED_ROWS = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },
+  { row: 7, sheetId: '', state: 'badId' }];
+const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
+  projects: [register, { ...register, id: 102 }, { ...register, id: 0 }],
+  amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }]
+} });
+const sheetDoc = fields => ({ projectId: '7002', source: 'sheet', owner: 'sheet', _etag: '"s"', ...fields });
+
+test('a row the crosswalk skips is listed crosswalkSkipped; a tombstoned work or held-off marker on its project does not refuse', async () => {
+  const { argv, outDir } = skippedInputs();
   const demi = fakeDemi();
+  demi.docs.set('sheet-gone', sheetDoc({ id: 'sheet-gone', sourceKey: '102:amendment:9', deleted: true }));
+  demi.docs.set(OVERRIDE_MARKER_ID, sheetDoc({ id: OVERRIDE_MARKER_ID, active: false }));
   const { value } = await load(argv, demi);
   const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
-  assert.deepEqual(skipped.map(one => [one.source, one.state, one.projectId]),
-    [['projects', 'unfolded', null], ['projects', 'badId', null], ['amendments', 'unfolded', null]]);
-  await load([...argv, ...liveArgs(value('planSha256'))], demi);
-  assert.deepEqual(demi.derived, [PROJECT]);
-  assert.deepEqual([...demi.docs.values()].filter(doc => doc.projectId !== PROJECT), []);
+  assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(), ['amendments:unfolded', 'projects:badId', 'projects:unfolded']);
+});
+
+test('refuses when a project the crosswalk skips still holds a sheet work or an active sheet marker', async () => {
+  const { argv } = skippedInputs();
+  const withWork = fakeDemi();
+  withWork.docs.set('sheet-old', sheetDoc({ id: 'sheet-old', sourceKey: '102:amendment:9' }));
+  await assert.rejects(load(argv, withWork), /skips still holds sheet works or an active sheet marker/);
+  const withMarker = fakeDemi();
+  withMarker.docs.set(OVERRIDE_MARKER_ID, sheetDoc({ id: OVERRIDE_MARKER_ID, active: true }));
+  await assert.rejects(load(argv, withMarker), /skips still holds sheet works or an active sheet marker/);
 });
 
 test('refuses an unknown Cosmos host, prod included, in the dry run', async (t) => {

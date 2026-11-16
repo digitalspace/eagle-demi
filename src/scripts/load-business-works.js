@@ -25,6 +25,7 @@ const { logger } = require('../utils/logger');
 const OWNER = 'sheet';
 const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
+const SKIPPED_HOLDS = 'skippedHoldsSheetWorks';
 const DERIVED = new Set(['patched', 'unchanged']);
 // The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
 const ENVELOPE_HEADROOM = 16 * 1024;
@@ -51,6 +52,21 @@ function liveDemi() {
   };
 }
 
+/**
+ * A report entry for each skipped row whose project still holds live sheet works or an active sheet marker. The load
+ * never reads that project, so it would neither tombstone nor deactivate them.
+ */
+async function skippedHolding(demi, skipped) {
+  const entries = [];
+  const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
+  for (const { state, targetId } of skipped.values()) {
+    const marker = await demi.marker(targetId);
+    const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true);
+    if (held) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId: targetId, state });
+  }
+  return entries;
+}
+
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const stored = await readStored(demi, [...new Set(crosswalk.values())]);
@@ -61,7 +77,11 @@ async function planFor(demi, inputs, { batchId, batchAt }) {
   const plan = buildPlan(inputs.opened.extract, {
     mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf
   });
+  plan.report.push(...await skippedHolding(demi, inputs.crosswalk.skipped));
   if (plan.report.some(entry => CROSSWALK_REASONS.includes(entry.reason))) refuse('a sheet number is not in the signed crosswalk or has no register row');
+  if (plan.report.some(entry => entry.reason === SKIPPED_HOLDS)) {
+    refuse('a project the crosswalk skips still holds sheet works or an active sheet marker; roll back the batch that loaded it');
+  }
   return { plan: withoutHeld(plan, await heldElsewhere(demi, plan)), stored };
 }
 

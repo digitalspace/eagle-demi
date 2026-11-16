@@ -122,27 +122,29 @@ test('aliases and names match normalized, on the Track name first, then the Eagl
   assert.deepEqual([rowOf(result, 190113).targetId, rowOf(result, 190113).via], ['7018', 'track']);
 });
 
-test('fold pairs: an Eagle-name match reaches its Track row through one, a target beside another pair is unlinked; ties are ambiguous', async () => {
+test('fold pairs: an Eagle-name match reaches its Track row through one and is unfolded beside the twin, a target beside another pair is unlinked; ties are ambiguous', async () => {
   const result = await crosswalk({
     projects: [register(190121, 'Sierra Falls', 4), register(190122, 'Tango Ridge', 5), register(190123, 'Whiskey Hill', 6)],
     rows: [trackRow('7020', 'Sierra Track Name'), twin(E.c, 'Sierra Falls'), trackRow('7021', 'Tango Ridge'), trackRow('7022', 'Tango-Ridge'),
       trackRow('7030', 'Whiskey Hill', E.a), trackRow('7031', 'Xray Hill', E.a)],
     manual: { matches: [], foldPairs: [`7020:${E.c}`, `7031:${E.a}`] }
   });
-  assert.deepEqual([rowOf(result, 190121).targetId, rowOf(result, 190121).eagleId, stateOf(result, 190121)], ['7020', E.c, 'unlinked']);
+  assert.deepEqual([rowOf(result, 190121).targetId, rowOf(result, 190121).eagleId, stateOf(result, 190121)], ['7020', E.c, 'unfolded']);
   assert.equal(stateOf(result, 190122), 'ambiguous');
   assert.deepEqual([rowOf(result, 190123).targetId, stateOf(result, 190123)], ['7030', 'unlinked']);
 });
 
-test("a target without the crosswalk's Eagle id is unlinked and exits 1", async () => {
-  const result = await crosswalk({
-    projects: [register(190201, 'Beta Wind', 4)],
-    rows: [trackRow('7002', 'Beta Wind', null)],
-    manual: { matches: [], foldPairs: [`7002:${E.b}`] }
-  });
+test("a target without the crosswalk's Eagle id is unfolded beside its unfolded twin, else unlinked and exits 1", async () => {
+  const beta = rows => crosswalk({ projects: [register(190201, 'Beta Wind', 4)], rows, manual: { matches: [], foldPairs: [`7002:${E.b}`] } });
+  const result = await beta([trackRow('7002', 'Beta Wind', null)]);
   assert.equal(result.code, 1);
   assert.equal(stateOf(result, 190201), 'unlinked');
   assert.equal(result.stat('unlinked'), 'unlinked=1');
+
+  const unfolded = await beta([trackRow('7002', 'Beta Wind', null), twin(E.b, 'Beta Wind')]);
+  assert.deepEqual([unfolded.code, stateOf(unfolded, 190201)], [0, 'unfolded']);
+  const other = await beta([trackRow('7002', 'Beta Wind', E.a), twin(E.b, 'Beta Wind')]);
+  assert.deepEqual([other.code, stateOf(other, 190201)], [1, 'unlinked']);
 });
 
 test('unfolded and badId rows are skipped: counted, kept in the CSV, read back as skipped, exit 0 (526)', async () => {
@@ -157,7 +159,7 @@ test('unfolded and badId rows are skipped: counted, kept in the CSV, read back a
   assert.deepEqual([unfolded.stat('unfolded'), unfolded.stat('badId')], ['unfolded=2', 'badId=1']);
   const read = readBack(unfolded);
   assert.deepEqual(read.rows.map(r => r.sheetId), ['190303']);
-  assert.deepEqual([...read.skipped], [[190301, 'unfolded'], [190302, 'unfolded']]);
+  assert.deepEqual([...read.skipped], [[190301, { state: 'unfolded', targetId: '7003' }], [190302, { state: 'unfolded', targetId: '7004' }]]);
 
   const folded = await crosswalk({ projects, manual, rows: [...linked,
     twin(E.c, 'Carbon Gas', { foldedInto: '7003' }), twin(E.d, 'Delta Port', { foldedInto: '7004' })] });
@@ -206,6 +208,12 @@ test('on test the manual file is keyed by surrogate; a real register number is r
   await refusedFor(313371, 'names a sheet id the register does not hold');
   const keyed = await crosswalk({ projects, rows, manual: { matches: [{ sheetId: 313370, trackId: '7025' }], foldPairs: [] } });
   assert.deepEqual([stateOf(keyed, 313370), rowOf(keyed, 313370).targetId], ['manual', '7025']);
+});
+
+test('an unnamed register row alone exits 1', async () => {
+  const result = await crosswalk({ projects: [register(191001, 'Papa Pond', 4)], rows: [trackRow('7040', 'Papa Pond')],
+    flags: [{ file: 'register.xlsx', sheet: 'Projects', row: 5, field: 'name', kind: 'unnamedRow' }] });
+  assert.deepEqual([result.code, result.stat('exact'), result.stat('unnamedRow')], [1, 'exact=1', 'unnamedRow=1']);
 });
 
 test('collision flagged', async () => {
