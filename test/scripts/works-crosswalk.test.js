@@ -319,8 +319,11 @@ test('--env must match the account COSMOS_ENDPOINT names', async (t) => {
   await assert.rejects(crosswalk({ projects, rows: [] }), /--env test does not match the COSMOS_ENDPOINT account/);
   process.env.COSMOS_ENDPOINT = 'https://other-cosmos-test.documents.azure.com:443/';
   await assert.rejects(crosswalk({ projects, rows: [] }), /COSMOS_ENDPOINT names no demi-cosmos-test or demi-cosmos-prod account/);
-  process.env.COSMOS_ENDPOINT = endpointOf(ENV);
-  await assert.rejects(crosswalk({ projects, rows: [], account: accountOf('prod') }), /--storage-account must be the demifctest API storage account/);
+});
+
+test('--storage-account must be the demifc account of --env', async () => {
+  await assert.rejects(crosswalk({ projects: [register(191302, 'Papa Lake', 4)], rows: [], account: accountOf('prod') }),
+    /--storage-account must be the demifctest API storage account/);
 });
 
 test('the sealed file is uploaded to the storage account under the blob= name', async () => {

@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
-const { fakeLists, uploadRecorder } = require('../helpers/works-import-fakes');
+const { accountOf, fakeLists, uploadRecorder } = require('../helpers/works-import-fakes');
 const { run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
@@ -44,6 +44,16 @@ test('a failure before the batch header frees the lock and keeps its error', asy
   assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
 });
 
+test('a failed backup upload writes no batch header, frees the lock and keeps its error', async (t) => {
+  const store = fakeLists(t);
+  const given = inputs();
+  const planSha256 = (await load(given.argv)).value('planSha256');
+  const upload = async () => { throw new Error('upload refused'); };
+  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: () => {}, demi: fakeDemi(), now: () => T0, upload }), /^Error: upload refused$/);
+  assert.equal(store.all().some(item => item.kind === KINDS.BATCH), false);
+  assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
+});
+
 test('a failed lock release keeps the first error', async (t) => {
   const store = fakeLists(t);
   t.mock.method(cosmos, 'remove', async () => { throw new Error('release failed'); });
@@ -75,7 +85,7 @@ test('a live run that stops after the batch header has printed the batch id, the
   const { uploads, upload } = uploadRecorder();
   await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0, upload }), /save failed/);
   const { id, backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
-  assert.deepEqual(uploads.map(u => u.name), [backupBlob]);
+  assert.deepEqual(uploads.map(u => [u.account, u.name]), [[accountOf(ENV), backupBlob]]);
   assert.deepEqual(lines, [`batchId=${id}`, `backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`,
     `worksRead=${DERIVE_ENV.WORKS_READ}`, `worksReadSources=${DERIVE_ENV.WORKS_READ_SOURCES}`]);
 });

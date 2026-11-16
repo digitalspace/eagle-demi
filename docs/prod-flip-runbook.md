@@ -195,7 +195,7 @@ Export `WORKS_READ` and `WORKS_READ_SOURCES` with the API's values before the `-
      --recipient-key <devbox public keys pem> --expect-fingerprint <devbox fingerprint> --out <file>.sealed.json
    ```
 
-5. `yarn works:parity` takes `--extract`, `--expect-extract-sha256`, `--crosswalk`, `--expect-manual-sha256`, `--devbox-key`, `--operator-key`, `--expect-operator-fingerprint`, `--storage-account` and `--out-dir`. It prints `mismatch=0` and exits 1 on a failing count.
+5. `yarn works:parity` takes `--extract`, `--expect-extract-sha256`, `--crosswalk`, `--expect-manual-sha256`, `--devbox-key`, `--operator-key`, `--expect-operator-fingerprint`, `--storage-account` and `--out-dir`. It prints `mismatch=0` and exits 1 on a failing count or an error.
 6. A second dry run prints a plan with `written=0`.
 
 ### Turn the sheet source on or off

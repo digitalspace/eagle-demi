@@ -164,7 +164,9 @@ const optionRows = [
   ['an unknown option', argv => [...argv, '--keep', 'x'], /^options are /],
   ['an option given twice', argv => [...argv, '--extract', argv[1]], /^--extract given more than once$/],
   ['an --out-dir that is a file', (argv, dir) => [...argv.slice(0, -2), '--out-dir', path.join(dir, 'extract')], /^--out-dir must be a directory$/],
-  ['a prod --storage-account', argv => argv.map(arg => (arg === accountOf(ENV) ? accountOf('prod') : arg)), /^--storage-account must be the demifctest API storage account$/]
+  ...[['a prod', accountOf('prod')], ['a bare', 'demifctest'], ['a short', 'demifctestabc'], ['an uppercase', accountOf(ENV).toUpperCase()],
+    ['a 14-character suffix', `${accountOf(ENV)}9`]].map(([kind, account]) => [`${kind} --storage-account`,
+    argv => argv.map(arg => (arg === accountOf(ENV) ? account : arg)), /^--storage-account must be the demifctest API storage account$/])
 ];
 for (const [label, argvOf, message] of optionRows) {
   test(`refuses ${label}`, async () => {

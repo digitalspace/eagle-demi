@@ -15,7 +15,7 @@ const { deriveInputs } = require('../../src/domain/works-derive');
 const { logger } = require('../../src/utils/logger');
 const { accountOf, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
 const {
-  PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
+  ENV, PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
 } = require('../helpers/works-import-loader');
 
 test('dry run twice on unchanged input gives the same planSha256', async () => {
@@ -91,7 +91,7 @@ test('no plaintext file on the devbox: the dry run writes one sealed 0600 report
   const before = fs.readdirSync(dir).sort();
   const { value, uploads } = await load(argv);
   assert.deepEqual(fs.readdirSync(outDir), [value('blob')]);
-  assert.deepEqual(uploads.map(u => u.name), [value('blob')]);
+  assert.deepEqual(uploads.map(u => [u.account, u.name]), [[accountOf(ENV), value('blob')]]);
   assert.match(value('blob'), /^[0-9a-f-]{36}\.sealed\.json$/);
   assert.equal(fs.statSync(path.join(outDir, value('blob'))).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(dir).sort(), before);
@@ -133,7 +133,7 @@ test('a Track amendment decided before B with no matching loaded sheet work is l
 });
 
 test('a --storage-account of another environment refuses', async () => {
-  const argv = inputs().argv.map(arg => (arg === accountOf('test') ? accountOf('prod') : arg));
+  const argv = inputs().argv.map(arg => (arg === accountOf(ENV) ? accountOf('prod') : arg));
   await assert.rejects(load(argv), /--storage-account must be the demifctest API storage account/);
 });
 
