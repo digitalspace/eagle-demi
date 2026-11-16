@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
-const { fakeLists } = require('../helpers/works-import-fakes');
+const { fakeLists, uploadRecorder } = require('../helpers/works-import-fakes');
 const { run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
@@ -72,8 +72,10 @@ test('a live run that stops after the batch header has printed the batch id, the
   const planSha256 = (await load(given.argv, demi)).value('planSha256');
   demi.saveWork = async () => { throw new Error('save failed'); };
   const lines = [];
-  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0 }), /save failed/);
+  const { uploads, upload } = uploadRecorder();
+  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: line => lines.push(line), demi, now: () => T0, upload }), /save failed/);
   const { id, backupBlob, backupSha256 } = store.all().find(item => item.kind === KINDS.BATCH);
+  assert.deepEqual(uploads.map(u => u.name), [backupBlob]);
   assert.deepEqual(lines, [`batchId=${id}`, `backupBlob=${backupBlob}`, `backupSha256=${backupSha256}`,
     `worksRead=${DERIVE_ENV.WORKS_READ}`, `worksReadSources=${DERIVE_ENV.WORKS_READ_SOURCES}`]);
 });

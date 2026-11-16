@@ -127,6 +127,8 @@ The business works spreadsheets load into DEMI through devbox scripts. They refu
 
 Run each `node` and `yarn works:load|crosswalk|parity|rollback` command as `scripts/demi-devbox.sh run --env test -- '<command>'`. The `yarn works:extract` commands run on the operator's laptop.
 
+`works:crosswalk`, `works:load` and `works:parity` upload each sealed file they write to the `works-import` container under the printed `blob=` or `backupBlob=` name. Download it on the laptop with `az storage blob download --auth-mode login --account-name <API storage account> -c works-import -n <name> -f <name>`.
+
 The order of `WORKS_WRITE`, the nightly parity check and `WORKS_READ` is in the wiki page Sync-Architecture. This section starts after those are on.
 
 ### Before the first run
@@ -163,8 +165,6 @@ The owner guard in `src/repositories/works.js` stops one source overwriting anot
      --storage-account <API storage account>
    ```
 
-   The sealed file is in the `works-import` container under the `blob=` name. Download it on the laptop with `az storage blob download --auth-mode login --account-name <API storage account> -c works-import -n <blob> -f <blob>`.
-
 6. `yarn works:extract open --purpose crosswalk …` writes the CSV for review. The business signs off `crosswalkCsvSha256` and gives a sign-off reference. `yarn works:extract seal --purpose crosswalk --signature <file>.sig …` seals the signed CSV back to the devbox.
 
 ### Dry run and live run
@@ -176,7 +176,8 @@ Export `WORKS_READ` and `WORKS_READ_SOURCES` with the API's values before the `-
    ```
    yarn works:load --extract <sealed> --expect-sha256 <hex> --crosswalk <sealed> --expect-crosswalk-sha256 <hex> \
      --expect-manual-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex> \
-     --operator-key <pub pem> --expect-operator-fingerprint <hex> --out-dir <dir>
+     --operator-key <pub pem> --expect-operator-fingerprint <hex> --out-dir <dir> \
+     --storage-account <API storage account>
    ```
 
 2. `yarn works:extract open --purpose works-report …` writes the report for review. The business signs off the four hashes.
@@ -194,7 +195,7 @@ Export `WORKS_READ` and `WORKS_READ_SOURCES` with the API's values before the `-
      --recipient-key <devbox public keys pem> --expect-fingerprint <devbox fingerprint> --out <file>.sealed.json
    ```
 
-5. `yarn works:parity` takes `--extract`, `--expect-extract-sha256`, `--crosswalk`, `--expect-manual-sha256`, `--devbox-key`, `--operator-key`, `--expect-operator-fingerprint` and `--out-dir`. It prints `mismatch=0` and exits 1 on a failing count.
+5. `yarn works:parity` takes `--extract`, `--expect-extract-sha256`, `--crosswalk`, `--expect-manual-sha256`, `--devbox-key`, `--operator-key`, `--expect-operator-fingerprint`, `--storage-account` and `--out-dir`. It prints `mismatch=0` and exits 1 on a failing count.
 6. A second dry run prints a plan with `written=0`.
 
 ### Turn the sheet source on or off

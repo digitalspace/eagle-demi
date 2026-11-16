@@ -12,11 +12,11 @@ const { spawnSync, execFileSync } = require('child_process');
 const { run, readCrosswalk, COLUMNS } = require('../../src/scripts/works-crosswalk');
 const { devboxKeysFromPem, fingerprintOf, sealEnvelope, openEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
 const { logger } = require('../../src/utils/logger');
+const { accountOf, uploadRecorder } = require('../helpers/works-import-fakes');
 
 const ENV = 'test';
 const SCRIPT = path.join(__dirname, '../../src/scripts/works-crosswalk.js');
 const endpointOf = env => `https://demi-cosmos-${env}.documents.azure.com:443/`;
-const accountOf = env => `demifc${env}abcdefgh12345`;
 const signoffRefs = { keepStaff: null, keepNumbers: null };
 const pemOf = (key, type) => key.export({ type, format: 'pem' });
 const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
@@ -79,8 +79,7 @@ function inputs({ projects, aliases = [], flags = [], manual = noManual, manualS
 async function crosswalk({ rows, ...opts }) {
   const { argv, outDir, ...hashes } = inputs(opts);
   const lines = [];
-  const uploads = [];
-  const upload = async (account, name, file) => { uploads.push({ account, name, bytes: fs.readFileSync(file) }); };
+  const { uploads, upload } = uploadRecorder();
   const code = await run(argv, { write: line => lines.push(line), listRows: async () => rows, upload });
   const [blob] = fs.readdirSync(outDir);
   const opened = openEnvelope(fs.readFileSync(path.join(outDir, blob)),
