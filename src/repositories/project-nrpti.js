@@ -16,6 +16,17 @@ const SUMMARY_PATH = '/sources/nrpti';
 const LINK_SELECT = 'VALUE { "id": c.id, "eagleId": c.eagleId, ' +
   '"sources": { "track": (IS_DEFINED(c.sources.track) AND NOT IS_NULL(c.sources.track)) } }';
 
+/** Project rows by their Eagle id, for `projects.pickByEagleId`; rows without one are left out. */
+function groupByEagleId(projectRows) {
+  const groups = new Map();
+  for (const row of projectRows) {
+    if (!row.eagleId) continue;
+    const key = String(row.eagleId);
+    groups.set(key, [...(groups.get(key) || []), row]);
+  }
+  return groups;
+}
+
 /** Eagle id to DEMI project id, picked as `GET /projects/:eagleId` picks; deleted rows never link. */
 async function eagleIdMap() {
   const rows = await fetchAll(projects.CONTAINER, selectWhere({
@@ -24,13 +35,8 @@ async function eagleIdMap() {
     criteria: [isDefinedAndNotNull('eagleId'), NOT_DELETED],
     select: LINK_SELECT
   }));
-  const groups = new Map();
-  for (const row of rows) {
-    const key = String(row.eagleId);
-    groups.set(key, [...(groups.get(key) || []), row]);
-  }
   const map = new Map();
-  for (const [eagleId, group] of groups) map.set(eagleId, String(projects.pickByEagleId(group, eagleId).id));
+  for (const [eagleId, group] of groupByEagleId(rows)) map.set(eagleId, String(projects.pickByEagleId(group, eagleId).id));
   return map;
 }
 
@@ -55,6 +61,7 @@ async function listIdsWithSummary() {
 }
 
 module.exports = {
+  groupByEagleId,
   eagleIdMap,
   patchSummary,
   removeSummary,

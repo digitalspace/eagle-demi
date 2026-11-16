@@ -8,6 +8,7 @@ const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
 const updates = require('../repositories/updates');
 const notifications = require('../repositories/notifications');
+const { groupByEagleId } = require('../repositories/project-nrpti');
 const { isEagleOnlyProjectId } = require('../merge/project');
 const { logger } = require('../utils/logger');
 
@@ -28,17 +29,6 @@ function parseArgs(argv) {
     else throw new Error(`${TAG} unknown argument: ${a}\n${USAGE}`);
   }
   return args;
-}
-
-function groupByEagleId(projectRows) {
-  const groups = new Map();
-  for (const row of projectRows) {
-    if (!row.eagleId) continue;
-    const key = String(row.eagleId);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
-  }
-  return groups;
 }
 
 const append = (map, key, value) => map.set(key, [...(map.get(key) || []), value]);
