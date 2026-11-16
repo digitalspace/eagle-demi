@@ -6,7 +6,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { eq, selectWhere, pageOptions } = require('./_sql');
+const { eq, selectWhere, selectFor, pageOptions } = require('./_sql');
 
 const CONTAINER = 'regulatoryRecords';
 const PARTITION_FIELD = 'projectId';
@@ -18,6 +18,7 @@ async function listByProject(access, projectId, { pageSize, continuationToken } 
     access,
     partitionField: SCOPE_FIELD,
     criteria: [eq(PARTITION_FIELD, String(projectId), '@projectId')],
+    select: selectFor('regulatoryRecords', access, SCOPE_FIELD),
     orderBy: 'c.id ASC'
   });
   return cosmos.query(CONTAINER, spec, pageOptions({ pageSize, continuationToken, partitionKey: String(projectId) }));

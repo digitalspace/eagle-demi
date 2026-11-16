@@ -1667,6 +1667,73 @@ paths:
         '500':
           description: The read failed.
 
+  /api/projects/{id}/mines:
+    get:
+      summary: List a project's NRPTI mines
+      description: >-
+        Mines from NRPTI (BC Mine Information) linked to the project by its EPIC id, as the
+        NRPTI sync stored them. Anonymous callers get public rows and fields only; `source` is
+        staff only. Only on environments whose `ENRICHMENT_SOURCES` lists `nrpti`; elsewhere the
+        route answers 404.
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdOrEagleId'
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of mines.
+          headers:
+            x-continuation-token:
+              description: Pass as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: An anonymous caller asked for more than 100 rows.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
+        '404':
+          description: NRPTI is not enabled here, or the project is not found or not readable by the caller.
+
+  /api/projects/{id}/regulatory-records:
+    get:
+      summary: List a project's NRPTI compliance records
+      description: >-
+        Inspections, orders, penalties, warnings, certificates, permits, agreements, plans and
+        self-reports from NRPTI linked to the project by its EPIC id, told apart by `kind`.
+        Records NRPTI copied from EPIC are not included. Anonymous callers get public rows and
+        fields only; `issuedTo` and `source` are staff only. Only on environments whose
+        `ENRICHMENT_SOURCES` lists `nrpti`; elsewhere the route answers 404.
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdOrEagleId'
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of records.
+          headers:
+            x-continuation-token:
+              description: Pass as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: An anonymous caller asked for more than 100 rows.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
+        '404':
+          description: NRPTI is not enabled here, or the project is not found or not readable by the caller.
+
   /api/projects/{id}/level:
     put:
       summary: Set a project's ladder level
@@ -8990,6 +9057,15 @@ components:
       in: query
       required: false
       description: The `x-continuation-token` header of the previous page.
+      schema:
+        type: string
+    ProjectIdOrEagleId:
+      name: id
+      in: path
+      required: true
+      description: >-
+        A DEMI project id, or the project's 24-character hex Eagle id, resolved as
+        `GET /api/projects/{id}` resolves it.
       schema:
         type: string
     OrganizationId:

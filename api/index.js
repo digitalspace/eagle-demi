@@ -22,7 +22,7 @@ app.setup({ enableHttpStream: true });
 
 // Exported for the timer and trigger test suites; the host is the only other caller.
 module.exports = {
-  reconcileEagle, reconcileEngage, syncTrackTeams, syncTrackProjects, bulkDownloadWorker,
+  reconcileEagle, reconcileEngage, syncTrackTeams, syncTrackProjects, syncNrpti, bulkDownloadWorker,
   cleanupBulkDownloads, restampChunksWorker, searchDefinitionsWorker, syncOutWorker,
   announceUpdates, edgeBan, intakeScanSweep
 };
@@ -83,6 +83,14 @@ if (process.env.SYNC_PROJECTS_SCHEDULE) {
     schedule: '%SYNC_PROJECTS_SCHEDULE%',
     runOnStartup: false,
     handler: syncTrackProjects
+  });
+}
+
+if (process.env.NRPTI_SYNC_SCHEDULE) {
+  app.timer('syncNrpti', {
+    schedule: '%NRPTI_SYNC_SCHEDULE%',
+    runOnStartup: false,
+    handler: syncNrpti
   });
 }
 
@@ -271,6 +279,16 @@ async function syncTrackProjects() {
     await require('../src/scripts/sync-track-run').run({ live: true });
   } catch (err) {
     logger.error('[track-projects-poll] run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+// `live: true` for the reason syncTrackTeams gives; the script itself refuses writes unless `nrpti` is enabled.
+async function syncNrpti() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/sync-nrpti').run({ live: true });
+  } catch (err) {
+    logger.error('[nrpti] scheduled sync failed', { error: err.message, stack: err.stack });
   }
 }
 
