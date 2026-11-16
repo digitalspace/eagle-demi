@@ -44,24 +44,34 @@ const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
 } });
 const sheetDoc = fields => ({ projectId: '7002', source: 'sheet', owner: 'sheet', _etag: '"s"', ...fields });
 
-test('a row the crosswalk skips is listed crosswalkSkipped; a tombstoned work or held-off marker on its project does not refuse', async () => {
+test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or a closed sheet entry holds does not refuse', async () => {
   const { argv, outDir } = skippedInputs();
   const demi = fakeDemi();
   demi.docs.set('sheet-gone', sheetDoc({ id: 'sheet-gone', sourceKey: '102:amendment:9', deleted: true }));
+  demi.docs.set('track-77', { id: 'track-77', projectId: '7002', source: 'track', workTypeId: 7, _etag: '"t"' });
   demi.docs.set(OVERRIDE_MARKER_ID, sheetDoc({ id: OVERRIDE_MARKER_ID, active: false }));
+  demi.otherRows.set('7002', { id: '7002',
+    externalIds: [{ system: 'eao-register', value: '102', source: 'demi' }, { system: 'eao-register', value: '999', source: 'sheet' }],
+    staffAssignments: [{ id: 'a1', source: 'sheet', effectiveTo: '2025-01-01' }, { id: 'a2', source: 'track', effectiveTo: null }] });
   const { value } = await load(argv, demi);
   const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
   assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(), ['amendments:unfolded', 'projects:badId', 'projects:unfolded']);
 });
 
+const refusedHolding = (seed) => {
+  const demi = fakeDemi();
+  seed(demi);
+  return assert.rejects(load(skippedInputs().argv, demi), /a skipped project holds what an earlier sheet load wrote/);
+};
+
 test('refuses when a project the crosswalk skips still holds a sheet work or an active sheet marker', async () => {
-  const { argv } = skippedInputs();
-  const withWork = fakeDemi();
-  withWork.docs.set('sheet-old', sheetDoc({ id: 'sheet-old', sourceKey: '102:amendment:9' }));
-  await assert.rejects(load(argv, withWork), /skips still holds sheet works or an active sheet marker/);
-  const withMarker = fakeDemi();
-  withMarker.docs.set(OVERRIDE_MARKER_ID, sheetDoc({ id: OVERRIDE_MARKER_ID, active: true }));
-  await assert.rejects(load(argv, withMarker), /skips still holds sheet works or an active sheet marker/);
+  await refusedHolding(demi => demi.docs.set('sheet-old', sheetDoc({ id: 'sheet-old', sourceKey: '102:amendment:9' })));
+  await refusedHolding(demi => demi.docs.set(OVERRIDE_MARKER_ID, sheetDoc({ id: OVERRIDE_MARKER_ID, active: true })));
+});
+
+test("refuses when a skipped project's row holds the sheet's register id for that number or an open sheet staff entry", async () => {
+  await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', externalIds: [{ system: 'eao-register', value: '102', source: 'sheet' }] }));
+  await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', staffNotes: [{ id: 'n1', source: 'sheet', text: 'note' }] }));
 });
 
 test('refuses an unknown Cosmos host, prod included, in the dry run', async (t) => {

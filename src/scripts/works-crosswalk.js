@@ -18,7 +18,7 @@ const ENVS = ['test', 'prod'];
 const PURPOSE = 'crosswalk';
 const STATES = ['exact', 'manual', 'ambiguous', 'unmatched', 'unlinked', 'unfolded', 'collision', 'badId', 'unnamedRow'];
 const PASSING = new Set(['exact', 'manual']);
-// Track stands for these projects: the load writes nothing for them, so they do not fail the crosswalk.
+// The load writes nothing for these rows, so they do not fail the crosswalk.
 const SKIPPED = new Set(['badId', 'unfolded']);
 const COLUMNS = ['row', 'sheetId', 'sheetName', 'state', 'via', 'targetId', 'trackName', 'eagleName', 'eagleId', 'targetEagleId'];
 const HEADER = ['extractSha256', 'manualSha256'];
@@ -188,8 +188,9 @@ function matchOf(sheetId, names, pool, manual) {
 }
 
 /** The state of a matched row; a target whose Track row has no Eagle id is `unfolded` beside an unfolded twin, else `unlinked`. */
-function linkedState(state, { eagleId, targetEagleId, fold, targetId, unfolded }) {
-  if ((targetEagleId && targetEagleId !== eagleId) || (fold && fold !== targetId)) return 'unlinked';
+function linkedState(state, { eagleId, targetEagleId, fold, targetId, foldedInto, unfolded }) {
+  const elsewhere = (fold && fold !== targetId) || (foldedInto && foldedInto !== targetId);
+  if ((targetEagleId && targetEagleId !== eagleId) || elsewhere) return 'unlinked';
   if (unfolded) return 'unfolded';
   return eagleId && !targetEagleId ? 'unlinked' : state;
 }
@@ -201,8 +202,9 @@ function linkStateOf(match, pool, manual) {
   const eagleId = manual.foldEagleOf.get(match.targetId) || match.eagleId || targetEagleId;
   const twin = eagleId ? pool.twins.get(eagleOnlyProjectId(eagleId)) : null;
   const fold = manual.foldTrackOf.get(eagleId);
-  const unfolded = Boolean(twin) && ((fold && String(twin.foldedInto ?? '') !== fold) || isDemiOwnedProject(twin));
-  const state = linkedState(match.state, { eagleId, targetEagleId, fold, targetId: match.targetId, unfolded });
+  const foldedInto = String(twin?.foldedInto ?? '');
+  const unfolded = Boolean(twin) && ((fold && foldedInto !== fold) || isDemiOwnedProject(twin));
+  const state = linkedState(match.state, { eagleId, targetEagleId, fold, targetId: match.targetId, foldedInto, unfolded });
   return {
     ...match, state, eagleId, targetEagleId, twinBeside: Boolean(twin) && !unfolded,
     trackName: textOf(target.sources.track.name), eagleName: textOf(target.sources?.eagle?.name) || textOf(twin?.sources?.eagle?.name)

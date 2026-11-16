@@ -15,7 +15,7 @@ const {
   milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
 } = require('./business-works-assessment');
 const { commentPeriodIdFor, compareRegister, eagleItemIdFor } = require('./business-works-compare');
-const { sheetIdOf } = require('./business-works-inputs');
+const { REGISTER_SYSTEM, sheetIdOf } = require('./business-works-inputs');
 
 /** Sheet ID 8 shows Track's investment, never a sheet figure (A19); a surrogate id cannot be checked against it. */
 const INVESTMENT_USE_TRACK = Object.freeze([8]);
@@ -65,8 +65,10 @@ function joinTimelines(ctx, rows, registers) {
   const byName = Map.groupBy(registers, row => keyOf(row.name));
   const hitsOf = (row) => byName.get(keyOf(row.name)) || [];
   const matched = rows.filter((row) => {
-    if (hitsOf(row).length === 1) return true;
-    return listFor(ctx, 'timeline2002', null, row.ref)(hitsOf(row).length ? 'timelineAmbiguous' : 'timelineUnmatched');
+    const [hit, ...more] = hitsOf(row);
+    const list = listFor(ctx, 'timeline2002', null, row.ref);
+    if (!hit || more.length) return list(hit ? 'timelineAmbiguous' : 'timelineUnmatched');
+    return ctx.skipped.has(hit.id) ? list('crosswalkSkipped', { state: ctx.skipped.get(hit.id).state }) : true;
   });
   return onePerId(ctx, 'timeline2002', Map.groupBy(matched, row => hitsOf(row)[0].id), 'timelineRepeated');
 }
@@ -99,7 +101,7 @@ function validEntries(ctx, entries, list) {
 function staffEntries(ctx, row, list) {
   const at = { observedAt: ctx.batchDate, source: 'sheet', recordedAt: ctx.batchAt };
   const entries = {
-    externalIds: [{ system: 'eao-register', value: String(row.id), source: 'sheet', recordedAt: ctx.batchAt }],
+    externalIds: [{ system: REGISTER_SYSTEM, value: String(row.id), source: 'sheet', recordedAt: ctx.batchAt }],
     staffAssignments: ['epd', 'lead'].filter(role => oneLine(row[role])).map(role => ({
       id: randomUUID(), role, name: oneLine(row[role]), effectiveFrom: null, effectiveTo: null, ...at, sheetKey: `register:${role}`
     })),
@@ -124,11 +126,11 @@ function registerProjectOf(ctx, raw) {
 }
 
 function readRegister(ctx, records) {
-  const timelines = joinTimelines(ctx, records.timeline2002 || [], records.projects || []);
-  ctx.transitions = transitionsOf(ctx, records.transitions || []);
   const registers = records.projects || [];
   // As the crosswalk counts it: an unusable id is `badId` only when a register row holds it.
   registers.filter(row => !sheetIdOf(row.id)).forEach(row => ctx.skipped.set(row.id, { state: 'badId' }));
+  const timelines = joinTimelines(ctx, records.timeline2002 || [], registers);
+  ctx.transitions = transitionsOf(ctx, records.transitions || []);
   const repeated = Map.groupBy(registers, row => row.id);
   if (!ctx.numbersReal && registers.length) listFor(ctx, 'projects', null)('investmentUseTrackUnchecked');
   const rows = [];

@@ -145,6 +145,8 @@ test("a target without the crosswalk's Eagle id is unfolded beside its unfolded 
   assert.deepEqual([unfolded.code, stateOf(unfolded, 190201)], [0, 'unfolded']);
   const other = await beta([trackRow('7002', 'Beta Wind', E.a), twin(E.b, 'Beta Wind')]);
   assert.deepEqual([other.code, stateOf(other, 190201)], [1, 'unlinked']);
+  const elsewhere = await beta([trackRow('7002', 'Beta Wind', null), twin(E.b, 'Beta Wind', { foldedInto: '7099' })]);
+  assert.deepEqual([elsewhere.code, stateOf(elsewhere, 190201)], [1, 'unlinked']);
 });
 
 test('unfolded and badId rows are skipped: counted, kept in the CSV, read back as skipped, exit 0 (526)', async () => {
@@ -153,7 +155,7 @@ test('unfolded and badId rows are skipped: counted, kept in the CSV, read back a
   const linked = [trackRow('7003', 'Carbon Gas', E.c), trackRow('7004', 'Delta Port', E.d)];
   const unfolded = await crosswalk({ projects: [...projects, register(190303, 'Foxtrot Bay', 6)], manual,
     flags: [{ file: 'register.xlsx', sheet: 'Projects', row: 7, field: 'id', kind: 'badId' }],
-    rows: [...linked, trackRow('7006', 'Foxtrot Bay'), twin(E.c, 'Carbon Gas'), twin(E.d, 'Delta Port', { foldedInto: '7003' })] });
+    rows: [...linked, trackRow('7006', 'Foxtrot Bay'), twin(E.c, 'Carbon Gas'), twin(E.d, 'Delta Port')] });
   assert.equal(unfolded.code, 0);
   assert.deepEqual(unfolded.csvRows.map(r => r.state), ['unfolded', 'unfolded', 'exact', 'badId']);
   assert.deepEqual([unfolded.stat('unfolded'), unfolded.stat('badId')], ['unfolded=2', 'badId=1']);

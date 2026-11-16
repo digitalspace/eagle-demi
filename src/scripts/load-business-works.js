@@ -16,7 +16,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
 const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
-const { mapperInputs } = require('../domain/business-works-inputs');
+const { holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
 const { requireDeriveEnv } = require('./works-rollback-steps');
@@ -53,15 +53,16 @@ function liveDemi() {
 }
 
 /**
- * A report entry for each skipped row whose project still holds live sheet works or an active sheet marker. The load
- * never reads that project, so it would neither tombstone nor deactivate them.
+ * A report entry for each skipped row whose project still holds sheet works, an active sheet marker or sheet entries on
+ * its row. The load never reads that project, so it would leave them in place.
  */
 async function skippedHolding(demi, skipped) {
   const entries = [];
   const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
-  for (const { state, targetId } of skipped.values()) {
+  for (const [number, { state, targetId }] of skipped) {
     const marker = await demi.marker(targetId);
-    const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true);
+    const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true) ||
+      holdsSheetEntries(await demi.project(targetId), number);
     if (held) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId: targetId, state });
   }
   return entries;
@@ -80,7 +81,7 @@ async function planFor(demi, inputs, { batchId, batchAt }) {
   plan.report.push(...await skippedHolding(demi, inputs.crosswalk.skipped));
   if (plan.report.some(entry => CROSSWALK_REASONS.includes(entry.reason))) refuse('a sheet number is not in the signed crosswalk or has no register row');
   if (plan.report.some(entry => entry.reason === SKIPPED_HOLDS)) {
-    refuse('a project the crosswalk skips still holds sheet works or an active sheet marker; roll back the batch that loaded it');
+    refuse('a skipped project holds what an earlier sheet load wrote; roll back that batch');
   }
   return { plan: withoutHeld(plan, await heldElsewhere(demi, plan)), stored };
 }
