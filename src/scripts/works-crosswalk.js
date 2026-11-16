@@ -8,6 +8,7 @@ const { parseArgs } = require('util');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
+const { sheetIdOf } = require('../domain/business-works-inputs');
 const {
   devboxKeysFromPem, readCapped, openEnvelope, openExtract, operatorRecipientOf, sha256Hex, verify, writeSealed
 } = require('../utils/import-envelope');
@@ -17,11 +18,13 @@ const ENVS = ['test', 'prod'];
 const PURPOSE = 'crosswalk';
 const STATES = ['exact', 'manual', 'ambiguous', 'unmatched', 'unlinked', 'unfolded', 'collision', 'badId', 'unnamedRow'];
 const PASSING = new Set(['exact', 'manual']);
+// Track stands for these projects: the load writes nothing for them, so they do not fail the crosswalk.
+const SKIPPED = new Set(['badId', 'unfolded']);
 const COLUMNS = ['row', 'sheetId', 'sheetName', 'state', 'via', 'targetId', 'trackName', 'eagleName', 'eagleId', 'targetEagleId'];
 const HEADER = ['extractSha256', 'manualSha256'];
 const REGISTER = 'projects';
 const REGISTER_TAB = 'Projects';
-// The extractor drops a register row with either flag; each must still stop the crosswalk.
+// The extractor drops a register row with either flag; each still gets a crosswalk row.
 const REGISTER_FLAGS = new Set(['badId', 'unnamedRow']);
 // Files 02-06: every name they give a register id is an alias of that id.
 const ALIAS_SOURCES = ['amendments', 'suspensions', 'extensions', 'orderVariations', 'commentPeriods'];
@@ -45,7 +48,6 @@ const SHA256 = /^[0-9a-f]{64}$/;
 
 const refuse = message => { throw new Error(message); };
 const textOf = v => (typeof v === 'string' && v.length <= MAX_NAME ? v : null);
-const sheetIdOf = v => (Number.isSafeInteger(v) && v > 0 ? v : null);
 const positionOf = ref => (ref && typeof ref === 'object' && Number.isSafeInteger(ref.row) ? ref.row : null);
 const eagleIdOf = v => (typeof v === 'string' && EAGLE_ID.test(v) ? v : null);
 
@@ -253,7 +255,8 @@ function cellsOf(line) {
 
 /**
  * Opens a crosswalk the operator sealed to the devbox, verifies the devbox signature over
- * {purpose: 'crosswalk', env, sha256} and the input hashes in its header, and returns its exact and manual rows only.
+ * {purpose: 'crosswalk', env, sha256} and the input hashes in its header. Returns its exact and manual rows, and
+ * `skipped`, the state by register number of each skipped row that has one.
  */
 function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha256 }) {
   const opened = openEnvelope(sealed, { purpose: PURPOSE, env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa });
@@ -270,8 +273,9 @@ function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha
   if (!shaped) refuse('crosswalk CSV is malformed');
   if (head[1] !== String(expectExtractSha256).toLowerCase()) refuse('crosswalk was not built from the expected extract');
   if (head[3] !== String(expectManualSha256).toLowerCase()) refuse('crosswalk was not built from the expected manual-match file');
-  const rows = lines.map(cells => Object.fromEntries(COLUMNS.map((c, i) => [c, cells[i]]))).filter(r => PASSING.has(r.state));
-  return { sha256, extractSha256: head[1], manualSha256: head[3], rows };
+  const all = lines.map(cells => Object.fromEntries(COLUMNS.map((c, i) => [c, cells[i]])));
+  const skipped = new Map(all.filter(r => SKIPPED.has(r.state) && r.sheetId).map(r => [Number(r.sheetId), r.state]));
+  return { sha256, extractSha256: head[1], manualSha256: head[3], rows: all.filter(r => PASSING.has(r.state)), skipped };
 }
 
 const OPTIONS = Object.fromEntries([
@@ -338,7 +342,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   write(`crosswalkCsvSha256=${sha256}`);
   write(`manualSha256=${manual.sha256}`);
   write(`blob=${blob}`);
-  return result.rows.every(r => PASSING.has(r.state)) ? 0 : 1;
+  return result.rows.every(r => PASSING.has(r.state) || SKIPPED.has(r.state)) ? 0 : 1;
 }
 
 module.exports = { run, readCrosswalk, COLUMNS, COSMOS_HOST };

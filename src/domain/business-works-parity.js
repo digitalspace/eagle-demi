@@ -191,12 +191,12 @@ function checkExternalIds(tally, { rows, fresh, numbersReal }) {
 }
 
 /** Counts and items from the extract, the stored state and the catalogs. */
-function parityOf({ extract, crosswalk, catalog, phaseCatalog, rows, works, markers, commentPeriods, sheetProjectIds = [], at }) {
+function parityOf({ extract, crosswalk, skipped, catalog, phaseCatalog, rows, works, markers, commentPeriods, sheetProjectIds = [], at }) {
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   if (!projectIds.length) refuse('crosswalk holds no project');
   const ofSource = (id, source) => listOf(works.get(id)).filter(work => sourceOf(work) === source);
   const { base, trackWorks } = mapperInputs({
-    crosswalk, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId: 'parity-check', batchAt: at
+    crosswalk, skipped, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId: 'parity-check', batchAt: at
   });
   const all = mapBusinessWorks(extract, base);
   const fresh = mapBusinessWorks(extract, { ...base, trackWorks, markers });

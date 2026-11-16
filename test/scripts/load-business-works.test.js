@@ -36,6 +36,23 @@ test('a sheet number missing from the crosswalk fails the dry run', async () => 
   await assert.rejects(load(argv), /not in the signed crosswalk/);
 });
 
+test('a row the crosswalk skips loads nothing for its project and is listed crosswalkSkipped', async (t) => {
+  fakeLists(t);
+  const rows = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },
+    { row: 7, sheetId: '', state: 'badId' }];
+  const records = { projects: [register, { ...register, id: 102 }, { ...register, id: 0 }],
+    amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }] };
+  const { argv, outDir } = inputs({ records, crosswalkRows: rows });
+  const demi = fakeDemi();
+  const { value } = await load(argv, demi);
+  const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
+  assert.deepEqual(skipped.map(one => [one.source, one.state, one.projectId]),
+    [['projects', 'unfolded', null], ['projects', 'badId', null], ['amendments', 'unfolded', null]]);
+  await load([...argv, ...liveArgs(value('planSha256'))], demi);
+  assert.deepEqual(demi.derived, [PROJECT]);
+  assert.deepEqual([...demi.docs.values()].filter(doc => doc.projectId !== PROJECT), []);
+});
+
 test('refuses an unknown Cosmos host, prod included, in the dry run', async (t) => {
   t.after(() => { process.env.COSMOS_ENDPOINT = testHost; });
   process.env.COSMOS_ENDPOINT = 'https://demi-cosmos-prod.documents.azure.com:443/';

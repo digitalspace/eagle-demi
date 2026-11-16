@@ -15,6 +15,7 @@ const {
   milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
 } = require('./business-works-assessment');
 const { commentPeriodIdFor, compareRegister, eagleItemIdFor } = require('./business-works-compare');
+const { sheetIdOf } = require('./business-works-inputs');
 
 /** Sheet ID 8 shows Track's investment, never a sheet figure (A19); a surrogate id cannot be checked against it. */
 const INVESTMENT_USE_TRACK = Object.freeze([8]);
@@ -29,7 +30,7 @@ function contextOf(extract, options = {}) {
     throw new Error('mapBusinessWorks needs catalog, phaseCatalog, crosswalk (a Map), batchId and batchAt');
   }
   return {
-    catalog, phaseCatalog, crosswalk, batchId, batchAt, batchDate: dayOf(batchAt),
+    catalog, phaseCatalog, crosswalk, skipped: options.skipped || new Map(), batchId, batchAt, batchDate: dayOf(batchAt),
     numbersReal: Boolean(extract) && extract.numbersReal === true,
     trackWorks: options.trackWorks || new Map(), markers: options.markers || new Map(),
     transitionIdsAreRegisterIds: options.transitionIdsAreRegisterIds === true,
@@ -41,6 +42,9 @@ function contextOf(extract, options = {}) {
 const listFor = (ctx, source, projectId, ref) => (reason, extra = {}) => {
   ctx.report.push({ reason, source, projectId, ...(ref && { ref: refOf(ref) }), ...extra });
 };
+
+/** The crosswalk state that skips register number `id`, else undefined; Track stands for that project. */
+const skippedState = (ctx, id) => (sheetIdOf(id) ? ctx.skipped.get(id) : 'badId');
 
 function projectOf(ctx, projectId) {
   if (!ctx.projects.has(projectId)) {
@@ -112,6 +116,16 @@ function staffEntries(ctx, row, list) {
   return validEntries(ctx, entries, list);
 }
 
+/** The project a register row loads into, else null with the row listed as skipped or not in the crosswalk. */
+function registerProjectOf(ctx, raw) {
+  const skipped = skippedState(ctx, raw.id);
+  const projectId = skipped ? null : ctx.crosswalk.get(raw.id) ?? null;
+  const list = listFor(ctx, 'projects', null, raw.ref);
+  if (skipped) list('crosswalkSkipped', { state: skipped });
+  else if (!projectId) list('notInCrosswalk');
+  return projectId;
+}
+
 function readRegister(ctx, records) {
   const timelines = joinTimelines(ctx, records.timeline2002 || [], records.projects || []);
   ctx.transitions = transitionsOf(ctx, records.transitions || []);
@@ -120,12 +134,9 @@ function readRegister(ctx, records) {
   if (!ctx.numbersReal && registers.length) listFor(ctx, 'projects', null)('investmentUseTrackUnchecked');
   const rows = [];
   for (const raw of registers) {
-    const projectId = ctx.crosswalk.get(raw.id) ?? null;
+    const projectId = registerProjectOf(ctx, raw);
+    if (!projectId) continue;
     const list = listFor(ctx, 'projects', projectId, raw.ref);
-    if (!projectId) {
-      list('notInCrosswalk');
-      continue;
-    }
     const base = { projectId, number: raw.id, title: oneLine(raw.name), ref: raw.ref };
     ctx.bases.set(raw.id, base);
     // Which of the rows sharing a number is right is undecided, so none of them loads anything.
@@ -161,6 +172,8 @@ function readRegister(ctx, records) {
 function sheetRow(ctx, source, row) {
   const base = ctx.bases.get(row.id);
   const list = listFor(ctx, source, base ? base.projectId : null, row.ref);
+  const skipped = skippedState(ctx, row.id);
+  if (skipped) return list('crosswalkSkipped', { state: skipped });
   if (!base) list(ctx.crosswalk.has(row.id) ? 'noRegisterRow' : 'notInCrosswalk');
   if (base && ctx.noWork.get(row.id) === 'registerRepeated') {
     list('registerRepeated');

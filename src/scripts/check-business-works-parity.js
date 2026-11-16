@@ -47,17 +47,18 @@ function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
   return parsed.values;
 }
 
-/** The keys, the decrypted extract and the crosswalk Map of register number to project id; nothing touches disk. */
+/** The keys, the decrypted extract, the crosswalk Map of register number to project id and its skipped rows; nothing touches disk. */
 function openInputs(o) {
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
   const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint'], refuse);
   const { extract, sha256 } = openExtract(readCapped(o.extract, MAX_BYTES.extract), {
     env: ENV, keyFingerprint: keys.fingerprint, privateKey: keys.rsa, expectSha256: o['expect-extract-sha256']
   });
-  const { rows } = readCrosswalk(readCapped(o.crosswalk, MAX_BYTES.crosswalk), {
+  const { rows, skipped } = readCrosswalk(readCapped(o.crosswalk, MAX_BYTES.crosswalk), {
     env: ENV, keys, expectExtractSha256: sha256, expectManualSha256: o['expect-manual-sha256']
   });
-  return { keys, recipient, extract, extractSha256: sha256, crosswalk: new Map(rows.map(row => [Number(row.sheetId), row.targetId])) };
+  const crosswalk = new Map(rows.map(row => [Number(row.sheetId), row.targetId]));
+  return { keys, recipient, extract, extractSha256: sha256, crosswalk, skipped };
 }
 
 /** Signs the report with the devbox key and seals it to the operator under a random name; returns the name and hash. */
@@ -101,10 +102,10 @@ async function run(argv, deps = {}) {
   if (deps.endpoint && !deps.state) refuse('a test endpoint needs a test state');
   const write = deps.write || (line => process.stdout.write(`${line}\n`));
   const o = optionsOf(argv, deps.endpoint);
-  const { keys, recipient, extract, extractSha256, crosswalk } = openInputs(o);
+  const { keys, recipient, extract, extractSha256, crosswalk, skipped } = openInputs(o);
   const state = await (deps.state || liveState)(crosswalk);
   const at = (deps.now || new Date()).toISOString();
-  const { counts, items } = parityOf({ extract, crosswalk, ...state, at });
+  const { counts, items } = parityOf({ extract, crosswalk, skipped, ...state, at });
   const { blob, sha256 } = writeReport({ kind: REPORT_PURPOSE, extractSha256, at, counts, items }, { keys, recipient, outDir: o['out-dir'] });
   COUNTS.forEach(name => write(`${name}=${counts[name]}`));
   write(`reportSha256=${sha256}`);

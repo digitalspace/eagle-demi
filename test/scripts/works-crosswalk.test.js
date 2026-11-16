@@ -145,14 +145,19 @@ test("a target without the crosswalk's Eagle id is unlinked and exits 1", async 
   assert.equal(result.stat('unlinked'), 'unlinked=1');
 });
 
-test('a fold-pair twin not folded into its Track row is unfolded and exits 1, matched by hand or by name (526)', async () => {
+test('unfolded and badId rows are skipped: counted, kept in the CSV, read back as skipped, exit 0 (526)', async () => {
   const manual = { matches: [{ sheetId: 190301, trackId: '7003' }], foldPairs: [`7003:${E.c}`, `7004:${E.d}`] };
   const projects = [register(190301, 'Typo Nme', 4), register(190302, 'Delta Port', 5)];
   const linked = [trackRow('7003', 'Carbon Gas', E.c), trackRow('7004', 'Delta Port', E.d)];
-  const unfolded = await crosswalk({ projects, manual,
-    rows: [...linked, twin(E.c, 'Carbon Gas'), twin(E.d, 'Delta Port', { foldedInto: '7003' })] });
-  assert.equal(unfolded.code, 1);
-  assert.deepEqual([stateOf(unfolded, 190301), stateOf(unfolded, 190302)], ['unfolded', 'unfolded']);
+  const unfolded = await crosswalk({ projects: [...projects, register(190303, 'Foxtrot Bay', 6)], manual,
+    flags: [{ file: 'register.xlsx', sheet: 'Projects', row: 7, field: 'id', kind: 'badId' }],
+    rows: [...linked, trackRow('7006', 'Foxtrot Bay'), twin(E.c, 'Carbon Gas'), twin(E.d, 'Delta Port', { foldedInto: '7003' })] });
+  assert.equal(unfolded.code, 0);
+  assert.deepEqual(unfolded.csvRows.map(r => r.state), ['unfolded', 'unfolded', 'exact', 'badId']);
+  assert.deepEqual([unfolded.stat('unfolded'), unfolded.stat('badId')], ['unfolded=2', 'badId=1']);
+  const read = readBack(unfolded);
+  assert.deepEqual(read.rows.map(r => r.sheetId), ['190303']);
+  assert.deepEqual([...read.skipped], [[190301, 'unfolded'], [190302, 'unfolded']]);
 
   const folded = await crosswalk({ projects, manual, rows: [...linked,
     twin(E.c, 'Carbon Gas', { foldedInto: '7003' }), twin(E.d, 'Delta Port', { foldedInto: '7004' })] });
@@ -160,10 +165,9 @@ test('a fold-pair twin not folded into its Track row is unfolded and exits 1, ma
   assert.deepEqual([stateOf(folded, 190301), stateOf(folded, 190302)], ['manual', 'exact']);
 });
 
-test('a DEMI-owned twin is unfolded and exits 1; a disowned relinked twin is not', async () => {
+test('a DEMI-owned twin is unfolded; a disowned relinked twin is not', async () => {
   const projects = [register(190401, 'Echo Dam', 4)];
   const owned = await crosswalk({ projects, rows: [trackRow('7005', 'Echo Dam', E.f), twin(E.f, 'Echo Dam', { demiOwnedAt: '2026-01-01' })] });
-  assert.equal(owned.code, 1);
   assert.equal(stateOf(owned, 190401), 'unfolded');
   assert.equal(owned.stat('twinsBeside'), 'twinsBeside=0');
 
@@ -245,7 +249,7 @@ test('readCrosswalk refuses a CSV whose signature does not verify, and returns o
   assert.throws(() => readBack(result, toDevbox(trailing, 'crosswalk', { signature: signed })), /CSV is malformed/);
 });
 
-test('hostile or dropped register rows stop the run; an empty register or pool is refused', async () => {
+test('hostile or dropped register rows are listed; an empty register or pool is refused', async () => {
   const result = await crosswalk({
     projects: [{ ref: { file: 'register.xlsx', row: 4 }, id: '190901', name: 'Mike Ridge' },
       { ref: { file: 'register.xlsx', row: 5 }, id: '__proto__', name: 'x'.repeat(600) },

@@ -131,16 +131,8 @@ The order of `WORKS_WRITE`, the nightly parity check and `WORKS_READ` is in the 
 
 ### Before the first run
 
-1. In Track, set the project form field "EPIC GUID" on projects 359, 365, 367, 373, 374 and 412 to the Eagle id the crosswalk names. A Track user with role `edit` does this. Until it is set, the Track merge writes `eagleId: null` on those rows.
-2. Fold the six `eagle-<id>` twins into their Track rows. The dry run prints each changed field and `planSha256=`; a pair prints `refused=eagleIdUnset` while step 1 is undone.
-
-   ```
-   node src/scripts/fold-twins.js --pairs <trackId>:<eagleId>,…
-   node src/scripts/fold-twins.js --pairs <same list> --live --expect-plan-sha256 <planSha256>
-   ```
-
-3. `node src/scripts/build-works-catalog.js` prints `missing=0`.
-4. `node src/scripts/works-import-key.js` writes the devbox key and prints its public keys and fingerprint. The operator records the fingerprint.
+1. `node src/scripts/build-works-catalog.js` prints `missing=0`.
+2. `node src/scripts/works-import-key.js` writes the devbox key and prints its public keys and fingerprint. The operator records the fingerprint.
 
 The owner guard in `src/repositories/works.js` stops one source overwriting another's works by mistake. It is not access control for devbox scripts: any script can pass any owner name, and the devbox identity has full data-plane rights.
 
@@ -157,7 +149,7 @@ The owner guard in `src/repositories/works.js` stops one source overwriting anot
    ```
 
 4. Seal the manual-match file with `yarn works:extract seal --purpose manual-match …` and record its SHA-256. Upload the extract and the sealed manual-match file to the `works-import` container with `--auth-mode login`.
-5. Build the crosswalk on the devbox. It prints one count per state and `crosswalkCsvSha256=`, and it exits 1 unless every row is `exact` or `manual`. Expect `unmatched=0 unlinked=0 unfolded=0 ambiguous=0`.
+5. Build the crosswalk on the devbox; it prints one count per state and `crosswalkCsvSha256=`. It exits 1 on any row other than `exact`, `manual`, `badId` or `unfolded`, so expect `unmatched=0 unlinked=0 ambiguous=0`. The load skips each `badId` and `unfolded` row and lists it as `crosswalkSkipped` in the dry-run report; Track stands for those projects.
 
    ```
    yarn works:crosswalk --env test --extract <sealed> --expect-extract-sha256 <hex> \

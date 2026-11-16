@@ -5,16 +5,20 @@
 
 const { listOf, sourceOf } = require('./work-model');
 
+/** A register number: a positive safe integer, else null; the crosswalk skips any other id as `badId`. */
+const sheetIdOf = v => (Number.isSafeInteger(v) && v > 0 ? v : null);
+
 /**
  * `base` for a map without Track works or markers, and `trackWorks` and `markers` to add for the fresh map.
- * `works` and `commentPeriods` are Maps by project id; `rows` is the stored project rows by id.
+ * `works` and `commentPeriods` are Maps by project id; `rows` is the stored project rows by id; `skipped` is the
+ * crosswalk state by register number of each row the crosswalk skips.
  */
-function mapperInputs({ crosswalk, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId, batchAt }) {
+function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId, batchAt }) {
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   const trackOf = id => listOf(works.get(id)).filter(work => sourceOf(work) === 'track' && work.deleted !== true);
   return {
     base: {
-      catalog, phaseCatalog, crosswalk, batchId, batchAt, storedProjects: rows,
+      catalog, phaseCatalog, crosswalk, skipped, batchId, batchAt, storedProjects: rows,
       eagleItems: new Map(projectIds.map(id => [id, { ...(rows.get(id) || {}), commentPeriods: listOf(commentPeriods.get(id)) }]))
     },
     trackWorks: new Map(projectIds.map(id => [id, trackOf(id)])),
@@ -22,4 +26,4 @@ function mapperInputs({ crosswalk, catalog, phaseCatalog, rows, works, markers, 
   };
 }
 
-module.exports = { mapperInputs };
+module.exports = { mapperInputs, sheetIdOf };

@@ -55,7 +55,7 @@ async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const stored = await readStored(demi, [...new Set(crosswalk.values())]);
   const mapper = mapperInputs({
-    crosswalk, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
+    crosswalk, skipped: inputs.crosswalk.skipped, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
     catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
   });
   const plan = buildPlan(inputs.opened.extract, {

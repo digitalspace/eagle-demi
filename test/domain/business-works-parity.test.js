@@ -18,8 +18,8 @@ const extract = extractOf(amendment('1', '2010-01-01', '2010-03-01'));
 const open = extractOf(amendment('1', '2010-01-01', null));
 const KEY = '101:amendment:1';
 
-const parity = (input, state, crosswalk = CROSSWALK) => {
-  const { counts, items } = parityOf({ extract: input, crosswalk, ...state, at: AT });
+const parity = (input, state, crosswalk = CROSSWALK, skipped) => {
+  const { counts, items } = parityOf({ extract: input, crosswalk, skipped, ...state, at: AT });
   return { counts, listed: (name) => items.filter(item => item.list === name) };
 };
 const reasons = (result) => result.listed('hiddenDrift').map(item => item.reason);
@@ -140,6 +140,13 @@ test('sheet rows outside the crosswalk or without a register row fail as notInCr
   const stray = { records: { projects: [register()], amendments: [amendment('1', '2010-01-01', '2010-03-01', 999), amendment('2', '2010-01-01', '2010-03-01', 103)] } };
   const { counts } = parity(stray, stateOf(loaded(extract)), new Map([[101, PROJECT], [103, 'project-gamma']]));
   assert.deepStrictEqual([counts.notInCrosswalk, counts.noRegisterRow], [1, 1]);
+});
+
+test('register rows the crosswalk skips, and their sheet rows, count nothing', () => {
+  const skips = { records: { projects: [register(), register(103), register(0)],
+    amendments: [amendment('1', '2010-01-01', '2010-03-01'), amendment('2', '2010-01-01', '2010-03-01', 103)] } };
+  const { counts } = parity(skips, stateOf(loaded(extract)), CROSSWALK, new Map([[103, 'unfolded']]));
+  assert.deepStrictEqual(Object.entries(counts).filter(([, n]) => n > 0).map(([name]) => name), ['projects', 'works']);
 });
 
 test('an empty crosswalk is refused', () => {
