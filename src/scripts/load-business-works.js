@@ -16,7 +16,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
 const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
-const { mapperInputs } = require('../domain/business-works-inputs');
+const { holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const batches = require('./works-import-batch');
 const { requireDeriveEnv } = require('./works-rollback-steps');
@@ -25,6 +25,7 @@ const { logger } = require('../utils/logger');
 const OWNER = 'sheet';
 const DONE = new Set(['written', 'set', 'appended', 'closed', 'unchanged']);
 const CROSSWALK_REASONS = ['notInCrosswalk', 'noRegisterRow'];
+const SKIPPED_HOLDS = 'skippedHoldsSheetWorks';
 const DERIVED = new Set(['patched', 'unchanged']);
 // The sealed envelope is the base64 plaintext plus a header, wrapped key and signature well under this.
 const ENVELOPE_HEADROOM = 16 * 1024;
@@ -51,17 +52,37 @@ function liveDemi() {
   };
 }
 
+/**
+ * A report entry for each skipped row whose project still holds sheet works, an active sheet marker or sheet entries on
+ * its row. The load never reads that project, so it would leave them in place.
+ */
+async function skippedHolding(demi, skipped) {
+  const entries = [];
+  const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
+  for (const [number, { state, targetId }] of skipped) {
+    const marker = await demi.marker(targetId);
+    const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true) ||
+      holdsSheetEntries(await demi.project(targetId), number);
+    if (held) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId: targetId, state });
+  }
+  return entries;
+}
+
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const stored = await readStored(demi, [...new Set(crosswalk.values())]);
   const mapper = mapperInputs({
-    crosswalk, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
+    crosswalk, skipped: inputs.crosswalk.skipped, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
     catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
   });
   const plan = buildPlan(inputs.opened.extract, {
     mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf
   });
+  plan.report.push(...await skippedHolding(demi, inputs.crosswalk.skipped));
   if (plan.report.some(entry => CROSSWALK_REASONS.includes(entry.reason))) refuse('a sheet number is not in the signed crosswalk or has no register row');
+  if (plan.report.some(entry => entry.reason === SKIPPED_HOLDS)) {
+    refuse('a skipped project holds what an earlier sheet load wrote; roll back that batch');
+  }
   return { plan: withoutHeld(plan, await heldElsewhere(demi, plan)), stored };
 }
 

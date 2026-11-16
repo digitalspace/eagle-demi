@@ -41,7 +41,7 @@ const TRACK = [trackWork(43, { startDate: '2023-03-01', decisionDate: '2023-11-0
 /** A fake DEMI: works keyed by id with etags from each save, one project row, and every derive call. */
 function fakeDemi() {
   const docs = new Map(TRACK.map(doc => [doc.id, { ...doc, _etag: '"t"' }]));
-  const state = { saves: 0, derived: [], docs, projectFields: [], row: { id: PROJECT, externalIds: [], reviewExtensions: [], reviewSuspensions: [], _etag: '"r"' } };
+  const state = { saves: 0, derived: [], docs, projectFields: [], otherRows: new Map(), row: { id: PROJECT, externalIds: [], reviewExtensions: [], reviewSuspensions: [], _etag: '"r"' } };
   const keep = (field, value) => {
     state.projectFields.push(field);
     state.row = { ...state.row, [field]: [...(state.row[field] || []), value], _etag: `"r${n += 1}"` };
@@ -58,9 +58,9 @@ function fakeDemi() {
   return Object.assign(state, {
     worksCatalog: async () => CATALOG,
     phaseCatalog: async () => PHASES,
-    works: async () => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID),
-    marker: async () => docs.get(OVERRIDE_MARKER_ID) || null,
-    project: async id => (id === PROJECT ? { ...state.row } : null),
+    works: async id => [...docs.values()].filter(doc => doc.id !== OVERRIDE_MARKER_ID && doc.projectId === id),
+    marker: async id => (docs.get(OVERRIDE_MARKER_ID)?.projectId === id ? docs.get(OVERRIDE_MARKER_ID) : null),
+    project: async id => (id === PROJECT ? { ...state.row } : state.otherRows.get(id) ?? null),
     externalIdHolders: async () => [],
     commentPeriods: async () => [],
     trackPublic: async () => [],

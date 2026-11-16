@@ -18,7 +18,7 @@ const commentPeriodsRepository = require('../../src/repositories/comment-periods
 const listsRepository = require('../../src/repositories/lists');
 const phaseCatalog = require('../../src/domain/phase-catalog');
 const { fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign, verify } = require('../../src/utils/import-envelope');
-const { CATALOG, PHASES, PROJECT, AT, amendment, extractOf, settledAmendment, loaded, stateOf } = require('../helpers/business-works-fixtures');
+const { CATALOG, PHASES, PROJECT, AT, register, amendment, extractOf, settledAmendment, loaded, stateOf } = require('../helpers/business-works-fixtures');
 
 const ENV = 'test';
 const TEST_ENDPOINT = 'https://demi-cosmos-test.documents.azure.com:443/';
@@ -37,14 +37,14 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'business-works-parity-'));
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 /** The extract and crosswalk sealed to the devbox as W4 and W5 write them, plus the key files. */
-function inputFiles(extract, dir) {
+function inputFiles(extract, dir, skippedRows = []) {
   const text = Buffer.from(JSON.stringify({ env: ENV, staffIncluded: false, numbersReal: false, ...extract }));
   const extractSha = sha256Hex(text);
   const toDevbox = (plaintext, purpose, extra = {}) => sealEnvelope(plaintext, {
     purpose, env: ENV, keyFingerprint: DEVBOX_FP, recipientKey: devboxRsa.publicKey, ...extra
   });
   const row = { row: '5', sheetId: '101', sheetName: 'Sample Mine', state: 'exact', via: 'name', targetId: PROJECT };
-  const csv = Buffer.from([['extractSha256', extractSha, 'manualSha256', MANUAL_SHA], COLUMNS, COLUMNS.map(c => row[c] ?? '')]
+  const csv = Buffer.from([['extractSha256', extractSha, 'manualSha256', MANUAL_SHA], COLUMNS, ...[row, ...skippedRows].map(one => COLUMNS.map(c => one[c] ?? ''))]
     .map(cells => cells.map(cell => `"${cell}"`).join(',')).join('\r\n').concat('\r\n'));
   const files = {
     extract: toDevbox(text, 'extract', { staffIncluded: false, numbersReal: false }),
@@ -56,9 +56,9 @@ function inputFiles(extract, dir) {
   return { extractSha, path: (name) => path.join(dir, name) };
 }
 
-async function check(extract, state, { endpoint = TEST_ENDPOINT, expectExtractSha, operatorFp = OPERATOR_FP, argvOf = argv => argv } = {}) {
+async function check(extract, state, { endpoint = TEST_ENDPOINT, expectExtractSha, operatorFp = OPERATOR_FP, argvOf = argv => argv, skippedRows } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'run-'));
-  const files = inputFiles(extract, dir);
+  const files = inputFiles(extract, dir, skippedRows);
   const argv = argvOf(['--extract', files.path('extract'), '--expect-extract-sha256', expectExtractSha || files.extractSha,
     '--crosswalk', files.path('crosswalk'), '--expect-manual-sha256', MANUAL_SHA, '--devbox-key', files.path('devbox-key'),
     '--operator-key', files.path('operator-key'), '--expect-operator-fingerprint', operatorFp, '--out-dir', dir], dir);
@@ -99,6 +99,12 @@ for (const [label, build] of failingRows) {
     assert.strictEqual((await check(extract, build())).code, 1);
   });
 }
+
+test('exits 0 when the crosswalk skips a register row', async () => {
+  const skips = { records: { ...extract.records, projects: [...extract.records.projects, register(103)] } };
+  const skippedRows = [{ row: '6', sheetId: '103', state: 'unfolded', targetId: '7002' }];
+  assert.strictEqual((await check(skips, stateOf(loaded(extract)), { skippedRows })).code, 0);
+});
 
 test('stdout holds counts and the report hash only; the sealed report holds kind, extract hash and time, signed by the devbox', async () => {
   const result = await check(extract, stateOf(loaded(extract), { track: [settledAmendment] }));

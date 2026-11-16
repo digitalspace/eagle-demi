@@ -194,6 +194,21 @@ test('a title with line breaks is collapsed to one line', () => {
   assert.strictEqual(assessments(run({ projects: [register({ name: 'Sample\n  Mine' })] }))[0].title, 'Sample Mine');
 });
 
+test('rows of a number the crosswalk skips are listed crosswalkSkipped; an unusable id is badId only when a register row holds it', () => {
+  const result = run({
+    projects: [register(), register({ id: 102, name: 'Other Mine' }), register({ id: 0, name: 'Third Mine' })],
+    amendments: [amendment(1, '2010-01-01', '2010-03-01', { id: 0 }), amendment(2, '2010-01-01', '2010-03-01', { id: -1 })],
+    transitions: [{ ref: ref('EA Process Data'), id: 102, date: '2022-08-23' }],
+    timeline2002: [{ ref: ref('2002'), name: 'Other Mine', start180: '2004-03-01' }, { ref: ref('2002'), name: 'No Such Mine', start180: '2004-03-01' }]
+  }, { skipped: new Map([[102, { state: 'unfolded', targetId: 'project-two' }]]), transitionIdsAreRegisterIds: true });
+  assert.deepStrictEqual(reasons(result, 'crosswalkSkipped').map(entry => `${entry.source}:${entry.state}`).sort(),
+    ['amendments:badId', 'projects:badId', 'projects:unfolded', 'timeline2002:unfolded', 'transitions:unfolded']);
+  assert.deepStrictEqual(reasons(result, 'timelineUnmatched').length, 1);
+  assert.deepStrictEqual(reasons(result, 'notInCrosswalk').map(entry => entry.source), ['amendments']);
+  assert.deepStrictEqual(reasons(result, 'transitionUnmatched'), []);
+  assert.deepStrictEqual([...new Set(result.works.map(one => one.projectId))], [PROJECT]);
+});
+
 test('a Transition Order before 2025 ends the 2002 work on its date and lists later milestones', () => {
   const result = run({ projects: [register({ decision: 'Incomplete/Inactive', decisionDate: null, start180: '2023-01-01' })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] },
     { transitionIdsAreRegisterIds: true });

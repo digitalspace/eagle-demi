@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parityOf } = require('../../src/domain/business-works-parity');
+const { FAILING, parityOf } = require('../../src/domain/business-works-parity');
 const { idOf } = require('../../src/domain/extensions');
 const { overrideShown } = require('../../src/domain/work-model');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
@@ -18,8 +18,8 @@ const extract = extractOf(amendment('1', '2010-01-01', '2010-03-01'));
 const open = extractOf(amendment('1', '2010-01-01', null));
 const KEY = '101:amendment:1';
 
-const parity = (input, state, crosswalk = CROSSWALK) => {
-  const { counts, items } = parityOf({ extract: input, crosswalk, ...state, at: AT });
+const parity = (input, state, crosswalk = CROSSWALK, skipped) => {
+  const { counts, items } = parityOf({ extract: input, crosswalk, skipped, ...state, at: AT });
   return { counts, listed: (name) => items.filter(item => item.list === name) };
 };
 const reasons = (result) => result.listed('hiddenDrift').map(item => item.reason);
@@ -140,6 +140,15 @@ test('sheet rows outside the crosswalk or without a register row fail as notInCr
   const stray = { records: { projects: [register()], amendments: [amendment('1', '2010-01-01', '2010-03-01', 999), amendment('2', '2010-01-01', '2010-03-01', 103)] } };
   const { counts } = parity(stray, stateOf(loaded(extract)), new Map([[101, PROJECT], [103, 'project-gamma']]));
   assert.deepStrictEqual([counts.notInCrosswalk, counts.noRegisterRow], [1, 1]);
+});
+
+test('rows the crosswalk skips are listed crosswalkSkipped and fail nothing', () => {
+  const skips = { records: { projects: [register(), register(103), register(0)],
+    amendments: [amendment('1', '2010-01-01', '2010-03-01'), amendment('2', '2010-01-01', '2010-03-01', 103)] } };
+  const result = parity(skips, stateOf(loaded(extract)), CROSSWALK, new Map([[103, { state: 'unfolded', targetId: 'project-gamma' }]]));
+  assert.deepStrictEqual(FAILING.filter(name => result.counts[name] > 0), []);
+  assert.deepStrictEqual(result.listed('crosswalkSkipped').map(item => `${item.source}:${item.state}`).sort(),
+    ['amendments:unfolded', 'projects:badId', 'projects:unfolded']);
 });
 
 test('an empty crosswalk is refused', () => {
