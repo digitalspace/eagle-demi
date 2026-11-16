@@ -11,14 +11,13 @@ Not scheduled. Added 2026-08-26.
   - `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`; field-level roles and levels
     designed in `docs/rbac-architecture.md`
   - eagle-api's separate `INTERNAL_API_KEY`, which skips scope checks
-- **One engine for data sources with visible syncs.** Today each source is bespoke: Track nightly
+- **One engine for data sources with visible syncs.** Each source is bespoke: Track nightly
   over its API (`sync-track-projects.js`) + `merge/project.js`, Eagle via seed (`seed-nosql.js`, on
-  demand) and push (`/eagle/*` routes), wildfire via `sync-wildfires.js` (manual POST). No registry
-  of sources, no last-run /
-  row-count / error surface, no schedule. Target: a `sources` registry (name, kind, schedule, last
-  run, counts, errors) + one runner that the existing scripts plug into, exposed on `/admin`.
-  Supersedes the 2026-08-24 "no adapter layer" call once a second real source exists; until then
-  the wiki `Sources-and-Status` contract stands.
+  demand) and push (`/eagle/*` routes), wildfire via `sync-wildfires.js` (manual POST), NRPTI via
+  `sync-nrpti.js` (test-only timer and CLI).
+  - No registry of sources, no last-run / row-count / error surface.
+  - NRPTI is the second enrichment source and stays bespoke until a third source or a status screen needs a registry.
+  - Target: a `sources` registry (name, kind, schedule, last run, counts, errors) + one runner that the existing scripts plug into, exposed on `/admin`. The wiki `Sources-and-Status` contract stands until then.
 - **Geo syncs as their own managed group.** Wildfire (DataBC WFS → `wildfires` + `sources.wildfire`),
   boundaries (checked-in GeoJSON → `boundaries`), the map's live DataBC layer. Same engine as
   above, geo-flavoured: bbox/centroid validation, `[lon, lat]` invariant, staleness shown on `/map`
