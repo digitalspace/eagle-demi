@@ -202,6 +202,49 @@ test('redactForAccess', async (t) => {
   });
 });
 
+test('sources.nrpti publishes only while ENRICHMENT_SOURCES names it', async (t) => {
+  const row = storedRow({ sources: { wildfire: { fires: 2 }, nrpti: { recordCounts: { order: 3 } } } });
+  t.after(() => { config.enrichmentSources = ['wildfire']; });
+
+  await t.test('dropped when the list names wildfire only', () => {
+    config.enrichmentSources = ['wildfire'];
+    assert.deepStrictEqual(redactForAccess('projects', row, { level: 4 }).sources, { wildfire: { fires: 2 } });
+  });
+
+  await t.test('kept when the list names nrpti', () => {
+    config.enrichmentSources = ['wildfire', 'nrpti'];
+    assert.deepStrictEqual(redactForAccess('projects', row, { level: 4 }).sources.nrpti, { recordCounts: { order: 3 } });
+  });
+});
+
+test('NRPTI rows', async (t) => {
+  const source = { system: 'nrpti', upstream: 'bcogc', id: 'n1', updatedAt: '2026-11-01T00:00:00.000Z' };
+  const record = {
+    id: 'nrpti-n1', projectId: '207', kind: 'order', title: 'Order 12', issuedTo: 'Pat Person',
+    source, read: ['public', 'staff', 'sysadmin']
+  };
+  const mine = { id: 'g1:207', projectId: '207', mineId: 'g1', name: 'Coal Mountain Mine', source, read: ['public'] };
+
+  await t.test('an anonymous regulatory record holds no recipient, upstream ref or ACL', () => {
+    const out = redactForAccess('regulatoryRecords', record, {});
+    assert.strictEqual(out.title, 'Order 12');
+    assert.strictEqual('issuedTo' in out, false);
+    assert.strictEqual('source' in out, false);
+    assert.strictEqual('read' in out, false);
+  });
+
+  await t.test('staff see the recipient', () => {
+    assert.strictEqual(redactForAccess('regulatoryRecords', record, { level: 2 }).issuedTo, 'Pat Person');
+  });
+
+  await t.test('an anonymous mine holds no upstream ref or ACL', () => {
+    const out = redactForAccess('mines', mine, {});
+    assert.strictEqual(out.name, 'Coal Mountain Mine');
+    assert.strictEqual('source' in out, false);
+    assert.strictEqual('read' in out, false);
+  });
+});
+
 test('effectiveVis and visible', async (t) => {
   await t.test('visible is a plain level comparison', () => {
     assert.strictEqual(visible(4, 4), true);
