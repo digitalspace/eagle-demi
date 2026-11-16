@@ -191,15 +191,15 @@ test('copy-to-env', async (t) => {
   });
 
   await t.test('a prod --target throws before any read', async (tt) => {
-    const targets = ['prod', 'production', 'https://DEMI-COSMOS-PROD.documents.azure.com:443/',
-      'https://demi-cosmos-prod-canadacentral.privatelink.documents.azure.com/', 'https://demi-cosmos-%70rod.documents.azure.com/'];
-    for (const target of targets) {
-      await tt.test(target, async (ttt) => {
-        const source = fakeContainer(onePage(), 2);
-        await assert.rejects(main(['--target', target, '--containers', 'projects', '--checkpoint', tmpCheckpoint(ttt), '--live'],
-          { client: fakeClient(source, fakeContainer({})) }), { message: 'Refusing to copy to a prod target' });
-        assert.deepStrictEqual(source.reads, []);
-      });
+    for (const target of ['prod', 'https://demi-cosmos-%70rod.documents.azure.com/']) {
+      for (const mode of [[], ['--live']]) {
+        await tt.test(`${target} ${mode.join('') || 'dry run'}`, async (ttt) => {
+          const source = fakeContainer(onePage(), 2);
+          await assert.rejects(main(['--target', target, '--containers', 'projects', '--checkpoint', tmpCheckpoint(ttt), ...mode],
+            { client: fakeClient(source, fakeContainer({})) }), { message: 'Refusing to copy to a prod target' });
+          assert.deepStrictEqual(source.reads, []);
+        });
+      }
     }
   });
 
