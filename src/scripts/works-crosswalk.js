@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const { parseArgs } = require('util');
+const { checkStorageAccount, uploadSealed } = require('./works-import-upload');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
@@ -287,7 +288,7 @@ function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha
 
 const OPTIONS = Object.fromEntries([
   'env', 'extract', 'expect-extract-sha256', 'manual', 'expect-manual-sha256', 'devbox-key', 'operator-key',
-  'expect-operator-fingerprint', 'out-dir'
+  'expect-operator-fingerprint', 'out-dir', 'storage-account'
 ].map(name => [name, { type: 'string' }]));
 
 /** The environment named by the Cosmos host the rows come from; demi-run binds only COSMOS_ENDPOINT. */
@@ -309,6 +310,7 @@ function optionsOf(argv) {
   if (!ENVS.includes(values.env)) refuse(`--env must be one of ${ENVS.join(', ')}`);
   // --env picks the keys and the signed statement; the rows come from the account COSMOS_ENDPOINT names.
   if (values.env !== cosmosEnvironment()) refuse(`--env ${values.env} does not match the COSMOS_ENDPOINT account`);
+  checkStorageAccount(values['storage-account'], values.env, refuse);
   return values;
 }
 
@@ -326,8 +328,8 @@ async function liveRows() {
   return (await projectsRepository.listVisible(systemAccess(), {})).items;
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {write, listRows} */
-async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows } = {}) {
+/** Resolves the exit code. @param {object} [deps] test seam {write, listRows, upload} */
+async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows, upload = uploadSealed } = {}) {
   const o = optionsOf(argv);
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
   const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint']);
@@ -344,6 +346,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   const { name: blob, sha256 } = writeSealed(o['out-dir'], csv, {
     purpose: PURPOSE, env: o.env, recipient, signingKey: keys.ed25519
   });
+  await upload(o['storage-account'], o['out-dir'], blob);
   STATES.forEach(state => write(`${state}=${result.counts[state]}`));
   write(`twinsBeside=${result.twinsBeside}`);
   write(`crosswalkCsvSha256=${sha256}`);

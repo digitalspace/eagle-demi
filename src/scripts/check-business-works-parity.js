@@ -17,13 +17,14 @@ const {
   devboxKeysFromPem, openExtract, operatorRecipientOf, readCapped, writeSealed
 } = require('../utils/import-envelope');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
+const { checkStorageAccount, uploadSealed } = require('./works-import-upload');
 const { logger } = require('../utils/logger');
 
 const ENV = 'test';
 // `extract.js open --purpose works-parity` reads it back.
 const REPORT_PURPOSE = 'works-parity';
 const OPTIONS = ['extract', 'expect-extract-sha256', 'crosswalk', 'expect-manual-sha256', 'devbox-key', 'operator-key',
-  'expect-operator-fingerprint', 'out-dir'];
+  'expect-operator-fingerprint', 'storage-account', 'out-dir'];
 const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 4 * 1024 * 1024, key: 64 * 1024 };
 
 
@@ -44,6 +45,7 @@ function optionsOf(argv, endpoint = process.env.COSMOS_ENDPOINT) {
   const missing = OPTIONS.filter(name => !parsed.values[name]);
   if (missing.length) refuse(`missing --${missing.join(', --')}`);
   if (!fs.statSync(parsed.values['out-dir'], { throwIfNoEntry: false })?.isDirectory()) refuse('--out-dir must be a directory');
+  checkStorageAccount(parsed.values['storage-account'], ENV, refuse);
   return parsed.values;
 }
 
@@ -97,7 +99,7 @@ async function liveState(crosswalk) {
   };
 }
 
-/** Resolves 1 on a failing count, else 0; throws on a refusal. @param {object} [deps] test seam {state, write, endpoint, now} */
+/** Resolves 1 on a failing count, else 0; throws on a refusal. @param {object} [deps] test seam {state, write, endpoint, now, upload} */
 async function run(argv, deps = {}) {
   if (deps.endpoint && !deps.state) refuse('a test endpoint needs a test state');
   const write = deps.write || (line => process.stdout.write(`${line}\n`));
@@ -107,6 +109,7 @@ async function run(argv, deps = {}) {
   const at = (deps.now || new Date()).toISOString();
   const { counts, items } = parityOf({ extract, crosswalk, skipped, ...state, at });
   const { blob, sha256 } = writeReport({ kind: REPORT_PURPOSE, extractSha256, at, counts, items }, { keys, recipient, outDir: o['out-dir'] });
+  await (deps.upload || uploadSealed)(o['storage-account'], o['out-dir'], blob);
   COUNTS.forEach(name => write(`${name}=${counts[name]}`));
   write(`reportSha256=${sha256}`);
   write(`blob=${blob}`);

@@ -12,7 +12,7 @@ const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const { keptFrom } = require('../../src/repositories/works');
 const { devboxKeysFromPem, fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
 const { COLUMNS } = require('../../src/scripts/works-crosswalk');
-const { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, register, amendment, trackWork } = require('./works-import-fakes');
+const { CATALOG, PHASES, PROJECT, NUMBER, accountOf, fakeLists, register, amendment, trackWork, uploadRecorder } = require('./works-import-fakes');
 
 const ENV = 'test';
 const T0 = Date.parse('2026-11-13T18:00:00Z');
@@ -111,16 +111,18 @@ function inputs({ records = { projects: [register], amendments: [amendment(1, '2
     '--expect-crosswalk-sha256', crosswalkSha256, '--expect-manual-sha256', manualSha256,
     '--devbox-key', keyFile(), '--expect-devbox-fingerprint', keys.fingerprint,
     '--operator-key', file('operator.pub.pem', pemOf(operator.publicKey, 'spki')),
-    '--expect-operator-fingerprint', fingerprintOf({ rsa: operator.publicKey }), '--out-dir', outDir
+    '--expect-operator-fingerprint', fingerprintOf({ rsa: operator.publicKey }), '--out-dir', outDir,
+    '--storage-account', accountOf(ENV)
   ];
   return { argv, outDir, dir };
 }
 
 async function load(argv, demi = fakeDemi(), at = T0) {
   const lines = [];
-  await run(argv, { write: line => lines.push(line), demi, now: () => at });
+  const { uploads, upload } = uploadRecorder();
+  await run(argv, { write: line => lines.push(line), demi, now: () => at, upload });
   const value = key => (lines.find(line => line.startsWith(`${key}=`)) || '').slice(key.length + 1);
-  return { lines, value, demi };
+  return { lines, value, demi, uploads };
 }
 
 /** The sealed dry-run report, opened as the operator opens it. */

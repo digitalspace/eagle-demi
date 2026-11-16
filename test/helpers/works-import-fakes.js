@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const MAP = require('../../src/data/works-catalog-map.json');
 const PHASE_MAP = require('../../src/data/phase-catalog-map.json');
@@ -58,4 +60,17 @@ function fakeLists(t) {
   return { get: (id, kind) => items.get(keyOf(id, kind)), all: () => [...items.values()], set: put };
 }
 
-module.exports = { CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork };
+/** A made-up demifc account name for `env`. */
+const accountOf = env => `demifc${env}abcdefgh12345`;
+
+/** An `upload` seam that records each sealed file it is given: account, name and bytes. */
+function uploadRecorder() {
+  const uploads = [];
+  const upload = async (account, dir, name) => { uploads.push({ account, name, bytes: fs.readFileSync(path.join(dir, name)) }); };
+  return { uploads, upload };
+}
+
+/** An `upload` seam whose storage call is refused. */
+const failingUpload = async () => { throw new Error('upload refused'); };
+
+module.exports = { accountOf, failingUpload, uploadRecorder, CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork };

@@ -8,6 +8,7 @@ const path = require('path');
 const { parseArgs } = require('util');
 const cosmos = require('../db/cosmos-nosql');
 const { COSMOS_HOST, readCrosswalk } = require('./works-crosswalk');
+const { checkStorageAccount } = require('./works-import-upload');
 const {
   MAX_BACKUP_BYTES, MAX_KEY_BYTES, devboxKeysFromPem, openExtract, operatorRecipientOf, readCapped
 } = require('../utils/import-envelope');
@@ -16,13 +17,13 @@ const ENV = 'test';
 const TEST_DATABASE = 'demi';
 const MAX_BYTES = { extract: 64 * 1024 * 1024, crosswalk: 16 * 1024 * 1024, backup: MAX_BACKUP_BYTES, key: MAX_KEY_BYTES };
 const INPUTS = ['extract', 'expect-sha256', 'crosswalk', 'expect-crosswalk-sha256', 'expect-manual-sha256', 'devbox-key',
-  'expect-devbox-fingerprint', 'operator-key', 'expect-operator-fingerprint', 'out-dir'];
+  'expect-devbox-fingerprint', 'operator-key', 'expect-operator-fingerprint', 'out-dir', 'storage-account'];
 const LIVE = ['operator', 'run-ref', 'signoff-ref', 'expect-plan-sha256'];
 const OPTIONS = { ...Object.fromEntries([...INPUTS, ...LIVE].map(name => [name, { type: 'string' }])), live: { type: 'boolean' }, help: { type: 'boolean' } };
 const HELP = [
   'Usage: load-business-works.js --extract <sealed> --expect-sha256 <hex> --crosswalk <sealed> --expect-crosswalk-sha256 <hex>',
   '  --expect-manual-sha256 <hex> --devbox-key <pem> --expect-devbox-fingerprint <hex> --operator-key <pem>',
-  '  --expect-operator-fingerprint <hex> --out-dir <dir>',
+  '  --expect-operator-fingerprint <hex> --out-dir <dir> --storage-account <API storage account>',
   '  [--live --operator <upn> --run-ref <id> --signoff-ref <id> --expect-plan-sha256 <hex>]',
   'Dry run by default; --live writes. Runs only where COSMOS_ENDPOINT is https://demi-cosmos-test and the database is demi.',
   'Before --live, export WORKS_READ and WORKS_READ_SOURCES with the API\'s values: the devbox shell has no app settings,',
@@ -68,6 +69,7 @@ function optionsOf(argv) {
   if (values.help) return values;
   const missing = [...INPUTS, ...(values.live ? LIVE : [])].filter(name => !values[name]);
   if (missing.length) refuse(`missing --${missing.join(', --')}`);
+  checkStorageAccount(values['storage-account'], ENV, refuse);
   return values;
 }
 

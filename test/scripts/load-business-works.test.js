@@ -6,16 +6,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { liveDemi } = require('../../src/scripts/load-business-works');
+const { liveDemi, run } = require('../../src/scripts/load-business-works');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { KINDS } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const projects = require('../../src/repositories/projects');
 const { deriveInputs } = require('../../src/domain/works-derive');
 const { logger } = require('../../src/utils/logger');
-const { fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
+const { accountOf, failingUpload, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
 const {
-  PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
+  ENV, PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
 } = require('../helpers/works-import-loader');
 
 test('dry run twice on unchanged input gives the same planSha256', async () => {
@@ -89,8 +89,9 @@ test('refuses the prod Cosmos host in live mode', async (t) => {
 test('no plaintext file on the devbox: the dry run writes one sealed 0600 report and nothing else', async () => {
   const { argv, outDir, dir } = inputs();
   const before = fs.readdirSync(dir).sort();
-  const { value } = await load(argv);
+  const { value, uploads } = await load(argv);
   assert.deepEqual(fs.readdirSync(outDir), [value('blob')]);
+  assert.deepEqual(uploads.map(u => [u.account, u.name]), [[accountOf(ENV), value('blob')]]);
   assert.match(value('blob'), /^[0-9a-f-]{36}\.sealed\.json$/);
   assert.equal(fs.statSync(path.join(outDir, value('blob'))).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(dir).sort(), before);
@@ -129,6 +130,15 @@ test('a Track amendment decided before B with no matching loaded sheet work is l
   const [shown] = report.lists.trackShownNoSheetMatch;
   assert.equal(shown.workId, 'track-45');
   assert.equal(shown.nearest.gap, 3014);
+});
+
+test('a dry run fails with the upload error when the report upload fails', async () => {
+  await assert.rejects(run(inputs().argv, { write: () => {}, demi: fakeDemi(), upload: failingUpload }), /^Error: upload refused$/);
+});
+
+test('a --storage-account of another environment refuses', async () => {
+  const argv = inputs().argv.map(arg => (arg === accountOf(ENV) ? accountOf('prod') : arg));
+  await assert.rejects(load(argv), /--storage-account must be the demifctest API storage account/);
 });
 
 test('live refuses without --signoff-ref', async () => {

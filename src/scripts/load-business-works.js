@@ -18,6 +18,7 @@ const { countLines } = require('./works-import-lists');
 const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
 const { holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
+const { uploadSealed } = require('./works-import-upload');
 const batches = require('./works-import-batch');
 const { requireDeriveEnv } = require('./works-rollback-steps');
 const { logger } = require('../utils/logger');
@@ -142,13 +143,14 @@ async function releaseQuietly(lease) {
 
 /** The plan, the sealed backup and the pending header, all under the lock; without a header the lock is freed. */
 async function startBatch(o, ctx, batchId, lease) {
-  const { demi, inputs, env, runAt } = ctx;
+  const { demi, inputs, env, runAt, upload } = ctx;
   let batch = null;
   try {
     const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
     if (plan.planSha256 !== o['expect-plan-sha256'].toLowerCase()) refuse('planSha256 does not match --expect-plan-sha256; nothing was written');
     const sealed = { purpose: 'works-backup', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 };
     const backup = writeSealed(o['out-dir'], backupBody(plan, stored, batchId), sealed);
+    await upload(o['storage-account'], o['out-dir'], backup.name);
     batch = await batches.createBatch(batchId, {
       operator: o.operator, runRef: o['run-ref'], signoffRef: o['signoff-ref'], signoffRefs: inputs.opened.signoffRefs ?? null,
       inputSha256: inputs.opened.sha256, crosswalkSha256: inputs.crosswalk.sha256, planSha256: plan.planSha256,
@@ -199,12 +201,13 @@ async function live(o, ctx) {
   write(`derived=${touched.length}`);
 }
 
-async function dryRun(o, { demi, inputs, env, runAt, write }) {
+async function dryRun(o, { demi, inputs, env, runAt, write, upload }) {
   const batchId = crypto.randomUUID();
   const { plan, stored } = await planFor(demi, inputs, { batchId, batchAt: runAt });
   backupBody(plan, stored, batchId);
   const body = Buffer.from(JSON.stringify({ planSha256: plan.planSha256, report: plan.report, lists: plan.lists }));
   const report = writeSealed(o['out-dir'], body, { purpose: 'works-report', env, recipient: inputs.recipient, signingKey: inputs.keys.ed25519 });
+  await upload(o['storage-account'], o['out-dir'], report.name);
   countLines(plan).forEach(write);
   write(`inputSha256=${inputs.opened.sha256}`);
   write(`crosswalkSha256=${inputs.crosswalk.sha256}`);
@@ -213,8 +216,8 @@ async function dryRun(o, { demi, inputs, env, runAt, write }) {
   write(`blob=${report.name}`);
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {write, demi, now} */
-async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), now = Date.now } = {}) {
+/** Resolves the exit code. @param {object} [deps] test seam {write, demi, now, upload} */
+async function run(argv, { write = line => process.stdout.write(`${line}\n`), demi = liveDemi(), now = Date.now, upload = uploadSealed } = {}) {
   const o = optionsOf(argv);
   if (o.help) {
     HELP.forEach(write);
@@ -223,7 +226,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), de
   const env = testEnvironment();
   if (o.live) requireDeriveEnv();
   checkOutDir(o['out-dir']);
-  const ctx = { demi, inputs: openInputs(o, env), env, now, runAt: new Date(now()).toISOString(), write };
+  const ctx = { demi, inputs: openInputs(o, env), env, now, runAt: new Date(now()).toISOString(), write, upload };
   if (o.live) await live(o, ctx);
   else await dryRun(o, ctx);
   return 0;
