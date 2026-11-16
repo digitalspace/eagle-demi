@@ -98,6 +98,16 @@ test('GET /projects/:id/mines with the Eagle id lists the same rows as the DEMI 
   assert.deepStrictEqual(byDemiId.body.map(row => row.name), ['Red Chris']);
 });
 
+test('GET /projects/:id/mines is 400 for an unknown parameter and lists nothing', async (t) => {
+  const { listedFor } = stubStore(t);
+
+  const res = await get('/projects/P/mines?pageSze=500');
+
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(res.body.error, 'unknown parameter: pageSze');
+  assert.deepStrictEqual(listedFor, []);
+});
+
 test('GET /projects/:id/regulatory-records anonymous leaves out issuedTo, source and read', async (t) => {
   stubStore(t);
 

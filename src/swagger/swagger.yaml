@@ -1694,7 +1694,7 @@ paths:
                 items:
                   type: object
         '400':
-          description: An anonymous caller asked for more than 100 rows.
+          description: An unknown parameter, or an anonymous caller asked for more than 100 rows.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
@@ -1728,7 +1728,7 @@ paths:
                 items:
                   type: object
         '400':
-          description: An anonymous caller asked for more than 100 rows.
+          description: An unknown parameter, or an anonymous caller asked for more than 100 rows.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':

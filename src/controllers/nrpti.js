@@ -21,7 +21,10 @@ function listForProject(entity, repository) {
 
       const access = resolveAccess(req);
       if (access.authenticated) res.setHeader('cache-control', NO_STORE);
-      const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
+      const { pageSize: rawPageSize, continuationToken: token, ...rest } = req.query || {};
+      const unknown = Object.keys(rest)[0];
+      if (unknown) return res.status(400).json({ error: `unknown parameter: ${unknown}` });
+      const { pageSize, error } = pageSizeFor(access, rawPageSize);
       if (error) return res.status(400).json({ error });
 
       // Same id rule as GET /projects/:id, so a hex Eagle id lists the rows of the project it names.
@@ -31,7 +34,7 @@ function listForProject(entity, repository) {
       if (!project) return res.status(404).json({ error: 'Project not found' });
 
       const { items, continuationToken } = await repository.listByProject(access, project.id,
-        { pageSize, continuationToken: req.query.continuationToken });
+        { pageSize, continuationToken: token });
       if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
       return res.json(redactAllForAccess(entity, items, access));
     } catch (err) {
