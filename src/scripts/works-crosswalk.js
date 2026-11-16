@@ -274,9 +274,8 @@ function cellsOf(line) {
 }
 
 /**
- * Opens a crosswalk the operator sealed to the devbox, verifies the devbox signature over
- * {purpose: 'crosswalk', env, sha256} and the input hashes in its header. Returns its exact and manual rows, and
- * `skipped`, `{state, targetId}` by register number of each skipped row that has one.
+ * Opens a devbox-signed crosswalk and checks its header hashes. Returns the exact and manual rows, and `skipped`,
+ * `{state, targetId}` by register number of each skipped row that has one.
  */
 function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha256 }) {
   const opened = openEnvelope(sealed, { purpose: PURPOSE, env, keyFingerprint: keys.fingerprint, privateKey: keys.rsa });
