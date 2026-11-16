@@ -7,6 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const ExcelJS = require('exceljs');
+// The zip library exceljs reads and writes workbooks with.
+const JSZip = require(require.resolve('jszip', { paths: [require.resolve('exceljs')] }));
 const { readFolder, readInput } = require('../../scripts/works-import/cells');
 const { fingerprintOf, openEnvelope, sealEnvelope, sign, sha256Hex } = require('../../src/utils/import-envelope');
 const {
@@ -75,6 +77,27 @@ test('a block whose band label moved is refused before any row is read', async (
   workbook.getWorksheet('Suspensions').getCell('E3').value = 'Suspension 02';
   await workbook.xlsx.writeFile(file);
   await assert.rejects(readFolder(dir), /column E is not "Suspension 01" \/ "No\."/);
+});
+
+test('a filtered table and hidden rows leave every read value as it was', async () => {
+  const dir = copyOfSheets();
+  const file = path.join(dir, '03 - Project Suspension Data.xlsx');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(file);
+  workbook.getWorksheet('Suspensions').getRow(5).hidden = true;
+  workbook.getWorksheet('Lookups').addTable({
+    name: 'Filtered', ref: 'D1', columns: [{ name: 'Year', filterButton: true }], rows: [[2024], [2025]]
+  });
+  const zip = await JSZip.loadAsync(await workbook.xlsx.writeBuffer());
+  const table = Object.keys(zip.files).find(name => /^xl\/tables\/table\d+\.xml$/.test(name));
+  const xml = await zip.file(table).async('string');
+  const groups = [2025, 2024].map(year => `<dateGroupItem year="${year}" dateTimeGrouping="year"/>`).join('');
+  const filtered = xml.replace(/<filterColumn colId="0"[^>]*\/>/,
+    `<filterColumn colId="0"><filters>${groups}</filters></filterColumn>`);
+  assert.notEqual(filtered, xml);
+  zip.file(table, filtered);
+  fs.writeFileSync(file, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  assert.deepEqual(await readFolder(dir), await readFolder(sheetsDir));
 });
 
 test('two workbooks matching one name, a symbolic link and an oversized file are refused', async () => {
