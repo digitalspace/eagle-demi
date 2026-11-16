@@ -43,6 +43,10 @@ const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
   amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }]
 } });
 const sheetDoc = fields => ({ projectId: '7002', source: 'sheet', owner: 'sheet', _etag: '"s"', ...fields });
+const holds103 = (demi, externalIds) => {
+  demi.externalIdHolders = async (system, value) => (system === 'eao-register' && value === '103' ? ['7003'] : []);
+  demi.otherRows.set('7003', { id: '7003', externalIds });
+};
 
 test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or a closed sheet entry holds does not refuse', async () => {
   const { argv, outDir } = skippedInputs();
@@ -53,17 +57,11 @@ test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or
   demi.otherRows.set('7002', { id: '7002',
     externalIds: [{ system: 'eao-register', value: '102', source: 'demi' }, { system: 'eao-register', value: '999', source: 'sheet' }],
     staffAssignments: [{ id: 'a1', source: 'sheet', effectiveTo: '2025-01-01' }, { id: 'a2', source: 'track', effectiveTo: null }] });
-  const { works: worksOf } = demi;
-  const read = [];
-  demi.works = async (id) => {
-    read.push(id);
-    return worksOf(id);
-  };
+  holds103(demi, [{ system: 'eao-register', value: '103', source: 'demi' }]);
   const { value } = await load(argv, demi);
   const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
   assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(),
     ['amendments:unfolded', 'projects:badId', 'projects:skipped', 'projects:unfolded']);
-  assert.ok(!read.includes(''));
 });
 
 const refusedHolding = (seed) => {
@@ -80,6 +78,7 @@ test('refuses when a project the crosswalk skips still holds a sheet work or an 
 test("refuses when a skipped project's row holds the sheet's register id for that number or an open sheet staff entry", async () => {
   await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', externalIds: [{ system: 'eao-register', value: '102', source: 'sheet' }] }));
   await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', staffNotes: [{ id: 'n1', source: 'sheet', text: 'note' }] }));
+  await refusedHolding(demi => holds103(demi, [{ system: 'eao-register', value: '103', source: 'sheet' }]));
 });
 
 test('refuses an unknown Cosmos host, prod included, in the dry run', async (t) => {

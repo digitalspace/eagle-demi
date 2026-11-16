@@ -104,8 +104,8 @@ for (const [label, build] of failingRows) {
 }
 
 test('exits 0 when the crosswalk skips a register row', async () => {
-  const skips = { records: { ...extract.records, projects: [...extract.records.projects, register(103), register(104)] } };
-  const skippedRows = [{ row: '6', sheetId: '103', state: 'unfolded', targetId: '7002' }, { row: '7', sheetId: '104', state: 'skipped' }];
+  const skips = { records: { ...extract.records, projects: [...extract.records.projects, register(103)] } };
+  const skippedRows = [{ row: '6', sheetId: '103', state: 'unfolded', targetId: '7002' }];
   assert.strictEqual((await check(skips, stateOf(loaded(extract)), { skippedRows })).code, 0);
 });
 

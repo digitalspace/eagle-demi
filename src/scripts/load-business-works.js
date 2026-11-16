@@ -16,7 +16,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
 const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
-const { holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
+const { REGISTER_SYSTEM, holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const { uploadSealed } = require('./works-import-upload');
 const batches = require('./works-import-batch');
@@ -54,18 +54,22 @@ function liveDemi() {
 }
 
 /**
- * A report entry for each skipped row whose project still holds sheet works, an active sheet marker or sheet entries on
- * its row. The load never reads that project, so it would leave them in place. A row the manual file skips names no project.
+ * A report entry per skipped project still holding sheet works, an active sheet marker or sheet row entries, which the load
+ * would leave in place. A `skipped` row names no project, so each holder of its register number is checked.
  */
 async function skippedHolding(demi, skipped) {
   const entries = [];
   const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
+  const holds = async (projectId, number) => {
+    const marker = await demi.marker(projectId);
+    return (await demi.works(projectId)).some(isSheet) || (isSheet(marker) && marker.active === true) ||
+      holdsSheetEntries(await demi.project(projectId), number);
+  };
   for (const [number, { state, targetId }] of skipped) {
-    if (!targetId) continue;
-    const marker = await demi.marker(targetId);
-    const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true) ||
-      holdsSheetEntries(await demi.project(targetId), number);
-    if (held) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId: targetId, state });
+    const projectIds = state === 'skipped' ? await demi.externalIdHolders(REGISTER_SYSTEM, String(number)) : [targetId];
+    for (const projectId of projectIds) {
+      if (await holds(projectId, number)) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId, state });
+    }
   }
   return entries;
 }

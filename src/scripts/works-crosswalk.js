@@ -138,8 +138,8 @@ function sheetProjectsOf(extract) {
 function checkManualIds(manual, sheet, numbersReal) {
   const hint = numbersReal ? '' : '; this extract holds surrogate ids, so key the file by surrogate, translated with ' +
     'the surrogate map on the operator machine, and never put a real register number on the devbox';
-  const entries = [...[...manual.matches].map(([sheetId, { index }]) => [sheetId, `matches[${index}]`]),
-    ...[...manual.skip].map(([sheetId, index]) => [sheetId, `skip[${index}]`])];
+  const entries = [...manual.matches].map(([sheetId, { index }]) => [sheetId, `matches[${index}]`])
+    .concat([...manual.skip].map(([sheetId, index]) => [sheetId, `skip[${index}]`]));
   for (const [sheetId, entry] of entries) {
     if (!numbersReal && (sheetId < SURROGATE_RANGE[0] || sheetId > SURROGATE_RANGE[1])) {
       refuse(`manual-match ${entry} is not a surrogate id${hint}`);
