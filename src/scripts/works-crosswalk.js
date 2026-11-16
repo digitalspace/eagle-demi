@@ -17,10 +17,10 @@ const { logger } = require('../utils/logger');
 
 const ENVS = ['test', 'prod'];
 const PURPOSE = 'crosswalk';
-const STATES = ['exact', 'manual', 'ambiguous', 'unmatched', 'unlinked', 'unfolded', 'collision', 'badId', 'unnamedRow'];
+const STATES = ['exact', 'manual', 'skipped', 'ambiguous', 'unmatched', 'unlinked', 'unfolded', 'collision', 'badId', 'unnamedRow'];
 const PASSING = new Set(['exact', 'manual']);
 // The load writes nothing for these rows, so they do not fail the crosswalk.
-const SKIPPED = new Set(['badId', 'unfolded']);
+const SKIPPED = new Set(['skipped', 'badId', 'unfolded']);
 const COLUMNS = ['row', 'sheetId', 'sheetName', 'state', 'via', 'targetId', 'trackName', 'eagleName', 'eagleId', 'targetEagleId'];
 const HEADER = ['extractSha256', 'manualSha256'];
 const REGISTER = 'projects';
@@ -63,7 +63,7 @@ function addTo(map, key, value) {
 
 const unionOf = (keys, map) => new Set([...keys].flatMap(key => [...(map.get(key) || [])]));
 
-/** `{matches: [{sheetId, trackId}], foldPairs: ['trackId:eagleId']}`; errors name the entry index only. */
+/** `{matches: [{sheetId, trackId}], foldPairs: ['trackId:eagleId'], skip?: [sheetId]}`; errors name the entry index only. */
 function manualOf(plaintext) {
   let doc;
   try {
@@ -73,16 +73,24 @@ function manualOf(plaintext) {
   }
   const keysAre = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value) &&
     Object.keys(value).sort().join() === [...keys].sort().join();
-  if (!keysAre(doc, ['matches', 'foldPairs'])) refuse('manual-match file must hold only matches and foldPairs');
-  const listed = Array.isArray(doc.matches) && Array.isArray(doc.foldPairs) &&
-    doc.matches.length <= MAX_MANUAL_ENTRIES && doc.foldPairs.length <= MAX_MANUAL_ENTRIES;
-  if (!listed) refuse(`manual-match matches and foldPairs must be arrays of at most ${MAX_MANUAL_ENTRIES}`);
+  const optional = Object.hasOwn(Object(doc), 'skip') ? ['skip'] : [];
+  if (!keysAre(doc, ['matches', 'foldPairs', ...optional])) refuse('manual-match file must hold only matches, foldPairs and skip');
+  const skipIds = optional.length ? doc.skip : [];
+  if (![doc.matches, doc.foldPairs, skipIds].every(list => Array.isArray(list) && list.length <= MAX_MANUAL_ENTRIES)) {
+    refuse(`manual-match matches, foldPairs and skip must be arrays of at most ${MAX_MANUAL_ENTRIES}`);
+  }
   const matches = new Map();
   doc.matches.forEach((entry, index) => {
     const valid = keysAre(entry, ['sheetId', 'trackId']) && sheetIdOf(entry.sheetId) &&
       typeof entry.trackId === 'string' && TRACK_ID.test(entry.trackId) && !matches.has(entry.sheetId);
     if (!valid) refuse(`manual-match matches[${index}] is not a unique {sheetId, trackId}`);
     matches.set(entry.sheetId, { trackId: entry.trackId, index });
+  });
+  const skip = new Map();
+  skipIds.forEach((sheetId, index) => {
+    if (!sheetIdOf(sheetId) || skip.has(sheetId)) refuse(`manual-match skip[${index}] is not a unique sheet id`);
+    if (matches.has(sheetId)) refuse(`manual-match skip[${index}] is also in matches`);
+    skip.set(sheetId, index);
   });
   const foldEagleOf = new Map();
   const foldTrackOf = new Map();
@@ -94,7 +102,7 @@ function manualOf(plaintext) {
     foldTrackOf.set(eagleId, trackId);
     foldIndex.set(trackId, i);
   });
-  return { matches, foldEagleOf, foldTrackOf, foldIndex };
+  return { matches, skip, foldEagleOf, foldTrackOf, foldIndex };
 }
 
 /** Register rows grouped by sheet id with every alias name, plus rows the extractor dropped or whose id is unusable. */
@@ -130,11 +138,13 @@ function sheetProjectsOf(extract) {
 function checkManualIds(manual, sheet, numbersReal) {
   const hint = numbersReal ? '' : '; this extract holds surrogate ids, so key the file by surrogate, translated with ' +
     'the surrogate map on the operator machine, and never put a real register number on the devbox';
-  for (const [sheetId, { index }] of manual.matches) {
+  const entries = [...[...manual.matches].map(([sheetId, { index }]) => [sheetId, `matches[${index}]`]),
+    ...[...manual.skip].map(([sheetId, index]) => [sheetId, `skip[${index}]`])];
+  for (const [sheetId, entry] of entries) {
     if (!numbersReal && (sheetId < SURROGATE_RANGE[0] || sheetId > SURROGATE_RANGE[1])) {
-      refuse(`manual-match matches[${index}] is not a surrogate id${hint}`);
+      refuse(`manual-match ${entry} is not a surrogate id${hint}`);
     }
-    if (!sheet.byId.has(sheetId)) refuse(`manual-match matches[${index}] names a sheet id the register does not hold${hint}`);
+    if (!sheet.byId.has(sheetId)) refuse(`manual-match ${entry} names a sheet id the register does not hold${hint}`);
   }
 }
 
@@ -172,8 +182,9 @@ const single = (ids, via, extra = {}) => (ids.size === 1
   ? { state: 'exact', via, targetId: [...ids][0], ...extra }
   : { state: ids.size ? 'ambiguous' : 'unmatched', via, ...extra });
 
-/** Manual entry, else the Track name, else the Eagle name; a tier with two candidates is ambiguous. */
+/** Skip or manual entry, else the Track name, else the Eagle name; a tier with two candidates is ambiguous. */
 function matchOf(sheetId, names, pool, manual) {
+  if (manual.skip.has(sheetId)) return { state: 'skipped', via: 'skip' };
   if (manual.matches.has(sheetId)) {
     const { trackId } = manual.matches.get(sheetId);
     return pool.byId.has(trackId) ? { state: 'manual', via: 'manual', targetId: trackId } : { state: 'unmatched', via: 'manual' };
@@ -221,7 +232,8 @@ function crosswalkOf(sheet, pool, manual) {
     names.delete('');
     const match = matchOf(sheetId, names, pool, manual);
     const linked = match.targetId ? linkStateOf(match, pool, manual) : match;
-    entries.forEach(entry => rows.push({ ...entry, ...linked, state: entries.length > 1 ? 'collision' : linked.state }));
+    const collides = entries.length > 1 && linked.state !== 'skipped';
+    entries.forEach(entry => rows.push({ ...entry, ...linked, state: collides ? 'collision' : linked.state }));
   }
   const claims = new Map();
   rows.filter(r => r.targetId).forEach(r => addTo(claims, r.targetId, r.sheetId));

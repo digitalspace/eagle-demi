@@ -55,12 +55,13 @@ function liveDemi() {
 
 /**
  * A report entry for each skipped row whose project still holds sheet works, an active sheet marker or sheet entries on
- * its row. The load never reads that project, so it would leave them in place.
+ * its row. The load never reads that project, so it would leave them in place. A row the manual file skips names no project.
  */
 async function skippedHolding(demi, skipped) {
   const entries = [];
   const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
   for (const [number, { state, targetId }] of skipped) {
+    if (!targetId) continue;
     const marker = await demi.marker(targetId);
     const held = (await demi.works(targetId)).some(isSheet) || (isSheet(marker) && marker.active === true) ||
       holdsSheetEntries(await demi.project(targetId), number);

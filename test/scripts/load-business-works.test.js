@@ -37,9 +37,9 @@ test('a sheet number missing from the crosswalk fails the dry run', async () => 
 });
 
 const SKIPPED_ROWS = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },
-  { row: 7, sheetId: '', state: 'badId' }];
+  { row: 7, sheetId: '', state: 'badId' }, { row: 8, sheetId: 103, state: 'skipped' }];
 const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
-  projects: [register, { ...register, id: 102 }, { ...register, id: 0 }],
+  projects: [register, { ...register, id: 102 }, { ...register, id: 0 }, { ...register, id: 103 }],
   amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }]
 } });
 const sheetDoc = fields => ({ projectId: '7002', source: 'sheet', owner: 'sheet', _etag: '"s"', ...fields });
@@ -53,9 +53,17 @@ test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or
   demi.otherRows.set('7002', { id: '7002',
     externalIds: [{ system: 'eao-register', value: '102', source: 'demi' }, { system: 'eao-register', value: '999', source: 'sheet' }],
     staffAssignments: [{ id: 'a1', source: 'sheet', effectiveTo: '2025-01-01' }, { id: 'a2', source: 'track', effectiveTo: null }] });
+  const { works: worksOf } = demi;
+  const read = [];
+  demi.works = async (id) => {
+    read.push(id);
+    return worksOf(id);
+  };
   const { value } = await load(argv, demi);
   const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
-  assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(), ['amendments:unfolded', 'projects:badId', 'projects:unfolded']);
+  assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(),
+    ['amendments:unfolded', 'projects:badId', 'projects:skipped', 'projects:unfolded']);
+  assert.ok(!read.includes(''));
 });
 
 const refusedHolding = (seed) => {
