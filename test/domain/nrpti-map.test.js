@@ -98,6 +98,18 @@ test('NRPTI\'s Unpublished placeholder is not stored as the name a record was is
   assert.strictEqual(row.issuedTo, null);
 });
 
+test('a staff-only flavour description is not used as the summary', () => {
+  const flavours = [{ _schemaName: 'OrderNRCED', read: ['sysadmin'], description: 'Staff-only notes.' }];
+  const { row } = mapRecord(order({ flavours }), 'Order', LINKS, SYNCED_AT);
+  assert.strictEqual(row.summary, null);
+});
+
+test('a staff-only document is left out of the documents list', () => {
+  const documents = [{ fileName: 'Draft', url: 'https://example.invalid/draft.pdf', read: ['sysadmin'] }];
+  const { row } = mapRecord(order({ documents }), 'Order', LINKS, SYNCED_AT);
+  assert.deepStrictEqual(row.documents, []);
+});
+
 test('a mine naming two EPIC projects, one linked, gives one row for that project', () => {
   const { rows } = mapMine(kemess(), LINKS, SYNCED_AT);
   assert.deepStrictEqual(rows.map(r => [r.id, r.projectId, r.eagleId]), [
