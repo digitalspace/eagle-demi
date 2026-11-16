@@ -1445,8 +1445,8 @@ exports.search = async (req, res) => {
             activeWork: row.activeWork ?? null,
             // Derived by the redactor from 'public' in the read ACL.
             isPublished: row.isPublished,
-            // The catalog publishes only `sources.wildfire`; the raw Track and Eagle payloads here
-            // are traceability, not API surface.
+            // The catalog publishes only the enrichment summaries (`sources.wildfire`, `sources.nrpti`);
+            // the raw Track and Eagle payloads here are traceability, not API surface.
             sources: row.sources || {},
             ...staffProjectFields(row)
           };
