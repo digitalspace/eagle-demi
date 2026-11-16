@@ -560,7 +560,7 @@ test('the not-ours search path still creates the shared private link to Cosmos',
 
 // `GET /boundaries` and `GET /db/stats` read `boundaries` unconditionally, so gating it too would
 // leave prod reading a container that does not exist.
-test('deployEnrichment gates the wildfires container and only that one', () => {
+test('deployEnrichment gates the wildfires container but not boundaries', () => {
   const wildfires = cosmosContainer('wildfires');
   assert.ok(wildfires, 'no wildfires container declared in cosmos-nosql.bicep');
   assert.match(wildfires.split('\n')[0], /= if \(deployEnrichment\)/,

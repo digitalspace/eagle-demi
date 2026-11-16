@@ -712,6 +712,29 @@ The step logs one line: `[investment] appended=N closed=M unreadable=K full=F`.
 An unreadable figure leaves the entries as they are, so a renamed Track field closes nothing. A second
 run with no change logs `appended=0 closed=0`. A dry run reports the counts without writing.
 
+### NRPTI sync (test only)
+
+`src/scripts/sync-nrpti.js` copies NRPTI mines and regulatory records onto test projects that carry an EPIC project id. Rows with no matching project are dropped, and no project is created. Link rules, datasets, fields and routes: wiki `Sources-and-Status`.
+
+Set `NRPTI_SYNC_SCHEDULE` to an NCRONTAB expression and the API app registers a `syncNrpti` timer; unset, no timer is registered. Test runs it daily at 10:30 UTC. The timer writes only when `ENRICHMENT_SOURCES` lists `nrpti`, and prod lists no source.
+
+The CLI takes two flags. Without `--live` it fetches, links and counts, and writes nothing. `--clear-only` removes `sources.nrpti` from every project that holds it, whatever `ENRICHMENT_SOURCES` says.
+
+| Command | Effect |
+|---|---|
+| `node src/scripts/sync-nrpti.js` | Dry run |
+| `ENRICHMENT_SOURCES=wildfire,nrpti node src/scripts/sync-nrpti.js --live` | Writes `mines`, `regulatoryRecords` and `sources.nrpti`; without the variable the run writes nothing and reports `skipped:disabled` |
+| `node src/scripts/sync-nrpti.js --clear-only` | Counts projects holding `sources.nrpti` |
+| `node src/scripts/sync-nrpti.js --clear-only --live` | Removes them |
+
+Run on the test devbox, which does not pull the repo for you:
+
+```bash
+scripts/demi-devbox.sh run --env test -- 'git pull --ff-only && yarn install && ENRICHMENT_SOURCES=wildfire,nrpti node src/scripts/sync-nrpti.js --live'
+```
+
+Drop `--live` and the variable for a dry run. The last line of output is the result, for example `nrpti: mode=live result=written linked=<n> projects=<n> stale=<n> cleared=<n>`. `mode` is `dry`, `live` or `clear-only`; `result` is `written`, `dry` or `skipped:disabled`. A failed run prints `nrpti: result=failed error=...` and exits 1.
+
 ### Staff works route
 
 `GET /api/projects/{id}/works-staff` returns a project's works with the contacts, investments and notes

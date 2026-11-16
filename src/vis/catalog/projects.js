@@ -155,13 +155,14 @@ const catalog = {
   pinsPublished: { defaultVis: 2, maxVis: 2 },
   featuredDocuments: { defaultVis: 4, maxVis: 4 },
 
-  // Written by the boundary and wildfire jobs, not by the merge.
+  // Written by the boundary, wildfire and NRPTI jobs, not by the merge.
   regionalDistrict: { defaultVis: 4, maxVis: 4 },
   municipality: { defaultVis: 4, maxVis: 4 },
   electoralDistrict: { defaultVis: 4, maxVis: 4 },
   'sources.wildfire': { defaultVis: 4, maxVis: 4 },
+  'sources.nrpti': { defaultVis: 4, maxVis: 4 },
 
-  // Never public. `sources` is the raw upstream payload; only the dotted child above publishes.
+  // Never public. `sources` is the raw upstream payload; only the dotted children above publish.
   // `vis` does not exist yet — catalogued so a dial map can never leak which fields are restricted.
   read: { defaultVis: 0, maxVis: 0 },
   // The pins ACL. Stored because `pinsPublished` reads it, and withheld like every other ACL.

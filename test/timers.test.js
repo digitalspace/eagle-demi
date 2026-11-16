@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const Module = require('node:module');
 
 const { logger } = require('../src/utils/logger');
 const { loadIndex } = require('./helpers/load-index');
@@ -46,6 +47,14 @@ const TIMERS = [
     failure: { message: '[track-projects-poll] run failed', meta: {} }
   },
   {
+    name: 'syncNrpti',
+    setting: 'NRPTI_SYNC_SCHEDULE',
+    module: '../src/scripts/sync-nrpti',
+    exportsFor: run => ({ run }),
+    args: [{ live: true }],
+    failure: { message: '[nrpti] scheduled sync failed', meta: {} }
+  },
+  {
     name: 'announceUpdates',
     setting: 'ANNOUNCE_UPDATES_SCHEDULE',
     module: '../src/scripts/announce-updates',
@@ -57,12 +66,13 @@ const TIMERS = [
 
 const SCHEDULE = '0 0 9 * * *';
 
-/** Puts `exports` in the require cache in place of `module`, for this test only. */
-function stubModule(t, module, exports) {
-  const file = require.resolve(module);
-  const cached = require.cache[file];
-  require.cache[file] = { id: file, filename: file, loaded: true, exports };
-  t.after(() => { require.cache[file] = cached; });
+/** Answers `require(request)` with `exports`, for this test only. Matched on the request string, not a
+ *  resolved path, so a stand-in works before the real module exists; api/ and test/ sit at one depth. */
+function stubModule(t, request, exports) {
+  const original = Module.prototype.require;
+  t.mock.method(Module.prototype, 'require', function (id) {
+    return id === request ? exports : original.call(this, id);
+  });
 }
 
 const pick = (obj, keys) => Object.fromEntries(keys.map(k => [k, obj[k]]));

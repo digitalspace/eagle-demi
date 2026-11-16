@@ -199,9 +199,9 @@ param intakeCapGBPerMonth int = 5
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
 
-// Declares the container; `enrichmentSources` decides what the API publishes. `boundaries` is
+// Declares the containers; `enrichmentSources` decides what the API publishes. `boundaries` is
 // reference data, declared everywhere; see cosmos-nosql.bicep.
-@description('Declare the Cosmos wildfires container.')
+@description('Declare the Cosmos enrichment containers: wildfires, mines, regulatoryRecords.')
 param deployEnrichment bool = true
 
 // Prod's search service is deployed from azure/ai-search.prod.bicepparam, not here; a re-PUT from
@@ -284,6 +284,9 @@ param syncTeamsSchedule string = ''
 
 @description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty runs it never.')
 param syncProjectsSchedule string = ''
+
+@description('NCRONTAB schedule for the NRPTI sync timer, e.g. `0 30 10 * * *`. Empty runs it never. Test only.')
+param nrptiSyncSchedule string = ''
 
 // Bulk download. The switches default off, so an environment gets the queue and container without
 // the feature running. A .bicepparam sets a cap only to override it.
@@ -789,6 +792,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     announceUpdatesSchedule: announceUpdatesSchedule
     syncTeamsSchedule: syncTeamsSchedule
     syncProjectsSchedule: syncProjectsSchedule
+    nrptiSyncSchedule: nrptiSyncSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
     chunkRestampQueue: chunkRestampQueue
