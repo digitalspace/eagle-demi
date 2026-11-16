@@ -24,7 +24,7 @@ param auditWorkspaceId string = ''
 
 // Never gate `boundaries` on this: GET /boundaries and /db/stats read it everywhere, and a missing
 // container turns both into a 500.
-@description('Declare the Cosmos wildfires container. False leaves the environment without `sources.wildfires`.')
+@description('Declare the enrichment containers: wildfires, mines, regulatoryRecords. False leaves the environment without them.')
 param deployEnrichment bool = true
 
 var accountName = 'demi-cosmos-${environmentName}'
@@ -883,6 +883,76 @@ resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             path: '/_etag/?'
           }
         ]
+      }
+    }
+  }
+}
+
+// NRPTI mines, one row per mine and linked project: the access predicate compares a scalar
+// partition field, so an array of project ids would leak rows across projects.
+resource minesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
+  parent: database
+  name: 'mines'
+  properties: {
+    resource: {
+      id: 'mines'
+      partitionKey: {
+        paths: [
+          '/projectId'
+        ]
+        kind: 'Hash'
+      }
+      defaultTtl: 604800 // 7 days
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// NRPTI compliance records, told apart by `kind`. Each sync re-upserts, so a record NRPTI drops or
+// unlinks expires by TTL, as in mines.
+resource regulatoryRecordsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
+  parent: database
+  name: 'regulatoryRecords'
+  properties: {
+    resource: {
+      id: 'regulatoryRecords'
+      partitionKey: {
+        paths: [
+          '/projectId'
+        ]
+        kind: 'Hash'
+      }
+      defaultTtl: 604800 // 7 days
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/kind/?'
+          }
+          {
+            path: '/issuedAt/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+        ]
+        excludedPaths: noIndex
       }
     }
   }

@@ -265,6 +265,9 @@ param syncTeamsSchedule string = ''
 @description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty registers no timer.')
 param syncProjectsSchedule string = ''
 
+@description('NCRONTAB schedule for the NRPTI sync timer, e.g. `0 30 10 * * *`. Empty registers no timer.')
+param nrptiSyncSchedule string = ''
+
 // Bulk download. Flex drops an app setting deployed as '', so the code reads undefined, not
 // empty: off is the code's default.
 @description('Storage queue the bulk-download worker triggers on. Empty registers no worker, which leaves the feature off.')
@@ -839,6 +842,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SYNC_PROJECTS_SCHEDULE'
           value: syncProjectsSchedule
+        }
+        {
+          name: 'NRPTI_SYNC_SCHEDULE'
+          value: nrptiSyncSchedule
         }
         // api/index.js registers the bulk worker only when set; the host resolves
         // `%BULK_DOWNLOADS_QUEUE%`. Empty is off (Flex drops it, so the code reads undefined).
