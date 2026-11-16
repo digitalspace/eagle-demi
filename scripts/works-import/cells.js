@@ -185,7 +185,9 @@ async function readFolder(dir) {
     const matches = files.filter(f => source.file.test(f));
     if (matches.length !== 1) throw new Error(`${source.key}: expected one workbook, found ${matches.length}`);
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(readInput(dir, matches[0]));
+    // Tables hold only filter state over cells read anyway; exceljs 4.4.0 throws on most table filter kinds.
+    workbook.xlsx._processTableEntry = async () => {};
+    await workbook.xlsx.load(readInput(dir, matches[0]), { ignoreNodes: ['tableParts'] });
     const ws = workbook.getWorksheet(source.tab);
     if (!ws) throw new Error(`${matches[0]}: no tab "${source.tab}"`);
     out.records[source.key] = [];
