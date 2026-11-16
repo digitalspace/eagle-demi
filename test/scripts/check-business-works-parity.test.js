@@ -18,7 +18,7 @@ const commentPeriodsRepository = require('../../src/repositories/comment-periods
 const listsRepository = require('../../src/repositories/lists');
 const phaseCatalog = require('../../src/domain/phase-catalog');
 const { fingerprintOf, openEnvelope, sealEnvelope, sha256Hex, sign, verify } = require('../../src/utils/import-envelope');
-const { accountOf, uploadRecorder } = require('../helpers/works-import-fakes');
+const { accountOf, failingUpload, uploadRecorder } = require('../helpers/works-import-fakes');
 const { CATALOG, PHASES, PROJECT, AT, register, amendment, extractOf, settledAmendment, loaded, stateOf } = require('../helpers/business-works-fixtures');
 
 const ENV = 'test';
@@ -57,7 +57,7 @@ function inputFiles(extract, dir, skippedRows = []) {
   return { extractSha, path: (name) => path.join(dir, name) };
 }
 
-async function check(extract, state, { endpoint = TEST_ENDPOINT, expectExtractSha, operatorFp = OPERATOR_FP, argvOf = argv => argv, skippedRows } = {}) {
+async function check(extract, state, { endpoint = TEST_ENDPOINT, expectExtractSha, operatorFp = OPERATOR_FP, argvOf = argv => argv, skippedRows, failUpload } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'run-'));
   const files = inputFiles(extract, dir, skippedRows);
   const argv = argvOf(['--extract', files.path('extract'), '--expect-extract-sha256', expectExtractSha || files.extractSha,
@@ -66,7 +66,7 @@ async function check(extract, state, { endpoint = TEST_ENDPOINT, expectExtractSh
     '--storage-account', accountOf(ENV), '--out-dir', dir], dir);
   const lines = [];
   const { uploads, upload } = uploadRecorder();
-  const seam = { write: line => lines.push(line), now: new Date(AT), upload };
+  const seam = { write: line => lines.push(line), now: new Date(AT), upload: failUpload ? failingUpload : upload };
   if (state) Object.assign(seam, { endpoint, state: typeof state === 'function' ? state : async () => state });
   const code = await run(argv, seam);
   const value = (name) => lines.find(line => line.startsWith(`${name}=`)).slice(name.length + 1);
@@ -134,6 +134,10 @@ test('--out-dir holds only the inputs and one sealed blob afterwards, uploaded u
   const result = await check(extract, stateOf(loaded(extract)));
   assert.deepStrictEqual(fs.readdirSync(result.dir).sort(), [...INPUTS, result.value('blob')].sort());
   assert.deepStrictEqual(result.uploads.map(u => [u.account, u.name]), [[accountOf(ENV), result.value('blob')]]);
+});
+
+test('the check fails with the upload error when the upload fails', async () => {
+  await assert.rejects(check(extract, stateOf(loaded(extract)), { failUpload: true }), { message: 'upload refused' });
 });
 
 test('a wrong --expect-extract-sha256 refuses before the store is read', async () => {

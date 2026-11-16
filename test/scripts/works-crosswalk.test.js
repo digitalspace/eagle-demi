@@ -12,7 +12,7 @@ const { spawnSync, execFileSync } = require('child_process');
 const { run, readCrosswalk, COLUMNS } = require('../../src/scripts/works-crosswalk');
 const { devboxKeysFromPem, fingerprintOf, sealEnvelope, openEnvelope, sha256Hex, sign } = require('../../src/utils/import-envelope');
 const { logger } = require('../../src/utils/logger');
-const { accountOf, uploadRecorder } = require('../helpers/works-import-fakes');
+const { accountOf, failingUpload, uploadRecorder } = require('../helpers/works-import-fakes');
 
 const ENV = 'test';
 const SCRIPT = path.join(__dirname, '../../src/scripts/works-crosswalk.js');
@@ -319,6 +319,12 @@ test('--env must match the account COSMOS_ENDPOINT names', async (t) => {
   await assert.rejects(crosswalk({ projects, rows: [] }), /--env test does not match the COSMOS_ENDPOINT account/);
   process.env.COSMOS_ENDPOINT = 'https://other-cosmos-test.documents.azure.com:443/';
   await assert.rejects(crosswalk({ projects, rows: [] }), /COSMOS_ENDPOINT names no demi-cosmos-test or demi-cosmos-prod account/);
+});
+
+test('the crosswalk fails with the upload error when the upload fails', async () => {
+  const { argv } = inputs({ projects: [register(191402, 'Romeo Sound', 4)] });
+  await assert.rejects(run(argv, { write: () => {}, listRows: async () => [trackRow('7042', 'Romeo Sound')], upload: failingUpload }),
+    /^Error: upload refused$/);
 });
 
 test('--storage-account must be the demifc account of --env', async () => {

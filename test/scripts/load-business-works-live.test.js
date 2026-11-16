@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { KINDS, LOCK_ID } = require('../../src/scripts/works-import-batch');
-const { accountOf, fakeLists, uploadRecorder } = require('../helpers/works-import-fakes');
+const { accountOf, failingUpload, fakeLists, uploadRecorder } = require('../helpers/works-import-fakes');
 const { run } = require('../../src/scripts/load-business-works');
 const { MAX_BYTES } = require('../../src/scripts/works-import-inputs');
 const { fingerprintOf, openEnvelope } = require('../../src/utils/import-envelope');
@@ -48,8 +48,8 @@ test('a failed backup upload writes no batch header, frees the lock and keeps it
   const store = fakeLists(t);
   const given = inputs();
   const planSha256 = (await load(given.argv)).value('planSha256');
-  const upload = async () => { throw new Error('upload refused'); };
-  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: () => {}, demi: fakeDemi(), now: () => T0, upload }), /^Error: upload refused$/);
+  await assert.rejects(run([...given.argv, ...liveArgs(planSha256)], { write: () => {}, demi: fakeDemi(), now: () => T0, upload: failingUpload }),
+    /^Error: upload refused$/);
   assert.equal(store.all().some(item => item.kind === KINDS.BATCH), false);
   assert.equal(store.get(LOCK_ID, KINDS.LOCK), undefined);
 });

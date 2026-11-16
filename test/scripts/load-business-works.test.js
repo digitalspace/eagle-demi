@@ -6,14 +6,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { liveDemi } = require('../../src/scripts/load-business-works');
+const { liveDemi, run } = require('../../src/scripts/load-business-works');
 const { PRIVATE_KEYS } = require('../../src/repositories/works');
 const { KINDS } = require('../../src/scripts/works-import-batch');
 const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const projects = require('../../src/repositories/projects');
 const { deriveInputs } = require('../../src/domain/works-derive');
 const { logger } = require('../../src/utils/logger');
-const { accountOf, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
+const { accountOf, failingUpload, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
 const {
   ENV, PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
 } = require('../helpers/works-import-loader');
@@ -130,6 +130,10 @@ test('a Track amendment decided before B with no matching loaded sheet work is l
   const [shown] = report.lists.trackShownNoSheetMatch;
   assert.equal(shown.workId, 'track-45');
   assert.equal(shown.nearest.gap, 3014);
+});
+
+test('a dry run fails with the upload error when the report upload fails', async () => {
+  await assert.rejects(run(inputs().argv, { write: () => {}, demi: fakeDemi(), upload: failingUpload }), /^Error: upload refused$/);
 });
 
 test('a --storage-account of another environment refuses', async () => {

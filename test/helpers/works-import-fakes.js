@@ -70,4 +70,7 @@ function uploadRecorder() {
   return { uploads, upload };
 }
 
-module.exports = { accountOf, uploadRecorder, CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork };
+/** An `upload` seam whose storage call is refused. */
+const failingUpload = async () => { throw new Error('upload refused'); };
+
+module.exports = { accountOf, failingUpload, uploadRecorder, CATALOG, PHASES, PROJECT, NUMBER, fakeLists, ref, register, amendment, trackWork };

@@ -20,8 +20,11 @@ test('uploadSealed puts the file from the folder into works-import under its own
   assert.deepEqual(puts, [[NAME, path.join(DIR, NAME), 'application/json']]);
 });
 
-test('a failed upload names the sealed file and keeps the storage error', async (t) => {
-  t.mock.method(azureBlob, 'createBlobClientFor', () => ({ putFile: async () => { throw new Error('AuthorizationPermissionMismatch'); } }));
-  await assert.rejects(uploadSealed(accountOf('test'), DIR, NAME),
-    { message: `upload of ${NAME} to works-import failed: AuthorizationPermissionMismatch` });
+test('a failed upload names the sealed file and keeps the storage error, its code and status', async (t) => {
+  const refused = Object.assign(new Error('This request is not authorized'), { code: 'AuthorizationPermissionMismatch', statusCode: 403 });
+  t.mock.method(azureBlob, 'createBlobClientFor', () => ({ putFile: async () => { throw refused; } }));
+  await assert.rejects(uploadSealed(accountOf('test'), DIR, NAME), {
+    message: `upload of ${NAME} to works-import failed: This request is not authorized`,
+    cause: refused, code: 'AuthorizationPermissionMismatch', statusCode: 403
+  });
 });

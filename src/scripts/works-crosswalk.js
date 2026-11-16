@@ -310,7 +310,7 @@ function optionsOf(argv) {
   if (!ENVS.includes(values.env)) refuse(`--env must be one of ${ENVS.join(', ')}`);
   // --env picks the keys and the signed statement; the rows come from the account COSMOS_ENDPOINT names.
   if (values.env !== cosmosEnvironment()) refuse(`--env ${values.env} does not match the COSMOS_ENDPOINT account`);
-  checkStorageAccount(values['storage-account'], values.env);
+  checkStorageAccount(values['storage-account'], values.env, refuse);
   return values;
 }
 

@@ -21,7 +21,8 @@ async function uploadSealed(account, dir, name) {
   try {
     await azureBlob.createBlobClientFor(account, { container: CONTAINER }).putFile(name, path.join(dir, name), 'application/json');
   } catch (err) {
-    throw new Error(`upload of ${name} to ${CONTAINER} failed: ${err.message}`, { cause: err });
+    const { code, statusCode } = err;
+    throw Object.assign(new Error(`upload of ${name} to ${CONTAINER} failed: ${err.message}`, { cause: err }), { code, statusCode });
   }
   logger.info('[works-import] sealed file uploaded', { account, container: CONTAINER, blob: name });
 }
