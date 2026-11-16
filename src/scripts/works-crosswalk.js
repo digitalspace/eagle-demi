@@ -2,9 +2,12 @@
 
 // Devbox tool (`scripts/demi-devbox.sh run --env <env> -- node src/scripts/works-crosswalk.js <options>`): nothing
 // decrypted is written; the CSV leaves only signed and sealed to the operator, and exit 1 still writes it.
+// The sealed file goes to `--out-dir` and to the works-import container, where the operator downloads it.
 
 const crypto = require('crypto');
+const path = require('path');
 const { parseArgs } = require('util');
+const { createBlobClientFor } = require('../storage/azureBlob');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
@@ -40,6 +43,9 @@ const CONTROL = new RegExp(`[\\p{Cc}\\p{Bidi_Control}${INVISIBLE}]`, 'gu');
 // scripts/works-import/surrogates.js draws test surrogates from this range.
 const SURROGATE_RANGE = [100000, 999999];
 const COSMOS_HOST = /^demi-cosmos-(test|prod)\.documents\.azure\.com$/;
+// The API storage account (api-function-flex.bicep): its 7-day delete rule covers this container.
+const STORAGE_ACCOUNT = /^demifc(test|prod)[a-z0-9]{13}$/;
+const UPLOAD_CONTAINER = 'works-import';
 const CSV_CELL = /"((?:[^"]|"")*)"(,?)/y;
 const EAGLE_ID = /^[0-9a-f]{24}$/;
 const TRACK_ID = /^[1-9]\d{0,9}$/;
@@ -287,7 +293,7 @@ function readCrosswalk(sealed, { env, keys, expectExtractSha256, expectManualSha
 
 const OPTIONS = Object.fromEntries([
   'env', 'extract', 'expect-extract-sha256', 'manual', 'expect-manual-sha256', 'devbox-key', 'operator-key',
-  'expect-operator-fingerprint', 'out-dir'
+  'expect-operator-fingerprint', 'out-dir', 'storage-account'
 ].map(name => [name, { type: 'string' }]));
 
 /** The environment named by the Cosmos host the rows come from; demi-run binds only COSMOS_ENDPOINT. */
@@ -309,6 +315,7 @@ function optionsOf(argv) {
   if (!ENVS.includes(values.env)) refuse(`--env must be one of ${ENVS.join(', ')}`);
   // --env picks the keys and the signed statement; the rows come from the account COSMOS_ENDPOINT names.
   if (values.env !== cosmosEnvironment()) refuse(`--env ${values.env} does not match the COSMOS_ENDPOINT account`);
+  if (STORAGE_ACCOUNT.exec(values['storage-account'])?.[1] !== values.env) refuse(`--storage-account must be the demifc${values.env} API storage account`);
   return values;
 }
 
@@ -326,8 +333,12 @@ async function liveRows() {
   return (await projectsRepository.listVisible(systemAccess(), {})).items;
 }
 
-/** Resolves the exit code. @param {object} [deps] test seam {write, listRows} */
-async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows } = {}) {
+function uploadSealed(account, name, file) {
+  return createBlobClientFor(account, { container: UPLOAD_CONTAINER }).putFile(name, file, 'application/json');
+}
+
+/** Resolves the exit code. @param {object} [deps] test seam {write, listRows, upload} */
+async function run(argv, { write = line => process.stdout.write(`${line}\n`), listRows = liveRows, upload = uploadSealed } = {}) {
   const o = optionsOf(argv);
   const keys = devboxKeysFromPem(readCapped(o['devbox-key'], MAX_BYTES.key).toString('utf8'));
   const recipient = operatorRecipientOf(o['operator-key'], o['expect-operator-fingerprint']);
@@ -344,6 +355,7 @@ async function run(argv, { write = line => process.stdout.write(`${line}\n`), li
   const { name: blob, sha256 } = writeSealed(o['out-dir'], csv, {
     purpose: PURPOSE, env: o.env, recipient, signingKey: keys.ed25519
   });
+  await upload(o['storage-account'], blob, path.join(o['out-dir'], blob));
   STATES.forEach(state => write(`${state}=${result.counts[state]}`));
   write(`twinsBeside=${result.twinsBeside}`);
   write(`crosswalkCsvSha256=${sha256}`);

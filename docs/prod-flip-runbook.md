@@ -159,8 +159,11 @@ The owner guard in `src/repositories/works.js` stops one source overwriting anot
    ```
    yarn works:crosswalk --env test --extract <sealed> --expect-extract-sha256 <hex> \
      --manual <sealed> --expect-manual-sha256 <manual-match SHA-256> --devbox-key <pem> \
-     --operator-key <pub pem> --expect-operator-fingerprint <hex> --out-dir <dir>
+     --operator-key <pub pem> --expect-operator-fingerprint <hex> --out-dir <dir> \
+     --storage-account <API storage account>
    ```
+
+   The sealed file is in the `works-import` container under the `blob=` name. Download it on the laptop with `az storage blob download --auth-mode login --account-name <API storage account> -c works-import -n <blob> -f <blob>`.
 
 6. `yarn works:extract open --purpose crosswalk …` writes the CSV for review. The business signs off `crosswalkCsvSha256` and gives a sign-off reference. `yarn works:extract seal --purpose crosswalk --signature <file>.sig …` seals the signed CSV back to the devbox.
 

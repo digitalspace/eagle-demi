@@ -16,6 +16,7 @@ const { logger } = require('../../src/utils/logger');
 const ENV = 'test';
 const SCRIPT = path.join(__dirname, '../../src/scripts/works-crosswalk.js');
 const endpointOf = env => `https://demi-cosmos-${env}.documents.azure.com:443/`;
+const accountOf = env => `demifc${env}abcdefgh12345`;
 const signoffRefs = { keepStaff: null, keepNumbers: null };
 const pemOf = (key, type) => key.export({ type, format: 'pem' });
 const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
@@ -49,7 +50,7 @@ const toDevbox = (plaintext, purpose, extra = {}) => sealEnvelope(Buffer.from(pl
 });
 
 /** Writes the sealed inputs and returns the argv a run takes; `edit(files, dir)` may swap a file first. */
-function inputs({ projects, aliases = [], flags = [], manual = noManual, manualSha, extractSha, extractText, operatorPem, edit }) {
+function inputs({ projects, aliases = [], flags = [], manual = noManual, manualSha, extractSha, extractText, operatorPem, edit, account = accountOf(ENV) }) {
   const dir = fresh();
   const outDir = fresh();
   const file = (name, data) => {
@@ -70,7 +71,7 @@ function inputs({ projects, aliases = [], flags = [], manual = noManual, manualS
   const argv = ['--env', ENV, '--extract', files.extract, '--expect-extract-sha256', extractSha || hashes.extractSha256,
     '--manual', files.manual, '--expect-manual-sha256', manualSha || hashes.manualSha256,
     '--devbox-key', files.devboxKey, '--operator-key', files.operatorKey,
-    '--expect-operator-fingerprint', operatorFingerprint, '--out-dir', outDir];
+    '--expect-operator-fingerprint', operatorFingerprint, '--out-dir', outDir, '--storage-account', account];
   return { argv, outDir, ...hashes };
 }
 
@@ -78,14 +79,16 @@ function inputs({ projects, aliases = [], flags = [], manual = noManual, manualS
 async function crosswalk({ rows, ...opts }) {
   const { argv, outDir, ...hashes } = inputs(opts);
   const lines = [];
-  const code = await run(argv, { write: line => lines.push(line), listRows: async () => rows });
+  const uploads = [];
+  const upload = async (account, name, file) => { uploads.push({ account, name, bytes: fs.readFileSync(file) }); };
+  const code = await run(argv, { write: line => lines.push(line), listRows: async () => rows, upload });
   const [blob] = fs.readdirSync(outDir);
   const opened = openEnvelope(fs.readFileSync(path.join(outDir, blob)),
     { purpose: 'crosswalk', env: ENV, keyFingerprint: operatorFingerprint, privateKey: operator.privateKey });
   const csv = opened.plaintext.toString('utf8');
   const csvRows = csv.split('\r\n').slice(2, -1)
     .map(line => Object.fromEntries([...line.matchAll(/"((?:[^"]|"")*)"/g)].map((m, i) => [COLUMNS[i], m[1].replace(/""/g, '"')])));
-  return { code, lines, outDir, blob, csv, csvRows, opened, ...hashes, stat: key => lines.find(l => l.startsWith(`${key}=`)) };
+  return { code, lines, uploads, outDir, blob, csv, csvRows, opened, ...hashes, stat: key => lines.find(l => l.startsWith(`${key}=`)) };
 }
 
 const rowOf = (result, sheetId) => result.csvRows.find(r => r.sheetId === String(sheetId));
@@ -317,6 +320,15 @@ test('--env must match the account COSMOS_ENDPOINT names', async (t) => {
   await assert.rejects(crosswalk({ projects, rows: [] }), /--env test does not match the COSMOS_ENDPOINT account/);
   process.env.COSMOS_ENDPOINT = 'https://other-cosmos-test.documents.azure.com:443/';
   await assert.rejects(crosswalk({ projects, rows: [] }), /COSMOS_ENDPOINT names no demi-cosmos-test or demi-cosmos-prod account/);
+  process.env.COSMOS_ENDPOINT = endpointOf(ENV);
+  await assert.rejects(crosswalk({ projects, rows: [], account: accountOf('prod') }), /--storage-account must be the demifctest API storage account/);
+});
+
+test('the sealed file is uploaded to the storage account under the blob= name', async () => {
+  const result = await crosswalk({ projects: [register(191401, 'Quebec Sound', 4)], rows: [trackRow('7041', 'Quebec Sound')] });
+  assert.equal(result.stat('blob'), `blob=${result.blob}`);
+  assert.deepEqual(result.uploads.map(u => [u.account, u.name]), [[accountOf(ENV), result.blob]]);
+  assert.deepEqual(result.uploads[0].bytes, fs.readFileSync(path.join(result.outDir, result.blob)));
 });
 
 test('no plaintext file on the devbox', async () => {
