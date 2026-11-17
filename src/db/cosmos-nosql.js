@@ -60,31 +60,14 @@ function getContainer(containerName) {
  * an unfiltered read.
  */
 function assertQuerySpec(spec, containerName) {
+  const refuse = (why) => { throw new TypeError(`[Cosmos] Refusing to query "${containerName}": ${why}`); };
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": expected a query spec object, got ${
-        Array.isArray(spec) ? 'array' : typeof spec
-      }.`
-    );
+    refuse(`expected a query spec object, got ${Array.isArray(spec) ? 'array' : typeof spec}.`);
   }
-  if (typeof spec.query !== 'string' || spec.query.trim() === '') {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": spec.query must be a non-empty string.`
-    );
-  }
-  if (!Array.isArray(spec.parameters)) {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": spec.parameters must be an array ` +
-      '(use [] when the query takes none).'
-    );
-  }
+  if (typeof spec.query !== 'string' || spec.query.trim() === '') refuse('spec.query must be a non-empty string.');
+  if (!Array.isArray(spec.parameters)) refuse('spec.parameters must be an array (use [] when the query takes none).');
   for (const p of spec.parameters) {
-    if (!p || typeof p.name !== 'string' || !p.name.startsWith('@')) {
-      throw new TypeError(
-        `[Cosmos] Refusing to query "${containerName}": every parameter needs a name ` +
-        'beginning with "@".'
-      );
-    }
+    if (!p || typeof p.name !== 'string' || !p.name.startsWith('@')) refuse('every parameter needs a name beginning with "@".');
   }
   return spec;
 }
@@ -99,6 +82,14 @@ function stripInternals(item) {
   if (!item || typeof item !== 'object') return item;
   for (const f of INTERNAL_FIELDS) delete item[f];
   return item;
+}
+
+// The SDK rejection names no container or query. Parameter values stay out (personal data);
+// callers branch on `code`, `statusCode` and the message start, so those carry over.
+function queryFailed(err, containerName, spec) {
+  const where = `(container "${containerName}", query "${spec.query.slice(0, 100)}")`;
+  return Object.assign(new Error(`${err?.message} ${where}`, { cause: err }),
+    { code: err?.code, statusCode: err?.statusCode, substatus: err?.substatus });
 }
 
 /**
@@ -127,9 +118,8 @@ async function query(containerName, spec, options = {}) {
   if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
 
   const iterator = container.items.query(spec, feedOptions);
-  const response = options.maxItemCount
-    ? await iterator.fetchNext()
-    : await iterator.fetchAll();
+  const response = await (options.maxItemCount ? iterator.fetchNext() : iterator.fetchAll())
+    .catch((err) => { throw queryFailed(err, containerName, spec); });
 
   return {
     items: (response.resources || []).map(stripInternals),

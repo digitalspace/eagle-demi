@@ -131,11 +131,13 @@ function loadWithSdkStub(t) {
               items: {
                 query: (spec, feedOptions) => {
                   queries.push({ spec, feedOptions });
-                  return {
-                    hasMoreResults: () => pages.length > 0,
-                    fetchNext: async () => pages.shift() || { resources: [] },
-                    fetchAll: async () => pages.shift() || { resources: [] }
+                  // A page that is an Error rejects, as a refused query does.
+                  const next = async () => {
+                    const page = pages.shift() || { resources: [] };
+                    if (page instanceof Error) throw page;
+                    return page;
                   };
+                  return { hasMoreResults: () => pages.length > 0, fetchNext: next, fetchAll: next };
                 },
                 upsert: async (item, options) => {
                   upserts.push({ item, options });
@@ -388,6 +390,20 @@ test('query() asks for query control only when it is paging', async (t) => {
 
     assert.strictEqual(res.continuationToken, 'page-2');
   });
+});
+
+test('a refused query names its container and query start, never a parameter value', async (t) => {
+  const { module: db, pages } = loadWithSdkStub(t);
+  pages.push(Object.assign(new Error('One of the input values is invalid.'), { code: 400 }));
+  const spec = { query: `SELECT * FROM c WHERE c.email = @email ${'AND c.x = 1 '.repeat(20)}`, parameters: [{ name: '@email', value: 'person@example.com' }] };
+
+  const err = await db.query('works', spec).then(() => assert.fail('query resolved'), e => e);
+
+  assert.match(err.message, /^One of the input values is invalid\. \(container "works", query "SELECT \* FROM c WHERE c\.email = @email /);
+  assert.ok(err.message.includes(spec.query.slice(0, 100)) && !err.message.includes(spec.query.slice(0, 101)));
+  assert.doesNotMatch(err.message, /person@example\.com/);
+  assert.strictEqual(err.code, 400);
+  assert.strictEqual(err.cause.message, 'One of the input values is invalid.');
 });
 
 // The etag is an upsert's only concurrency guard: without it, of two writers that read the same
