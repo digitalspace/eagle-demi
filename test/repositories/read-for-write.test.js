@@ -240,6 +240,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // Track's work, phase and event writes, and the nightly works pass: each must find a hidden project row.
     'scripts/sync-works.js',
     'scripts/track-record-write.js',
+    // The index row, built from the stored row whatever its level, as the indexer would; never a response.
+    'search/document-query.js',
     // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
     'sync-out/index.js',
     // Each kind's repository as the sync-out worker reads it.

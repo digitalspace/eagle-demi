@@ -632,8 +632,11 @@ answer with a measured total sets `x-total-count`, and `HEAD` returns the same h
   `meta[0].dropped.sort`. They have no text index, so `keywords` is a 400.
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
-`_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
-exception — the high-water mark cannot see them, so the application removes index entries explicitly.
+`_ts` high-water mark.
+
+A document create or Eagle push writes its `documents` index row at once, because the staff list
+pages in the index. Deletes are invisible to the high-water mark, so the application removes index
+entries explicitly.
 
 #### Ported objects
 

@@ -63,7 +63,8 @@ test('search data health', async (t) => {
     assert.deepStrictEqual(out.body.checks, [
       { index: 'projects', field: 'currentPhaseNameId', count: 0, max: 0, ok: true },
       { index: 'projects', field: 'eacDecisionId', count: 0, max: 0, ok: true },
-      { index: 'documents', field: 'searchVis', count: 0, max: 0, ok: true }
+      { index: 'documents', field: 'searchVis', count: 0, max: 0, ok: true },
+      { index: 'documents', field: 'isDeleted', count: 0, max: 0, ok: true }
     ]);
   });
 
@@ -80,7 +81,8 @@ test('search data health', async (t) => {
         filter: 'currentPhaseNameId eq null and isPublished eq true and legislationYear ne 2025' },
       { indexName: 'projects-live',
         filter: 'eacDecisionId eq null and isPublished eq true and legislationYear ne 2025' },
-      { indexName: 'documents-live', filter: 'searchVis eq null' }
+      { indexName: 'documents-live', filter: 'searchVis eq null' },
+      { indexName: 'documents-live', filter: 'isDeleted eq null' }
     ]);
   });
 
@@ -148,7 +150,8 @@ test('search data health', async (t) => {
     assert.deepStrictEqual(out.body.checks, [
       { index: 'projects', field: 'currentPhaseNameId', ok: false, error: 'missing' },
       { index: 'projects', field: 'eacDecisionId', ok: false, error: 'missing' },
-      { index: 'documents', field: 'searchVis', ok: false, error: 'missing' }
+      { index: 'documents', field: 'searchVis', ok: false, error: 'missing' },
+      { index: 'documents', field: 'isDeleted', ok: false, error: 'missing' }
     ]);
   });
 

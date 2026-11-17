@@ -7,7 +7,8 @@ process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { documentsAcl, NOT_UPDATE_IMAGE } = require('../../src/search/document-query');
+const { documentsAcl, NOT_UPDATE_IMAGE, indexDocumentsNow } = require('../../src/search/document-query');
+const documents = require('../../src/repositories/documents');
 const eagleQuery = require('../../src/search/eagle-query');
 const aiSearch = require('../../src/search/ai-search');
 const { TIER } = require('../../src/helpers/access-sql');
@@ -19,15 +20,15 @@ DefaultAzureCredential.prototype.getToken = async () => ({
   expiresOnTimestamp: Date.now() + 60 * 60 * 1000
 });
 
-/** Answers every search request with `json`, and records each request body. */
-function captureSearch(t, json) {
+/** Answers every search request with `json` and `status`, and records each request body. */
+function captureSearch(t, json, status = 200) {
   const bodies = [];
   const originalFetch = global.fetch;
   global.fetch = async (url, init) => {
     bodies.push(JSON.parse(init.body));
     return {
-      ok: true,
-      status: 200,
+      ok: status < 400,
+      status,
       headers: { get: () => null },
       json: async () => json,
       text: async () => JSON.stringify(json)
@@ -88,4 +89,47 @@ test('searchDocumentIds with keywords runs one leg over the document fields only
   assert.notStrictEqual(bodies[0].search, '*');
   assert.match(bodies[0].search, /river/);
   assert.strictEqual(bodies[0].queryType, 'full');
+});
+
+// A write that lands between the caller's own write and this index write must win in the index.
+test('indexDocumentsNow sends the stored row, not the older one the caller holds', async (t) => {
+  t.mock.method(documents, 'readForWrite', async (id, projectId) => ({ id, projectId, read: ['staff'], isDeleted: true }));
+  const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
+
+  await indexDocumentsNow([{ id: 'd1', projectId: '207', read: ['public'], isDeleted: false }]);
+
+  assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.id, row.read, row.isDeleted])),
+    [[['d1', ['staff'], true]]]);
+});
+
+test('indexDocumentsNow reads nothing back when search is not configured', async (t) => {
+  t.mock.method(aiSearch, 'config', () => ({ configured: false }));
+  const read = t.mock.method(documents, 'readForWrite', async () => null);
+
+  await indexDocumentsNow([{ id: 'd1', projectId: '207' }]);
+
+  assert.strictEqual(read.mock.callCount(), 0);
+});
+
+test('writeAcls merges isDeleted when a row carries it', async (t) => {
+  const bodies = captureSearch(t, { value: [] });
+  await aiSearch.writeAcls('documents', [{ id: 'd1', read: ['staff'], isPublished: false, isDeleted: true }]);
+  assert.strictEqual(bodies[0].value[0].isDeleted, true);
+});
+
+test('writeAcls logs a bad entry and counts it 0, never throws', async (t) => {
+  captureSearch(t, { value: [] });
+  assert.strictEqual(await aiSearch.writeAcls('documents', [null]), 0);
+});
+
+test('upsertIndexRows sends whole rows as mergeOrUpload, since merge refuses a new row', async (t) => {
+  const bodies = captureSearch(t, { value: [] });
+  await aiSearch.upsertIndexRows('documents', [{ id: 'd1', displayName: 'Report' }]);
+  assert.deepStrictEqual(bodies[0].value, [{ '@search.action': 'mergeOrUpload', id: 'd1', displayName: 'Report' }]);
+});
+
+test('upsertIndexRows tries once, so a throttled service cannot hold a create', async (t) => {
+  const bodies = captureSearch(t, {}, 503);
+  assert.strictEqual(await aiSearch.upsertIndexRows('documents', [{ id: 'd1' }]), 0);
+  assert.strictEqual(bodies.length, 1);
 });

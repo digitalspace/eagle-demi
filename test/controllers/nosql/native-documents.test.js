@@ -15,6 +15,8 @@ const { counts } = require('../../../src/controllers/native/counts');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');
 const projects = require('../../../src/repositories/projects');
+const documents = require('../../../src/repositories/documents');
+const { NOT_DELETED } = require('../../../src/repositories/_sql');
 const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../../src/search/eagle-query');
 const { makeRes } = require('../../../src/http/router');
 
@@ -33,8 +35,14 @@ const DOCS = [
   { id: 'd2', projectId: '207', read: ['public'], displayName: 'Application Part B' }
 ];
 
-/** Index answers `ids` with `count`; Cosmos answers COUNT with `total`, `@xid` with those rows. */
-function fakeStores(t, { ids = ['d2', 'd1'], count = ids.length, total = DOCS.length, continuationToken } = {}) {
+// Eagle deleted it: the row stays, narrowed to staff, and the index still holds it.
+const DELETED = { id: 'd4', projectId: '207', read: documents.DELETED_CEILING, isDeleted: true, displayName: 'Withdrawn' };
+
+/**
+ * Index answers `ids` with `count`; Cosmos answers COUNT with `total`, `@xid` with those rows, and
+ * honours NOT_DELETED.
+ */
+function fakeStores(t, { ids = ['d2', 'd1'], count = ids.length, total = DOCS.length, continuationToken, rows: stored = DOCS } = {}) {
   const searches = [];
   const queries = [];
   t.mock.method(aiSearch, 'searchDocumentIds', async (opts) => {
@@ -45,7 +53,8 @@ function fakeStores(t, { ids = ['d2', 'd1'], count = ids.length, total = DOCS.le
     queries.push({ container, ...spec });
     if (spec.query.includes('COUNT(1)')) return { items: [total] };
     const asked = spec.parameters.filter(p => p.name.startsWith('@xid')).map(p => p.value);
-    const rows = asked.length ? DOCS.filter(row => asked.includes(row.id)) : DOCS;
+    const rows = (asked.length ? stored.filter(row => asked.includes(row.id)) : stored)
+      .filter(row => !spec.query.includes(NOT_DELETED.clause) || row.isDeleted !== true);
     return { items: structuredClone(rows), continuationToken };
   });
   t.mock.method(projects, 'listRowsByIds', async () => []);
@@ -103,6 +112,27 @@ test('native documents list', async (t) => {
     assert.match(searches[0].filter, /documentSource ne 'UPDATE'/);
     const [reread] = documentReads(queries);
     assert.ok(reread.query.includes(EXCLUSION), 'the index page re-read leaves them out as well');
+  });
+
+  await t.test('a row Eagle deleted is out of a staff list', async (t) => {
+    fakeStores(t, { rows: [...DOCS, DELETED] });
+    const res = await list('project=207', STAFF);
+
+    assert.deepStrictEqual(res.body.map(doc => doc.id), ['d1', 'd2']);
+  });
+
+  await t.test('GET /documents/:id answers 404 for a row Eagle deleted', async (t) => {
+    t.mock.method(documents, 'getById', async () => structuredClone(DELETED));
+    const res = await call(documentController.getDocument, 'project=207', STAFF);
+
+    assert.strictEqual(res.status, 404);
+  });
+
+  await t.test('GET /documents/:id/download answers 404 for a row Eagle deleted, file or not', async (t) => {
+    t.mock.method(documents, 'getById', async () => ({ ...structuredClone(DELETED), s3Key: '207/withdrawn.pdf' }));
+    const res = await call(documentController.downloadDocument, 'project=207', STAFF);
+
+    assert.strictEqual(res.status, 404);
   });
 
   await t.test('rows carry projectName and projectEagleId', async (t) => {

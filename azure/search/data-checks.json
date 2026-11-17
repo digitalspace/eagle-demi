@@ -19,5 +19,12 @@
     "filter": "searchVis eq null",
     "max": 0,
     "note": "Projected on every row by demi-documents-ds; null means the index was widened but documents-indexer was not reset"
+  },
+  {
+    "index": "documents",
+    "field": "isDeleted",
+    "filter": "isDeleted eq null",
+    "max": 0,
+    "note": "Projected as true or false on every row by demi-documents-ds; null means documents-indexer was not reset, so rows Eagle deleted before the reset are still listed and counted"
   }
 ]

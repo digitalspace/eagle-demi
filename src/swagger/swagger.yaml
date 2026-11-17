@@ -25,7 +25,8 @@ paths:
         number — see `and[status]`; it is absent everywhere else rather than zero. An unknown
         dataset, or any query parameter not listed here, is a 400. Document reads and counts leave
         out images uploaded through the Update form (`documentSource` `UPDATE`) unless the request
-        filters on `and[documentSource]`. A project is left out when the request sorts, filters or
+        filters on `and[documentSource]`. Documents deleted in Eagle are left out for every caller.
+        A project is left out when the request sorts, filters or
         searches on a field the caller may not see for that project, and `count` drops with it; a
         Document keyword search does not match documents through such a project's name. When the
         hidden projects cannot all be read, or there are too many to leave out safely, the search
@@ -436,7 +437,7 @@ paths:
         by the search index, so its number answers a slightly different question than the tab will.
         No `Cache-Control` is sent: the counts are ACL-scoped and must not be held by a shared cache.
         The Document count leaves out images uploaded through the Update form (`documentSource`
-        `UPDATE`), as the Document list does.
+        `UPDATE`), as the Document list does. Documents deleted in Eagle are left out for every caller.
 
 
         TAKES NO FILTERS. The four parameters below are the whole list: filters belong to one
@@ -2299,7 +2300,8 @@ paths:
     get:
       summary: List documents
       description: >-
-        One page of the documents this caller may read, with hidden fields left out. Images
+        One page of the documents this caller may read, with hidden fields left out. Documents
+        deleted in Eagle are left out for every caller, staff included. Images
         uploaded through the Update form (`documentSource` `UPDATE`) are left out, except from an
         `ids` read that the database serves, which returns them as `GET /api/documents/{id}` does. One project's
         plain list and an `ids` read come from the database; every other list, `q`, `sort` and the
@@ -2677,7 +2679,7 @@ paths:
         The distinct projects that most recently received a document the caller may read, newest
         first, each listing up to five of its newest documents. Documents the caller cannot read,
         documents with no upload date, images uploaded through the Update form (`documentSource`
-        `UPDATE`) and projects the caller cannot read are all left out.
+        `UPDATE`), documents deleted in Eagle and projects the caller cannot read are all left out.
 
         The ranking comes from the newest upload date in each project, so a bulk import of many
         documents into one project takes one place in the list. FEWER than `limit` projects is a
@@ -3077,7 +3079,7 @@ paths:
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
-          description: Document not found.
+          description: Document not found, or deleted in Eagle.
     put:
       summary: Update document
       description: >-
@@ -3497,7 +3499,8 @@ paths:
         A short-lived presigned URL for the stored file. Unauthenticated callers get the public
         tier rather than a 401, exactly as `GET /api/documents/{id}` does — the row's `read[]` is
         the gate and it runs inside the controller, so an unpublished document is a 404 to a caller
-        who may not see it. A download of a document the public cannot see is audited as
+        who may not see it, and a document deleted in Eagle is a 404 to every caller. A download
+        of a document the public cannot see is audited as
         `document.download`; every download is an analytics event.
 
         THREE MODES, same visibility check. By default the URL is returned as JSON. With

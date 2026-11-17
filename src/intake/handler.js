@@ -9,6 +9,7 @@ const path = require('path');
 const { logger } = require('../utils/logger');
 const { decide } = require('./decision');
 const { moveToQuarantine } = require('./blobs');
+const { indexDocumentsNow } = require('../search/document-query');
 const { capRead, levelOfRead, systemAccess } = require('../helpers/access-sql');
 
 /**
@@ -64,6 +65,8 @@ async function release(row, scan, { store, blobs, nrs, projects }) {
     logger.warn('[intake] row settled by another writer while releasing', { documentId: row.id, key });
     return { outcome: 'raced', sizeBytes: stat.size };
   }
+  // `row` is the pending listing's few columns; the index row is built from the stored row.
+  await indexDocumentsNow([row]);
   await client.removeObject(row.id);
   return { outcome: 'clean', sizeBytes: stat.size };
 }

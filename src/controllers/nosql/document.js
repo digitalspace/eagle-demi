@@ -25,6 +25,7 @@ const {
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { documentIndexRow, indexDocumentsNow } = require('../../search/document-query');
 const { purgeDocument } = require('../../helpers/purge');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
@@ -265,13 +266,15 @@ exports.scanDocuments = async (req, res) => {
 
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { projectParentJoin } = require('../../helpers/native-query');
+const { NOT_DELETED } = require('../../repositories/_sql');
 const { listHandler } = require('./mirror-reads');
 
 const DOCUMENT_ID_FILTERS = ['projectId', ...chunks.CHUNK_PARENT_LIST_REFS];
 
+// NOT_DELETED here, not in `buildCriteria`: the scan feed and backfills built on it still walk deleted rows.
 const documentsRepository = withoutUpdateImages => indexedKind({
   index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
-  defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages })
+  defaultOrder: 'c.id ASC', baseCriteria: [...documents.buildCriteria({ withoutUpdateImages }), NOT_DELETED]
 });
 const listedDocuments = documentsRepository(true);
 const namedDocuments = documentsRepository(false);
@@ -485,10 +488,7 @@ exports.getDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
     const doc = await documents.getById(access, req.params.id, req.query.project);
-
-    if (!doc) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    if (!doc || doc.isDeleted === true) return res.status(404).json({ error: 'Document not found' });
     return res.json(redactForAccess('documents', doc, access));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
@@ -504,7 +504,7 @@ exports.getDocument = async (req, res) => {
 async function findStoredFile(req, id) {
   const access = resolveAccess(req);
   const doc = await documents.getById(access, id, req.query.project);
-  if (!doc) return { status: 404, body: { error: 'Document not found' } };
+  if (!doc || doc.isDeleted === true) return { status: 404, body: { error: 'Document not found' } };
   if (!doc.s3Key) return { status: 404, body: { error: 'Document has no stored file.' } };
   return {
     doc,
@@ -930,6 +930,7 @@ exports.createDocument = async (req, res) => {
       updatedAt: now
     });
     await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
+    await indexDocumentsNow([saved]);
 
     auditEvent(req, {
       action: 'document.create',
@@ -996,6 +997,7 @@ exports.extractDocument = async (req, res) => {
       updatedAt: now
     });
     await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
+    await indexDocumentsNow([saved]);
 
     // Same action as createDocument, so "who created documents" stays one query; `via` tells
     // the two doors apart.
@@ -1266,6 +1268,8 @@ function listLookupFrom(doc, labels) {
   return lookup;
 }
 
+const indexFieldsMoved = (from, saved) => JSON.stringify(documentIndexRow(from)) !== JSON.stringify(documentIndexRow(saved));
+
 /**
  * Receive one raw Eagle document pushed by eagle-api, through the seed's own transform. A delete
  * push narrows the row to level 2 and flags it rather than dropping it.
@@ -1389,13 +1393,8 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    // As in setLevel, the index is corrected here. Compares the LEVEL: a delete push narrows level
-    // 3 to 2 without touching `isPublished`.
-    if (from && levelOfRead(saved.read) !== levelOfRead(from.read)) {
-      await aiSearch.writeAcls(aiSearch.indexes().documents, [
-        { id: saved.id, read: saved.read, isPublished: saved.isPublished }
-      ]);
-    }
+    // Staff lists page in the index, so a new or changed row goes in now, not at the indexer's next pass.
+    if (!from || indexFieldsMoved(from, saved)) await indexDocumentsNow([saved]);
 
     if (owed) await propagateParentFields(saved);
 

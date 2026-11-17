@@ -6,7 +6,7 @@
  */
 
 const aiSearch = require('./ai-search');
-const { documentsAcl, NOT_UPDATE_IMAGE } = require('./document-query');
+const { documentsAcl, NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT } = require('./document-query');
 const { filterFor, inClause, quote } = require('../helpers/access-odata');
 const { nativeCriteria, rangeBound, cosmosKind } = require('../helpers/native-query');
 const { dialAllows } = require('../helpers/dial');
@@ -103,7 +103,7 @@ const INDEX_MAPS = Object.freeze({
     search: opts => aiSearch.searchDocumentIds(opts),
     partitionField: 'projectId',
     acl: documentsAcl,
-    always: [NOT_UPDATE_IMAGE],
+    always: [NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT],
     searchVis: 'searchVis',
     columns: {
       projectId: 'projectId',
