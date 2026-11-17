@@ -60,31 +60,14 @@ function getContainer(containerName) {
  * an unfiltered read.
  */
 function assertQuerySpec(spec, containerName) {
+  const refuse = (why) => { throw new TypeError(`[Cosmos] Refusing to query "${containerName}": ${why}`); };
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": expected a query spec object, got ${
-        Array.isArray(spec) ? 'array' : typeof spec
-      }.`
-    );
+    refuse(`expected a query spec object, got ${Array.isArray(spec) ? 'array' : typeof spec}.`);
   }
-  if (typeof spec.query !== 'string' || spec.query.trim() === '') {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": spec.query must be a non-empty string.`
-    );
-  }
-  if (!Array.isArray(spec.parameters)) {
-    throw new TypeError(
-      `[Cosmos] Refusing to query "${containerName}": spec.parameters must be an array ` +
-      '(use [] when the query takes none).'
-    );
-  }
+  if (typeof spec.query !== 'string' || spec.query.trim() === '') refuse('spec.query must be a non-empty string.');
+  if (!Array.isArray(spec.parameters)) refuse('spec.parameters must be an array (use [] when the query takes none).');
   for (const p of spec.parameters) {
-    if (!p || typeof p.name !== 'string' || !p.name.startsWith('@')) {
-      throw new TypeError(
-        `[Cosmos] Refusing to query "${containerName}": every parameter needs a name ` +
-        'beginning with "@".'
-      );
-    }
+    if (!p || typeof p.name !== 'string' || !p.name.startsWith('@')) refuse('every parameter needs a name beginning with "@".');
   }
   return spec;
 }
@@ -100,6 +83,14 @@ function stripInternals(item) {
   for (const f of INTERNAL_FIELDS) delete item[f];
   return item;
 }
+
+// The SDK rejection names no container or query. Parameter values stay out (personal data);
+// callers branch on `code`, `statusCode` and the message start, so those carry over.
+const queryFailed = (containerName, spec) => (err) => {
+  const wrapped = new Error(`${err?.message ?? String(err)} (container "${containerName}", query ${JSON.stringify(spec.query.slice(0, 100))})`, { cause: err });
+  for (const key of ['code', 'statusCode', 'substatus', 'name']) if (err?.[key] !== undefined) wrapped[key] = err[key];
+  throw wrapped;
+};
 
 /**
  * @param {string} containerName
@@ -127,9 +118,8 @@ async function query(containerName, spec, options = {}) {
   if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
 
   const iterator = container.items.query(spec, feedOptions);
-  const response = options.maxItemCount
-    ? await iterator.fetchNext()
-    : await iterator.fetchAll();
+  const response = await (options.maxItemCount ? iterator.fetchNext() : iterator.fetchAll())
+    .catch(queryFailed(containerName, spec));
 
   return {
     items: (response.resources || []).map(stripInternals),
@@ -168,7 +158,7 @@ async function queryFirst(containerName, spec, options = {}) {
   if (options.partitionKey !== undefined) feedOptions.partitionKey = options.partitionKey;
   if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
 
-  const { rows, cut } = await drain(container.items.query(spec, feedOptions), 1, LOOKUP_MAX_PAGES);
+  const { rows, cut } = await drain(container.items.query(spec, feedOptions), 1, LOOKUP_MAX_PAGES, queryFailed(containerName, spec));
   if (rows.length > 0) return rows[0];
   if (!cut) return null;
 
@@ -183,13 +173,13 @@ async function queryFirst(containerName, spec, options = {}) {
 
 /**
  * `fetchNext()` on ONE iterator until it holds `want` rows or runs dry (see `queryFirst` for why one
- * iterator). `cut` is true when `maxFetches` stopped it with results still pending.
+ * iterator). `cut` is true when `maxFetches` stopped it with results still pending; a failed fetch goes to `fail`.
  */
-async function drain(iterator, want, maxFetches) {
+async function drain(iterator, want, maxFetches, fail) {
   const rows = [];
   for (let page = 0; rows.length < want && iterator.hasMoreResults(); page++) {
     if (page === maxFetches) return { rows, cut: true };
-    const response = await iterator.fetchNext();
+    const response = await iterator.fetchNext().catch(fail);
     for (const item of response.resources || []) rows.push(stripInternals(item));
   }
   return { rows, cut: false };
@@ -207,7 +197,7 @@ async function queryPage(containerName, spec, { size, skip = 0, whole = false } 
   if (!container) return [];
 
   const maxFetches = LOOKUP_MAX_PAGES + Math.ceil(Math.max(Number(skip) || 0, 0) / size);
-  const { rows, cut } = await drain(container.items.query(spec, { maxItemCount: size }), size, maxFetches);
+  const { rows, cut } = await drain(container.items.query(spec, { maxItemCount: size }), size, maxFetches, queryFailed(containerName, spec));
   if (cut) {
     logger.warn('[Cosmos] page drain hit its fetch bound; answering a short page.', {
       container: containerName, pages: maxFetches, rows: rows.length, size, skip
