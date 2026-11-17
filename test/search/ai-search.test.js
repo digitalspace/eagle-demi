@@ -2023,6 +2023,12 @@ test('writeAcls', async (t) => {
     assert.strictEqual(calls[0].body.value[0].isDeleted, true);
   });
 
+  await t.test('upsertIndexRows sends whole rows as mergeOrUpload, since merge refuses a new row', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.upsertIndexRows('documents', [{ id: 'd1', displayName: 'Report' }]);
+    assert.deepStrictEqual(calls[0].body.value, [{ '@search.action': 'mergeOrUpload', id: 'd1', displayName: 'Report' }]);
+  });
+
   await t.test('1,500 rows go as 1,000 + 500 — the service caps one batch at 1,000', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 

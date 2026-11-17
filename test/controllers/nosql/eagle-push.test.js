@@ -940,34 +940,27 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       're-mirroring is the repair, so the misfiled row has to go');
   });
 
-  await t.test('a visibility flip writes the index ACL; a rename does not', async () => {
+  await t.test('a push that moves an index field writes the row; a repeat of it does not', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => ({
-      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin']
-    }));
-    t.mock.method(documents, 'upsert', async (item) => item);
+    let stored = { id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'] };
+    t.mock.method(documents, 'getById', async () => structuredClone(stored));
+    t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
     const indexWrites = [];
-    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
-      indexWrites.push(rows); return rows.length;
+    t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
+      indexWrites.push(...rows); return rows.length;
     });
-
-    await documentController.upsertFromEagle({
+    const push = () => documentController.upsertFromEagle({
       params: { eagleId: DOC_EAGLE_ID }, query: {},
       body: { doc: eagleDocument({ read: ['sysadmin'] }) }, user: STAFF
     }, mockRes());
 
-    assert.strictEqual(indexWrites.length, 1);
+    await push();
     // Eagle's own read: nothing added, never `team`.
-    assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false, isDeleted: false }]);
+    assert.deepStrictEqual(indexWrites.map(row => [row.id, row.read, row.isPublished]),
+      [[DOC_EAGLE_ID, ['sysadmin'], false]]);
 
-    indexWrites.length = 0;
-    await documentController.upsertFromEagle({
-      params: { eagleId: DOC_EAGLE_ID }, query: {},
-      body: { doc: eagleDocument({ displayName: 'Application (revised)' }) }, user: STAFF
-    }, mockRes());
-
-    assert.strictEqual(indexWrites.length, 0, 'a metadata edit does not move the ACL');
+    await push();
+    assert.strictEqual(indexWrites.length, 1, 'an unchanged row is not rewritten');
   });
 
   await t.test('a body whose doc._id disagrees with the path is a 400 and no write', async () => {
@@ -1002,8 +995,9 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     let written;
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
-    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
-      indexWrites.push(rows); return rows.length;
+    t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
+      indexWrites.push(...rows.map(row => ({ id: row.id, read: row.read, isPublished: row.isPublished, isDeleted: row.isDeleted })));
+      return rows.length;
     });
 
     const res = mockRes();
@@ -1024,7 +1018,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     assert.deepStrictEqual(written.ownRead, ['public', 'sysadmin']);
     // The index is a separate store and no list read is live, so the narrowing has to be pushed.
     assert.deepStrictEqual(indexWrites,
-      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]]);
+      [{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]);
   });
 
   await t.test('a delete of a document only idir could see still reaches the index', async () => {
@@ -1037,8 +1031,9 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     let written;
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
-    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
-      indexWrites.push(rows); return rows.length;
+    t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
+      indexWrites.push(...rows.map(row => ({ id: row.id, read: row.read, isPublished: row.isPublished, isDeleted: row.isDeleted })));
+      return rows.length;
     });
 
     await documentController.upsertFromEagle({
@@ -1049,19 +1044,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
     assert.deepStrictEqual(written.read, ['staff']);
     assert.deepStrictEqual(indexWrites,
-      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]]);
-  });
-
-  await t.test('a delete of a staff-level row moves no level and still reaches the index', async () => {
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => ({
-      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'sysadmin']
-    }));
-    t.mock.method(documents, 'upsert', async (item) => item);
-    const written = t.mock.method(aiSearch, 'writeAcls', async (index, rows) => rows.length);
-    await documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
-      body: { doc: eagleDocument({ read: ['staff', 'sysadmin'], isDeleted: true }) }, user: STAFF }, mockRes());
-    assert.deepStrictEqual(written.mock.calls.map(c => c.arguments[1][0].isDeleted), [true]);
+      [{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]);
   });
 
   await t.test('an ordinary push stores the flag false and leaves read[] alone', async () => {
@@ -1078,6 +1061,19 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     assert.strictEqual(written.isDeleted, false, 'stored explicitly — a missing field is not false');
     assert.deepStrictEqual(written.read, ['staff', 'idir', 'public']);
     assert.strictEqual(written.isPublished, true);
+  });
+
+  await t.test('a push that creates a document puts its whole index row in at once', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => null);
+    t.mock.method(documents, 'upsert', async (item) => item);
+    const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => rows.length);
+    await documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF }, mockRes());
+
+    assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row =>
+      [row.id, row.projectId, row.displayName, row.fileNameTokens, row.searchVis])),
+    [[[DOC_EAGLE_ID, '207', 'Application', 'application.pdf', 4]]]);
   });
 
   await t.test('only eagle-api sending the record again brings it back', async () => {

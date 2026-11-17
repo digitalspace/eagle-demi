@@ -1273,55 +1273,53 @@ const DELETE_STALL_BUDGET_MS = 20000;
 const UNINDEX_CONCURRENCY = 4;
 
 /**
- * Best-effort ACL write; `merge`, since an upload would insert a title-less half-row. `isDeleted`
- * goes only when a row carries it: the `projects` index has no such field and refuses the batch.
- * @param {Array<{id: string, read: string[], isPublished: boolean, isDeleted?: boolean}>} rows
+ * Best-effort index write in service-sized batches: a refusal is logged, never thrown, and the
+ * indexer's next pass repairs the row. `what` names the rows in the log.
  * @returns {Promise<number>} rows the service accepted
  */
-async function writeAcls(index, rows) {
+async function sendIndexActions(index, actions, what) {
   const { configured } = config();
-  if (!configured) {
-    warnUnconfigured();
-    return 0;
-  }
-  if (!Array.isArray(rows) || rows.length === 0) return 0;
-
+  if (!configured) warnUnconfigured();
+  if (!configured || actions.length === 0) return 0;
   let merged = 0;
-
-  for (let start = 0; start < rows.length; start += INDEX_BATCH_ROWS) {
-    const batch = rows.slice(start, start + INDEX_BATCH_ROWS);
+  for (let start = 0; start < actions.length; start += INDEX_BATCH_ROWS) {
+    const batch = actions.slice(start, start + INDEX_BATCH_ROWS);
     try {
-      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
-        value: batch.map(row => ({
-          '@search.action': 'merge',
-          id: String(row.id),
-          read: row.read,
-          isPublished: Boolean(row.isPublished),
-          ...(typeof row.isDeleted === 'boolean' ? { isDeleted: row.isDeleted } : {})
-        }))
-      });
-
-      // A 207 is `ok` with per-row verdicts; a 404 row is not indexed yet, so nothing to hide.
+      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, { value: batch });
+      // A 207 is `ok` with per-row verdicts; a 404 on `merge` is a row not indexed yet, so nothing to hide.
       const failed = (result.value || []).filter(r => r.status === false);
       merged += batch.length - failed.length;
-
       const real = failed.filter(r => r.statusCode !== 404);
       if (real.length > 0) {
-        logger.error(
-          `[ai-search] could not write ${real.length} of ${batch.length} ACLs to ${index} ` +
-          `(${real[0].errorMessage || 'no message'}). Those rows stay as indexed until the ` +
-          'indexer\'s next pass.'
-        );
+        logger.error(`[ai-search] could not write ${real.length} of ${batch.length} ${what} to ${index} ` +
+          `(${real[0].errorMessage || 'no message'}). Those rows stay as indexed until the indexer's next pass.`);
       }
     } catch (err) {
-      logger.error(
-        `[ai-search] ACL write to ${index} failed for ${batch.length} rows (${err.message}). ` +
-        'They stay as indexed until the indexer\'s next pass.'
-      );
+      logger.error(`[ai-search] ${what} write to ${index} failed for ${batch.length} rows (${err.message}). ` +
+        'They stay as indexed until the indexer\'s next pass.');
     }
   }
-
   return merged;
+}
+
+/**
+ * ACL write; `merge`, since an upload would insert a title-less half-row. `isDeleted` goes only
+ * when a row carries it: the `projects` index has no such field and refuses the batch.
+ * @param {Array<{id: string, read: string[], isPublished: boolean, isDeleted?: boolean}>} rows
+ */
+function writeAcls(index, rows) {
+  return sendIndexActions(index, (Array.isArray(rows) ? rows : []).map(row => ({
+    '@search.action': 'merge',
+    id: String(row.id),
+    read: row.read,
+    isPublished: Boolean(row.isPublished),
+    ...(typeof row.isDeleted === 'boolean' ? { isDeleted: row.isDeleted } : {})
+  })), 'ACLs');
+}
+
+/** Whole index rows, as `documentIndexRow` builds them; `mergeOrUpload`, since `merge` refuses a new row. */
+function upsertIndexRows(index, rows) {
+  return sendIndexActions(index, rows.map(row => ({ '@search.action': 'mergeOrUpload', ...row })), 'rows');
 }
 
 /**
@@ -1598,6 +1596,7 @@ module.exports = {
   deleteFromIndex,
   deleteDocuments,
   writeAcls,
+  upsertIndexRows,
   indexes,
   // The controller refuses larger pages, so it reads this one copy.
   MAX_PAGE_ROWS,

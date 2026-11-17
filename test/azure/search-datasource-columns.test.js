@@ -399,3 +399,60 @@ test('searchVis holds -1 for a dial that is not an integer, and stays between -1
   assert.strictEqual(searchVisOf({ vis: { description: -7 } }), -1);
   assert.strictEqual(searchVisOf({ vis: { displayName: 2 ** 40 } }), 4, 'clamped, so Int32 holds it');
 });
+
+// A push writes the index row itself, so it must hold what the next indexer run would write over it.
+const { documentIndexRow } = require('../../src/search/document-query');
+const SELECTED = new Map([...projectedColumns(datasource.container.query)].filter(([name]) => name !== '_ts'));
+const PLAIN = [...SELECTED].filter(([name, expr]) => name === expr).map(([name]) => name);
+
+test('documentIndexRow copies every plain column the SELECT names, and builds every other one', () => {
+  const row = { ...Object.fromEntries(PLAIN.map(name => [name, `${name}-value`])), documentAuthor: 'EAO' };
+  const built = documentIndexRow(row);
+
+  assert.deepStrictEqual(PLAIN.map(name => built[name]), PLAIN.map(name => `${name}-value`));
+  assert.deepStrictEqual(Object.keys(built).sort(), [...SELECTED.keys()].sort());
+});
+
+// Any change to one of these expressions must be mirrored in documentIndexRow before this passes.
+test('the computed columns are the four documentIndexRow reproduces', () => {
+  const computed = Object.fromEntries([...SELECTED].filter(([name, expr]) => name !== expr));
+  const dial = (f, l) => `(NOT IS_DEFINED(c.vis.${f}) OR (IS_INTEGER(c.vis.${f}) AND c.vis.${f} >= ${l}))`;
+  const level = l => `(${['displayName', 'documentFileName', 'description'].map(f => dial(f, l)).join(' AND ')})`;
+  const searchVis = [4, 3, 2, 1, 0].reduceRight((rest, l) => `(${level(l)} ? ${l} : ${rest})`, '-1');
+
+  assert.deepStrictEqual(computed, {
+    fileNameTokens: 'documentFileName',
+    documentAuthorSort: 'LOWER(c.documentAuthor)',
+    searchVis,
+    isDeleted: '(IS_BOOL(c.isDeleted) AND c.isDeleted = true)'
+  });
+});
+
+test('documentIndexRow searchVis equals the SELECT run as JS', () => {
+  const rows = [{}, { vis: {} }, { vis: { description: 2 } }, { vis: { displayName: 3, documentFileName: 1 } },
+    { vis: { displayName: 0 } }, { vis: { displayName: '2' } }, { vis: { documentFileName: 2.5 } },
+    { vis: { description: null } }, { vis: { description: -7 } }, { vis: { displayName: 2 ** 40 } }, { vis: 'x' }];
+
+  assert.deepStrictEqual(rows.map(row => documentIndexRow(row).searchVis), rows.map(searchVisOf));
+});
+
+test('documentIndexRow isDeleted is true only for a stored boolean true', () => {
+  assert.deepStrictEqual([{}, { isDeleted: 'true' }, { isDeleted: false }, { isDeleted: true }]
+    .map(row => documentIndexRow(row).isDeleted), [false, false, false, true]);
+});
+
+// Cosmos drops an undefined property from a projection, and LOWER of a non-string is undefined.
+test('documentIndexRow leaves out what the SELECT would not project', () => {
+  const built = documentIndexRow({ id: 'd1', description: null, documentAuthor: 7 });
+
+  assert.deepStrictEqual(Object.keys(built), ['id', 'description', 'searchVis', 'isDeleted']);
+});
+
+test('documentIndexRow lowers an ASCII author and leaves any other to the indexer', () => {
+  assert.strictEqual(documentIndexRow({ documentAuthor: 'Ministry of MINES' }).documentAuthorSort, 'ministry of mines');
+  assert.strictEqual(documentIndexRow({ documentAuthor: 'İLKER' }).documentAuthorSort, undefined);
+});
+
+test('documentIndexRow is null for a row the SELECT WHERE leaves out', () => {
+  assert.strictEqual(documentIndexRow({ id: 'd1', scanStatus: 'pending' }), null);
+});

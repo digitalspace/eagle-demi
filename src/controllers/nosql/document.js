@@ -25,6 +25,7 @@ const {
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { documentIndexRow, indexDocumentsNow } = require('../../search/document-query');
 const { purgeDocument } = require('../../helpers/purge');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
@@ -929,6 +930,7 @@ exports.createDocument = async (req, res) => {
       updatedAt: now
     });
     await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
+    await indexDocumentsNow([saved]);
 
     auditEvent(req, {
       action: 'document.create',
@@ -995,6 +997,7 @@ exports.extractDocument = async (req, res) => {
       updatedAt: now
     });
     await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
+    await indexDocumentsNow([saved]);
 
     // Same action as createDocument, so "who created documents" stays one query; `via` tells
     // the two doors apart.
@@ -1265,9 +1268,7 @@ function listLookupFrom(doc, labels) {
   return lookup;
 }
 
-// The LEVEL, since a delete push narrows level 3 to 2 without touching `isPublished`, and the delete
-// flag, which a staff-level row changes alone.
-const indexFieldsMoved = (from, saved) => levelOfRead(saved.read) !== levelOfRead(from.read) || (saved.isDeleted === true) !== (from.isDeleted === true);
+const indexFieldsMoved = (from, saved) => JSON.stringify(documentIndexRow(from)) !== JSON.stringify(documentIndexRow(saved));
 
 /**
  * Receive one raw Eagle document pushed by eagle-api, through the seed's own transform. A delete
@@ -1392,12 +1393,8 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    // As in setLevel, the index is corrected here.
-    if (from && indexFieldsMoved(from, saved)) {
-      await aiSearch.writeAcls(aiSearch.indexes().documents, [
-        { id: saved.id, read: saved.read, isPublished: saved.isPublished, isDeleted: saved.isDeleted === true }
-      ]);
-    }
+    // Staff lists page in the index, so a new or changed row goes in now, not at the indexer's next pass.
+    if (!from || indexFieldsMoved(from, saved)) await indexDocumentsNow([saved]);
 
     if (owed) await propagateParentFields(saved);
 

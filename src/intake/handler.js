@@ -9,6 +9,7 @@ const path = require('path');
 const { logger } = require('../utils/logger');
 const { decide } = require('./decision');
 const { moveToQuarantine } = require('./blobs');
+const { indexDocumentsNow } = require('../search/document-query');
 const { capRead, levelOfRead, systemAccess } = require('../helpers/access-sql');
 
 /**
@@ -56,14 +57,15 @@ async function release(row, scan, { store, blobs, nrs, projects }) {
     const capped = await releasedRead(row, projects);
     read = { read: capped, isPublished: capped.includes('public') };
   }
-  const settled = await store.settle(row, {
+  const fields = {
     scanStatus: 'clean', scanResult: scan.result, scannedAt: scan.scannedAt, scanSizeBytes: stat.size,
     s3Key: key, ...read
-  });
-  if (!settled) {
+  };
+  if (!await store.settle(row, fields)) {
     logger.warn('[intake] row settled by another writer while releasing', { documentId: row.id, key });
     return { outcome: 'raced', sizeBytes: stat.size };
   }
+  await indexDocumentsNow([{ ...row, ...fields }]);
   await client.removeObject(row.id);
   return { outcome: 'clean', sizeBytes: stat.size };
 }

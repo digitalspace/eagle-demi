@@ -11,6 +11,7 @@ const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
 const storage = require('../../../src/storage');
 const syncOut = require('../../../src/sync-out');
+const aiSearch = require('../../../src/search/ai-search');
 const { logger } = require('../../../src/utils/logger');
 const documentController = require('../../../src/controllers/nosql/document');
 const { mockRes } = require('../../helpers/eagle-mirror-fixtures');
@@ -52,6 +53,16 @@ test('native document creates queue sync-out', async (t) => {
       assert.deepStrictEqual(enqueue.mock.calls[0].arguments, [saved[0], { kind: 'document' }]);
     });
 
+    // The staff list pages in the index, so a create left to the indexer is missing for minutes.
+    await t.test(`${name} puts the saved row in the documents index at once`, async () => {
+      const saved = wireWrite(t);
+      t.mock.method(syncOut, 'enqueue', async () => []);
+      const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
+
+      await documentController[name](request(), mockRes());
+
+      assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => row.id)), [[saved[0].id]]);
+    });
   }
 
   await t.test('a create answers 201 when sync-out is on but no queue is set', async (tt) => {
