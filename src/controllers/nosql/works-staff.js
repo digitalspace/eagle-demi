@@ -1,6 +1,6 @@
 'use strict';
 
-// Staff reads of a project's works: the staff entries in effect for each, and the sheet works.
+// Staff reads of works: a project's staff entries in effect for each and its sheet works, and sheet work counts across projects.
 // Level 2 and narrower only: the staff lists sit at level 2 or 3, and sheet works the public read hides are staff data.
 
 const projects = require('../../repositories/projects');
@@ -10,7 +10,7 @@ const { levelOf } = require('../../vis/level');
 const { redactForAccess } = require('../../vis/redact');
 const { inEffect, workRangeOf } = require('../../domain/work-model');
 const { given, listOf } = require('../../domain/work-override');
-const { sheetWorksOf } = require('../../domain/works-derive');
+const { sheetWorksOf, sheetWorksSummaryOf } = require('../../domain/works-derive');
 const { ENTRY_SCHEMAS, SERVER_KEYS, currentInvestment } = require('../../domain/project-staff-fields');
 const { serverError } = require('../../helpers/response');
 
@@ -37,15 +37,22 @@ const entriesFor = (list, keys, work) => listOf(list).flatMap((entry) => {
   return [given(entry.effectiveFrom) ? entry : { ...entry, currentAsOf: entry.observedAt }];
 }).map(entry => pick(entry, keys));
 
+const refusal = (res, status, error) => { res.status(status).json({ error }); return null; };
+
+/** The caller's access when it is staff level or narrower; else sends 403 and gives null. */
+function staffAccessOf(req, res) {
+  const access = resolveAccess(req);
+  return levelOf(access) > STAFF_LEVEL ? refusal(res, 403, 'Forbidden') : access;
+}
+
 /** `{ access, project }` for a staff-level caller and a readable project; else sends 403, 400 or 404 and gives null. */
 async function staffProjectOf(req, res) {
-  const refuse = (status, error) => { res.status(status).json({ error }); return null; };
-  const access = resolveAccess(req);
-  if (levelOf(access) > STAFF_LEVEL) return refuse(403, 'Forbidden');
+  const access = staffAccessOf(req, res);
+  if (!access) return null;
   const id = req.params && req.params.id;
-  if (typeof id !== 'string' || !PROJECT_ID.test(id)) return refuse(400, 'Invalid project id');
+  if (typeof id !== 'string' || !PROJECT_ID.test(id)) return refusal(res, 400, 'Invalid project id');
   const project = await projects.getById(access, id);
-  if (!project) return refuse(404, 'Project not found');
+  if (!project) return refusal(res, 404, 'Project not found');
   return { access, project };
 }
 
@@ -86,5 +93,17 @@ exports.getSheetWorks = async (req, res) => {
     return res.json({ projectId: project.id, ...(await sheetWorksOf(project)) });
   } catch (err) {
     return serverError(res, err, 'sheet-works read failed');
+  }
+};
+
+/** `GET /sheet-works/summary`: counts only, for the projects with a live sheet work the caller may read. */
+exports.getSheetWorksSummary = async (req, res) => {
+  try {
+    const access = staffAccessOf(req, res);
+    if (!access) return undefined;
+    const rows = await projects.listByIds(access, await works.liveProjectIds({ owner: 'sheet' }));
+    return res.json({ projects: await sheetWorksSummaryOf(rows) });
+  } catch (err) {
+    return serverError(res, err, 'sheet-works summary read failed');
   }
 };

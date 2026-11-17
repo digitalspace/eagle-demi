@@ -4,7 +4,7 @@
 // Writes refused on another owner's document are an authorization check only where the caller fixes the owner.
 
 const cosmos = require('../db/cosmos-nosql');
-const { upsertWithEtag, createItem, eq, fetchAll } = require('./_sql');
+const { upsertWithEtag, createItem, eq, inList, fetchAll } = require('./_sql');
 
 const CONTAINER = 'works';
 const PARTITION_FIELD = 'projectId';
@@ -110,9 +110,26 @@ async function listForRead(projectId) {
   return (await listByProject(projectId)).map(withoutPrivate);
 }
 
+/** `listForRead` over several projects in one cross-partition query. */
+async function listForReadAcross(projectIds) {
+  const projects = inList('projectId', projectIds.map(String), '@pid');
+  const terms = [projects.clause, 'NOT IS_DEFINED(c.kind)', LIVE];
+  return (await fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${terms.join(' AND ')}`, parameters: projects.params }))
+    .map(withoutPrivate);
+}
+
 /** Point read, tombstone and marker included, with its `_etag`; null when absent. */
 async function get(projectId, workId) {
   return cosmos.readItem(CONTAINER, String(workId), String(projectId));
+}
+
+/** `get` of `workId` in each of `projectIds`, one cross-partition query; projects lacking it are left out. */
+async function getEach(projectIds, workId) {
+  const projects = inList('projectId', projectIds.map(String), '@pid');
+  const id = eq('id', String(workId), '@id');
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${id.clause} AND ${projects.clause}`, parameters: [...id.params, ...projects.params]
+  });
 }
 
 /** The one document of the project holding `sourceKey`, tombstone included; null when none. */
@@ -166,6 +183,6 @@ async function remove({ projectId, id }, { owner, etag } = {}) {
 }
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, PRIVATE_KEYS, ownerOf, listByProject, listForRead, liveProjectIds, get, findBySourceKey,
-  save, tombstone, remove, keptFrom
+  CONTAINER, PARTITION_FIELD, PRIVATE_KEYS, ownerOf, listByProject, listForRead, listForReadAcross, liveProjectIds, get,
+  getEach, findBySourceKey, save, tombstone, remove, keptFrom
 };

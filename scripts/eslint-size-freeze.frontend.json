@@ -10,7 +10,7 @@
   "src/screens/MapExplorer.test.tsx": {"max-lines":[1058]},
   "src/screens/MapExplorer.tsx": {"complexity":[84],"max-lines":[1528],"max-lines-per-function":[1397]},
   "src/screens/Notify.tsx": {"complexity":[44],"max-lines-per-function":[315]},
-  "src/screens/ProjectPicker.tsx": {"max-lines-per-function":[167]},
+  "src/screens/ProjectPicker.tsx": {"max-lines-per-function":[156]},
   "src/screens/ProjectShortUrl.tsx": {"complexity":[31,22],"max-lines-per-function":[302]},
   "src/screens/ProjectSummary.test.tsx": {"max-lines":[1123]},
   "src/screens/ProjectSummary.tsx": {"complexity":[100],"max-lines":[872],"max-lines-per-function":[801]},

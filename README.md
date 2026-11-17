@@ -759,6 +759,13 @@ fields plus `shownAfterFlip`, `untilTrack` and `replaces`, the stored Track work
 hides in its favour. Contacts, notes, investments, the marker's certificates and `trackAlive` list,
 `sourceKey`, `sheetKey` and `provenance` are left out.
 
+`GET /api/sheet-works/summary` returns `{ projects: [...] }` with one entry per readable project that has
+live sheet works, sorted by `projectId`. Each entry holds `projectId`, `act1996`, `act2002`, `hidden`,
+`replaces` and `untilTrack`, counted the same way as the Project details panel. A work under any other or
+unknown Act is left out of `act1996` and `act2002`, but it still counts toward the other three fields and
+its project still appears. It has the same staff access and dev/test routing as the route above, and the
+Project details picker shows the counts as badges with a filter.
+
 ### Track project poll
 
 Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five

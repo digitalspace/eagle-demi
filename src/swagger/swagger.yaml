@@ -1755,6 +1755,65 @@ paths:
         '500':
           description: The read failed.
 
+  /api/sheet-works/summary:
+    get:
+      summary: Count sheet works per project
+      description: >-
+        One entry per project that has at least one live sheet work and that the caller can read,
+        sorted by `projectId`. The counts come from the same rules as
+        `/api/projects/{id}/sheet-works`: `hidden` counts works with `shownAfterFlip` false,
+        `replaces` counts shown works with a non-empty `replaces` list, and `untilTrack` counts
+        shown works that replace nothing and have `untilTrack`. A work under any other or unknown
+        Act is not counted in `act1996` or `act2002`, but it still counts toward `hidden`, `replaces`
+        and `untilTrack`, and its project still appears. Routed only when `ENVIRONMENT` is
+        `dev` or `test`; elsewhere every caller gets the router's 404. Needs the same roles as
+        `works-staff`: a call with no token gets 401, and IDIR-only and other non-staff callers get
+        403 before any works are read. Project names, work titles and marker details never appear.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Sheet work counts per project.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      type: object
+                      required: [projectId, act1996, act2002, hidden, replaces, untilTrack]
+                      properties:
+                        projectId:
+                          type: string
+                        act1996:
+                          type: integer
+                          description: Sheet works whose public `actYear` is 1996.
+                        act2002:
+                          type: integer
+                          description: Sheet works whose public `actYear` is 2002.
+                        hidden:
+                          type: integer
+                          description: Works a read with `WORKS_READ_SOURCES` `track,sheet` hides.
+                        replaces:
+                          type: integer
+                          description: Shown works that hide at least one stored Track work.
+                        untilTrack:
+                          type: integer
+                          description: >-
+                            Shown works that hide no Track work and wait for a matching Track work.
+        '401':
+          description: No token, or the credential is rejected.
+        '403':
+          description: The caller holds only an IDIR login or has no staff-level role.
+        '404':
+          description: Not on `dev` or `test`.
+        '500':
+          description: The read failed.
+
   /api/projects/{id}/mines:
     get:
       summary: List a project's NRPTI mines

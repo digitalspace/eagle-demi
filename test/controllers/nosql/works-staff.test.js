@@ -1,6 +1,6 @@
 'use strict';
 
-// GET /projects/:id/works-staff and /sheet-works: who may call them, and what each work carries.
+// GET /projects/:id/works-staff, /projects/:id/sheet-works and /sheet-works/summary: who may call them, and what each carries.
 
 process.env.NODE_ENV = 'test';
 
@@ -11,9 +11,10 @@ const config = require('../../../src/config');
 const phaseCatalog = require('../../../src/domain/phase-catalog');
 const projects = require('../../../src/repositories/projects');
 const works = require('../../../src/repositories/works');
+const { resolveAccess } = require('../../../src/helpers/access-sql');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
-const { getSheetWorks, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
+const { getSheetWorks, getSheetWorksSummary, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
 const { mockRes } = require('../../helpers/mock-res');
 const { withServer } = require('../../helpers/with-server');
 
@@ -178,22 +179,27 @@ async function asDeployment(environmentName, fn) {
   }
 }
 
-test('sheet-works is not routed outside dev and test, token or not, and reaches auth on dev and test', async (t) => {
-  const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+test('both sheet-works paths are not routed outside dev and test, token or not, and reach auth on dev and test', async (t) => {
+  const reads = [t.mock.method(projects, 'getById', async () => structuredClone(ROW)),
+    t.mock.method(projects, 'listByIds', async () => [structuredClone(ROW)])];
   const results = [];
   const before = config.environmentName;
-  for (const environmentName of ['prod', 'staging', 'dev', 'test']) {
-    await asDeployment(environmentName, async (call) => {
-      for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
-        results.push([environmentName, Boolean(headers.authorization), (await call(`/api/projects/${ROW.id}/sheet-works`, { headers })).status]);
-      }
-    });
+  const urls = [`/api/projects/${ROW.id}/sheet-works`, '/api/sheet-works/summary'];
+  for (const url of urls) {
+    for (const environmentName of ['prod', 'staging', 'dev', 'test']) {
+      await asDeployment(environmentName, async (call) => {
+        for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
+          results.push([url, environmentName, Boolean(headers.authorization), (await call(url, { headers })).status]);
+        }
+      });
+    }
   }
-  assert.deepStrictEqual(results, [
+  const expected = [
     ['prod', false, 404], ['prod', true, 404], ['staging', false, 404], ['staging', true, 404],
     ['dev', false, 401], ['dev', true, 401], ['test', false, 401], ['test', true, 401]
-  ]);
-  assert.strictEqual(read.mock.callCount(), 0);
+  ];
+  assert.deepStrictEqual(results, urls.flatMap(url => expected.map(row => [url, ...row])));
+  assert.deepStrictEqual(reads.map(read => read.mock.callCount()), [0, 0]);
   assert.strictEqual(config.environmentName, before);
 });
 
@@ -219,4 +225,40 @@ test('sheet-works returns only sheet works, with no staff entries, marker detail
   for (const key of ['contacts', 'notes', 'investments', 'certificates', 'trackAlive', 'sourceKey', 'sheetKey', 'provenance', 'sample.xlsx', EPD.name]) {
     assert.ok(!text.includes(key), `${key} is left out`);
   }
+});
+
+// Project 999 has sheet works the caller's projects read does not return.
+async function callSummary(t, user) {
+  const stored = [TRACK_WORK, { ...SHEET_WORK, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
+  const reads = [t.mock.method(works, 'liveProjectIds', async () => ['412', '999', '412']),
+    t.mock.method(projects, 'listByIds', async () => [{ id: ROW.id, name: ROW.name }])];
+  t.mock.method(works, 'listForReadAcross', async (ids) => structuredClone(stored.filter(work => ids.includes(work.projectId))));
+  t.mock.method(works, 'getEach', async (ids) => [structuredClone(MARKER)].filter(marker => ids.includes(marker.projectId)));
+  t.mock.method(phaseCatalog, 'load', async () => ({}));
+  const res = mockRes();
+  await getSheetWorksSummary({ params: {}, query: {}, user }, res);
+  return { res, reads: reads.map(read => read.mock.callCount()), projectReads: reads[1].mock.calls.map(call => call.arguments) };
+}
+
+test('sheet-works summary refuses anonymous and idir calls before any read', async (t) => {
+  const route = routes.find(r => r.method === 'get' && r.path === '/sheet-works/summary');
+  assert.strictEqual(route.guards[0], authMiddleware);
+  const results = [];
+  for (const user of [undefined, IDIR]) {
+    const { res, reads } = await callSummary(t, user);
+    results.push([res.statusCode, reads]);
+    t.mock.restoreAll();
+  }
+  assert.deepStrictEqual(results, [[403, [0, 0]], [403, [0, 0]]]);
+});
+
+test('sheet-works summary gives counts only, for the projects the caller may read', async (t) => {
+  const { res, projectReads } = await callSummary(t, STAFF);
+  assert.deepStrictEqual(projectReads.map(([access, ids]) => [access, new Set(ids)]),
+    [[resolveAccess({ user: STAFF }), new Set(['412', '999'])]]);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body,
+    { projects: [{ projectId: '412', act1996: 1, act2002: 0, hidden: 0, replaces: 1, untilTrack: 0 }] });
+  const text = JSON.stringify(res.body);
+  for (const key of [SHEET_WORK.title, TRACK_WORK.title, ROW.name, EPD.name]) assert.ok(!text.includes(key), `${key} is left out`);
 });

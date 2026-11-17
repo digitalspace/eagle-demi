@@ -24,6 +24,7 @@ export const SCREENS = [
   { path: '/summary', h1: 'AI Search Summary' },
   { path: '/projects', h1: 'AI Project Summary' },
   { path: '/projects/901', h1: 'Sample Alpha Transmission Line' },
+  { path: '/project-details', h1: 'Project details', text: '1996 Act (1)' },
   // `text` comes only from a panel's own fixture, so a panel reading the wrong id fails here.
   { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
   { path: '/notify', h1: 'eagle-notify' },
