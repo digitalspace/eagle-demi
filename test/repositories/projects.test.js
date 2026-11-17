@@ -204,7 +204,7 @@ test('project staff history writes', async (t) => {
     const store = mirrorStore(t, rows.map(row => ({ container: 'projects', read: ['public'], ...row })));
     const mirrored = cosmos.query;
     t.mock.method(cosmos, 'query', async (container, spec, opts) => {
-      if (!spec.query.includes('StringEquals(x.value, @v0, true)')) return mirrored(container, spec, opts);
+      if (!spec.query.includes('StringEquals(x["value"], @v0, true)')) return mirrored(container, spec, opts);
       const param = (name) => spec.parameters.find(p => p.name === name).value;
       const pairs = spec.parameters.filter(p => p.name.startsWith('@s')).map(p => [p.value, param(`@v${p.name.slice(2)}`)]);
       const items = store.rows(container).map(({ id, eagleId, foldedInto, externalIds = [] }) => ({ id, eagleId, foldedInto,
@@ -221,6 +221,7 @@ test('project staff history writes', async (t) => {
 
     assert.deepStrictEqual(await history.externalIdHolders(ORCS.system, ORCS.value), []);
     assert.ok(!spec.query.includes(ORCS.value) && !spec.query.includes(`'${ORCS.system}'`), spec.query);
+    assert.ok(!spec.query.includes('x.value'), `Cosmos rejects the keyword in dot notation: ${spec.query}`);
     assert.deepStrictEqual(spec.parameters, [{ name: '@s0', value: 'orcs' }, { name: '@v0', value: ORCS.value }]);
     for (const [system, value] of [['orcs', ' 12345-20/AB'], ['eao-register', 412], ['orcs', '12345 20'], ['ORCS', ORCS.value], ['constructor', '1']]) {
       await assert.rejects(history.externalIdHolders(system, value), TypeError, `${system} ${value}: a padded, untyped or unknown pair could dodge the match`);
