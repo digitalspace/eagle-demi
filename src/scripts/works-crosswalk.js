@@ -9,7 +9,8 @@ const { checkStorageAccount, uploadSealed } = require('./works-import-upload');
 const { systemAccess } = require('../helpers/access-sql');
 const projectsRepository = require('../repositories/projects');
 const { eagleOnlyProjectId, isEagleOnlyProjectId, isDemiOwnedProject } = require('../merge/project');
-const { sheetIdOf } = require('../domain/business-works-inputs');
+const { REGISTER_SYSTEM, sheetIdOf } = require('../domain/business-works-inputs');
+const { SYSTEMS } = require('../repositories/project-staff-history');
 const {
   devboxKeysFromPem, readCapped, openEnvelope, openExtract, operatorRecipientOf, sha256Hex, verify, writeSealed
 } = require('../utils/import-envelope');
@@ -88,7 +89,9 @@ function manualOf(plaintext) {
   });
   const skip = new Map();
   skipIds.forEach((sheetId, index) => {
-    if (!sheetIdOf(sheetId) || skip.has(sheetId)) refuse(`manual-match skip[${index}] is not a unique sheet id`);
+    // The load looks a skip id up as a register external id, so it must fit that shape too.
+    const valid = sheetIdOf(sheetId) && SYSTEMS[REGISTER_SYSTEM].test(String(sheetId)) && !skip.has(sheetId);
+    if (!valid) refuse(`manual-match skip[${index}] is not a unique sheet id`);
     if (matches.has(sheetId)) refuse(`manual-match skip[${index}] is also in matches`);
     skip.set(sheetId, index);
   });

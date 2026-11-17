@@ -43,9 +43,9 @@ const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
   amendments: [amendment(1, '2023-06-01', '2023-11-07'), { ...amendment(2, '2012-02-01', '2012-05-01'), id: 102 }]
 } });
 const sheetDoc = fields => ({ projectId: '7002', source: 'sheet', owner: 'sheet', _etag: '"s"', ...fields });
-const holds103 = (demi, externalIds) => {
-  demi.externalIdHolders = async (system, value) => (system === 'eao-register' && value === '103' ? ['7003'] : []);
-  demi.otherRows.set('7003', { id: '7003', externalIds });
+const holds103 = source => ({ id: '7003', externalIds: [{ system: 'eao-register', value: '103', source }] });
+const heldBy = (demi, holders) => {
+  demi.externalIdHolders = async (system, value) => (system === 'eao-register' && value === '103' ? holders : []);
 };
 
 test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or a closed sheet entry holds does not refuse', async () => {
@@ -57,7 +57,8 @@ test('a row the crosswalk skips is listed crosswalkSkipped; what Track, staff or
   demi.otherRows.set('7002', { id: '7002',
     externalIds: [{ system: 'eao-register', value: '102', source: 'demi' }, { system: 'eao-register', value: '999', source: 'sheet' }],
     staffAssignments: [{ id: 'a1', source: 'sheet', effectiveTo: '2025-01-01' }, { id: 'a2', source: 'track', effectiveTo: null }] });
-  holds103(demi, [{ system: 'eao-register', value: '103', source: 'demi' }]);
+  heldBy(demi, ['7003']);
+  demi.otherRows.set('7003', holds103('demi'));
   const { value } = await load(argv, demi);
   const skipped = reportOf(outDir, value('blob')).report.filter(one => one.reason === 'crosswalkSkipped');
   assert.deepEqual(skipped.map(one => `${one.source}:${one.state}`).sort(),
@@ -78,7 +79,18 @@ test('refuses when a project the crosswalk skips still holds a sheet work or an 
 test("refuses when a skipped project's row holds the sheet's register id for that number or an open sheet staff entry", async () => {
   await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', externalIds: [{ system: 'eao-register', value: '102', source: 'sheet' }] }));
   await refusedHolding(demi => demi.otherRows.set('7002', { id: '7002', staffNotes: [{ id: 'n1', source: 'sheet', text: 'note' }] }));
-  await refusedHolding(demi => holds103(demi, [{ system: 'eao-register', value: '103', source: 'sheet' }]));
+  await refusedHolding((demi) => {
+    heldBy(demi, ['7004', '7003']);
+    demi.otherRows.set('7003', holds103('sheet'));
+  });
+});
+
+test('a holder of a skipped number that is a passing target is left to that row: its sheet work does not refuse', async () => {
+  const demi = fakeDemi();
+  heldBy(demi, [PROJECT]);
+  demi.docs.set('sheet-own', sheetDoc({ id: 'sheet-own', projectId: PROJECT, sourceKey: `${NUMBER}:amendment:9` }));
+  const { value } = await load(skippedInputs().argv, demi);
+  assert.match(value('planSha256'), /^[0-9a-f]{64}$/);
 });
 
 test('refuses an unknown Cosmos host, prod included, in the dry run', async (t) => {

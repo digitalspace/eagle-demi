@@ -233,7 +233,7 @@ A failed run leaves its rollback batch pending, and the same command resumes it.
 
 After a `WORKS_READ` rollback, the first nightly run writes Track's works back onto the project rows as drift. It leaves `updatedAt` alone.
 
-The load refuses with "a skipped project holds what an earlier sheet load wrote; roll back that batch". The project is an `unfolded` row's `targetId` in the opened crosswalk CSV, or holds a `skipped` row's number. Nightly parity `sheetOutsideCrosswalk` lists a `badId` row's project only while it holds live sheet works.
+The load refuses with "a skipped project holds what an earlier sheet load wrote; roll back that batch". The project is an `unfolded` row's `targetId` in the opened crosswalk CSV, or holds a `skipped` row's number. Nightly parity `sheetOutsideCrosswalk` lists any project outside the passing rows that holds live sheet works.
 
 `--rollback` undoes only the latest complete load batch. If an older batch loaded the project, roll back each later batch first, newest first.
 

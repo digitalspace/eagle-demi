@@ -312,7 +312,7 @@ test('key, fingerprint, file and manual-shape guards refuse', async () => {
     /is over 65536 bytes/);
   await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, extra: [] } }), /must hold only matches, foldPairs and skip/);
   await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, skip: null } }), /matches, foldPairs and skip must be arrays/);
-  for (const skip of [[191201, 191201], ['191201'], [0]]) {
+  for (const skip of [[191201, 191201], ['191201'], [0], [1234567890]]) {
     await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, skip } }), /^Error: manual-match skip\[\d\] is not a unique sheet id$/);
   }
   await assert.rejects(crosswalk({ projects, rows, manual: { matches: [{ sheetId: 191201, trackId: '7027' }], foldPairs: [], skip: [191201] } }),

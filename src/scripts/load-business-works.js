@@ -55,9 +55,9 @@ function liveDemi() {
 
 /**
  * A report entry per skipped project still holding sheet works, an active sheet marker or sheet row entries, which the load
- * would leave in place. A `skipped` row names no project, so each holder of its register number is checked.
+ * would leave in place. A `skipped` row names no project, so each holder of its number outside `targets` is checked.
  */
-async function skippedHolding(demi, skipped) {
+async function skippedHolding(demi, skipped, targets) {
   const entries = [];
   const isSheet = doc => works.ownerOf(doc) === OWNER && !doc.deleted;
   const holds = async (projectId, number) => {
@@ -66,7 +66,10 @@ async function skippedHolding(demi, skipped) {
       holdsSheetEntries(await demi.project(projectId), number);
   };
   for (const [number, { state, targetId }] of skipped) {
-    const projectIds = state === 'skipped' ? await demi.externalIdHolders(REGISTER_SYSTEM, String(number)) : [targetId];
+    // A passing row's plan owns its target's sheet works.
+    const projectIds = state === 'skipped'
+      ? (await demi.externalIdHolders(REGISTER_SYSTEM, String(number))).filter(id => !targets.has(id))
+      : [targetId];
     for (const projectId of projectIds) {
       if (await holds(projectId, number)) entries.push({ reason: SKIPPED_HOLDS, source: 'load', projectId, state });
     }
@@ -76,7 +79,8 @@ async function skippedHolding(demi, skipped) {
 
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
-  const stored = await readStored(demi, [...new Set(crosswalk.values())]);
+  const targets = new Set(crosswalk.values());
+  const stored = await readStored(demi, [...targets]);
   const mapper = mapperInputs({
     crosswalk, skipped: inputs.crosswalk.skipped, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
     catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
@@ -84,7 +88,7 @@ async function planFor(demi, inputs, { batchId, batchAt }) {
   const plan = buildPlan(inputs.opened.extract, {
     mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf
   });
-  plan.report.push(...await skippedHolding(demi, inputs.crosswalk.skipped));
+  plan.report.push(...await skippedHolding(demi, inputs.crosswalk.skipped, targets));
   if (plan.report.some(entry => CROSSWALK_REASONS.includes(entry.reason))) refuse('a sheet number is not in the signed crosswalk or has no register row');
   if (plan.report.some(entry => entry.reason === SKIPPED_HOLDS)) {
     refuse('a skipped project holds what an earlier sheet load wrote; roll back that batch');
