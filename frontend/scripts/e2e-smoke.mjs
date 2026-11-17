@@ -1,13 +1,6 @@
 #!/usr/bin/env node
-// Smoke test for a built DEMI frontend: every screen and every legacy redirect, Keycloak off, plus
-// no sideways scroll on the FITS screens at four widths.
-// Serve the build first (`yarn build && yarn preview --host 127.0.0.1`); this script starts nothing.
-//
-// Usage:
-//   node scripts/e2e-smoke.mjs [--base <url>] [--timeout <ms>] [--help]
-//
-// Sign-in, runtime config and every API answer come from the parity harness: env.js is patched in
-// flight and /api/** is served from parity/fixtures/. Nothing on disk is edited.
+// Smoke test for a served build: every screen and redirect, plus FITS. Serve it first with
+// `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -50,9 +43,8 @@ export const REDIRECTS = [
   { path: '/no-such-screen', to: '/map', h1: 'Map Explorer' }
 ];
 
-// Screens that must not scroll sideways at these widths. The project page also gets a 64-character
-// code with no hyphen to break at, which is what once widened it. `api` swaps the screen's own read
-// for an edited fixture; `panel` must not scroll sideways either, from `panelFrom` px up.
+// Screens that must not scroll sideways at these widths. `api` swaps the screen's read for an edited
+// fixture (a long unbreakable code on the project page); `panel` must not scroll from `panelFrom` px up.
 export const FIT_WIDTHS = [390, 768, 1280, 1440];
 const LONG_CODE = 'sample_project_code_with_no_hyphen_to_break_at_all_sixty_four_ch';
 export const FITS = [
