@@ -24,6 +24,8 @@ export const SCREENS = [
   { path: '/summary', h1: 'AI Search Summary' },
   { path: '/projects', h1: 'AI Project Summary' },
   { path: '/projects/901', h1: 'Sample Alpha Transmission Line' },
+  // `text` comes only from a panel's own fixture, so a panel reading the wrong id fails here.
+  { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
   { path: '/notify', h1: 'eagle-notify' },
   { path: '/links', h1: 'Short URLs' },
   { path: '/rbac', h1: 'Access model' },
@@ -132,6 +134,13 @@ async function check(context, base, entry, timeout) {
         .waitForFunction((want) => [...document.querySelectorAll('h1')].some((h) => h.textContent.trim() === want), entry.h1, { timeout })
         .catch(async () => reasons.push(`h1 ${JSON.stringify(await h1Texts(page))} lacks "${entry.h1}"`));
     }
+    if (entry.text) {
+      await page
+        .getByText(entry.text, { exact: true })
+        .first()
+        .waitFor({ timeout })
+        .catch(() => reasons.push(`"${entry.text}" never rendered`));
+    }
 
     // Late errors (a failed lazy chunk, a query that throws on render) land after the h1.
     await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
@@ -200,6 +209,8 @@ async function main() {
   await routeApi(context, misses);
   await routeTiles(context);
   await routeDataBc(context, misses);
+  // NrptiPanel reads NRPTI's prod API straight from the browser; the smoke must not depend on it.
+  await context.route((url) => url.hostname.startsWith('nrpti-api-'), (route) => route.fulfill({ json: [{ searchResults: [] }] }));
 
   let ok = 0;
   let fail = 0;

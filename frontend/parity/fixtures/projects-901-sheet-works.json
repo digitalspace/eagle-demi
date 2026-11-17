@@ -1,0 +1,139 @@
+{
+  "projectId": "901",
+  "overrideActive": true,
+  "boundary": "2021-06-30",
+  "works": [
+    {
+      "workId": "sheet-901-assessment-1996",
+      "source": "sheet",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "title": "Sample Alpha Transmission Line assessment",
+      "eaAct": "Environmental Assessment Act (1996)",
+      "actYear": 1996,
+      "startDate": null,
+      "isActive": false,
+      "workState": "COMPLETED",
+      "decisionDate": "2003-04-10",
+      "anticipatedDecisionDate": null,
+      "outcome": "Withdrawn",
+      "transitionOut": { "toActYear": 2002, "date": null, "dateSource": "none" },
+      "undated": { "startDate": { "notAfter": "2001-03-01" } },
+      "phases": [
+        {
+          "name": "Application Review",
+          "startDate": "2002-01-15",
+          "endDate": "2003-04-10",
+          "numberOfDays": 450,
+          "legislated": true,
+          "order": 2,
+          "stage": "assessment",
+          "isCompleted": true,
+          "undated": null,
+          "interruptions": [
+            {
+              "kind": "suspension",
+              "startDate": "2002-06-01",
+              "endDate": "2002-07-01",
+              "days": 30,
+              "legalSection": "s.30(1)"
+            }
+          ]
+        },
+        {
+          "name": "Pre-Application",
+          "startDate": null,
+          "endDate": "2002-01-14",
+          "numberOfDays": null,
+          "legislated": false,
+          "order": 1,
+          "stage": "pre-application",
+          "isCompleted": true,
+          "undated": { "startDate": { "notAfter": "2001-03-01" } },
+          "interruptions": []
+        }
+      ],
+      "milestones": [],
+      "shownAfterFlip": false,
+      "untilTrack": false,
+      "replaces": []
+    },
+    {
+      "workId": "sheet-901-assessment-2002",
+      "source": "sheet",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "title": "Sample Alpha Transmission Line assessment",
+      "eaAct": "Environmental Assessment Act (2002)",
+      "actYear": 2002,
+      "startDate": "2003-05-01",
+      "isActive": false,
+      "workState": "COMPLETED",
+      "decisionDate": "2014-10-14",
+      "anticipatedDecisionDate": null,
+      "outcome": "Certificate Issued",
+      "transitionOut": null,
+      "undated": null,
+      "phases": [
+        {
+          "name": "Application Review",
+          "startDate": "2013-11-01",
+          "endDate": "2014-10-14",
+          "numberOfDays": 347,
+          "legislated": true,
+          "order": 1,
+          "stage": "assessment",
+          "isCompleted": true,
+          "undated": null,
+          "interruptions": []
+        }
+      ],
+      "milestones": [
+        {
+          "name": "Public comment period",
+          "code": "comment-period",
+          "eventType": "comment-period",
+          "actualDate": "2014-02-03",
+          "anticipatedDate": null,
+          "endDate": "2014-03-05",
+          "outcome": null,
+          "numberOfDays": 30,
+          "links": { "commentPeriodId": null },
+          "undated": null
+        }
+      ],
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [
+        {
+          "workId": "track-901-1",
+          "title": "Sample Alpha EA Certificate",
+          "startDate": "2003-05-01",
+          "decisionDate": "2014-10-14"
+        }
+      ]
+    },
+    {
+      "workId": "sheet-901-amendment-2002",
+      "source": "sheet",
+      "workTypeCode": "amendment",
+      "workType": "Amendment",
+      "title": "Sample Alpha route amendment",
+      "eaAct": "Environmental Assessment Act (2002)",
+      "actYear": 2002,
+      "startDate": "2017-02-01",
+      "isActive": true,
+      "workState": "IN_PROGRESS",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2018-03-01",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "phases": [],
+      "milestones": [],
+      "shownAfterFlip": true,
+      "untilTrack": true,
+      "replaces": []
+    }
+  ]
+}
