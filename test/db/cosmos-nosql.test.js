@@ -400,7 +400,8 @@ test('a refused query names its container and query start, never a parameter val
   const err = await db.query('works', spec).then(() => assert.fail('query resolved'), e => e);
 
   assert.match(err.message, /^One of the input values is invalid\. \(container "works", query "SELECT \* FROM c WHERE c\.email = @email /);
-  assert.ok(err.message.includes(spec.query.slice(0, 100)) && !err.message.includes(spec.query.slice(0, 101)));
+  assert.ok(err.message.includes(spec.query.slice(0, 100)));
+  assert.ok(!err.message.includes(spec.query.slice(0, 101)));
   assert.doesNotMatch(err.message, /person@example\.com/);
   assert.strictEqual(err.code, 400);
   assert.strictEqual(err.cause.message, 'One of the input values is invalid.');
@@ -408,13 +409,19 @@ test('a refused query names its container and query start, never a parameter val
 
 test('a refused page drain names its container and query, as query() does', async (t) => {
   const { module: db, pages } = loadWithSdkStub(t);
-  pages.push(Object.assign(new Error('Request rate is large.'), { code: 429 }));
+  const spec = { query: 'SELECT * FROM c WHERE c.id = @id AND c.kind = "work"', parameters: [{ name: '@id', value: 'w1' }] };
+  const refused = () => Object.assign(new Error('Request rate is large.'), { statusCode: 429, name: 'TimeoutError' });
+  const named = 'Request rate is large. (container "works", query "SELECT * FROM c WHERE c.id = @id AND c.kind = \\"work\\"")';
 
-  const err = await db.queryFirst('works', { query: 'SELECT * FROM c WHERE c.id = @id', parameters: [{ name: '@id', value: 'w1' }] })
-    .then(() => assert.fail('queryFirst resolved'), e => e);
+  await t.test('queryFirst', async () => {
+    pages.push(refused());
+    await assert.rejects(db.queryFirst('works', spec), { message: named, statusCode: 429, name: 'TimeoutError' });
+  });
 
-  assert.strictEqual(err.message, 'Request rate is large. (container "works", query "SELECT * FROM c WHERE c.id = @id")');
-  assert.strictEqual(err.code, 429);
+  await t.test('queryPage', async () => {
+    pages.push(refused());
+    await assert.rejects(db.queryPage('works', spec, { size: 2 }), { message: named });
+  });
 });
 
 // The etag is an upsert's only concurrency guard: without it, of two writers that read the same

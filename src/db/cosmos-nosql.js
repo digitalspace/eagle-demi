@@ -87,9 +87,9 @@ function stripInternals(item) {
 // The SDK rejection names no container or query. Parameter values stay out (personal data);
 // callers branch on `code`, `statusCode` and the message start, so those carry over.
 const queryFailed = (containerName, spec) => (err) => {
-  const where = `(container "${containerName}", query "${spec.query.slice(0, 100)}")`;
-  throw Object.assign(new Error(`${err?.message} ${where}`, { cause: err }),
-    { code: err?.code, statusCode: err?.statusCode, substatus: err?.substatus });
+  const wrapped = new Error(`${err?.message ?? String(err)} (container "${containerName}", query ${JSON.stringify(spec.query.slice(0, 100))})`, { cause: err });
+  for (const key of ['code', 'statusCode', 'substatus', 'name']) if (err?.[key] !== undefined) wrapped[key] = err[key];
+  throw wrapped;
 };
 
 /**
