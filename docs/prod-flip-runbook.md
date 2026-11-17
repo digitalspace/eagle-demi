@@ -243,6 +243,12 @@ On test, call `GET /demi/api/projects/<id>/works-staff` through the Front Door h
 
 The response shape is in `src/swagger/swagger.yaml`.
 
+### Check the sheet works routes
+
+On test, with a staff token, the per-project route `GET /projects/<id>/sheet-works` answers 200 through the test host's `/demi/api` path and through the demo site's `/api` path. The summary route `GET /sheet-works/summary` answers 200 only through the demo site's `/api` path. On the test host, `/demi/api/sheet-works/summary` answers 404 with or without a token, because the edge read allowlist does not include it.
+
+On the routed paths, a call with no token gets 401. The check passes on the demo site when the Project details page lists the works the per-project route returns and the picker's badge counts match the summary.
+
 ### Clean up and check that the files are gone
 
 After the load is verified, delete these:
