@@ -21,6 +21,7 @@ export const SCREENS: Screen[] = [
   { key: 'summary', label: 'AI Search Summary', group: 'Discover', path: '/summary' },
   // The picker; /projects/:id under it is the same screen, so both share this key and info panel.
   { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects', ownsLoadError: true },
+  { key: 'project-details', label: 'Project details', group: 'Discover', path: '/project-details', ownsLoadError: true },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },
@@ -60,6 +61,11 @@ export const TECH: Record<string, Tech> = {
     title: 'AI Project Summary',
     chips: ['Azure AI Foundry — gpt-4.1-mini', 'Cosmos DB — projectSummaries', 'per-document chunk retrieval', 'server-side citation resolution', 'generated offline, read online'],
     note: 'Nothing on this page calls a model. One script reads the project’s own documents, asks for JSON per section and writes a single row to the projectSummaries container; the page reads that row and the live project record, and joins nation names to registry organisation rows in code so an address is never something a model wrote. A section whose source document is missing is stored as null and hidden here rather than invented, which is why the federal block can be a one-line note.'
+  },
+  'project-details': {
+    title: 'Project details',
+    chips: ['DEMI GET /projects/:id', 'NRPTI public search API (live)', 'read in the browser, nothing stored'],
+    note: 'One page per project with extra data beside the summary, one section per source. The project search is the same list AI Project Summary uses. NRPTI mines and compliance records are read live from the public NRPTI API by the project’s Eagle id; records that came from EPIC are left out, since EPIC already publishes them.'
   },
   notify: {
     title: 'eagle-notify',

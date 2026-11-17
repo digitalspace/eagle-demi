@@ -8,6 +8,7 @@ import { json } from '../test-http';
 import { queryWrapper } from '../test-query';
 import { stubNarrow } from '../test-setup';
 import { NAV_KEY } from './prefs';
+import { SCREENS } from './screens';
 
 function renderShell(at = '/keys') {
   const router = createMemoryRouter(routes, { initialEntries: [at] });
@@ -68,8 +69,9 @@ describe('the navigation rail', () => {
 
     const hrefs = navLinks().map((link) => link.getAttribute('href'));
 
-    expect(hrefs).toHaveLength(11);
+    expect([...hrefs].sort()).toEqual(SCREENS.map((s) => s.path).sort());
     expect(hrefs).toContain('/projects');
+    expect(hrefs).toContain('/project-details');
     expect(hrefs.some((href) => href?.startsWith('/projects/'))).toBe(false);
   });
 
@@ -106,7 +108,7 @@ describe('the navigation rail', () => {
     await user.click(railToggle());
 
     expect(railToggle()).toHaveAttribute('aria-expanded', 'true');
-    expect(navLinks()).toHaveLength(11);
+    expect(navLinks()).toHaveLength(SCREENS.length);
     expect(localStorage.getItem(NAV_KEY)).toBe('true');
   });
 

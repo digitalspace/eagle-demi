@@ -42,11 +42,8 @@ export function joinLabels(
 }
 
 /**
- * Every Eagle `List` row as id -> name.
- *
- * The project record stores List ObjectIds in `currentPhaseName` and friends, so without this the
- * page renders ids. A nameless row is dropped rather than mapped to '': an id with its "not in the
- * list" tooltip says more than a blank.
+ * Every Eagle `List` row as id -> name; the project record stores List ObjectIds, not names.
+ * A nameless row is dropped, not mapped to '': an id with its "not in the list" tooltip beats a blank.
  */
 export function listNames(rows: ListRow[]): Map<string, string> {
   return new Map(rows.filter((row) => row.name).map((row) => [String(row.id ?? row._id), String(row.name)]));
@@ -56,8 +53,7 @@ const NO_NAMES = new Map<string, string>();
 
 /**
  * The `List` name table, read once per session and shared by the picker, the summary page and the
- * search filters. A failed read gives an empty table rather than a pending one: ids then render with
- * the tooltip that explains them, which is a worse page than names but still the page.
+ * search filters. A failed read gives an empty table, not a pending one: ids show with their tooltip.
  */
 export function useLists(): { data: Map<string, string> | undefined } {
   const query = useQuery({ ...listRowsQuery, select: listNames });
@@ -98,6 +94,9 @@ export interface ProjectFacts {
   /** True only when staff stored a target other than the project page. */
   shortLinkCustom?: boolean;
 }
+
+/** The project's Eagle id, or empty when the record carries none. */
+export const projectEagleId = (facts: ProjectFacts | null): string => facts?.eagleId || facts?.legacyEagleId || '';
 
 /** A document the summary points at. `datePosted` is an ISO string when the index carried one. */
 export interface SummaryDocumentRef {
@@ -354,10 +353,8 @@ interface SummaryEnvelope {
 }
 
 /**
- * The stored summary row, or the reason there is none.
- *
- * Never rejects: a 404, a switched-off environment and a failed read are all answers this page
- * states out loud, and none of them stop the facts above from being the page.
+ * The stored summary row, or the reason there is none. Never rejects: a 404, a switched-off
+ * environment and a failed read are all answers the page states, and none hide the facts.
  */
 export async function fetchProjectSummary(
   projectId: string,
@@ -391,10 +388,8 @@ interface RawOrganization extends Omit<OrganizationRow, 'id' | 'name'> {
 }
 
 /**
- * Every Indigenous Group Organization row, indexed by id.
- *
- * Address and website come from here and never from the model: a contact detail a model wrote is a
- * contact detail nobody verified. A failed read costs the cards their detail, not the section.
+ * Every Indigenous Group Organization row by id. Address and website come from here, never the model:
+ * a contact detail a model wrote is one nobody verified. A failed read costs detail, not the section.
  */
 export async function fetchOrganizations(init?: ApiInit): Promise<Map<string, OrganizationRow>> {
   try {
@@ -418,10 +413,8 @@ export async function fetchOrganizations(init?: ApiInit): Promise<Map<string, Or
 }
 
 /**
- * The reads behind one project's summary page.
- *
- * Three independent legs, never a group: facts render on their own, and a missing or switched-off
- * summary is a normal answer, so a slow Organization list of 246 rows holds up neither.
+ * The project facts read shared by the summary and details pages; a missing summary or a slow
+ * 246-row Organization list never holds it up.
  */
 export function useProjectFacts(projectId: string) {
   return useQuery({
