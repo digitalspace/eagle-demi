@@ -165,29 +165,36 @@ const ROUTER = require.resolve('../../../src/http/router');
 const ROUTES = require.resolve('../../../src/http/routes');
 
 /** Calls a router built as a deployment with ENVIRONMENT `environmentName`: routes.js reads it once at load. */
-async function asDeployment(t, environmentName, fn) {
+async function asDeployment(environmentName, fn) {
   const before = config.environmentName;
   const fresh = () => { delete require.cache[ROUTER]; delete require.cache[ROUTES]; };
-  t.after(() => { config.environmentName = before; fresh(); });
   config.environmentName = environmentName;
   fresh();
-  await withServer(fn);
+  try {
+    await withServer(fn);
+  } finally {
+    config.environmentName = before;
+    fresh();
+  }
 }
 
-test('sheet-works is not routed outside dev and test, token or not, and reaches auth on test', async (t) => {
+test('sheet-works is not routed outside dev and test, token or not, and reaches auth on dev and test', async (t) => {
   const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
   const results = [];
-  for (const environmentName of ['prod', 'staging', 'test']) {
-    await asDeployment(t, environmentName, async (call) => {
+  const before = config.environmentName;
+  for (const environmentName of ['prod', 'staging', 'dev', 'test']) {
+    await asDeployment(environmentName, async (call) => {
       for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
         results.push([environmentName, Boolean(headers.authorization), (await call(`/api/projects/${ROW.id}/sheet-works`, { headers })).status]);
       }
     });
   }
   assert.deepStrictEqual(results, [
-    ['prod', false, 404], ['prod', true, 404], ['staging', false, 404], ['staging', true, 404], ['test', false, 401], ['test', true, 401]
+    ['prod', false, 404], ['prod', true, 404], ['staging', false, 404], ['staging', true, 404],
+    ['dev', false, 401], ['dev', true, 401], ['test', false, 401], ['test', true, 401]
   ]);
   assert.strictEqual(read.mock.callCount(), 0);
+  assert.strictEqual(config.environmentName, before);
 });
 
 test('sheet-works refuses anonymous and idir calls, and a malformed id, before any read', async (t) => {

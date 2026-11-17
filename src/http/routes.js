@@ -347,8 +347,7 @@ const routes = [
   // port: document-feature
 ];
 
-// Allowlist: a deployment that forgets ENVIRONMENT must 404 these. The spec is unauthenticated and
-// names every route and role; sheet works are loaded on test only.
+// Served only when ENVIRONMENT is dev or test; a missing ENVIRONMENT reads as dev.
 if (['dev', 'test'].includes(config.environmentName)) {
   routes.push(
     { method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec },

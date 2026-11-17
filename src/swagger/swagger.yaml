@@ -1591,10 +1591,9 @@ paths:
         it, plus the project's `currentInvestment`. Needs the role `staff`, `sysadmin` or
         `demi-admin`, or a registry key carrying `demi-service-read` or a write role. A call with no
         token gets 401; IDIR-only and other non-staff callers get 403 before the project is read. A
-        staff list that a per-project dial
-        hides from the caller comes back empty. The route lists all works, with no sheet-override
-        hiding, so it shows the sheet works a public read leaves out. `sourceKey` and `sheetKey`
-        never appear.
+        staff list that a per-project dial hides from the caller comes back empty. The route lists
+        all works, with no sheet-override hiding, so it shows the sheet works a public read leaves
+        out. `sourceKey` and `sheetKey` never appear.
 
         An entry tied to a work by `workId` shows on that work only, with no date test. Any other
         entry shows on each work whose dates it overlaps. An entry with no `effectiveFrom` shows on a
@@ -10344,9 +10343,11 @@ components:
           type: string
           nullable: true
           description: >-
-            Track's state on a Track work. `transitioned` marks a work its project left for a
-            later Act; `inactive` a sheet work recorded as incomplete or inactive.
-          enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, transitioned, inactive, null]
+            Track's state on a Track work (upper case); the sheet loader's code on a sheet work
+            (lower case). `transitioned` marks a work its project left for a later Act; `inactive` a
+            sheet work recorded as incomplete or inactive.
+          enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, in-progress, completed,
+            suspended, withdrawn, terminated, closed, transitioned, inactive, null]
         decisionDate:
           type: string
           format: date-time

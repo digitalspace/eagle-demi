@@ -28,7 +28,7 @@ describe('SheetWorksPanel', () => {
     renderPanel();
 
     expect(await screen.findByText('Hidden when the public site shows sheet works')).toBeInTheDocument();
-    expect(screen.getByText('Replaces Track work: Sample Alpha EAC extension')).toBeInTheDocument();
+    expect(screen.getByText('Replaces Track work: Sample Alpha Transmission Line - EAC Extension - EAC extension')).toBeInTheDocument();
     expect(screen.getByText('Shown until Track has it')).toBeInTheDocument();
   });
 
