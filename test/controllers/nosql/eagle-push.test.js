@@ -989,10 +989,10 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
   await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => ({
-      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['staff', 'idir', 'public']
-    }));
     let written;
+    t.mock.method(documents, 'getById', async () => written || {
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['staff', 'idir', 'public']
+    });
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
     t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
@@ -1025,10 +1025,10 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     // Level 3 -> 2 moves no `isPublished` flag, and the index would otherwise keep answering idir
     // callers with a document Eagle has deleted.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => ({
-      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'idir']
-    }));
     let written;
+    t.mock.method(documents, 'getById', async () => written || {
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'idir']
+    });
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
     t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
@@ -1065,8 +1065,9 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
   await t.test('a push that creates a document puts its whole index row in at once', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => null);
-    t.mock.method(documents, 'upsert', async (item) => item);
+    let stored = null;
+    t.mock.method(documents, 'getById', async () => stored);
+    t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
     const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => rows.length);
     await documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
       body: { doc: eagleDocument() }, user: STAFF }, mockRes());
@@ -1074,6 +1075,21 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row =>
       [row.id, row.projectId, row.displayName, row.fileNameTokens, row.searchVis])),
     [[[DOC_EAGLE_ID, '207', 'Application', 'application.pdf', 4]]]);
+  });
+
+  await t.test('a delete that changes only isDeleted on a staff-level row still reaches the index', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    let stored = null;
+    t.mock.method(documents, 'getById', async () => stored && structuredClone(stored));
+    t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
+    const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => rows.length);
+    const push = isDeleted => documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: ['staff', 'sysadmin'], isDeleted }) }, user: STAFF }, mockRes());
+
+    await push(false);
+    await push(true);
+    assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.read, row.isDeleted])),
+      [[[['staff'], false]], [[['staff'], true]]]);
   });
 
   await t.test('only eagle-api sending the record again brings it back', async () => {

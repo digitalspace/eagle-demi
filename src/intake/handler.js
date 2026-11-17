@@ -57,15 +57,16 @@ async function release(row, scan, { store, blobs, nrs, projects }) {
     const capped = await releasedRead(row, projects);
     read = { read: capped, isPublished: capped.includes('public') };
   }
-  const fields = {
+  const settled = await store.settle(row, {
     scanStatus: 'clean', scanResult: scan.result, scannedAt: scan.scannedAt, scanSizeBytes: stat.size,
     s3Key: key, ...read
-  };
-  if (!await store.settle(row, fields)) {
+  });
+  if (!settled) {
     logger.warn('[intake] row settled by another writer while releasing', { documentId: row.id, key });
     return { outcome: 'raced', sizeBytes: stat.size };
   }
-  await indexDocumentsNow([{ ...row, ...fields }]);
+  // `row` is the pending listing's few columns; the index row is built from the stored row.
+  await indexDocumentsNow([row]);
   await client.removeObject(row.id);
   return { outcome: 'clean', sizeBytes: stat.size };
 }

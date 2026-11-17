@@ -12,6 +12,7 @@ const assert = require('node:assert');
 
 const { applyScanResult } = require('../../src/intake/handler');
 const aiSearch = require('../../src/search/ai-search');
+const documents = require('../../src/repositories/documents');
 const { readForLevel, systemAccess } = require('../../src/helpers/access-sql');
 const { setIntakeEnv, fakeStore, fakeAccount, fakeNrs, recordLogs } = require('./fakes');
 
@@ -78,14 +79,16 @@ test('No threats found: the row is clean, keyed, and takes its requested read li
   assert.strictEqual(row.isPublished, false);
 });
 
-test('No threats found puts the released row in the documents index at once', async (t) => {
-  const { deps } = setup(t, pendingRow({ requestedRead: readForLevel(3) }));
+test('No threats found puts the stored row, not the pending listing, in the documents index', async (t) => {
+  const { deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), displayName: 'Survey', createdAt: 'x' }));
+  t.mock.method(documents, 'readForWrite', async id => ({ ...deps.store.rows.get(id) }));
   const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
+  const { id, projectId, createdAt, requestedRead, s3Key, fileExt } = deps.store.rows.get(DOC);
 
-  await apply('No threats found', deps);
+  await applyScanResult({ id, projectId, createdAt, requestedRead, s3Key, fileExt }, scan('No threats found'), deps);
 
-  assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.id, row.read])),
-    [[[DOC, readForLevel(3)]]]);
+  assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.id, row.displayName, row.read])),
+    [[[DOC, 'Survey', readForLevel(3)]]]);
 });
 
 test('No threats found publishes a public request under a public project', async (t) => {

@@ -232,6 +232,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/users.js',
     // The archive restore: it must see a sealed row's pdfTitle record to refuse or update it.
     'scripts/restore-originals.js',
+    // The index row, built from the stored row whatever its level, as the indexer would; never a response.
+    'search/document-query.js',
     // Repair clears `syncOut.<target>.sentVersion` on the row so the worker resends it, sealed or not.
     'scripts/reconcile-engage.js',
     'scripts/seed-public-reads.js',

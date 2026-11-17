@@ -5,8 +5,11 @@
  */
 
 const { filterFor, quote } = require('../helpers/access-odata');
-const { UPDATE_SOURCE, isScanCleared } = require('../repositories/documents');
+const documents = require('../repositories/documents');
 const aiSearch = require('./ai-search');
+const { logger } = require('../utils/logger');
+
+const { UPDATE_SOURCE, isScanCleared } = documents;
 
 // A partly loaded repository (a require cycle) would render `ne 'undefined'` and let update images through.
 if (typeof UPDATE_SOURCE !== 'string') {
@@ -57,10 +60,19 @@ function documentIndexRow(row) {
   return out;
 }
 
-/** Writes stored rows into the `documents` index now: staff lists page there, ahead of the indexer. */
-function indexDocumentsNow(rows) {
-  const indexRows = rows.map(documentIndexRow).filter(Boolean);
-  return indexRows.length ? aiSearch.upsertIndexRows(aiSearch.indexes().documents, indexRows) : 0;
+/**
+ * Writes rows into the `documents` index now: staff lists page there, ahead of the indexer. Each is
+ * read back first, so a write that landed after the caller's is not undone with an older read or ACL.
+ */
+async function indexDocumentsNow(rows) {
+  try {
+    const stored = await Promise.all(rows.map(row => documents.readForWrite(row.id, row.projectId)));
+    const indexRows = stored.map(documentIndexRow).filter(Boolean);
+    return indexRows.length ? await aiSearch.upsertIndexRows(aiSearch.indexes().documents, indexRows) : 0;
+  } catch (err) {
+    logger.error('[document-query] index write skipped; the indexer adds the rows', { error: err.message, stack: err.stack });
+    return 0;
+  }
 }
 
 module.exports = { documentsAcl, NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT, documentIndexRow, indexDocumentsNow };

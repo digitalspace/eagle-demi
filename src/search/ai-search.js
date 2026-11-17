@@ -1274,18 +1274,18 @@ const UNINDEX_CONCURRENCY = 4;
 
 /**
  * Best-effort index write in service-sized batches: a refusal is logged, never thrown, and the
- * indexer's next pass repairs the row. `what` names the rows in the log.
+ * indexer's next pass repairs the row. `toAction` runs inside the catch; `what` names the rows in the log.
  * @returns {Promise<number>} rows the service accepted
  */
-async function sendIndexActions(index, actions, what) {
+async function sendIndexActions(index, rows, toAction, what, opts) {
   const { configured } = config();
   if (!configured) warnUnconfigured();
-  if (!configured || actions.length === 0) return 0;
+  if (!configured || !Array.isArray(rows) || rows.length === 0) return 0;
   let merged = 0;
-  for (let start = 0; start < actions.length; start += INDEX_BATCH_ROWS) {
-    const batch = actions.slice(start, start + INDEX_BATCH_ROWS);
+  for (let start = 0; start < rows.length; start += INDEX_BATCH_ROWS) {
+    const batch = rows.slice(start, start + INDEX_BATCH_ROWS);
     try {
-      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, { value: batch });
+      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, { value: batch.map(toAction) }, opts);
       // A 207 is `ok` with per-row verdicts; a 404 on `merge` is a row not indexed yet, so nothing to hide.
       const failed = (result.value || []).filter(r => r.status === false);
       merged += batch.length - failed.length;
@@ -1307,19 +1307,18 @@ async function sendIndexActions(index, actions, what) {
  * when a row carries it: the `projects` index has no such field and refuses the batch.
  * @param {Array<{id: string, read: string[], isPublished: boolean, isDeleted?: boolean}>} rows
  */
-function writeAcls(index, rows) {
-  return sendIndexActions(index, (Array.isArray(rows) ? rows : []).map(row => ({
-    '@search.action': 'merge',
-    id: String(row.id),
-    read: row.read,
-    isPublished: Boolean(row.isPublished),
+async function writeAcls(index, rows) {
+  return sendIndexActions(index, rows, row => ({
+    '@search.action': 'merge', id: String(row.id), read: row.read, isPublished: Boolean(row.isPublished),
     ...(typeof row.isDeleted === 'boolean' ? { isDeleted: row.isDeleted } : {})
-  })), 'ACLs');
+  }), 'ACLs');
 }
 
-/** Whole index rows, as `documentIndexRow` builds them; `mergeOrUpload`, since `merge` refuses a new row. */
-function upsertIndexRows(index, rows) {
-  return sendIndexActions(index, rows.map(row => ({ '@search.action': 'mergeOrUpload', ...row })), 'rows');
+// Whole rows from `documentIndexRow`; `mergeOrUpload`, since `merge` refuses a new row. One 5 s try:
+// it runs inside a create that APIM cuts off at 30 s, and the indexer repairs a miss.
+async function upsertIndexRows(index, rows) {
+  return sendIndexActions(index, rows, row => ({ '@search.action': 'mergeOrUpload', ...row }), 'rows',
+    { timeoutMs: 5000, maxAttempts: 1 });
 }
 
 /**

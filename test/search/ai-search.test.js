@@ -2029,6 +2029,17 @@ test('writeAcls', async (t) => {
     assert.deepStrictEqual(calls[0].body.value, [{ '@search.action': 'mergeOrUpload', id: 'd1', displayName: 'Report' }]);
   });
 
+  await t.test('upsertIndexRows tries once, so a throttled service cannot hold a create', async (tt) => {
+    const calls = captureFetch(tt, () => ({ ok: false, status: 503 }));
+    assert.strictEqual(await aiSearch.upsertIndexRows('documents', [{ id: 'd1' }]), 0);
+    assert.strictEqual(calls.length, 1);
+  });
+
+  await t.test('a bad entry is logged and counted as 0, never thrown', async (tt) => {
+    captureFetch(tt, () => ({ json: { value: [] } }));
+    assert.strictEqual(await aiSearch.writeAcls('documents', [null]), 0);
+  });
+
   await t.test('1,500 rows go as 1,000 + 500 — the service caps one batch at 1,000', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 

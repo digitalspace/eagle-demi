@@ -34,6 +34,7 @@ function wireWrite(t) {
   t.mock.method(storage, 'putFile', async () => {});
   const saved = [];
   t.mock.method(documents, 'upsert', async (doc) => { saved.push(doc); return doc; });
+  t.mock.method(documents, 'readForWrite', async id => saved.find(doc => doc.id === id) || null);
   return saved;
 }
 

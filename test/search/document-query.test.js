@@ -7,7 +7,8 @@ process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { documentsAcl, NOT_UPDATE_IMAGE } = require('../../src/search/document-query');
+const { documentsAcl, NOT_UPDATE_IMAGE, indexDocumentsNow } = require('../../src/search/document-query');
+const documents = require('../../src/repositories/documents');
 const eagleQuery = require('../../src/search/eagle-query');
 const aiSearch = require('../../src/search/ai-search');
 const { TIER } = require('../../src/helpers/access-sql');
@@ -88,4 +89,15 @@ test('searchDocumentIds with keywords runs one leg over the document fields only
   assert.notStrictEqual(bodies[0].search, '*');
   assert.match(bodies[0].search, /river/);
   assert.strictEqual(bodies[0].queryType, 'full');
+});
+
+// A write that lands between the caller's own write and this index write must win in the index.
+test('indexDocumentsNow sends the stored row, not the older one the caller holds', async (t) => {
+  t.mock.method(documents, 'readForWrite', async (id, projectId) => ({ id, projectId, read: ['staff'], isDeleted: true }));
+  const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
+
+  await indexDocumentsNow([{ id: 'd1', projectId: '207', read: ['public'], isDeleted: false }]);
+
+  assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.id, row.read, row.isDeleted])),
+    [[['d1', ['staff'], true]]]);
 });
