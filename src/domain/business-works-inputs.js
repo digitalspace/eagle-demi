@@ -18,11 +18,8 @@ function holdsSheetEntries(row, number) {
   return listOf(row?.externalIds).some(isNumber) || STAFF_HISTORY.some(field => listOf(row?.[field]).some(isOpen));
 }
 
-/**
- * `base` for a map without Track works or markers, and `trackWorks` and `markers` to add for the fresh map.
- * `works` and `commentPeriods` are Maps by project id; `rows` is the stored project rows by id; `skipped` is
- * `{state, targetId}` by register number of each row the crosswalk skips.
- */
+/** `base` for a map without Track works or markers, plus the `trackWorks` and `markers` the fresh map adds.
+ * `works`, `commentPeriods` and `rows` are Maps by project id; `skipped` is `{state, targetId}` by register number. */
 function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId, batchAt }) {
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   const trackOf = id => listOf(works.get(id)).filter(work => sourceOf(work) === 'track' && work.deleted !== true);
