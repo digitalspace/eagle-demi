@@ -95,6 +95,9 @@ export interface ProjectFacts {
   shortLinkCustom?: boolean;
 }
 
+/** The project's Eagle id, or empty when the record carries none. */
+export const projectEagleId = (facts: ProjectFacts | null): string => facts?.eagleId || facts?.legacyEagleId || '';
+
 /** A document the summary points at. `datePosted` is an ISO string when the index carried one. */
 export interface SummaryDocumentRef {
   documentId: string;
@@ -410,10 +413,8 @@ export async function fetchOrganizations(init?: ApiInit): Promise<Map<string, Or
 }
 
 /**
- * The reads behind one project's summary page.
- *
- * Three independent legs, never a group: facts render on their own, and a missing or switched-off
- * summary is a normal answer, so a slow Organization list of 246 rows holds up neither.
+ * The project facts read shared by the summary and details pages; a missing summary or a slow
+ * 246-row Organization list never holds it up.
  */
 export function useProjectFacts(projectId: string) {
   return useQuery({

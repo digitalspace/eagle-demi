@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MAX_ROWS, ProjectPicker } from './ProjectPicker';
+import { MAX_ROWS, ProjectDetailsPicker, ProjectPicker } from './ProjectPicker';
 import { json } from '../test-http';
 import { renderScreen } from '../test-query';
 
 const PROJECTS = [
-  { id: 272, name: 'Site C Clean Energy Project', region: 'Peace', proponent: { name: 'BC Hydro' } },
-  { id: 111, name: 'Ajax Mine', region: 'Thompson-Okanagan', currentPhaseName: '5d3f6c7eda7a384218296035' },
+  // Only Ajax Mine's Eagle id is on the NRPTI business list.
+  { id: 272, name: 'Site C Clean Energy Project', region: 'Peace', proponent: { name: 'BC Hydro' }, legacyEagleId: '58851000aaecd9001b800000' },
+  { id: 111, name: 'Ajax Mine', region: 'Thompson-Okanagan', currentPhaseName: '5d3f6c7eda7a384218296035', legacyEagleId: '588511caaaecd9001b825bcb' },
   { id: 333, name: 'Coastal GasLink Pipeline', proponent: { name: 'TC Energy' } },
   { id: 444, name: 'ajax Creek Diversion' },
 ];
@@ -107,9 +108,25 @@ describe('ProjectPicker', () => {
     ]);
   });
 
-  // The second line is the registry's own region line, as every other screen shows it: a row with
-  // no region reads "British Columbia" rather than falling through to the proponent, and the phase
-  // is not appended — the shared row does not carry one, and Angular's list does not show one.
+  it('links each result at that project’s details, with an NRPTI pill only on listed projects', async () => {
+    stub();
+
+    renderScreen(<ProjectDetailsPicker />);
+    await screen.findByRole('link', { name: /Ajax Mine/ });
+
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '/project-details/444',
+      '/project-details/111',
+      '/project-details/333',
+      '/project-details/272',
+    ]);
+    const flagged = screen.getAllByRole('link', { name: /^Ajax Mine NRPTI records available/ });
+    expect(flagged.map((link) => link.getAttribute('href'))).toEqual(['/project-details/111']);
+    expect(within(flagged[0]).getByText('NRPTI')).toBeInTheDocument();
+  });
+
+  // The registry's own region line: no region reads "British Columbia", never the proponent, and
+  // no phase is appended, since the shared row does not carry one.
   it('shows the region alone under each project name', async () => {
     stub();
 

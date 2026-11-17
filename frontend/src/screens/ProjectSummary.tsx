@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import {
   KEY_DOCUMENT_LABELS,
   joinLabels,
+  projectEagleId,
   resolveListLabel,
   useLists,
   useOrganizations,
@@ -20,6 +21,7 @@ import {
 } from '../api/project-summary';
 import { useDownload } from '../hooks/useDownload';
 import { useSession } from '../session/session';
+import { ProjectFactsState } from './ProjectFactsState';
 import { ProjectShortUrl } from './ProjectShortUrl';
 import { dayMonthYear, dayMonthYearTime, cad } from '../dates';
 
@@ -73,11 +75,6 @@ export function ProjectSummary() {
   const [openCondition, setOpenCondition] = useState<ConditionItem | null>(null);
 
   const facts = factsQuery.data ?? null;
-  const factsError = factsQuery.isError
-    ? factsQuery.error instanceof Error
-      ? factsQuery.error.message
-      : 'Could not load the project.'
-    : '';
   const summary = summaryQuery.data?.record ?? null;
   const summaryReason = summaryQuery.data?.reason ?? null;
   // isLoading, not isPending: a disabled query is pending for ever, so an empty id would leave the
@@ -262,7 +259,7 @@ export function ProjectSummary() {
   }));
 
   /** The public EPIC page for this project. Empty when the record carries no Eagle id. */
-  const eagleId = facts?.eagleId || facts?.legacyEagleId;
+  const eagleId = projectEagleId(facts);
   const epicUrl = eagleId ? `${EPIC_PROJECT_BASE}/${eagleId}/project-details` : '';
 
   /** Resolve the `[n]` markers on one generated claim to the chunks they point at. */
@@ -412,13 +409,9 @@ export function ProjectSummary() {
           <span aria-hidden="true">←</span> All projects
         </Link>
 
-        {factsError && (
-          <div className="callout callout--warning" role="alert">
-            <p>{factsError}</p>
-          </div>
-        )}
+        <ProjectFactsState query={factsQuery} />
 
-        {facts ? (
+        {facts && (
           <>
             <header className="ps__header">
               {/* `title` names any id the List lookup could not place; empty removes the attribute. */}
@@ -516,15 +509,6 @@ export function ProjectSummary() {
               </dl>
             </section>
           </>
-        ) : (
-          factsQuery.isLoading && (
-            <header className="ps__header" aria-busy="true">
-              <p className="visually-hidden">Loading the project record…</p>
-              <span className="skeleton skeleton--text" aria-hidden="true" style={{ width: '14rem' }} />
-              <span className="skeleton" aria-hidden="true" style={{ width: '24rem', height: '2.4rem', margin: '0.5rem 0' }} />
-              <span className="skeleton skeleton--text" aria-hidden="true" style={{ width: '20rem' }} />
-            </header>
-          )
         )}
 
         {noSummary && (

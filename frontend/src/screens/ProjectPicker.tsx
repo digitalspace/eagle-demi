@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { hasNrptiData } from '../api/nrpti';
 import { useProjects } from '../api/projects';
 import type { Project } from '../api/types';
 import { joinLabels, useLists, PROJECT_LIST_ERROR } from '../api/project-summary';
@@ -19,17 +20,51 @@ const searchBox = {
   font: 'var(--typography-regular-body)',
 } as const;
 
-/**
- * Project picker — the way into the Project summary screen.
- *
- * The whole list is one read held in the browser, so a keystroke filters locally: no debounce, no
- * in-flight state, no stale response to race. Results are plain links rather than a combobox, so
- * Enter, open-in-new-tab and the focus ring are the browser's; only arrow movement is added.
- */
+/** The way into the Project summary screen. */
 export function ProjectPicker() {
-  // The shared registry corpus, mapped by the one `mapProject`: a second read of the same rows
-  // would default them differently, which is how this list came to name a region the registry
-  // screens never showed.
+  return (
+    <ProjectSearch title="AI Project Summary" pathFor={projectPath}>
+      Pick a project to read its stored summary. Every summary is generated offline and read here, so opening one
+      costs no model call.
+    </ProjectSearch>
+  );
+}
+
+const nrptiBadge = (row: Project): ReactNode =>
+  hasNrptiData(row.legacyEagleId) ? (
+    <>
+      NRPTI <span className="visually-hidden">records available</span>
+    </>
+  ) : null;
+
+/** The way into the Project details screen. */
+export function ProjectDetailsPicker() {
+  return (
+    <ProjectSearch
+      title="Project details"
+      pathFor={(id) => `/project-details/${encodeURIComponent(id)}`}
+      badgeFor={nrptiBadge}
+    >
+      Pick a project to see data about it from other sources.
+    </ProjectSearch>
+  );
+}
+
+interface ProjectSearchProps {
+  title: string;
+  pathFor: (id: string) => string;
+  /** Content of a pill after the row's name, or null for none. */
+  badgeFor?: (row: Project) => ReactNode;
+  children: ReactNode;
+}
+
+/**
+ * Project search, shared by every screen that opens one project. Results are plain links, not a
+ * combobox, so Enter, open-in-new-tab and focus stay the browser's; only arrow movement is added.
+ */
+function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProps) {
+  // Shared registry corpus, mapped by the one `mapProject`: a second read of the same rows
+  // would default them differently and show a region the registry screens never did.
   const projects = useProjects();
   const lists = useLists();
 
@@ -62,8 +97,9 @@ export function ProjectPicker() {
         // Region or proponent, as one muted line. Phase is not on the shared row, and re-reading
         // for it would be the duplicate read this reuse avoids: it stays on the project's own page.
         meta: joinLabels([row.region || row.proponent], labels, ' · '),
+        badge: badgeFor?.(row) ?? null,
       })),
-    [matches, labels],
+    [matches, labels, badgeFor],
   );
 
   const countLabel = useMemo(() => {
@@ -97,11 +133,8 @@ export function ProjectPicker() {
     <>
       <div className="screen-header">
         <div className="screen-header__text">
-          <h1>AI Project Summary</h1>
-          <p>
-            Pick a project to read its stored summary. Every summary is generated offline and read here, so opening one
-            costs no model call.
-          </p>
+          <h1>{title}</h1>
+          <p>{children}</p>
         </div>
       </div>
 
@@ -171,13 +204,15 @@ export function ProjectPicker() {
                 <li key={item.row.id}>
                   <Link
                     className="pp-result"
-                    to={projectPath(String(item.row.id))}
+                    to={pathFor(String(item.row.id))}
                     onKeyDown={(event) => {
                       if (event.key === 'ArrowDown') moveFocus(index, 1, event);
                       if (event.key === 'ArrowUp') moveFocus(index, -1, event);
                     }}
                   >
-                    <span className="pp-result__name">{item.row.name}</span>
+                    <span className="pp-result__name">
+                      {item.row.name}{item.badge && <> <span className="pill pill--info">{item.badge}</span></>}
+                    </span>
                     {item.meta.text && (
                       // `title` names any id the List lookup could not place; empty drops the attribute.
                       <span className="pp-result__meta" title={item.meta.title || undefined}>
