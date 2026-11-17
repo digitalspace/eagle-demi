@@ -123,6 +123,10 @@ describe('ProjectPicker', () => {
     const flagged = screen.getAllByRole('link', { name: /^Ajax Mine NRPTI records available/ });
     expect(flagged.map((link) => link.getAttribute('href'))).toEqual(['/project-details/111']);
     expect(within(flagged[0]).getByText('NRPTI')).toBeInTheDocument();
+    // Site C has an Eagle id, but one that is not on the list.
+    const unlisted = screen.getByRole('link', { name: /^Site C Clean Energy Project/ });
+    expect(unlisted).not.toHaveAccessibleName(/NRPTI records available/);
+    expect(within(unlisted).queryByText(/NRPTI/)).not.toBeInTheDocument();
   });
 
   // The registry's own region line: no region reads "British Columbia", never the proponent, and
