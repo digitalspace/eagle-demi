@@ -80,10 +80,12 @@ async function skippedHolding(demi, skipped, targets) {
 async function planFor(demi, inputs, { batchId, batchAt }) {
   const crosswalk = new Map(inputs.crosswalk.rows.map(row => [Number(row.sheetId), row.targetId]));
   const targets = new Set(crosswalk.values());
+  const catalog = await demi.worksCatalog();
+  if (!catalog) refuse('no works catalog stored');
   const stored = await readStored(demi, [...targets]);
   const mapper = mapperInputs({
     crosswalk, skipped: inputs.crosswalk.skipped, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
-    catalog: await demi.worksCatalog(), phaseCatalog: await demi.phaseCatalog()
+    catalog, phaseCatalog: await demi.phaseCatalog()
   });
   const plan = buildPlan(inputs.opened.extract, {
     mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf

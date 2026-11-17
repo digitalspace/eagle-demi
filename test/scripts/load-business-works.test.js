@@ -36,6 +36,12 @@ test('a sheet number missing from the crosswalk fails the dry run', async () => 
   await assert.rejects(load(argv), /not in the signed crosswalk/);
 });
 
+test('refuses when no works catalog is stored', async () => {
+  const demi = fakeDemi();
+  demi.worksCatalog = async () => null;
+  await assert.rejects(load(inputs().argv, demi), /^Error: no works catalog stored$/);
+});
+
 const SKIPPED_ROWS = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },
   { row: 7, sheetId: '', state: 'badId' }, { row: 8, sheetId: 103, state: 'skipped' }];
 const skippedInputs = () => inputs({ crosswalkRows: SKIPPED_ROWS, records: {
