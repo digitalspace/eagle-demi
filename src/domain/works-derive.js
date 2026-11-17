@@ -18,14 +18,18 @@ async function deriveInputs(row) {
   return loadWorks(row, { sources: config.worksReadSources });
 }
 
-/** The project's override marker, or null when it is absent or fails the validator. */
-async function markerOf(projectId) {
-  const marker = await works.get(projectId, OVERRIDE_MARKER_ID);
+/** `marker`, or null when it is absent or fails the validator. */
+function checkedMarker(projectId, marker) {
   if (!marker) return null;
   const checked = validateMarker(marker);
   if (checked.ok) return marker;
   logger.warn('[works] override marker refused, read as missing', { projectId, paths: checked.errors.map(e => e.path) });
   return null;
+}
+
+/** The project's override marker, or null when it is absent or fails the validator. */
+async function markerOf(projectId) {
+  return checkedMarker(projectId, await works.get(projectId, OVERRIDE_MARKER_ID));
 }
 
 /**
@@ -64,7 +68,11 @@ const trackSummaryOf = ({ workId, title, startDate, decisionDate }) => ({ workId
 async function sheetWorksOf(row) {
   const catalog = await catalogOf();
   const stored = await works.listForRead(row.id);
-  const marker = await markerOf(row.id);
+  return sheetWorksFrom(stored, await markerOf(row.id), row, catalog);
+}
+
+/** `sheetWorksOf` over the project's live works `stored` and its checked `marker`. */
+function sheetWorksFrom(stored, marker, row, catalog) {
   const bySource = source => stored.filter(work => sourceOf(work) === source);
   const { boundary, shownSheetIds } = overrideShown(bySource('sheet'), bySource('track'), marker);
   const overrideActive = marker?.active === true;
@@ -84,4 +92,31 @@ async function sheetWorksOf(row) {
   return { overrideActive, boundary: overrideActive ? boundary : null, works: sheetWorks };
 }
 
-module.exports = { deriveInputs, loadWorks, sheetWorksOf };
+/** The panel's per-Act counts and pills: `hidden + replaces + untilTrack` is the number of pills it draws. */
+function sheetCountsOf(sheetWorks) {
+  const count = test => sheetWorks.filter(test).length;
+  return {
+    act1996: count(work => work.actYear === 1996),
+    act2002: count(work => work.actYear === 2002),
+    hidden: count(work => !work.shownAfterFlip),
+    replaces: count(work => work.shownAfterFlip && work.replaces.length > 0),
+    untilTrack: count(work => work.shownAfterFlip && work.replaces.length === 0 && work.untilTrack)
+  };
+}
+
+/** `sheetCountsOf` each of `rows` with a live sheet work, sorted by `projectId`; one works query and one marker query. */
+async function sheetWorksSummaryOf(rows) {
+  if (!rows.length) return [];
+  const ids = rows.map(row => String(row.id));
+  const catalog = await catalogOf();
+  const storedOf = Map.groupBy(await works.listForReadAcross(ids), work => String(work.projectId));
+  const markers = new Map((await works.getEach(ids, OVERRIDE_MARKER_ID)).map(doc => [String(doc.projectId), doc]));
+  return rows.flatMap((row) => {
+    const projectId = String(row.id);
+    const stored = storedOf.get(projectId) || [];
+    const sheet = sheetWorksFrom(stored, checkedMarker(projectId, markers.get(projectId)), row, catalog).works;
+    return sheet.length ? [{ projectId, ...sheetCountsOf(sheet) }] : [];
+  }).sort((a, b) => (a.projectId < b.projectId ? -1 : Number(a.projectId > b.projectId)));
+}
+
+module.exports = { deriveInputs, loadWorks, sheetWorksOf, sheetWorksSummaryOf };

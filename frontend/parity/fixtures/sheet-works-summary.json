@@ -1,0 +1,6 @@
+{
+  "projects": [
+    { "projectId": "901", "act1996": 1, "act2002": 4, "hidden": 1, "replaces": 1, "untilTrack": 1 },
+    { "projectId": "902", "act1996": 0, "act2002": 2, "hidden": 0, "replaces": 0, "untilTrack": 0 }
+  ]
+}

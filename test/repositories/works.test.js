@@ -289,4 +289,42 @@ test('works repository', async (t) => {
     assert.ok(projections.every(Boolean), 'SELECT VALUE c.projectId only');
     await assert.rejects(works.liveProjectIds({ owner: '' }), TypeError);
   });
+
+  /** A mirror store that also judges `ARRAY_CONTAINS(@projectIds, c.projectId)`; gives each query's options. */
+  function acrossStore(t, rows) {
+    mirrorStore(t, rows.map(row => ({ container: 'works', ...row })));
+    const query = cosmos.query;
+    const options = [];
+    const term = 'ARRAY_CONTAINS(@projectIds, c.projectId)';
+    t.mock.method(cosmos, 'query', async (container, spec, opts) => {
+      options.push(opts);
+      const { value: projectIds } = spec.parameters.find(p => p.name === '@projectIds');
+      assert.ok(spec.query.includes(term));
+      const page = await query(container, { query: spec.query.replace(term, 'true'),
+        parameters: spec.parameters.filter(p => p.name !== '@projectIds') }, opts);
+      return { ...page, items: page.items.filter(row => projectIds.includes(row.projectId)) };
+    });
+    return options;
+  }
+
+  await t.test('listForReadAcross reads live works of the named projects with no partition key, marker and private keys left out',
+    async (t) => {
+      const sourceRef = { sheet: { row: 12 } };
+      const options = acrossStore(t, [TRACK, TOMBSTONE, MARKER, { ...SHEET, projectId: 'p2', provenance: { batchId: 'b1' },
+        phases: [{ id: 'pre-ea', milestones: [{ id: 'start', sourceRef }] }] }, { ...TRACK, projectId: 'p3' }]);
+
+      const read = await works.listForReadAcross(['p1', 'p2']);
+
+      assert.deepStrictEqual(read.map(row => [row.projectId, row.id]), [['p1', 'track-1'], ['p2', 'sheet-a']]);
+      assert.doesNotMatch(JSON.stringify(read), /sourceKey|sourceRef|provenance/);
+      assert.ok(options.every(opts => opts.partitionKey === undefined));
+    });
+
+  await t.test('getEach reads one id in each named project, tombstone included', async (t) => {
+    acrossStore(t, [TRACK, MARKER, { ...MARKER, projectId: 'p2', deleted: true }, { ...MARKER, projectId: 'p3' }]);
+
+    const read = await works.getEach(['p1', 'p2'], 'sheet-override');
+
+    assert.deepStrictEqual(read.map(row => [row.projectId, row.id]), [['p1', 'sheet-override'], ['p2', 'sheet-override']]);
+  });
 });

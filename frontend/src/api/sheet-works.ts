@@ -69,3 +69,37 @@ export function useSheetWorks(projectId: string) {
     staleTime: 5 * 60_000,
   });
 }
+
+/** Sheet work counts for one project: works per Act, and works the public read would treat differently. */
+export interface SheetWorksSummary {
+  projectId: string;
+  act1996: number;
+  act2002: number;
+  hidden: number;
+  replaces: number;
+  untilTrack: number;
+}
+
+const NO_SUMMARY = new Map<string, SheetWorksSummary>();
+
+async function fetchSheetWorksSummary(signal: AbortSignal): Promise<Map<string, SheetWorksSummary>> {
+  const body = await api<{ projects?: SheetWorksSummary[] } | null>('/sheet-works/summary', {
+    signal,
+    timeoutMs: READ_TIMEOUT_MS,
+  });
+  const rows = Array.isArray(body?.projects) ? body.projects : [];
+  return new Map(rows.map((row) => [String(row.projectId), row]));
+}
+
+/**
+ * Sheet work counts for every project the reader can see, keyed by project id. Empty while loading
+ * and on any failure: the route is served in dev and test only, and staff only.
+ */
+export function useSheetWorksSummary(): Map<string, SheetWorksSummary> {
+  const { data } = useQuery({
+    queryKey: ['sheet-works-summary'],
+    queryFn: ({ signal }) => fetchSheetWorksSummary(signal),
+    staleTime: 5 * 60_000,
+  });
+  return data ?? NO_SUMMARY;
+}

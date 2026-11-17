@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { MAX_ROWS, ProjectDetailsPicker, ProjectPicker } from './ProjectPicker';
 import { json } from '../test-http';
-import { renderScreen } from '../test-query';
+import { queryWrapper, renderScreen, testQueryClient } from '../test-query';
 
 const PROJECTS = [
   // Only Ajax Mine's Eagle id is on the NRPTI business list.
@@ -18,18 +19,32 @@ const PHASE_ROWS = [{ id: '5d3f6c7eda7a384218296035', name: 'Post Decision - Con
 const projectSearch = (rows: unknown[], total?: number) =>
   json([{ count: total ?? rows.length, searchResults: rows }]);
 
-/** The default: every project answered, phase names resolvable. */
-function stub(rows: unknown[] = PROJECTS, total?: number) {
+// Ajax Mine has 1996 works and one switch case of each kind; Coastal GasLink has one 2002 work.
+const SHEET_SUMMARY = {
+  projects: [
+    { projectId: '111', act1996: 2, act2002: 0, hidden: 1, replaces: 1, untilTrack: 1 },
+    { projectId: '333', act1996: 0, act2002: 1, hidden: 0, replaces: 0, untilTrack: 0 },
+  ],
+};
+
+/** The default: every project answered, phase names resolvable, and no sheet works summary. */
+function stub(rows: unknown[] = PROJECTS, total?: number, sheetSummary?: () => Response) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: unknown) => {
       const url = String(input);
       if (url.includes('dataset=List')) return Promise.resolve(json([{ searchResults: PHASE_ROWS }]));
       if (url.includes('dataset=Project')) return Promise.resolve(projectSearch(rows, total));
+      if (sheetSummary && url.includes('/sheet-works/summary')) return Promise.resolve(sheetSummary());
       return Promise.resolve(json([{ searchResults: [] }]));
     }),
   );
 }
+
+const hrefs = () => screen.queryAllByRole('link').map((link) => link.getAttribute('href'));
+
+const fetchedUrls = () =>
+  (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(([input]) => String(input));
 
 // The name element, not the link's whole accessible name: the ordering assertions are about the
 // project name alone, and the secondary line sits in the same link.
@@ -255,10 +270,70 @@ describe('ProjectPicker', () => {
     renderScreen(<ProjectPicker />);
     await screen.findByRole('link', { name: /Ajax Mine/ });
 
-    const urls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(([input]) =>
-      String(input),
-    );
-    await waitFor(() => expect(urls.some((url) => url.includes('dataset=List&pageSize=1000'))).toBe(true));
+    await waitFor(() => expect(fetchedUrls().some((url) => url.includes('dataset=List&pageSize=1000'))).toBe(true));
+    const urls = fetchedUrls();
     expect(urls.some((url) => url.includes('/api/search?dataset=Project&pageSize=500'))).toBe(true);
+    // Sheet works badges belong to the details picker only.
+    expect(urls.some((url) => url.includes('/sheet-works/summary'))).toBe(false);
+  });
+
+  it('badges each details row with its sheet works, after any NRPTI pill', async () => {
+    stub(PROJECTS, undefined, () => json(SHEET_SUMMARY));
+
+    renderScreen(<ProjectDetailsPicker />);
+
+    const ajax = await screen.findByRole('link', {
+      name: /^Ajax Mine NRPTI records available 1996 Act \(2\) Switch cases \(3\): 1 hidden when the public site shows sheet works, 1 replaces a Track work, 1 shown until Track has it/,
+    });
+    expect(within(ajax).queryByText(/2002 Act/)).not.toBeInTheDocument();
+    const coastal = screen.getByRole('link', { name: /^Coastal GasLink Pipeline/ });
+    expect(within(coastal).getByText('2002 Act (1)')).toBeInTheDocument();
+    expect(within(coastal).queryByText(/1996 Act|Switch cases/)).not.toBeInTheDocument();
+    for (const name of [/^Site C Clean Energy Project/, /^ajax Creek Diversion/]) {
+      expect(within(screen.getByRole('link', { name })).queryByText(/Act \(|Switch cases/)).not.toBeInTheDocument();
+    }
+  });
+
+  it('narrows the rows and the count with the Show filter, together with the name query', async () => {
+    const user = userEvent.setup();
+    stub(PROJECTS, 900, () => json(SHEET_SUMMARY));
+
+    renderScreen(<ProjectDetailsPicker />);
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Show' }), '2002 Act works');
+
+    expect(hrefs()).toEqual(['/project-details/333']);
+    expect(screen.getByText('1 project · 4 of 900 loaded')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Show' }), 'With sheet works');
+    await user.type(screen.getByLabelText('Find a project'), 'ajax');
+
+    expect(hrefs()).toEqual(['/project-details/111']);
+    expect(screen.getByText('1 project · 4 of 900 loaded')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Show' }), 'Switch cases');
+    expect(hrefs()).toEqual(['/project-details/111']);
+
+    // The filter, not a missing project, is why nothing matches.
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Show' }), '2002 Act works');
+    expect(screen.getByRole('status')).toHaveTextContent('No project matches “ajax” with this filter.');
+  });
+
+  // 403 goes through the client's token refresh first; 404 is every environment outside dev and test.
+  it.each([403, 404])('shows no sheet works badges and no filter when the summary answers %i', async (status) => {
+    stub(PROJECTS, undefined, () => json(SHEET_SUMMARY, status));
+    const client = testQueryClient();
+
+    render(
+      <MemoryRouter>
+        <ProjectDetailsPicker />
+      </MemoryRouter>,
+      { wrapper: queryWrapper(client) },
+    );
+    await waitFor(() => expect(client.getQueryState(['sheet-works-summary'])?.status).toBe('error'));
+
+    expect(screen.getByRole('link', { name: /^Ajax Mine NRPTI records available/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(PROJECTS.length);
+    expect(screen.queryByText(/Act \(|Switch cases/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Show' })).not.toBeInTheDocument();
   });
 });

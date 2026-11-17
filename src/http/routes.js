@@ -351,7 +351,8 @@ const routes = [
 if (['dev', 'test'].includes(config.environmentName)) {
   routes.push(
     { method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec },
-    { method: 'get', path: '/projects/:id/sheet-works', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks }
+    { method: 'get', path: '/projects/:id/sheet-works', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks },
+    { method: 'get', path: '/sheet-works/summary', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorksSummary }
   );
 }
 

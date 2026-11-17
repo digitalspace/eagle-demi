@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { hasNrptiData } from '../api/nrpti';
 import { useProjects } from '../api/projects';
 import type { Project } from '../api/types';
 import { joinLabels, useLists, PROJECT_LIST_ERROR } from '../api/project-summary';
 import { projectPath } from '../search/record-types';
+import { useSheetWorksView, type Badge } from './sheet-works-badges';
 
 /** Rows drawn at once. The filter still runs over all 411; a 411-row list is a wall, not a list. */
 export const MAX_ROWS = 50;
@@ -30,20 +31,30 @@ export function ProjectPicker() {
   );
 }
 
-const nrptiBadge = (row: Project): ReactNode =>
-  hasNrptiData(row.legacyEagleId) ? (
+const NRPTI_BADGE: Badge = {
+  key: 'nrpti',
+  tone: 'info',
+  content: (
     <>
       NRPTI <span className="visually-hidden">records available</span>
     </>
-  ) : null;
+  ),
+};
 
 /** The way into the Project details screen. */
 export function ProjectDetailsPicker() {
+  const sheet = useSheetWorksView();
+  const badgesFor = useCallback(
+    (row: Project) => [...(hasNrptiData(row.legacyEagleId) ? [NRPTI_BADGE] : []), ...sheet.badgesFor(row)],
+    [sheet],
+  );
   return (
     <ProjectSearch
       title="Project details"
       pathFor={(id) => `/project-details/${encodeURIComponent(id)}`}
-      badgeFor={nrptiBadge}
+      badgesFor={badgesFor}
+      keep={sheet.keep}
+      controls={sheet.control}
     >
       Pick a project to see data about it from other sources.
     </ProjectSearch>
@@ -53,16 +64,63 @@ export function ProjectDetailsPicker() {
 interface ProjectSearchProps {
   title: string;
   pathFor: (id: string) => string;
-  /** Content of a pill after the row's name, or null for none. */
-  badgeFor?: (row: Project) => ReactNode;
+  /** Pills after the row's name, in order. */
+  badgesFor?: (row: Project) => Badge[];
+  /** Rows to search at all; the count line counts only these. */
+  keep?: (row: Project) => boolean;
+  /** Drawn under the search box. */
+  controls?: ReactNode;
   children: ReactNode;
+}
+
+interface ResultItem {
+  row: Project;
+  meta: ReturnType<typeof joinLabels>;
+  badges: Badge[];
+}
+
+interface ResultRowProps {
+  item: ResultItem;
+  to: string;
+  onArrow: (delta: number, event: KeyboardEvent) => void;
+}
+
+function ResultRow({ item, to, onArrow }: ResultRowProps) {
+  return (
+    <li>
+      <Link
+        className="pp-result"
+        to={to}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') onArrow(1, event);
+          if (event.key === 'ArrowUp') onArrow(-1, event);
+        }}
+      >
+        <span className="pp-result__name">
+          {item.row.name}
+          {item.badges.map((badge) => (
+            <Fragment key={badge.key}>
+              {' '}
+              <span className={`pill pill--${badge.tone}`}>{badge.content}</span>
+            </Fragment>
+          ))}
+        </span>
+        {item.meta.text && (
+          // `title` names any id the List lookup could not place; empty drops the attribute.
+          <span className="pp-result__meta" title={item.meta.title || undefined}>
+            {item.meta.text}
+          </span>
+        )}
+      </Link>
+    </li>
+  );
 }
 
 /**
  * Project search, shared by every screen that opens one project. Results are plain links, not a
  * combobox, so Enter, open-in-new-tab and focus stay the browser's; only arrow movement is added.
  */
-function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProps) {
+function ProjectSearch({ title, pathFor, badgesFor, keep, controls, children }: ProjectSearchProps) {
   // Shared registry corpus, mapped by the one `mapProject`: a second read of the same rows
   // would default them differently and show a region the registry screens never did.
   const projects = useProjects();
@@ -85,9 +143,9 @@ function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProp
   const matches = useMemo<Project[]>(() => {
     const needle = query.trim().toLowerCase();
     return (rows || [])
-      .filter((row) => !needle || row.name.toLowerCase().includes(needle))
+      .filter((row) => (!keep || keep(row)) && (!needle || row.name.toLowerCase().includes(needle)))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [rows, query]);
+  }, [rows, query, keep]);
 
   const labels = lists.data ?? null;
   const visible = useMemo(
@@ -97,9 +155,9 @@ function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProp
         // Region or proponent, as one muted line. Phase is not on the shared row, and re-reading
         // for it would be the duplicate read this reuse avoids: it stays on the project's own page.
         meta: joinLabels([row.region || row.proponent], labels, ' · '),
-        badge: badgeFor?.(row) ?? null,
+        badges: badgesFor?.(row) ?? [],
       })),
-    [matches, labels, badgeFor],
+    [matches, labels, badgesFor],
   );
 
   const countLabel = useMemo(() => {
@@ -159,6 +217,7 @@ function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProp
           }}
           style={searchBox}
         />
+        {controls}
 
         {/* Polite, so a filtered count is announced without interrupting the letter being typed. */}
         <p className="panel__lede pp-count" style={{ margin: 'var(--layout-margin-small) 0 0' }} aria-live="polite">
@@ -196,31 +255,19 @@ function ProjectSearch({ title, pathFor, badgeFor, children }: ProjectSearchProp
           ) : !matches.length ? (
             // Distinct from a query that matched nothing: the ACL left this reader zero rows to search.
             <p role="status" style={{ margin: 0 }}>
-              {!rows?.length ? 'No projects are visible to you.' : `No project matches “${query}”.`}
+              {!rows?.length
+                ? 'No projects are visible to you.'
+                : `No project matches${query.trim() ? ` “${query}”` : ''}${keep ? ' with this filter' : ''}.`}
             </p>
           ) : (
             <ul className="pp-list">
               {visible.map((item, index) => (
-                <li key={item.row.id}>
-                  <Link
-                    className="pp-result"
-                    to={pathFor(String(item.row.id))}
-                    onKeyDown={(event) => {
-                      if (event.key === 'ArrowDown') moveFocus(index, 1, event);
-                      if (event.key === 'ArrowUp') moveFocus(index, -1, event);
-                    }}
-                  >
-                    <span className="pp-result__name">
-                      {item.row.name}{item.badge && <> <span className="pill pill--info">{item.badge}</span></>}
-                    </span>
-                    {item.meta.text && (
-                      // `title` names any id the List lookup could not place; empty drops the attribute.
-                      <span className="pp-result__meta" title={item.meta.title || undefined}>
-                        {item.meta.text}
-                      </span>
-                    )}
-                  </Link>
-                </li>
+                <ResultRow
+                  key={item.row.id}
+                  item={item}
+                  to={pathFor(String(item.row.id))}
+                  onArrow={(delta, event) => moveFocus(index, delta, event)}
+                />
               ))}
             </ul>
           )}

@@ -110,9 +110,30 @@ async function listForRead(projectId) {
   return (await listByProject(projectId)).map(withoutPrivate);
 }
 
+const projectIdsTerm = (projectIds) => ({
+  clause: 'ARRAY_CONTAINS(@projectIds, c.projectId)', params: [{ name: '@projectIds', value: projectIds.map(String) }]
+});
+
+/** `listForRead` over several projects in one cross-partition query. */
+async function listForReadAcross(projectIds) {
+  const projects = projectIdsTerm(projectIds);
+  const terms = [projects.clause, 'NOT IS_DEFINED(c.kind)', LIVE];
+  return (await fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${terms.join(' AND ')}`, parameters: projects.params }))
+    .map(withoutPrivate);
+}
+
 /** Point read, tombstone and marker included, with its `_etag`; null when absent. */
 async function get(projectId, workId) {
   return cosmos.readItem(CONTAINER, String(workId), String(projectId));
+}
+
+/** `get` of `workId` in each of `projectIds`, one cross-partition query; projects lacking it are left out. */
+async function getEach(projectIds, workId) {
+  const projects = projectIdsTerm(projectIds);
+  const id = eq('id', String(workId), '@id');
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${id.clause} AND ${projects.clause}`, parameters: [...id.params, ...projects.params]
+  });
 }
 
 /** The one document of the project holding `sourceKey`, tombstone included; null when none. */
@@ -166,6 +187,6 @@ async function remove({ projectId, id }, { owner, etag } = {}) {
 }
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, PRIVATE_KEYS, ownerOf, listByProject, listForRead, liveProjectIds, get, findBySourceKey,
-  save, tombstone, remove, keptFrom
+  CONTAINER, PARTITION_FIELD, PRIVATE_KEYS, ownerOf, listByProject, listForRead, listForReadAcross, liveProjectIds, get,
+  getEach, findBySourceKey, save, tombstone, remove, keptFrom
 };

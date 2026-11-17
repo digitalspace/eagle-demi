@@ -12,7 +12,7 @@ const works = require('../../src/repositories/works');
 const { logger } = require('../../src/utils/logger');
 const { TRACK_ACT_YEAR } = require('../../src/merge/assessment-work');
 const { publicWorksOf } = require('../../src/seed/track-mappers');
-const { deriveInputs, loadWorks, sheetWorksOf } = require('../../src/domain/works-derive');
+const { deriveInputs, loadWorks, sheetWorksOf, sheetWorksSummaryOf } = require('../../src/domain/works-derive');
 
 test('deriveInputs', async (t) => {
   const stored = [
@@ -225,20 +225,22 @@ test('the sheet override on read', async (t) => {
   });
 });
 
+const sheetCases = [
+  [amendments, markerDoc(listed)],
+  [amendments, markerDoc({ ...listed, active: false })],
+  [amendments, null],
+  [amendments.filter(work => work.id !== 'track-7'), markerDoc(listed)],
+  [[trackWork(7, { decisionDate: '2025-03-01' }), sheetWork(1, { decisionDate: '2024-06-01' })], markerDoc(listed)],
+  [[assessment, trackWork(7, { decisionDate: '2023-11-01' }), sheetWork(1, { decisionDate: '2023-11-01' })], markerDoc(listed)],
+  [[sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })], markerDoc({ untilTrack: [sheetId(1)] })],
+  [[sheetWork(2, { startDate: '2024-09-21' }), sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })],
+    markerDoc({ untilTrack: [sheetId(1), sheetId(2)] })],
+  [[...amendments, sheetWork(3, { startDate: '2024-09-01' })], markerDoc({ ...listed, untilTrack: [sheetId(3)] })]
+];
+
 test('sheetWorksOf', async (t) => {
   await t.test('shownAfterFlip and replaces match what a track and sheet read shows and hides', async (t) => {
-    const cases = [
-      [amendments, markerDoc(listed)],
-      [amendments, markerDoc({ ...listed, active: false })],
-      [amendments, null],
-      [amendments.filter(work => work.id !== 'track-7'), markerDoc(listed)],
-      [[trackWork(7, { decisionDate: '2025-03-01' }), sheetWork(1, { decisionDate: '2024-06-01' })], markerDoc(listed)],
-      [[assessment, trackWork(7, { decisionDate: '2023-11-01' }), sheetWork(1, { decisionDate: '2023-11-01' })], markerDoc(listed)],
-      [[sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })], markerDoc({ untilTrack: [sheetId(1)] })],
-      [[sheetWork(2, { startDate: '2024-09-21' }), sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })],
-        markerDoc({ untilTrack: [sheetId(1), sheetId(2)] })]
-    ];
-    for (const [docs, marker] of cases) {
+    for (const [docs, marker] of sheetCases) {
       store(t, docs, marker);
       const read = (await loadWorks({ id: 'p1' }, { sources: ['track', 'sheet'] })).worksForDerive;
       const expected = read.filter(work => work.source === 'sheet').map(work => work.workId).sort();
@@ -260,5 +262,47 @@ test('sheetWorksOf', async (t) => {
       ['sheet-2', false, []],
       ['sheet-3', true, []]
     ]);
+  });
+});
+
+/** Stores the docs and markers of several projects behind the two cross-partition reads of the summary. */
+function storeAcross(t, docs, markers) {
+  t.mock.method(phaseCatalog, 'load', async () => ({}));
+  t.mock.method(cosmos, 'query', async (container, spec) => ({
+    items: structuredClone(spec.parameters.some(p => p.name === '@id') ? markers : docs), continuationToken: undefined
+  }));
+}
+
+test('sheetWorksSummaryOf', async (t) => {
+  await t.test('gives each project the Act counts and pill counts its sheetWorksOf read gives', async (t) => {
+    const actYears = [1996, 2002, 2018];
+    const projectCases = sheetCases.map(([docs, marker], i) => [`p${i}`,
+      docs.map((doc, n) => ({ ...doc, projectId: `p${i}`, ...(doc.source === 'sheet' && { actYear: actYears[n % 3] }) })),
+      marker && { ...marker, projectId: `p${i}` }]);
+    const expected = [];
+    for (const [projectId, docs, marker] of projectCases) {
+      store(t, docs, marker);
+      const { works: sheet } = await sheetWorksOf({ id: projectId });
+      const count = test => sheet.filter(test).length;
+      expected.push({ projectId, act1996: count(w => w.actYear === 1996), act2002: count(w => w.actYear === 2002),
+        hidden: count(w => !w.shownAfterFlip), replaces: count(w => w.shownAfterFlip && w.replaces.length > 0),
+        untilTrack: count(w => w.shownAfterFlip && !w.replaces.length && w.untilTrack) });
+      t.mock.restoreAll();
+    }
+    storeAcross(t, projectCases.flatMap(([, docs]) => docs), projectCases.flatMap(([, , marker]) => (marker ? [marker] : [])));
+
+    const summary = await sheetWorksSummaryOf(projectCases.map(([id]) => ({ id })).reverse());
+
+    assert.deepStrictEqual(summary, expected);
+    assert.ok(['act1996', 'act2002', 'hidden', 'replaces', 'untilTrack'].every(key => expected.some(row => row[key] > 0)),
+      'the cases reach every count');
+  });
+
+  await t.test('leaves out a project with no sheet work and gives 2018 or undated sheet works no Act count', async (t) => {
+    storeAcross(t, [{ ...trackWork(2), projectId: 'p-track' }, { ...sheetWork(1, { actYear: 2018 }), projectId: 'p-old' },
+      { ...sheetWork(2), projectId: 'p-old' }], []);
+
+    assert.deepStrictEqual(await sheetWorksSummaryOf([{ id: 'p-track' }, { id: 'p-old' }]),
+      [{ projectId: 'p-old', act1996: 0, act2002: 0, hidden: 2, replaces: 0, untilTrack: 0 }]);
   });
 });
