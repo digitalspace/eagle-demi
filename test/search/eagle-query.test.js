@@ -21,10 +21,10 @@ const { catalogFor } = require('../../src/vis/catalog');
 const anonymous = () => resolveAccess({ header: () => null });
 const anonAcl = (field) => filterFor(anonymous(), field);
 /** What an anonymous caller's ACL clause is on its own: the public roles, minus the sealed rows. */
-const ANON_FILTER =
-  "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')";
-// Every Document read carries the Update-image exclusion ahead of the ACL clause.
-const DOC_ANON_FILTER = `documentSource ne 'UPDATE' and ${ANON_FILTER}`;
+const ANON_FILTER = "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')";
+// Every Document read carries the Update-image and Eagle-deleted exclusions ahead of the ACL clause.
+const DOC_DEFAULTS = "documentSource ne 'UPDATE' and isDeleted ne true";
+const DOC_ANON_FILTER = `${DOC_DEFAULTS} and ${ANON_FILTER}`;
 
 test('eagle-query filters', async (t) => {
   // THE assertion that matters. The caller's filters are COMPOSED with the ACL clause; a filter
@@ -816,14 +816,14 @@ test('a boolean value OData cannot express is dropped, not coerced to false', ()
   // blanks, so `and[isPublished]=` carries no value and reports nothing.
   for (const v of ['1', 'True', 'TRUE', 'yes', 'banana']) {
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
-    assert.strictEqual(out.filter, "documentSource ne 'UPDATE'", `${v} builds only the Update-image default`);
+    assert.strictEqual(out.filter, DOC_DEFAULTS, `${v} builds only the Document defaults`);
     assert.deepStrictEqual(out.dropped, ['isPublished'], `${v} must be reported dropped`);
   }
   // The control: the two literals OData does define must still filter, or the assertion above is
   // satisfied by dropping everything.
   for (const [v, expected] of [['true', true], ['false', false]]) {
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
-    assert.strictEqual(out.filter, `isPublished eq ${expected} and documentSource ne 'UPDATE'`);
+    assert.strictEqual(out.filter, `isPublished eq ${expected} and ${DOC_DEFAULTS}`);
     assert.deepStrictEqual(out.dropped, []);
   }
 });
@@ -1066,7 +1066,7 @@ test('Update-form images stay out of Document reads', async (t) => {
   await t.test('an unfiltered read still leaves them out', () => {
     const { filter } = eagleQuery.buildFilter({}, 'Document', noAcl, anonymous());
 
-    assert.strictEqual(filter, "documentSource ne 'UPDATE'");
+    assert.strictEqual(filter, DOC_DEFAULTS);
   });
 
   await t.test('a caller filtering on documentSource gets their own clause instead', () => {
@@ -1074,7 +1074,7 @@ test('Update-form images stay out of Document reads', async (t) => {
       { 'and[documentSource]': 'UPDATE' }, 'Document', noAcl, anonymous());
 
     assert.deepStrictEqual(dropped, []);
-    assert.strictEqual(filter, "documentSource eq 'UPDATE'");
+    assert.strictEqual(filter, "documentSource eq 'UPDATE' and isDeleted ne true");
   });
 
   // A key that never became a clause has not chosen a source, so the default stays.
@@ -1084,7 +1084,7 @@ test('Update-form images stay out of Document reads', async (t) => {
       { unexpressible: ['documentSource'] });
 
     assert.deepStrictEqual(dropped, ['documentSource']);
-    assert.strictEqual(filter, "documentSource ne 'UPDATE'");
+    assert.strictEqual(filter, DOC_DEFAULTS);
   });
 
   await t.test('other datasets carry no documentSource clause', () => {

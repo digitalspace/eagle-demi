@@ -142,7 +142,7 @@ async function projectUploadMaxima(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage(), scanCleared()],
+    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage(), scanCleared(), NOT_DELETED],
     select: 'c.projectId, MAX(c.dateUploaded) AS dateUploaded',
     groupBy: 'c.projectId'
   });
@@ -165,7 +165,8 @@ async function newestUploads(access, projectId) {
       eq('projectId', String(projectId), '@projectId'),
       isDefinedAndNotNull('dateUploaded'),
       notUpdateImage(),
-      scanCleared()
+      scanCleared(),
+      NOT_DELETED
     ],
     select: `TOP ${RECENT_UPLOAD_DOCUMENTS} ${selectFor('documents', access, PARTITION_FIELD)}`,
     orderBy: 'c.dateUploaded DESC'
@@ -293,7 +294,8 @@ async function listByIds(access, ids, projectIds) {
       inList(PARTITION_FIELD, projects, '@dpid'),
       // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
       notUpdateImage(),
-      scanCleared()
+      scanCleared(),
+      NOT_DELETED
     ],
     select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
   });
@@ -755,7 +757,7 @@ async function listByIdsUnscoped(access, ids, select) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [inList('id', unique, '@bid'), scanCleared()],
+    criteria: [inList('id', unique, '@bid'), scanCleared(), NOT_DELETED],
     select
   });
 

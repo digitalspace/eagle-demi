@@ -1273,9 +1273,9 @@ const DELETE_STALL_BUDGET_MS = 20000;
 const UNINDEX_CONCURRENCY = 4;
 
 /**
- * Best-effort ACL write so an unpublish does not stay searchable until the next indexer run.
- * `merge`, not `mergeOrUpload`: an upload would insert a title-less half-row.
- * @param {Array<{id: string, read: string[], isPublished: boolean}>} rows
+ * Best-effort ACL write; `merge`, since an upload would insert a title-less half-row. `isDeleted`
+ * goes only when a row carries it: the `projects` index has no such field and refuses the batch.
+ * @param {Array<{id: string, read: string[], isPublished: boolean, isDeleted?: boolean}>} rows
  * @returns {Promise<number>} rows the service accepted
  */
 async function writeAcls(index, rows) {
@@ -1296,7 +1296,8 @@ async function writeAcls(index, rows) {
           '@search.action': 'merge',
           id: String(row.id),
           read: row.read,
-          isPublished: Boolean(row.isPublished)
+          isPublished: Boolean(row.isPublished),
+          ...(typeof row.isDeleted === 'boolean' ? { isDeleted: row.isDeleted } : {})
         }))
       });
 

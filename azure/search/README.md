@@ -359,6 +359,19 @@ with `scripts/demi-devbox.sh apply --env <env> --only documents --yes`, which PU
 `demi-documents-ds` and resets and runs `documents-indexer`. A row with no author stays null after
 the reset too. The catalog entry is `4/4`, the same as `documentAuthor`.
 
+`isDeleted` on `documents` is a plain widening: an `Edm.Boolean` that is filterable and nothing
+else. Every query to this index, from the native list and from `/search`, sends `isDeleted ne true`.
+So a row Eagle deleted is left out of index pages and counts, for staff too.
+
+`demi-documents-ds` computes it in the SELECT as true or false, never null. A row indexed before
+the field holds null, and `null ne true` is true, so it still matches as live. The delete push
+merges the flag into the index at once; rows deleted before the PUT drop out only after a reset.
+
+Apply it with `scripts/demi-devbox.sh apply --env <env> --only documents --yes` before the app
+that sends it ships, or every document search answers 502. The data check `documents isDeleted`
+reads over its maximum until the reset finishes. The catalog entry is `0/0`, so a caller's
+`and[isDeleted]` is dropped.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

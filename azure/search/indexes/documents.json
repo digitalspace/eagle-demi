@@ -451,6 +451,24 @@
       "vectorSearchProfile": null,
       "vectorEncoding": null,
       "synonymMaps": []
+    },
+    {
+      "name": "isDeleted",
+      "type": "Edm.Boolean",
+      "searchable": false,
+      "filterable": true,
+      "retrievable": false,
+      "stored": true,
+      "sortable": false,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": null,
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
     }
   ],
   "scoringProfiles": [],

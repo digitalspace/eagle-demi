@@ -522,10 +522,10 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
   }
 
   // A caller who filters on `documentSource` has said which sources they want; a dropped key has not.
-  if (dataset === 'Document' && !filtered.has('documentSource')) {
-    // Required here, not at the top: document-query loads the documents repository, whose `_sql`
-    // requires this module, so a top-level require is a cycle.
-    groups.push(require('./document-query').NOT_UPDATE_IMAGE);
+  // Required here: document-query loads the documents repository, whose `_sql` requires this module.
+  if (dataset === 'Document') {
+    const { NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT } = require('./document-query');
+    groups.push(...(filtered.has('documentSource') ? [] : [NOT_UPDATE_IMAGE]), NOT_DELETED_DOCUMENT);
   }
 
   if (acl.filter) groups.push(acl.filter);

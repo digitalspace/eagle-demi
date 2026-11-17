@@ -2017,6 +2017,12 @@ test('writeAcls', async (t) => {
     ]);
   });
 
+  await t.test('a row that carries isDeleted merges it too', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.writeAcls('documents', [{ id: 'd1', read: ['staff'], isPublished: false, isDeleted: true }]);
+    assert.strictEqual(calls[0].body.value[0].isDeleted, true);
+  });
+
   await t.test('1,500 rows go as 1,000 + 500 — the service caps one batch at 1,000', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 

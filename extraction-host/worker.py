@@ -283,6 +283,15 @@ def api_get(path, **kw):
 
 # ---------------------------------------------------------------- work list
 
+def worklist_rows(batch):
+    """The scan rows worth extracting. A row Eagle deleted answers 404 on download, so it stays off."""
+    return [{
+        "id": d["id"],
+        "projectId": d.get("projectId"),
+        "ext": (d.get("fileExt") or "pdf").lower().lstrip("."),
+    } for d in batch if d.get("isDeleted") is not True]
+
+
 def build_worklist():
     """Snapshot every unextracted document once, then work purely from disk.
 
@@ -309,11 +318,7 @@ def build_worklist():
         batch = r.json()
         if not batch:
             break
-        docs.extend({
-            "id": d["id"],
-            "projectId": d.get("projectId"),
-            "ext": (d.get("fileExt") or "pdf").lower().lstrip("."),
-        } for d in batch)
+        docs.extend(worklist_rows(batch))
         page += 1
         if page % 20 == 0:
             log(f"  ...{len(docs)} so far")
@@ -1126,8 +1131,8 @@ def feeder(docs):
 
 
 def selfcheck():
-    """The routing decision is the one piece of logic here that can be wrong without failing
-    loudly, so it is the one piece with a check."""
+    """The routing decision and the work-list filter can be wrong without failing loudly, so they
+    are the pieces with a check."""
     big, small = 10 * 1024 * 1024, 1000
     assert decide([2000] * 20, big) == "text", "a digital document must not go to the GPU"
     assert decide([0] * 20, big) == "ocr", "a scan must go to OCR"
@@ -1139,6 +1144,8 @@ def selfcheck():
     # A small file with little text is a short document, not a scan worth GPU time.
     assert decide([120] * 5, small) == "text", "a tiny file must not be sent to the GPU"
     assert decide([120] * 5, big) == "ocr", "a big file with thin text is a scan"
+    rows = worklist_rows([{"id": "a", "fileExt": ".PDF"}, {"id": "b", "isDeleted": True}])
+    assert rows == [{"id": "a", "projectId": None, "ext": "pdf"}], "a deleted row must stay off the work list"
     print("selfcheck ok")
 
 

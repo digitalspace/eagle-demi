@@ -959,7 +959,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(indexWrites.length, 1);
     // Eagle's own read: nothing added, never `team`.
     assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false }]);
+      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false, isDeleted: false }]);
 
     indexWrites.length = 0;
     await documentController.upsertFromEagle({
@@ -1024,7 +1024,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     assert.deepStrictEqual(written.ownRead, ['public', 'sysadmin']);
     // The index is a separate store and no list read is live, so the narrowing has to be pushed.
     assert.deepStrictEqual(indexWrites,
-      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]]);
+      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]]);
   });
 
   await t.test('a delete of a document only idir could see still reaches the index', async () => {
@@ -1049,7 +1049,19 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
     assert.deepStrictEqual(written.read, ['staff']);
     assert.deepStrictEqual(indexWrites,
-      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]]);
+      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false, isDeleted: true }]]);
+  });
+
+  await t.test('a delete of a staff-level row moves no level and still reaches the index', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'sysadmin']
+    }));
+    t.mock.method(documents, 'upsert', async (item) => item);
+    const written = t.mock.method(aiSearch, 'writeAcls', async (index, rows) => rows.length);
+    await documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: ['staff', 'sysadmin'], isDeleted: true }) }, user: STAFF }, mockRes());
+    assert.deepStrictEqual(written.mock.calls.map(c => c.arguments[1][0].isDeleted), [true]);
   });
 
   await t.test('an ordinary push stores the flag false and leaves read[] alone', async () => {

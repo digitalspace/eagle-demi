@@ -43,5 +43,7 @@ module.exports = {
   read: { defaultVis: 0, maxVis: 0 },
   // The row's own dials folded into one number for the index filter. Never a caller filter or
   // sort key: a count over it answers which documents carry a narrower dial.
-  searchVis: { defaultVis: 0, maxVis: 0 }
+  searchVis: { defaultVis: 0, maxVis: 0 },
+  // Every read already leaves deleted rows out, so no caller filters on it.
+  isDeleted: { defaultVis: 0, maxVis: 0 }
 };

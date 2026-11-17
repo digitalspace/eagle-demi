@@ -410,11 +410,11 @@ test('documents list over the paged index', async (t) => {
     assert.strictEqual(queries.length, 1, 'list and count share one Cosmos re-read');
   });
 
-  await t.test('the filter is the ACL, the update-image clause, searchVis, then the mapped filters', async (t) => {
+  await t.test('the filter is the ACL, the update-image and deleted clauses, searchVis, then the mapped filters', async (t) => {
     const { searches } = fakeDocStores(t);
     await callDocs('q=report&legislation=2002&legislation=2018');
     assert.strictEqual(searches[0].filter, `(${documentsAcl(ANON).filter}) and (documentSource ne 'UPDATE')` +
-      ' and (searchVis ge 4) and ((legislation eq 2002 or legislation eq 2018))');
+      ' and (isDeleted ne true) and (searchVis ge 4) and ((legislation eq 2002 or legislation eq 2018))');
   });
 
   await t.test('searchVis clause only with q', async (t) => {

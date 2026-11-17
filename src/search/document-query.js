@@ -24,4 +24,7 @@ const documentsAcl = access => filterFor(access, 'projectId', 'id');
  */
 const NOT_UPDATE_IMAGE = `documentSource ne ${quote(UPDATE_SOURCE)}`;
 
-module.exports = { documentsAcl, NOT_UPDATE_IMAGE };
+/** Leaves out rows Eagle deleted. `null ne true` is true, so rows indexed before the field still match. */
+const NOT_DELETED_DOCUMENT = 'isDeleted ne true';
+
+module.exports = { documentsAcl, NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT };

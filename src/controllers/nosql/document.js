@@ -265,13 +265,15 @@ exports.scanDocuments = async (req, res) => {
 
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { projectParentJoin } = require('../../helpers/native-query');
+const { NOT_DELETED } = require('../../repositories/_sql');
 const { listHandler } = require('./mirror-reads');
 
 const DOCUMENT_ID_FILTERS = ['projectId', ...chunks.CHUNK_PARENT_LIST_REFS];
 
+// NOT_DELETED here, not in `buildCriteria`: the scan feed and backfills built on it still walk deleted rows.
 const documentsRepository = withoutUpdateImages => indexedKind({
   index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
-  defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages })
+  defaultOrder: 'c.id ASC', baseCriteria: [...documents.buildCriteria({ withoutUpdateImages }), NOT_DELETED]
 });
 const listedDocuments = documentsRepository(true);
 const namedDocuments = documentsRepository(false);
@@ -485,10 +487,7 @@ exports.getDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
     const doc = await documents.getById(access, req.params.id, req.query.project);
-
-    if (!doc) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    if (!doc || doc.isDeleted === true) return res.status(404).json({ error: 'Document not found' });
     return res.json(redactForAccess('documents', doc, access));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
@@ -504,7 +503,7 @@ exports.getDocument = async (req, res) => {
 async function findStoredFile(req, id) {
   const access = resolveAccess(req);
   const doc = await documents.getById(access, id, req.query.project);
-  if (!doc) return { status: 404, body: { error: 'Document not found' } };
+  if (!doc || doc.isDeleted === true) return { status: 404, body: { error: 'Document not found' } };
   if (!doc.s3Key) return { status: 404, body: { error: 'Document has no stored file.' } };
   return {
     doc,
@@ -1266,6 +1265,10 @@ function listLookupFrom(doc, labels) {
   return lookup;
 }
 
+// The LEVEL, since a delete push narrows level 3 to 2 without touching `isPublished`, and the delete
+// flag, which a staff-level row changes alone.
+const indexFieldsMoved = (from, saved) => levelOfRead(saved.read) !== levelOfRead(from.read) || (saved.isDeleted === true) !== (from.isDeleted === true);
+
 /**
  * Receive one raw Eagle document pushed by eagle-api, through the seed's own transform. A delete
  * push narrows the row to level 2 and flags it rather than dropping it.
@@ -1389,11 +1392,10 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    // As in setLevel, the index is corrected here. Compares the LEVEL: a delete push narrows level
-    // 3 to 2 without touching `isPublished`.
-    if (from && levelOfRead(saved.read) !== levelOfRead(from.read)) {
+    // As in setLevel, the index is corrected here.
+    if (from && indexFieldsMoved(from, saved)) {
       await aiSearch.writeAcls(aiSearch.indexes().documents, [
-        { id: saved.id, read: saved.read, isPublished: saved.isPublished }
+        { id: saved.id, read: saved.read, isPublished: saved.isPublished, isDeleted: saved.isDeleted === true }
       ]);
     }
 
