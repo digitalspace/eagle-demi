@@ -347,10 +347,12 @@ const routes = [
   // port: document-feature
 ];
 
-// Unauthenticated and names every route and role, so an allowlist: a deployment that forgets
-// ENVIRONMENT must 404 the spec, not publish it.
+// Served only when ENVIRONMENT is dev or test; a missing ENVIRONMENT reads as dev.
 if (['dev', 'test'].includes(config.environmentName)) {
-  routes.push({ method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec });
+  routes.push(
+    { method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec },
+    { method: 'get', path: '/projects/:id/sheet-works', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks }
+  );
 }
 
 module.exports = routes;

@@ -1,13 +1,6 @@
 #!/usr/bin/env node
-// Smoke test for a built DEMI frontend: every screen and every legacy redirect, Keycloak off, plus
-// no sideways scroll on the FITS screens at four widths.
-// Serve the build first (`yarn build && yarn preview --host 127.0.0.1`); this script starts nothing.
-//
-// Usage:
-//   node scripts/e2e-smoke.mjs [--base <url>] [--timeout <ms>] [--help]
-//
-// Sign-in, runtime config and every API answer come from the parity harness: env.js is patched in
-// flight and /api/** is served from parity/fixtures/. Nothing on disk is edited.
+// Smoke test for a served build: every screen and redirect, plus FITS. Serve it first with
+// `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -31,6 +24,8 @@ export const SCREENS = [
   { path: '/summary', h1: 'AI Search Summary' },
   { path: '/projects', h1: 'AI Project Summary' },
   { path: '/projects/901', h1: 'Sample Alpha Transmission Line' },
+  // `text` comes only from a panel's own fixture, so a panel reading the wrong id fails here.
+  { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
   { path: '/notify', h1: 'eagle-notify' },
   { path: '/links', h1: 'Short URLs' },
   { path: '/rbac', h1: 'Access model' },
@@ -50,9 +45,8 @@ export const REDIRECTS = [
   { path: '/no-such-screen', to: '/map', h1: 'Map Explorer' }
 ];
 
-// Screens that must not scroll sideways at these widths. The project page also gets a 64-character
-// code with no hyphen to break at, which is what once widened it. `api` swaps the screen's own read
-// for an edited fixture; `panel` must not scroll sideways either, from `panelFrom` px up.
+// Screens that must not scroll sideways at these widths. `api` swaps the screen's read for an edited
+// fixture (a long unbreakable code on the project page); `panel` must not scroll from `panelFrom` px up.
 export const FIT_WIDTHS = [390, 768, 1280, 1440];
 const LONG_CODE = 'sample_project_code_with_no_hyphen_to_break_at_all_sixty_four_ch';
 export const FITS = [
@@ -140,6 +134,13 @@ async function check(context, base, entry, timeout) {
         .waitForFunction((want) => [...document.querySelectorAll('h1')].some((h) => h.textContent.trim() === want), entry.h1, { timeout })
         .catch(async () => reasons.push(`h1 ${JSON.stringify(await h1Texts(page))} lacks "${entry.h1}"`));
     }
+    if (entry.text) {
+      await page
+        .getByText(entry.text, { exact: true })
+        .first()
+        .waitFor({ timeout })
+        .catch(() => reasons.push(`"${entry.text}" never rendered`));
+    }
 
     // Late errors (a failed lazy chunk, a query that throws on render) land after the h1.
     await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
@@ -208,6 +209,8 @@ async function main() {
   await routeApi(context, misses);
   await routeTiles(context);
   await routeDataBc(context, misses);
+  // NrptiPanel reads NRPTI's prod API straight from the browser; the smoke must not depend on it.
+  await context.route((url) => url.hostname.startsWith('nrpti-api-'), (route) => route.fulfill({ json: [{ searchResults: [] }] }));
 
   let ok = 0;
   let fail = 0;

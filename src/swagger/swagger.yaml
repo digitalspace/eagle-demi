@@ -1589,11 +1589,11 @@ paths:
       description: >-
         Every live work of the project, each with the contacts, investments and notes that apply to
         it, plus the project's `currentInvestment`. Needs the role `staff`, `sysadmin` or
-        `demi-admin`, or a registry key carrying `demi-service-read` or a write role. Anonymous and
-        IDIR-only callers get 403 before the project is read. A staff list that a per-project dial
-        hides from the caller comes back empty. The route lists all works, with no sheet-override
-        hiding, so it shows the sheet works a public read leaves out. `sourceKey` and `sheetKey`
-        never appear.
+        `demi-admin`, or a registry key carrying `demi-service-read` or a write role. A call with no
+        token gets 401; IDIR-only and other non-staff callers get 403 before the project is read. A
+        staff list that a per-project dial hides from the caller comes back empty. The route lists
+        all works, with no sheet-override hiding, so it shows the sheet works a public read leaves
+        out. `sourceKey` and `sheetKey` never appear.
 
         An entry tied to a work by `workId` shows on that work only, with no date test. Any other
         entry shows on each work whose dates it overlaps. An entry with no `effectiveFrom` shows on a
@@ -1660,11 +1660,98 @@ paths:
         '400':
           description: The id is not a DEMI project id. Nothing is read.
         '401':
-          description: Credential rejected.
+          description: No token, or the credential is rejected.
         '403':
-          description: The caller is anonymous, holds only an IDIR login, or has no staff-level role.
+          description: The caller holds only an IDIR login or has no staff-level role.
         '404':
           description: Project not found, or not readable by the caller.
+        '500':
+          description: The read failed.
+
+  /api/projects/{id}/sheet-works:
+    get:
+      summary: Get a project's sheet works and how the sheet override treats each
+      description: >-
+        Every live work loaded from the business spreadsheets, in the public work shape, whether or
+        not a public read shows it. Each work says whether a read with `WORKS_READ_SOURCES`
+        `track,sheet` would show it, whether it waits in the marker's `untilTrack` list, and which
+        Track works it hides. Routed only when `ENVIRONMENT` is `dev` or `test`; elsewhere every
+        caller gets the router's 404. Needs the same roles as `works-staff`: a call with no token
+        gets 401, and IDIR-only and other non-staff callers get 403 before the project is read.
+        Staff entries, the marker's certificates and `trackAlive` list, `sourceKey`, `sheetKey` and
+        `provenance` never appear.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id (a Track number, `eagle-<ObjectId>` or a UUID).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The project's sheet works.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                  overrideActive:
+                    type: boolean
+                    description: The project has a valid sheet override marker set active.
+                  boundary:
+                    type: string
+                    format: date
+                    nullable: true
+                    description: >-
+                      Sheet works decided before this day show, and Track works paired with a shown
+                      one and settled before it hide; null unless `overrideActive`.
+                  works:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/ProjectWork'
+                        - type: object
+                          properties:
+                            shownAfterFlip:
+                              type: boolean
+                              description: A read with `WORKS_READ_SOURCES` `track,sheet` shows this work.
+                            untilTrack:
+                              type: boolean
+                              description: The work shows only until a matching Track work is stored.
+                            replaces:
+                              type: array
+                              description: >-
+                                The stored Track works the marker pairs with this work that a read
+                                with `WORKS_READ_SOURCES` `track,sheet` hides: this work shows and
+                                they are settled before `boundary`.
+                              items:
+                                type: object
+                                properties:
+                                  workId:
+                                    type: string
+                                  title:
+                                    type: string
+                                    nullable: true
+                                  startDate:
+                                    type: string
+                                    nullable: true
+                                  decisionDate:
+                                    type: string
+                                    nullable: true
+        '400':
+          description: The id is not a DEMI project id. Nothing is read.
+        '401':
+          description: No token, or the credential is rejected.
+        '403':
+          description: The caller holds only an IDIR login or has no staff-level role.
+        '404':
+          description: >-
+            Not on `dev` or `test`, or the project is not found or not readable by the caller.
         '500':
           description: The read failed.
 
@@ -9700,209 +9787,7 @@ components:
             there are none or the works sync has not run. Notes, staff, hidden events and source
             references are left out. On a work from another source the Track-only keys are null.
           items:
-            type: object
-            properties:
-              workId:
-                type: string
-                description: The work's id, `track-<n>` for a Track work.
-              source:
-                type: string
-                nullable: true
-                enum: [track, sheet, demi, null]
-              trackWorkId:
-                type: integer
-                nullable: true
-              workTypeId:
-                type: integer
-                nullable: true
-              workTypeCode:
-                type: string
-                nullable: true
-                description: The works catalog code of the work type.
-              workType:
-                type: string
-                nullable: true
-              title:
-                type: string
-                nullable: true
-              eaAct:
-                type: string
-                nullable: true
-              actYear:
-                type: integer
-                nullable: true
-                enum: [1996, 2002, 2018, 2025, null]
-              outcomeCode:
-                type: string
-                nullable: true
-              transitionOut:
-                type: object
-                nullable: true
-                description: >-
-                  Present on a work that ended because its project moved to a later Act.
-                properties:
-                  toActYear:
-                    type: integer
-                    nullable: true
-                  date:
-                    type: string
-                    format: date
-                    nullable: true
-                    description: >-
-                      The hand-over day. A sheet date before 2025-01-01 when the stored `dateSource`
-                      is `sheet`. Else the day of Track's "Project Transitioning FROM" milestone naming
-                      this work's Act. Else the stored sheet date, only when the stored `dateSource` is
-                      `track`. Else null.
-                  dateSource:
-                    type: string
-                    enum: [sheet, track, none]
-                    description: >-
-                      Where `date` came from: `track` for Track's milestone, `sheet` for a sheet date,
-                      `none` when `date` is null.
-              undated:
-                $ref: '#/components/schemas/WorkUndated'
-              startDate:
-                type: string
-                format: date-time
-                nullable: true
-              isActive:
-                type: boolean
-                nullable: true
-              workState:
-                type: string
-                nullable: true
-                description: >-
-                  Track's state on a Track work. `transitioned` marks a work its project left for a
-                  later Act; `inactive` a sheet work recorded as incomplete or inactive.
-                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, transitioned, inactive, null]
-              decisionDate:
-                type: string
-                format: date-time
-                nullable: true
-              anticipatedDecisionDate:
-                type: string
-                format: date-time
-                nullable: true
-              outcome:
-                type: string
-                nullable: true
-                description: >-
-                  The outcome name. On a Track work, the Track outcome of the END milestone in the
-                  work's last phase that has one. On a work from another source, the stored name
-                  for `outcomeCode`.
-              phases:
-                type: array
-                items:
-                  allOf:
-                    - $ref: '#/components/schemas/TrackWorkPhase'
-                    - type: object
-                      properties:
-                        trackPhaseId:
-                          type: integer
-                          nullable: true
-                        phaseCodeId:
-                          type: integer
-                          nullable: true
-                        catalogId:
-                          type: string
-                          nullable: true
-                          description: The phase catalog entry, `track-<phase code>` when the catalog lacks it.
-                        catalogName:
-                          type: string
-                          nullable: true
-                        stage:
-                          type: string
-                          nullable: true
-                        order:
-                          type: integer
-                          nullable: true
-                        isSuspended:
-                          type: boolean
-                          nullable: true
-                        suspendedDate:
-                          type: string
-                          format: date-time
-                          nullable: true
-                        undated:
-                          $ref: '#/components/schemas/WorkUndated'
-                        interruptions:
-                          type: array
-                          items:
-                            type: object
-                            properties:
-                              id:
-                                type: string
-                              kind:
-                                type: string
-                                enum: [extension, suspension, interregnum]
-                              typeCode:
-                                type: string
-                                nullable: true
-                              legalSection:
-                                type: string
-                                nullable: true
-                              startDate:
-                                type: string
-                                nullable: true
-                              endDate:
-                                type: string
-                                nullable: true
-                              days:
-                                type: integer
-                                nullable: true
-                                description: End minus start.
-              milestones:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                      nullable: true
-                    code:
-                      type: string
-                      nullable: true
-                      description: The works catalog milestone code; null on a Track milestone.
-                    position:
-                      type: string
-                      nullable: true
-                      enum: [START, INTERMEDIATE, INTERIOR, END, null]
-                    eventType:
-                      type: integer
-                      nullable: true
-                      description: Track event type id
-                    trackEventId:
-                      type: integer
-                      nullable: true
-                    actualDate:
-                      type: string
-                      nullable: true
-                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
-                    anticipatedDate:
-                      type: string
-                      nullable: true
-                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
-                    endDate:
-                      type: string
-                      nullable: true
-                      description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
-                    outcome:
-                      type: string
-                      nullable: true
-                    numberOfDays:
-                      type: integer
-                      nullable: true
-                    links:
-                      type: object
-                      properties:
-                        commentPeriodId:
-                          type: string
-                          nullable: true
-                        blockField:
-                          type: string
-                          nullable: true
-                    undated:
-                      $ref: '#/components/schemas/WorkUndated'
+            $ref: '#/components/schemas/ProjectWork'
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
@@ -10383,6 +10268,214 @@ components:
           items:
             type: object
             description: The stored item plus its `id`.
+
+    ProjectWork:
+      type: object
+      description: One work in the public project shape (`Project.works`).
+      properties:
+        workId:
+          type: string
+          description: The work's id, `track-<n>` for a Track work.
+        source:
+          type: string
+          nullable: true
+          enum: [track, sheet, demi, null]
+        trackWorkId:
+          type: integer
+          nullable: true
+        workTypeId:
+          type: integer
+          nullable: true
+        workTypeCode:
+          type: string
+          nullable: true
+          description: The works catalog code of the work type.
+        workType:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        eaAct:
+          type: string
+          nullable: true
+        actYear:
+          type: integer
+          nullable: true
+          enum: [1996, 2002, 2018, 2025, null]
+        outcomeCode:
+          type: string
+          nullable: true
+        transitionOut:
+          type: object
+          nullable: true
+          description: >-
+            Present on a work that ended because its project moved to a later Act.
+          properties:
+            toActYear:
+              type: integer
+              nullable: true
+            date:
+              type: string
+              format: date
+              nullable: true
+              description: >-
+                The hand-over day. A sheet date before 2025-01-01 when the stored `dateSource`
+                is `sheet`. Else the day of Track's "Project Transitioning FROM" milestone naming
+                this work's Act. Else the stored sheet date, only when the stored `dateSource` is
+                `track`. Else null.
+            dateSource:
+              type: string
+              enum: [sheet, track, none]
+              description: >-
+                Where `date` came from: `track` for Track's milestone, `sheet` for a sheet date,
+                `none` when `date` is null.
+        undated:
+          $ref: '#/components/schemas/WorkUndated'
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        isActive:
+          type: boolean
+          nullable: true
+        workState:
+          type: string
+          nullable: true
+          description: >-
+            Track's state on a Track work (upper case); the sheet loader's code on a sheet work
+            (lower case). `transitioned` marks a work its project left for a later Act; `inactive` a
+            sheet work recorded as incomplete or inactive.
+          enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, in-progress, completed,
+            suspended, withdrawn, terminated, closed, transitioned, inactive, null]
+        decisionDate:
+          type: string
+          format: date-time
+          nullable: true
+        anticipatedDecisionDate:
+          type: string
+          format: date-time
+          nullable: true
+        outcome:
+          type: string
+          nullable: true
+          description: >-
+            The outcome name. On a Track work, the Track outcome of the END milestone in the
+            work's last phase that has one. On a work from another source, the stored name
+            for `outcomeCode`.
+        phases:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/TrackWorkPhase'
+              - type: object
+                properties:
+                  trackPhaseId:
+                    type: integer
+                    nullable: true
+                  phaseCodeId:
+                    type: integer
+                    nullable: true
+                  catalogId:
+                    type: string
+                    nullable: true
+                    description: The phase catalog entry, `track-<phase code>` when the catalog lacks it.
+                  catalogName:
+                    type: string
+                    nullable: true
+                  stage:
+                    type: string
+                    nullable: true
+                  order:
+                    type: integer
+                    nullable: true
+                  isSuspended:
+                    type: boolean
+                    nullable: true
+                  suspendedDate:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  undated:
+                    $ref: '#/components/schemas/WorkUndated'
+                  interruptions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        kind:
+                          type: string
+                          enum: [extension, suspension, interregnum]
+                        typeCode:
+                          type: string
+                          nullable: true
+                        legalSection:
+                          type: string
+                          nullable: true
+                        startDate:
+                          type: string
+                          nullable: true
+                        endDate:
+                          type: string
+                          nullable: true
+                        days:
+                          type: integer
+                          nullable: true
+                          description: End minus start.
+        milestones:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                nullable: true
+              code:
+                type: string
+                nullable: true
+                description: The works catalog milestone code; null on a Track milestone.
+              position:
+                type: string
+                nullable: true
+                enum: [START, INTERMEDIATE, INTERIOR, END, null]
+              eventType:
+                type: integer
+                nullable: true
+                description: Track event type id
+              trackEventId:
+                type: integer
+                nullable: true
+              actualDate:
+                type: string
+                nullable: true
+                description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
+              anticipatedDate:
+                type: string
+                nullable: true
+                description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
+              endDate:
+                type: string
+                nullable: true
+                description: A date-time on a Track milestone, `YYYY-MM-DD` on a sheet milestone.
+              outcome:
+                type: string
+                nullable: true
+              numberOfDays:
+                type: integer
+                nullable: true
+              links:
+                type: object
+                properties:
+                  commentPeriodId:
+                    type: string
+                    nullable: true
+                  blockField:
+                    type: string
+                    nullable: true
+              undated:
+                $ref: '#/components/schemas/WorkUndated'
 
     WorksStaffEntry:
       type: object

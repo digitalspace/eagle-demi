@@ -18,12 +18,8 @@ html, body {
   min-height: 0;
 }
 
-/* `position: relative` is load-bearing, not decoration. `.visually-hidden` is absolutely
-   positioned with no inset, so without a positioned ancestor its containing block is the initial
-   containing block: it is laid out at its static offset measured from the DOCUMENT, which for a
-   label far down this scrolling column is ~3,800px. The document then grew to match and the window
-   scrolled thousands of pixels past a shell that is only 100vh tall. Positioning the scroll
-   container keeps every absolute descendant inside it. */
+/* Positioned so `.visually-hidden` descendants stay in this scroll column; unpositioned, they were
+   placed from the document and scrolled the window thousands of px past the 100vh shell. */
 .app__main {
   overflow-y: auto;
   position: relative;
@@ -153,14 +149,8 @@ html, body {
   color: var(--typography-color-primary);
 }
 
-/* ============================================================================
-   screen: Project summary (/projects/:id)
-
-   One 880px reading column, following the reference status page. Classes rather than the inline
-   styles the other screens use: this page needs a media query (the card grid drops to one column
-   under 600px), :focus-visible, :hover and dialog::backdrop, none of which a style attribute can
-   express. Same place map-explorer's own screen classes live. Every value is a design token.
-   ============================================================================ */
+/* screen: Project summary (/projects/:id). Classes, not inline styles: the page needs a media
+   query, :focus-visible, :hover and dialog::backdrop, which a style attribute cannot express. */
 
 .ps {
   max-width: 55rem; /* 880px at the 16px root */
@@ -579,6 +569,17 @@ html, body {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
   }
+}
+
+/* Phases and milestones under a work: the left rule carries the nesting, so rules between rows only split works. */
+.ps-list--nested {
+  margin: var(--layout-margin-xsmall) 0 var(--layout-margin-small);
+  padding-left: var(--layout-padding-medium);
+  border-left: var(--layout-border-width-medium) solid var(--surface-color-border-default);
+}
+
+.ps-list--nested > .ps-list__row {
+  border-bottom: none;
 }
 
 .ps-unmatched {

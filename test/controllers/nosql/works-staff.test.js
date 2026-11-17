@@ -1,18 +1,21 @@
 'use strict';
 
-// GET /projects/:id/works-staff: who may call it, and the staff entries each work gets.
+// GET /projects/:id/works-staff and /sheet-works: who may call them, and what each work carries.
 
 process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
 
+const config = require('../../../src/config');
+const phaseCatalog = require('../../../src/domain/phase-catalog');
 const projects = require('../../../src/repositories/projects');
 const works = require('../../../src/repositories/works');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
-const { getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
+const { getSheetWorks, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
 const { mockRes } = require('../../helpers/mock-res');
+const { withServer } = require('../../helpers/with-server');
 
 const EPD = {
   id: 'a1', role: 'epd', name: 'Casey Sample', effectiveFrom: null, effectiveTo: null,
@@ -132,4 +135,88 @@ test('a row dial narrower than the caller withholds that staff list', async (t) 
   const { res } = await call(t, SERVICE_READ, { row: { ...ROW, vis: { capitalInvestments: 1 } } });
   assert.strictEqual(res.body.currentInvestment, null);
   assert.deepStrictEqual(workOf(res.body, OPEN_WORK.id).investments, []);
+});
+
+const SHEET_WORK = {
+  id: 'sheet-00000000-0000-4000-8000-000000000002', projectId: '412', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment',
+  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: [],
+  sourceKey: '412:amendment:1', sheetKey: 'sheet-row-7', provenance: { file: 'sample.xlsx', row: 7 }
+};
+const TRACK_WORK = { ...OPEN_WORK, source: 'track', trackWorkId: 9001, workTypeId: 7, decisionDate: '2024-06-01', phases: [] };
+const MARKER = {
+  id: 'sheet-override', projectId: '412', kind: 'override', source: 'sheet', owner: 'sheet', active: true,
+  boundaryAtLoad: '2025-01-01', certificates: [{ actYear: 1996, certificateKind: 'EAC', decisionDate: '1998-01-01' }],
+  hidden: [{ trackWorkId: TRACK_WORK.id, sheetWorkId: SHEET_WORK.id }],
+  trackAlive: [{ trackWorkId: 'track-9003', sourceKey: '412:alive:1' }], untilTrack: [], pairedTrackWorkIds: [TRACK_WORK.id, 'track-9003'],
+  batchId: 'batch-1', provenance: {}, schemaVersion: 1
+};
+
+async function callSheet(t, user, { id = ROW.id } = {}) {
+  const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+  t.mock.method(works, 'listForRead', async () => structuredClone([TRACK_WORK, SHEET_WORK]));
+  t.mock.method(works, 'get', async () => structuredClone(MARKER));
+  t.mock.method(phaseCatalog, 'load', async () => ({}));
+  const res = mockRes();
+  await getSheetWorks({ params: { id }, query: {}, user }, res);
+  return { res, reads: read.mock.callCount() };
+}
+
+const ROUTER = require.resolve('../../../src/http/router');
+const ROUTES = require.resolve('../../../src/http/routes');
+
+/** Calls a router built as a deployment with ENVIRONMENT `environmentName`: routes.js reads it once at load. */
+async function asDeployment(environmentName, fn) {
+  const before = config.environmentName;
+  const fresh = () => { delete require.cache[ROUTER]; delete require.cache[ROUTES]; };
+  config.environmentName = environmentName;
+  fresh();
+  try {
+    await withServer(fn);
+  } finally {
+    config.environmentName = before;
+    fresh();
+  }
+}
+
+test('sheet-works is not routed outside dev and test, token or not, and reaches auth on dev and test', async (t) => {
+  const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+  const results = [];
+  const before = config.environmentName;
+  for (const environmentName of ['prod', 'staging', 'dev', 'test']) {
+    await asDeployment(environmentName, async (call) => {
+      for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
+        results.push([environmentName, Boolean(headers.authorization), (await call(`/api/projects/${ROW.id}/sheet-works`, { headers })).status]);
+      }
+    });
+  }
+  assert.deepStrictEqual(results, [
+    ['prod', false, 404], ['prod', true, 404], ['staging', false, 404], ['staging', true, 404],
+    ['dev', false, 401], ['dev', true, 401], ['test', false, 401], ['test', true, 401]
+  ]);
+  assert.strictEqual(read.mock.callCount(), 0);
+  assert.strictEqual(config.environmentName, before);
+});
+
+test('sheet-works refuses anonymous and idir calls, and a malformed id, before any read', async (t) => {
+  const route = routes.find(r => r.method === 'get' && r.path === '/projects/:id/sheet-works');
+  assert.strictEqual(route.guards[0], authMiddleware);
+  const results = [];
+  for (const [user, id] of [[undefined, ROW.id], [IDIR, ROW.id], [STAFF, '412/../x']]) {
+    const { res, reads } = await callSheet(t, user, { id });
+    results.push([res.statusCode, reads]);
+    t.mock.restoreAll();
+  }
+  assert.deepStrictEqual(results, [[403, 0], [403, 0], [400, 0]]);
+});
+
+test('sheet-works returns only sheet works, with no staff entries, marker detail or source keys', async (t) => {
+  const { res } = await callSheet(t, STAFF);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(Object.keys(res.body).sort(), ['boundary', 'overrideActive', 'projectId', 'works']);
+  assert.deepStrictEqual(res.body.works.map(work => [work.workId, work.shownAfterFlip, work.replaces.map(r => r.workId)]),
+    [[SHEET_WORK.id, true, [TRACK_WORK.id]]]);
+  const text = JSON.stringify(res.body);
+  for (const key of ['contacts', 'notes', 'investments', 'certificates', 'trackAlive', 'sourceKey', 'sheetKey', 'provenance', 'sample.xlsx', EPD.name]) {
+    assert.ok(!text.includes(key), `${key} is left out`);
+  }
 });

@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router';
 import { projectEagleId, useProjectFacts } from '../api/project-summary';
 import { NrptiPanel } from './NrptiPanel';
 import { ProjectFactsState } from './ProjectFactsState';
+import { SheetWorksPanel } from './SheetWorksPanel';
 
 /** Extra data about one project, one section each, beside the summary page. */
 export function ProjectDetails() {
@@ -26,6 +27,7 @@ export function ProjectDetails() {
           </header>
 
           <NrptiPanel key={eagleId} eagleId={eagleId} />
+          <SheetWorksPanel projectId={String(facts.id)} />
         </>
       )}
     </div>
