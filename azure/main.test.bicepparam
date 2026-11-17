@@ -61,9 +61,9 @@ param optionalSecretNames = [
 // one of them: the app can only reach what its token opens, and it holds no prod token.
 param syncNamespaces = '6cdc9e-dev,6cdc9e-test'
 
-// The map explorer renders the wildfire aggregate; nrpti serves NRPTI mines and records. Prod
-// publishes no enrichment.
-param enrichmentSources = 'wildfire,nrpti'
+// The map explorer renders the wildfire aggregate. 'nrpti' (NRPTI mines and records) is left out
+// until the business approves pulling NRPTI data. Prod publishes no enrichment.
+param enrichmentSources = 'wildfire'
 
 // TEST, not dev. src/seed/sources.js defaults to the eagle-DEV instance when this is unset, so
 // leaving it out of the template does not merely lose a setting — it repoints staging's seed at
@@ -244,8 +244,9 @@ param syncTeamsSchedule = '0 0 10 * * *'
 // not the next day. Armed 2026-10-16.
 param syncProjectsSchedule = '0 */5 * * * *'
 
-// Daily 10:30 UTC, after the Track team sync. Test only: prod has no NRPTI containers.
-param nrptiSyncSchedule = '0 30 10 * * *'
+// Off until the business approves NRPTI data; to turn on, set '0 30 10 * * *' (daily 10:30 UTC)
+// and add 'nrpti' to enrichmentSources. Test only: prod has no NRPTI containers.
+param nrptiSyncSchedule = ''
 
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
 // Test only. pdfTitleLive true: the worker writes titles into test originals; set false to list work and write nothing.
