@@ -748,6 +748,16 @@ and IDIR-only callers. The response never carries `sourceKey` or `sheetKey`; fie
 `currentInvestment` sits beside `works` in the response. It is the open entry of the first source that
 has one, in the order `demi`, `track`, `eagle`, `sheet`, and `null` when no entry is open.
 
+### Sheet works route
+
+`GET /api/projects/{id}/sheet-works` returns a project's works loaded from the business spreadsheets,
+including the ones the public read hides. It needs the same staff-level access as the staff works route.
+It answers 404 unless `ENVIRONMENT` is `dev` or `test`.
+
+The response holds `projectId`, `overrideActive`, `boundary` and `works`. Each work has the public work
+fields plus `shownAfterFlip`, `untilTrack` and `replaces`, the Track works it stands in for. Contacts,
+notes, investments, the marker's certificates and `trackAlive` list, `sourceKey` and `sheetKey` are left out.
+
 ### Track project poll
 
 Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five

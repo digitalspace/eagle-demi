@@ -12,7 +12,7 @@ const works = require('../../src/repositories/works');
 const { logger } = require('../../src/utils/logger');
 const { TRACK_ACT_YEAR } = require('../../src/merge/assessment-work');
 const { publicWorksOf } = require('../../src/seed/track-mappers');
-const { deriveInputs, loadWorks } = require('../../src/domain/works-derive');
+const { deriveInputs, loadWorks, sheetWorksOf } = require('../../src/domain/works-derive');
 
 test('deriveInputs', async (t) => {
   const stored = [
@@ -145,13 +145,13 @@ test('loadWorks', async (t) => {
   });
 });
 
-test('the sheet override on read', async (t) => {
-  const amendments = [
-    trackWork(7, { decisionDate: '2024-06-01' }), trackWork(8, { decisionDate: '2024-06-01' }),
-    sheetWork(1, { decisionDate: '2024-06-01' }), sheetWork(2, { decisionDate: '2024-03-01' })
-  ];
-  const listed = { hidden: [pair(7, 1)], pairedTrackWorkIds: ['track-7'] };
+const amendments = [
+  trackWork(7, { decisionDate: '2024-06-01' }), trackWork(8, { decisionDate: '2024-06-01' }),
+  sheetWork(1, { decisionDate: '2024-06-01' }), sheetWork(2, { decisionDate: '2024-03-01' })
+];
+const listed = { hidden: [pair(7, 1)], pairedTrackWorkIds: ['track-7'] };
 
+test('the sheet override on read', async (t) => {
   await t.test('an active marker hides a listed Track amendment decided 2024-06-01, shows an unlisted one decided the same day, and shows the sheet amendments closed before the boundary', async (t) => {
     assert.deepStrictEqual(await shown(t, amendments, markerDoc(listed)), ['sheet-1', 'sheet-2', 'track-8']);
   });
@@ -222,5 +222,38 @@ test('the sheet override on read', async (t) => {
     const docs = [sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })];
     const marker = markerDoc({ untilTrack: [sheetId(1)], pairedTrackWorkIds: ['track-9'] });
     assert.deepStrictEqual(await shown(t, docs, marker), ['sheet-1', 'track-9']);
+  });
+});
+
+test('sheetWorksOf', async (t) => {
+  await t.test('shownAfterFlip marks the sheet works a track and sheet read shows', async (t) => {
+    const cases = [
+      [amendments, markerDoc(listed)],
+      [amendments, markerDoc({ ...listed, active: false })],
+      [amendments, null],
+      [[assessment, trackWork(7, { decisionDate: '2023-11-01' }), sheetWork(1, { decisionDate: '2023-11-01' })], markerDoc(listed)],
+      [[sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })], markerDoc({ untilTrack: [sheetId(1)] })],
+      [[sheetWork(2, { startDate: '2024-09-21' }), sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })],
+        markerDoc({ untilTrack: [sheetId(1), sheetId(2)] })]
+    ];
+    for (const [docs, marker] of cases) {
+      store(t, docs, marker);
+      const read = (await loadWorks({ id: 'p1' }, { sources: ['track', 'sheet'] })).worksForDerive;
+      const expected = read.filter(work => work.source === 'sheet').map(work => work.workId).sort();
+      const { works: sheet } = await sheetWorksOf({ id: 'p1' });
+      assert.deepStrictEqual(sheet.filter(work => work.shownAfterFlip).map(work => work.workId).sort(), expected);
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('lists every sheet work with its untilTrack flag and the Track work each replaces', async (t) => {
+    store(t, [...amendments, sheetWork(3, { startDate: '2024-09-01' })], markerDoc({ ...listed, untilTrack: [sheetId(3)] }));
+    const out = await sheetWorksOf({ id: 'p1' });
+    assert.deepStrictEqual([out.overrideActive, out.boundary], [true, '2025-01-01']);
+    assert.deepStrictEqual(out.works.map(work => [work.title, work.untilTrack, work.replaces]), [
+      ['sheet-1', false, [{ workId: 'track-7', title: 'track-7', startDate: null, decisionDate: '2024-06-01' }]],
+      ['sheet-2', false, []],
+      ['sheet-3', true, []]
+    ]);
   });
 });

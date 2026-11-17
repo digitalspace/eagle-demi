@@ -6,7 +6,7 @@ const works = require('../repositories/works');
 const { logger } = require('../utils/logger');
 const { publicWorksOf } = require('../seed/track-mappers');
 const {
-  OVERRIDE_MARKER_ID, hiddenByOverride, overrideShown, sourceOf, validateMarker
+  OVERRIDE_MARKER_ID, hiddenByOverride, listOf, overrideShown, sourceOf, validateMarker
 } = require('./work-model');
 
 /**
@@ -50,4 +50,34 @@ async function loadWorks(row, { sources = ['track'] } = {}) {
   return { worksForDerive: publicWorksOf(kept, row, { catalog }), catalog };
 }
 
-module.exports = { deriveInputs, loadWorks };
+/** The public `title` and dates of `trackWorkId` among `publicWorks`; nulls when it is not stored. */
+function trackSummaryOf(publicWorks, trackWorkId) {
+  const work = publicWorks.find(candidate => candidate.workId === trackWorkId);
+  return { workId: trackWorkId, title: work?.title ?? null, startDate: work?.startDate ?? null, decisionDate: work?.decisionDate ?? null };
+}
+
+/**
+ * Every live sheet work in public shape, hidden or not, marked as a read with WORKS_READ_SOURCES
+ * `track,sheet` would treat it. Staff only; the public read never calls this.
+ */
+async function sheetWorksOf(row) {
+  const loaded = await phaseCatalog.load();
+  const catalog = Object.values(loaded).some(entries => entries.length) ? loaded : undefined;
+  const stored = await works.listForRead(row.id);
+  const marker = await markerOf(row.id);
+  const bySource = source => stored.filter(work => sourceOf(work) === source);
+  const { boundary, shownSheetIds } = overrideShown(bySource('sheet'), bySource('track'), marker);
+  const overrideActive = marker?.active === true;
+  // Built over every work so a sheet work's transitionOut resolves against Track's milestones.
+  const publicWorks = publicWorksOf(stored, row, { catalog });
+  const sheetWorks = publicWorks.filter(work => work.source === 'sheet').map(work => ({
+    ...work,
+    shownAfterFlip: shownSheetIds.has(work.workId),
+    untilTrack: listOf(marker?.untilTrack).includes(work.workId),
+    replaces: listOf(marker?.hidden).filter(pair => pair.sheetWorkId === work.workId)
+      .map(pair => trackSummaryOf(publicWorks, pair.trackWorkId))
+  }));
+  return { overrideActive, boundary: overrideActive ? boundary : null, works: sheetWorks };
+}
+
+module.exports = { deriveInputs, loadWorks, sheetWorksOf };

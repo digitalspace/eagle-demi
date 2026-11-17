@@ -1668,6 +1668,92 @@ paths:
         '500':
           description: The read failed.
 
+  /api/projects/{id}/sheet-works:
+    get:
+      summary: Get a project's sheet works and how the sheet override treats each
+      description: >-
+        Every live work loaded from the business spreadsheets, in the public work shape, whether or
+        not a public read shows it. Each work says whether a read with `WORKS_READ_SOURCES`
+        `track,sheet` would show it, whether it waits in the marker's `untilTrack` list, and which
+        Track works it replaces. Only on `ENVIRONMENT` `dev` and `test`; elsewhere the route answers
+        404 before any read. Needs the same roles as `works-staff`; anonymous and IDIR-only callers
+        get 403 before the project is read. Staff entries, the marker's certificates and
+        `trackAlive` list, `sourceKey` and `sheetKey` never appear.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id (a Track number, `eagle-<ObjectId>` or a UUID).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The project's sheet works.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                  overrideActive:
+                    type: boolean
+                    description: The project has a valid sheet override marker set active.
+                  boundary:
+                    type: string
+                    format: date
+                    nullable: true
+                    description: >-
+                      Sheet works decided before this day show, and Track works paired with a shown
+                      one and settled before it hide; null unless `overrideActive`.
+                  works:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Project/properties/works/items'
+                        - type: object
+                          properties:
+                            shownAfterFlip:
+                              type: boolean
+                              description: A read with `WORKS_READ_SOURCES` `track,sheet` shows this work.
+                            untilTrack:
+                              type: boolean
+                              description: The work shows only until a matching Track work is stored.
+                            replaces:
+                              type: array
+                              description: >-
+                                The Track works the marker pairs with this work, hidden once this
+                                work shows and they are settled before `boundary`. Fields are null
+                                when the Track work is not stored.
+                              items:
+                                type: object
+                                properties:
+                                  workId:
+                                    type: string
+                                  title:
+                                    type: string
+                                    nullable: true
+                                  startDate:
+                                    type: string
+                                    nullable: true
+                                  decisionDate:
+                                    type: string
+                                    nullable: true
+        '400':
+          description: The id is not a DEMI project id. Nothing is read.
+        '401':
+          description: Credential rejected.
+        '403':
+          description: The caller is anonymous, holds only an IDIR login, or has no staff-level role.
+        '404':
+          description: >-
+            Not on `dev` or `test`, or the project is not found or not readable by the caller.
+        '500':
+          description: The read failed.
+
   /api/projects/{id}/mines:
     get:
       summary: List a project's NRPTI mines

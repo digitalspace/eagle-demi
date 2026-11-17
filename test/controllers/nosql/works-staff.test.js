@@ -1,17 +1,19 @@
 'use strict';
 
-// GET /projects/:id/works-staff: who may call it, and the staff entries each work gets.
+// GET /projects/:id/works-staff and /sheet-works: who may call them, and what each work carries.
 
 process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
 
+const config = require('../../../src/config');
+const phaseCatalog = require('../../../src/domain/phase-catalog');
 const projects = require('../../../src/repositories/projects');
 const works = require('../../../src/repositories/works');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
-const { getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
+const { getSheetWorks, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
 const { mockRes } = require('../../helpers/mock-res');
 
 const EPD = {
@@ -132,4 +134,62 @@ test('a row dial narrower than the caller withholds that staff list', async (t) 
   const { res } = await call(t, SERVICE_READ, { row: { ...ROW, vis: { capitalInvestments: 1 } } });
   assert.strictEqual(res.body.currentInvestment, null);
   assert.deepStrictEqual(workOf(res.body, OPEN_WORK.id).investments, []);
+});
+
+const SHEET_WORK = {
+  id: 'sheet-00000000-0000-4000-8000-000000000002', projectId: '412', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment',
+  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: []
+};
+const TRACK_WORK = { ...OPEN_WORK, source: 'track', trackWorkId: 9001, workTypeId: 7, decisionDate: '2024-06-01', phases: [] };
+const MARKER = {
+  id: 'sheet-override', projectId: '412', kind: 'override', source: 'sheet', owner: 'sheet', active: true,
+  boundaryAtLoad: '2025-01-01', certificates: [{ actYear: 1996, certificateKind: 'EAC', decisionDate: '1998-01-01' }],
+  hidden: [{ trackWorkId: TRACK_WORK.id, sheetWorkId: SHEET_WORK.id }],
+  trackAlive: [{ trackWorkId: 'track-9003', sourceKey: '412:alive:1' }], untilTrack: [], pairedTrackWorkIds: [TRACK_WORK.id, 'track-9003'],
+  batchId: 'batch-1', provenance: {}, schemaVersion: 1
+};
+
+async function callSheet(t, user, { environmentName = 'test', id = ROW.id } = {}) {
+  const before = config.environmentName;
+  t.after(() => { config.environmentName = before; });
+  config.environmentName = environmentName;
+  const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+  t.mock.method(works, 'listForRead', async () => structuredClone([TRACK_WORK, SHEET_WORK]));
+  t.mock.method(works, 'get', async () => structuredClone(MARKER));
+  t.mock.method(phaseCatalog, 'load', async () => ({}));
+  const res = mockRes();
+  await getSheetWorks({ params: { id }, query: {}, user }, res);
+  return { res, reads: read.mock.callCount() };
+}
+
+test('sheet-works answers 404 outside dev and test, before any read', async (t) => {
+  for (const environmentName of ['prod', 'staging']) {
+    const { res, reads } = await callSheet(t, STAFF, { environmentName });
+    assert.deepStrictEqual([environmentName, res.statusCode, reads], [environmentName, 404, 0]);
+    t.mock.restoreAll();
+  }
+});
+
+test('sheet-works refuses anonymous and idir calls, and a malformed id, before any read', async (t) => {
+  const route = routes.find(r => r.method === 'get' && r.path === '/projects/:id/sheet-works');
+  assert.strictEqual(route.guards[0], authMiddleware);
+  const results = [];
+  for (const [user, id] of [[undefined, ROW.id], [IDIR, ROW.id], [STAFF, '412/../x']]) {
+    const { res, reads } = await callSheet(t, user, { id });
+    results.push([res.statusCode, reads]);
+    t.mock.restoreAll();
+  }
+  assert.deepStrictEqual(results, [[403, 0], [403, 0], [400, 0]]);
+});
+
+test('sheet-works returns only sheet works, with no staff entries, marker detail or source keys', async (t) => {
+  const { res } = await callSheet(t, STAFF);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(Object.keys(res.body).sort(), ['boundary', 'overrideActive', 'projectId', 'works']);
+  assert.deepStrictEqual(res.body.works.map(work => [work.workId, work.shownAfterFlip, work.replaces.map(r => r.workId)]),
+    [[SHEET_WORK.id, true, [TRACK_WORK.id]]]);
+  const text = JSON.stringify(res.body);
+  for (const key of ['contacts', 'notes', 'investments', 'certificates', 'trackAlive', 'sourceKey', 'sheetKey', EPD.name]) {
+    assert.ok(!text.includes(key), `${key} is left out`);
+  }
 });

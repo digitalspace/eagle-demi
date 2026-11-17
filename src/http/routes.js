@@ -120,6 +120,7 @@ const routes = [
   { method: 'put', path: '/projects/:id/summary', guards: [authMiddleware, requireWrite], load: () => projectSummaryController().putProjectSummary },
   // The controller also refuses any caller above level 2.
   { method: 'get', path: '/projects/:id/works-staff', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getWorksStaff },
+  { method: 'get', path: '/projects/:id/sheet-works', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks },
   { method: 'get', path: '/projects/:id/mines', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/nrpti').getMines },
   { method: 'get', path: '/projects/:id/regulatory-records', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/nrpti').getRegulatoryRecords },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
