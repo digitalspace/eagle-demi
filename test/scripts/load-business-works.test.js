@@ -13,7 +13,7 @@ const { OVERRIDE_MARKER_ID } = require('../../src/domain/work-model');
 const projects = require('../../src/repositories/projects');
 const { deriveInputs } = require('../../src/domain/works-derive');
 const { logger } = require('../../src/utils/logger');
-const { accountOf, failingUpload, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
+const { PHASES, accountOf, failingUpload, fakeLists, ref, register, amendment } = require('../helpers/works-import-fakes');
 const {
   ENV, PROJECT, NUMBER, testHost, fakeDemi, inputs, load, reportOf, liveArgs, staffed, liveLoad
 } = require('../helpers/works-import-loader');
@@ -40,6 +40,13 @@ test('refuses when no works catalog is stored', async () => {
   const demi = fakeDemi();
   demi.worksCatalog = async () => null;
   await assert.rejects(load(inputs().argv, demi), /^Error: no works catalog stored$/);
+});
+
+test('refuses a phase catalog with no entries for an Act the sheets map, before reading stored data', async () => {
+  const demi = fakeDemi();
+  demi.phaseCatalog = async () => ({ ...PHASES, 1996: [] });
+  demi.works = async () => assert.fail('read stored works');
+  await assert.rejects(load(inputs().argv, demi), /^Error: phase catalog has no entries for 1996$/);
 });
 
 const SKIPPED_ROWS = [{ row: 5, sheetId: NUMBER, state: 'exact', targetId: PROJECT }, { row: 6, sheetId: 102, state: 'unfolded', targetId: '7002' },

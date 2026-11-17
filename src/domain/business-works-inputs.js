@@ -4,6 +4,7 @@
 // the two cannot map one extract differently.
 
 const { listOf, sourceOf } = require('./work-model');
+const { SHEET_ACT_YEARS } = require('./business-works-assessment');
 
 /** A register number: a positive safe integer, else null; the crosswalk skips any other id as `badId`. */
 const sheetIdOf = v => (Number.isSafeInteger(v) && v > 0 ? v : null);
@@ -16,6 +17,13 @@ function holdsSheetEntries(row, number) {
   const isNumber = one => bySheet(one) && one.system === REGISTER_SYSTEM && String(one.value) === String(number);
   const isOpen = one => bySheet(one) && (one.effectiveTo ?? null) === null;
   return listOf(row?.externalIds).some(isNumber) || STAFF_HISTORY.some(field => listOf(row?.[field]).some(isOpen));
+}
+
+/** The phase catalog, refused when an Act the sheets map has no entries: its works would place phases with no catalogId. */
+function checkSheetPhases(phaseCatalog, refuse) {
+  const empty = SHEET_ACT_YEARS.filter(year => !listOf(phaseCatalog?.[year]).length);
+  if (empty.length) refuse(`phase catalog has no entries for ${empty.join(', ')}`);
+  return phaseCatalog;
 }
 
 /** `base` for a map without Track works or markers, plus the `trackWorks` and `markers` the fresh map adds.
@@ -33,4 +41,4 @@ function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, 
   };
 }
 
-module.exports = { REGISTER_SYSTEM, holdsSheetEntries, mapperInputs, sheetIdOf };
+module.exports = { REGISTER_SYSTEM, checkSheetPhases, holdsSheetEntries, mapperInputs, sheetIdOf };

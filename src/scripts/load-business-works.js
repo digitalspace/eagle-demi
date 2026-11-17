@@ -16,7 +16,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { buildPlan, withoutHeld } = require('./works-import-plan');
 const { countLines } = require('./works-import-lists');
 const { MAX_BYTES, HELP, optionsOf, testEnvironment, openInputs, readStored, heldElsewhere } = require('./works-import-inputs');
-const { REGISTER_SYSTEM, holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
+const { REGISTER_SYSTEM, checkSheetPhases, holdsSheetEntries, mapperInputs } = require('../domain/business-works-inputs');
 const { checkOutDir, writeSealed } = require('../utils/import-envelope');
 const { uploadSealed } = require('./works-import-upload');
 const batches = require('./works-import-batch');
@@ -82,10 +82,11 @@ async function planFor(demi, inputs, { batchId, batchAt }) {
   const targets = new Set(crosswalk.values());
   const catalog = await demi.worksCatalog();
   if (!catalog) refuse('no works catalog stored');
+  const phases = checkSheetPhases(await demi.phaseCatalog(), refuse);
   const stored = await readStored(demi, [...targets]);
   const mapper = mapperInputs({
     crosswalk, skipped: inputs.crosswalk.skipped, rows: stored.rows, works: stored.works, markers: stored.markers, commentPeriods: stored.commentPeriods, batchId, batchAt,
-    catalog, phaseCatalog: await demi.phaseCatalog()
+    catalog, phaseCatalog: phases
   });
   const plan = buildPlan(inputs.opened.extract, {
     mapper, stored: stored.works, storedMarkers: stored.markers, rows: stored.rows, trackPublic: stored.trackPublic, ownerOf: works.ownerOf

@@ -25,7 +25,8 @@ const ENV = 'test';
 const TEST_ENDPOINT = 'https://demi-cosmos-test.documents.azure.com:443/';
 const MANUAL_SHA = 'a'.repeat(64);
 const INPUTS = ['crosswalk', 'devbox-key', 'extract', 'operator-key'];
-const LATER_YEARS = Object.fromEntries([2018, 2025].map(year => [year, [{ name: 'Made-up', catalogId: `${year}:Made-up` }]]));
+// As a build stores them: the sheets map no 2018 phase, and the 2025 Act has none.
+const LATER_YEARS = { 2018: [{ name: 'Project Designation', group: 'assessment', stage: null, catalogId: '2018:Project Designation' }], 2025: [] };
 
 // Keys made for this run only.
 const pemOf = (key, type) => key.export({ type, format: 'pem' });
@@ -203,9 +204,14 @@ for (const [label, marker, missing] of liveRows) {
   });
 }
 
-test('liveState refuses a phase catalog with a year that holds no entries', async (t) => {
-  stubRepositories(t, { marker: one => one, phases: { ...PHASES, 2025: LATER_YEARS[2025] } });
-  await assert.rejects(check(extract), { message: /^phase catalog has no entries for 2018$/ });
+test('liveState refuses a phase catalog with no entries for an Act the sheets map', async (t) => {
+  stubRepositories(t, { marker: one => one, phases: { 1996: PHASES[1996], ...LATER_YEARS } });
+  await assert.rejects(check(extract), { message: /^phase catalog has no entries for 2002$/ });
+});
+
+test('liveState accepts a phase catalog with no entries for 2018 or 2025', async (t) => {
+  stubRepositories(t, { marker: one => one, phases: { ...PHASES, 2018: [], 2025: [] } });
+  assert.ok((await check(extract)).count('works') > 0);
 });
 
 // [case, COSMOS_ENDPOINT, exit code]
