@@ -171,6 +171,16 @@ test('unfolded and badId rows are skipped: counted, kept in the CSV, read back a
   assert.deepEqual([stateOf(folded, 190301), stateOf(folded, 190302)], ['manual', 'exact']);
 });
 
+test('skip ids are skipped over a name match or a repeated row: counted, kept in the CSV, read back as skipped, exit 0', async () => {
+  const result = await crosswalk({ projects: [register(190311, 'Lima Act', 4), register(190312, 'Kilo Gone', 5), register(190312, 'Kilo Gone', 6)],
+    rows: [trackRow('7040', 'Lima Act')], manual: { ...noManual, skip: [190312, 190311] } });
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.csvRows.map(r => [r.state, r.via, r.targetId]), [['skipped', 'skip', ''], ['skipped', 'skip', ''], ['skipped', 'skip', '']]);
+  assert.equal(result.stat('skipped'), 'skipped=3');
+  const read = readBack(result);
+  assert.deepEqual([read.rows, [...read.skipped]], [[], [[190311, { state: 'skipped', targetId: '' }], [190312, { state: 'skipped', targetId: '' }]]]);
+});
+
 test('a DEMI-owned twin is unfolded; a disowned relinked twin is not', async () => {
   const projects = [register(190401, 'Echo Dam', 4)];
   const owned = await crosswalk({ projects, rows: [trackRow('7005', 'Echo Dam', E.f), twin(E.f, 'Echo Dam', { demiOwnedAt: '2026-01-01' })] });
@@ -300,7 +310,15 @@ test('key, fingerprint, file and manual-shape guards refuse', async () => {
   }
   await assert.rejects(crosswalk({ projects, rows, edit: files => fs.appendFileSync(files.operatorKey, Buffer.alloc(64 * 1024)) }),
     /is over 65536 bytes/);
-  await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, extra: [] } }), /must hold only matches and foldPairs/);
+  await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, extra: [] } }), /must hold only matches, foldPairs and skip/);
+  await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, skip: null } }), /matches, foldPairs and skip must be arrays/);
+  for (const skip of [[191201, 191201], ['191201'], [0], [1234567890]]) {
+    await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, skip } }), /^Error: manual-match skip\[\d\] is not a unique sheet id$/);
+  }
+  await assert.rejects(crosswalk({ projects, rows, manual: { matches: [{ sheetId: 191201, trackId: '7027' }], foldPairs: [], skip: [191201] } }),
+    /^Error: manual-match skip\[0\] is also in matches$/);
+  await assert.rejects(crosswalk({ projects, rows, manual: { ...noManual, skip: [191299] } }),
+    /^Error: manual-match skip\[0\] names a sheet id the register does not hold; /);
   await assert.rejects(crosswalk({ projects, rows, manual: { matches: [], foldPairs: ['7027:not-an-eagle-id'] } }), /foldPairs\[0\]/);
   await assert.rejects(crosswalk({ projects, rows, manual: { matches: [], foldPairs: [`7099:${E.a}`] } }),
     /^Error: manual-match foldPairs\[0\] names a Track id with no live project row$/);

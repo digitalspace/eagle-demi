@@ -152,11 +152,11 @@ The owner guard in `src/repositories/works.js` stops one source overwriting anot
 
 4. Seal the manual-match file with `yarn works:extract seal --purpose manual-match …` and record its SHA-256. Upload the extract and the sealed manual-match file to the `works-import` container with `--auth-mode login`.
 
-   Keep each fold pair in the manual-match file, so the crosswalk skips the row as `unfolded`. Without it, a Track-name match is `exact` and loads onto the Track row.
+   Keep each fold pair in the manual-match file, so the crosswalk skips the row as `unfolded`. Without it, a Track-name match is `exact` and loads onto the Track row. List sheet ids the load must not touch in `skip`; each row is `skipped`, even when a name matches.
 
 5. Build the crosswalk on the devbox; it prints one count per state and `crosswalkCsvSha256=`. It exits 1 unless `unmatched`, `unlinked`, `ambiguous`, `collision` and `unnamedRow` are all 0.
 
-   The load skips each `badId` and `unfolded` row and lists it as `crosswalkSkipped` in the dry-run report. Track stands for an `unfolded` row's project; a `badId` row names no project.
+   The load skips each `skipped`, `badId` and `unfolded` row and lists it as `crosswalkSkipped` in the dry-run report. Track stands for an `unfolded` row's project; a `skipped` or `badId` row names no project.
 
    ```
    yarn works:crosswalk --env test --extract <sealed> --expect-extract-sha256 <hex> \
@@ -233,7 +233,7 @@ A failed run leaves its rollback batch pending, and the same command resumes it.
 
 After a `WORKS_READ` rollback, the first nightly run writes Track's works back onto the project rows as drift. It leaves `updatedAt` alone.
 
-The load refuses with "a skipped project holds what an earlier sheet load wrote; roll back that batch". The project is an `unfolded` row's `targetId` in the opened crosswalk CSV. Nightly parity `sheetOutsideCrosswalk` covers `badId` rows.
+The load refuses with "a skipped project holds what an earlier sheet load wrote; roll back that batch". The project is an `unfolded` row's `targetId` in the opened crosswalk CSV, or holds a `skipped` row's number. Nightly parity `sheetOutsideCrosswalk` lists any project outside the passing rows that holds live sheet works.
 
 `--rollback` undoes only the latest complete load batch. If an older batch loaded the project, roll back each later batch first, newest first.
 
