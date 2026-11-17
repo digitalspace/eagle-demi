@@ -15,6 +15,7 @@ const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { getSheetWorks, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
 const { mockRes } = require('../../helpers/mock-res');
+const { withServer } = require('../../helpers/with-server');
 
 const EPD = {
   id: 'a1', role: 'epd', name: 'Casey Sample', effectiveFrom: null, effectiveTo: null,
@@ -149,10 +150,7 @@ const MARKER = {
   batchId: 'batch-1', provenance: {}, schemaVersion: 1
 };
 
-async function callSheet(t, user, { environmentName = 'test', id = ROW.id } = {}) {
-  const before = config.environmentName;
-  t.after(() => { config.environmentName = before; });
-  config.environmentName = environmentName;
+async function callSheet(t, user, { id = ROW.id } = {}) {
   const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
   t.mock.method(works, 'listForRead', async () => structuredClone([TRACK_WORK, SHEET_WORK]));
   t.mock.method(works, 'get', async () => structuredClone(MARKER));
@@ -162,17 +160,36 @@ async function callSheet(t, user, { environmentName = 'test', id = ROW.id } = {}
   return { res, reads: read.mock.callCount() };
 }
 
-test('sheet-works answers 404 outside dev and test, before any read', async (t) => {
+test('sheet-works answers 404 outside dev and test to every caller, before auth or any read', async (t) => {
+  const before = config.environmentName;
+  t.after(() => { config.environmentName = before; });
+  const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
+  const results = [];
   for (const environmentName of ['prod', 'staging']) {
-    const { res, reads } = await callSheet(t, STAFF, { environmentName });
-    assert.deepStrictEqual([environmentName, res.statusCode, reads], [environmentName, 404, 0]);
-    t.mock.restoreAll();
+    config.environmentName = environmentName;
+    await withServer(async (call) => {
+      for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
+        const res = await call(`/api/projects/${ROW.id}/sheet-works`, { headers });
+        results.push([environmentName, res.status, await res.json()]);
+      }
+    });
   }
+  const notFound = { error: 'Endpoint not found.' };
+  assert.deepStrictEqual(results, [
+    ['prod', 404, notFound], ['prod', 404, notFound], ['staging', 404, notFound], ['staging', 404, notFound]
+  ]);
+  assert.strictEqual(read.mock.callCount(), 0);
+
+  config.environmentName = 'test';
+  await withServer(async (call) => {
+    const res = await call(`/api/projects/${ROW.id}/sheet-works`);
+    assert.strictEqual(res.status, 401, 'on test the request reaches auth');
+  });
 });
 
 test('sheet-works refuses anonymous and idir calls, and a malformed id, before any read', async (t) => {
   const route = routes.find(r => r.method === 'get' && r.path === '/projects/:id/sheet-works');
-  assert.strictEqual(route.guards[0], authMiddleware);
+  assert.strictEqual(route.guards[1], authMiddleware);
   const results = [];
   for (const [user, id] of [[undefined, ROW.id], [IDIR, ROW.id], [STAFF, '412/../x']]) {
     const { res, reads } = await callSheet(t, user, { id });

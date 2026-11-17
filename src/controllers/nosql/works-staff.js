@@ -3,7 +3,6 @@
 // Staff reads of a project's works: the staff entries in effect for each, and the sheet works.
 // Level 2 and narrower only: the staff lists sit at level 2 or 3 and these routes return nothing else.
 
-const config = require('../../config');
 const projects = require('../../repositories/projects');
 const works = require('../../repositories/works');
 const { resolveAccess } = require('../../helpers/access-sql');
@@ -81,8 +80,6 @@ exports.getWorksStaff = async (req, res) => {
 /** `GET /projects/:id/sheet-works` */
 exports.getSheetWorks = async (req, res) => {
   try {
-    // Allow-list, so an unset or misspelt ENVIRONMENT keeps the route closed.
-    if (!['dev', 'test'].includes(config.environmentName)) return res.status(404).json({ error: 'Endpoint not found.' });
     const found = await staffProjectOf(req, res);
     if (!found) return undefined;
     const { project } = found;
