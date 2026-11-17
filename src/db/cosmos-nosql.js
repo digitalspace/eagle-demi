@@ -86,11 +86,11 @@ function stripInternals(item) {
 
 // The SDK rejection names no container or query. Parameter values stay out (personal data);
 // callers branch on `code`, `statusCode` and the message start, so those carry over.
-function queryFailed(err, containerName, spec) {
+const queryFailed = (containerName, spec) => (err) => {
   const where = `(container "${containerName}", query "${spec.query.slice(0, 100)}")`;
-  return Object.assign(new Error(`${err?.message} ${where}`, { cause: err }),
+  throw Object.assign(new Error(`${err?.message} ${where}`, { cause: err }),
     { code: err?.code, statusCode: err?.statusCode, substatus: err?.substatus });
-}
+};
 
 /**
  * @param {string} containerName
@@ -119,7 +119,7 @@ async function query(containerName, spec, options = {}) {
 
   const iterator = container.items.query(spec, feedOptions);
   const response = await (options.maxItemCount ? iterator.fetchNext() : iterator.fetchAll())
-    .catch((err) => { throw queryFailed(err, containerName, spec); });
+    .catch(queryFailed(containerName, spec));
 
   return {
     items: (response.resources || []).map(stripInternals),
@@ -158,7 +158,7 @@ async function queryFirst(containerName, spec, options = {}) {
   if (options.partitionKey !== undefined) feedOptions.partitionKey = options.partitionKey;
   if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
 
-  const { rows, cut } = await drain(container.items.query(spec, feedOptions), 1, LOOKUP_MAX_PAGES);
+  const { rows, cut } = await drain(container.items.query(spec, feedOptions), 1, LOOKUP_MAX_PAGES, queryFailed(containerName, spec));
   if (rows.length > 0) return rows[0];
   if (!cut) return null;
 
@@ -173,13 +173,13 @@ async function queryFirst(containerName, spec, options = {}) {
 
 /**
  * `fetchNext()` on ONE iterator until it holds `want` rows or runs dry (see `queryFirst` for why one
- * iterator). `cut` is true when `maxFetches` stopped it with results still pending.
+ * iterator). `cut` is true when `maxFetches` stopped it with results still pending; a failed fetch goes to `fail`.
  */
-async function drain(iterator, want, maxFetches) {
+async function drain(iterator, want, maxFetches, fail) {
   const rows = [];
   for (let page = 0; rows.length < want && iterator.hasMoreResults(); page++) {
     if (page === maxFetches) return { rows, cut: true };
-    const response = await iterator.fetchNext();
+    const response = await iterator.fetchNext().catch(fail);
     for (const item of response.resources || []) rows.push(stripInternals(item));
   }
   return { rows, cut: false };
@@ -197,7 +197,7 @@ async function queryPage(containerName, spec, { size, skip = 0, whole = false } 
   if (!container) return [];
 
   const maxFetches = LOOKUP_MAX_PAGES + Math.ceil(Math.max(Number(skip) || 0, 0) / size);
-  const { rows, cut } = await drain(container.items.query(spec, { maxItemCount: size }), size, maxFetches);
+  const { rows, cut } = await drain(container.items.query(spec, { maxItemCount: size }), size, maxFetches, queryFailed(containerName, spec));
   if (cut) {
     logger.warn('[Cosmos] page drain hit its fetch bound; answering a short page.', {
       container: containerName, pages: maxFetches, rows: rows.length, size, skip

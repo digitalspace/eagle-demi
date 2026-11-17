@@ -406,6 +406,17 @@ test('a refused query names its container and query start, never a parameter val
   assert.strictEqual(err.cause.message, 'One of the input values is invalid.');
 });
 
+test('a refused page drain names its container and query, as query() does', async (t) => {
+  const { module: db, pages } = loadWithSdkStub(t);
+  pages.push(Object.assign(new Error('Request rate is large.'), { code: 429 }));
+
+  const err = await db.queryFirst('works', { query: 'SELECT * FROM c WHERE c.id = @id', parameters: [{ name: '@id', value: 'w1' }] })
+    .then(() => assert.fail('queryFirst resolved'), e => e);
+
+  assert.strictEqual(err.message, 'Request rate is large. (container "works", query "SELECT * FROM c WHERE c.id = @id")');
+  assert.strictEqual(err.code, 429);
+});
+
 // The etag is an upsert's only concurrency guard: without it, of two writers that read the same
 // row, one loses its change with nothing logged.
 test('upsert carries optimistic concurrency to the SDK', async (t) => {
