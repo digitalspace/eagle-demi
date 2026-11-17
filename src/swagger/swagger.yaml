@@ -1675,9 +1675,10 @@ paths:
         Every live work loaded from the business spreadsheets, in the public work shape, whether or
         not a public read shows it. Each work says whether a read with `WORKS_READ_SOURCES`
         `track,sheet` would show it, whether it waits in the marker's `untilTrack` list, and which
-        Track works it hides. Routed only when `ENVIRONMENT` is `dev` or `test`; elsewhere every
-        caller gets the router's 404. Needs the same roles as `works-staff`: a call with no token
-        gets 401, and IDIR-only and other non-staff callers get 403 before the project is read.
+        Track works it hides. Routed only when `ENVIRONMENT` is `dev` or `test`; unset reads as
+        `dev`. Elsewhere every caller gets the router's 404. Needs the same roles as `works-staff`:
+        a call with no token gets 401, and IDIR-only and other non-staff callers get 403 before
+        the project is read.
         Staff entries, the marker's certificates and `trackAlive` list, `sourceKey`, `sheetKey` and
         `provenance` never appear.
       security:
@@ -1766,9 +1767,9 @@ paths:
         shown works that replace nothing and have `untilTrack`. A work under any other or unknown
         Act is not counted in `act1996` or `act2002`, but it still counts toward `hidden`, `replaces`
         and `untilTrack`, and its project still appears. Routed only when `ENVIRONMENT` is
-        `dev` or `test`; elsewhere every caller gets the router's 404. Needs the same roles as
-        `works-staff`: a call with no token gets 401, and IDIR-only and other non-staff callers get
-        403 before any works are read. Project names, work titles and marker details never appear.
+        `dev` or `test`; unset reads as `dev`. Elsewhere every caller gets the router's 404. Needs
+        the same roles as `works-staff`: a call with no token gets 401, and IDIR-only and other
+        non-staff callers get 403 before any works are read. Project names, work titles and marker details never appear.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

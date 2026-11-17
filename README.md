@@ -741,8 +741,8 @@ Drop `--live` and the variable for a dry run. The last line of output is the res
 ### Staff works route
 
 `GET /api/projects/{id}/works-staff` returns a project's works with the contacts, investments and notes
-that apply to each. It needs a staff-level role or a `demi-service-read` key. A call with no token gets 401;
-an IDIR-only caller gets 403. The response never carries `sourceKey` or `sheetKey`; field shapes are in
+that apply to each. It needs a staff-level role or a `demi-service-read` key, and a call with no token gets 401
+while an IDIR-only caller gets 403. The response never carries `sourceKey` or `sheetKey`; field shapes are in
 `src/swagger/swagger.yaml`.
 
 `currentInvestment` sits beside `works` in the response. It is the open entry of the first source that
@@ -752,8 +752,8 @@ has one, in the order `demi`, `track`, `eagle`, `sheet`, and `null` when no entr
 
 `GET /api/projects/{id}/sheet-works` returns a project's works loaded from the business spreadsheets,
 including the ones the public read hides. It needs the same staff-level access as the staff works route.
-It is routed only when `ENVIRONMENT` is `dev` or `test`, or unset (unset reads as `dev`); elsewhere every
-caller gets 404.
+It is routed only when `ENVIRONMENT` is `dev` or `test`; unset reads as `dev`. Elsewhere every caller
+gets 404.
 
 The response holds `projectId`, `overrideActive`, `boundary` and `works`. Each work has the public work
 fields plus `shownAfterFlip`, `untilTrack` and `replaces`, the stored Track works a `track,sheet` read
