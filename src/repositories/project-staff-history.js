@@ -79,9 +79,11 @@ async function guarded(id, attempt) {
 /** `{project, held}` for each row holding any of `pairs`, values matched case-blind, from every partition unfiltered. */
 async function holdersOf(pairs) {
   const checked = pairs.map(checkedPair);
-  const match = checked.map((_, n) => `(x.system = @s${n} AND StringEquals(x.value, @v${n}, true))`).join(' OR ');
+  // `value` is a Cosmos keyword: `x.value` gets a 400, so it is read as `x["value"]`.
+  const match = checked.map((_, n) => `(x.system = @s${n} AND StringEquals(x["value"], @v${n}, true))`).join(' OR ');
   const rows = await fetchAll(CONTAINER, {
-    query: `SELECT c.id, c.eagleId, c.foldedInto, ARRAY(SELECT x.system, x.value FROM x IN c.externalIds WHERE ${match}) AS held ` +
+    query: 'SELECT c.id, c.eagleId, c.foldedInto, ' +
+      `ARRAY(SELECT VALUE {"system": x.system, "value": x["value"]} FROM x IN c.externalIds WHERE ${match}) AS held ` +
       `FROM c WHERE EXISTS(SELECT VALUE x FROM x IN c.externalIds WHERE ${match})`,
     parameters: checked.flatMap(({ system, value }, n) => [{ name: `@s${n}`, value: system }, { name: `@v${n}`, value }])
   });

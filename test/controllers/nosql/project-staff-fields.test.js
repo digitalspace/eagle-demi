@@ -367,7 +367,7 @@ test('PUT /projects/:id staff history', async (t) => {
     const holder = { queries: 0, heldFrom: 1, unexpected: [] };
     // Project 999 holds 413 from the `heldFrom`th holder query on; any other query is recorded and thrown.
     t.mock.method(cosmos, 'query', async (_container, spec) => {
-      if (!spec.query.includes('StringEquals(x.value, @v0, true)')) {
+      if (!spec.query.includes('StringEquals(x["value"], @v0, true)')) {
         holder.unexpected.push(spec.query);
         throw new Error(`unexpected query: ${spec.query}`);
       }
