@@ -716,9 +716,9 @@ run with no change logs `appended=0 closed=0`. A dry run reports the counts with
 
 `src/scripts/sync-nrpti.js` copies NRPTI mines and regulatory records onto test projects that carry an EPIC project id. Rows with no matching project are dropped, and no project is created. Link rules, datasets, fields and routes: wiki `Sources-and-Status`.
 
-Set `NRPTI_SYNC_SCHEDULE` to an NCRONTAB expression and the API app registers a `syncNrpti` timer; unset, no timer is registered. Test runs it daily at 10:30 UTC. The timer writes only when `ENRICHMENT_SOURCES` lists `nrpti`, and prod lists no source.
+Set `NRPTI_SYNC_SCHEDULE` to an NCRONTAB expression and the API app registers a `syncNrpti` timer; unset, no timer is registered. Test and prod set no schedule, so no timer runs. The timer writes only when `ENRICHMENT_SOURCES` lists `nrpti`, and prod lists no source.
 
-The CLI takes two flags. Without `--live` it fetches, links and counts, and writes nothing. `--clear-only` removes `sources.nrpti` from every project that holds it, whatever `ENRICHMENT_SOURCES` says.
+The CLI takes two flags. Without `--live` it fetches, links and counts, and writes nothing. `--clear-only` counts the projects that hold `sources.nrpti`; with `--live` it removes it from each of them, whatever `ENRICHMENT_SOURCES` says.
 
 | Command | Effect |
 |---|---|
