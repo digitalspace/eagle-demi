@@ -4,6 +4,7 @@
 // the two cannot map one extract differently.
 
 const { listOf, sourceOf } = require('./work-model');
+const { SHEET_ACT_YEARS } = require('./business-works-assessment');
 
 /** A register number: a positive safe integer, else null; the crosswalk skips any other id as `badId`. */
 const sheetIdOf = v => (Number.isSafeInteger(v) && v > 0 ? v : null);
@@ -18,11 +19,15 @@ function holdsSheetEntries(row, number) {
   return listOf(row?.externalIds).some(isNumber) || STAFF_HISTORY.some(field => listOf(row?.[field]).some(isOpen));
 }
 
-/**
- * `base` for a map without Track works or markers, and `trackWorks` and `markers` to add for the fresh map.
- * `works` and `commentPeriods` are Maps by project id; `rows` is the stored project rows by id; `skipped` is
- * `{state, targetId}` by register number of each row the crosswalk skips.
- */
+/** The phase catalog, refused when an Act the sheets map has no entries: its works would place phases with no catalogId. */
+function checkSheetPhases(phaseCatalog, refuse) {
+  const empty = SHEET_ACT_YEARS.filter(year => !listOf(phaseCatalog?.[year]).length);
+  if (empty.length) refuse(`phase catalog has no entries for ${empty.join(', ')}`);
+  return phaseCatalog;
+}
+
+/** `base` for a map without Track works or markers, plus the `trackWorks` and `markers` the fresh map adds.
+ * `works`, `commentPeriods` and `rows` are Maps by project id; `skipped` is `{state, targetId}` by register number. */
 function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, markers, commentPeriods, batchId, batchAt }) {
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   const trackOf = id => listOf(works.get(id)).filter(work => sourceOf(work) === 'track' && work.deleted !== true);
@@ -36,4 +41,4 @@ function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, 
   };
 }
 
-module.exports = { REGISTER_SYSTEM, holdsSheetEntries, mapperInputs, sheetIdOf };
+module.exports = { REGISTER_SYSTEM, checkSheetPhases, holdsSheetEntries, mapperInputs, sheetIdOf };

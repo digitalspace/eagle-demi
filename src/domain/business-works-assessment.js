@@ -8,6 +8,7 @@ const { entryForName, normalizeName } = require('./phase-catalog');
 const { certificateKindOf, entryFor } = require('./works-catalog');
 const { TRACK_FROM, childIdOf, dayOf, newWorkId, sourceKeyOf } = require('./work-model');
 
+const SHEET_ACT_YEARS = Object.freeze([1996, 2002]);
 const UNKNOWN_DAY = LEGISLATIONS[1996].inForce;
 const SPLIT_DAY = LEGISLATIONS[2002].inForce;
 const LAST_SHEET_DAY = '2024-12-31';
@@ -272,6 +273,6 @@ function registerPostDecision(ctx, project, row, list) {
 }
 
 module.exports = {
-  LAST_SHEET_DAY, UNKNOWN_DAY, UNKNOWN_FIELDS,
+  LAST_SHEET_DAY, SHEET_ACT_YEARS, UNKNOWN_DAY, UNKNOWN_FIELDS,
   actOf, assessmentWorks, datedOf, isLater, keyOf, milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
 };

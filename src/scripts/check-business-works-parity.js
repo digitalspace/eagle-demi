@@ -13,6 +13,7 @@ const listsRepository = require('../repositories/lists');
 const phaseCatalog = require('../domain/phase-catalog');
 const { COUNTS, FAILING, parityOf, refuse } = require('../domain/business-works-parity');
 const { OVERRIDE_MARKER_ID } = require('../domain/work-model');
+const { checkSheetPhases } = require('../domain/business-works-inputs');
 const {
   devboxKeysFromPem, openExtract, operatorRecipientOf, readCapped, writeSealed
 } = require('../utils/import-envelope');
@@ -71,14 +72,6 @@ function writeReport(report, { keys, recipient, outDir }) {
   return { blob: name, sha256 };
 }
 
-/** The phase catalog, refused when a year lacks entries: W7 would then place no phase for that Act. */
-async function phasesOf() {
-  const loaded = await phaseCatalog.load();
-  const empty = phaseCatalog.CATALOG_YEARS.filter(year => !Array.isArray(loaded[year]) || !loaded[year].length);
-  if (empty.length) refuse(`phase catalog has no entries for ${empty.join(', ')}`);
-  return loaded;
-}
-
 async function liveState(crosswalk) {
   const projectIds = [...new Set([...crosswalk.values()].map(String))];
   const { items } = await projectsRepository.listVisible(systemAccess(), {});
@@ -95,7 +88,7 @@ async function liveState(crosswalk) {
   if (!catalog) refuse('no works catalog stored');
   return {
     rows: new Map(items.map(row => [String(row.id), row])), works, markers, commentPeriods, catalog,
-    phaseCatalog: await phasesOf(), sheetProjectIds: await worksRepository.liveProjectIds({ owner: 'sheet' })
+    phaseCatalog: checkSheetPhases(await phaseCatalog.load(), refuse), sheetProjectIds: await worksRepository.liveProjectIds({ owner: 'sheet' })
   };
 }
 
