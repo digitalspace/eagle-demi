@@ -751,8 +751,8 @@ has one, in the order `demi`, `track`, `eagle`, `sheet`, and `null` when no entr
 ### Sheet works route
 
 `GET /api/projects/{id}/sheet-works` returns a project's works loaded from the business spreadsheets,
-including the ones the public read hides. It needs the same staff-level access as the staff works route.
-It is routed only when `ENVIRONMENT` is `dev` or `test`; unset reads as `dev`. Elsewhere every caller
+including the ones the public read hides. It needs the same staff-level access as the staff works route,
+and is routed only when `ENVIRONMENT` is `dev` or `test`; unset reads as `dev`. Elsewhere every caller
 gets 404.
 
 The response holds `projectId`, `overrideActive`, `boundary` and `works`. Each work has the public work
