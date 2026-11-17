@@ -175,24 +175,18 @@ function ActGroup({ actYear, works }: { actYear: number | null; works: SheetWork
   );
 }
 
-function SheetWorksBody({ works, error }: { works: SheetWork[]; error: Error | null }) {
-  if (works.length) return groupByAct(works).map(([actYear, group]) => <ActGroup key={actYear ?? 'none'} actYear={actYear} works={group} />);
-  if (error instanceof ApiError && error.status === 403) return <p className="ps-note">Only staff can see the sheet works.</p>;
-  if (error) {
-    return (
-      <p className="ps-note" role="alert">
-        The sheet works could not be loaded. The rest of this page is unaffected.
-      </p>
-    );
-  }
-  return <p className="ps-note">No works from the business spreadsheets are stored for this project.</p>;
+function SheetWorksBody({ works }: { works: SheetWork[] | undefined }) {
+  if (!works) return <p className="ps-note">Only staff can see the sheet works.</p>;
+  if (!works.length) return <p className="ps-note">No works from the business spreadsheets are stored for this project.</p>;
+  return groupByAct(works).map(([actYear, group]) => <ActGroup key={actYear ?? 'none'} actYear={actYear} works={group} />);
 }
 
 /** Works loaded from the business spreadsheets for one project, with how the public read would treat each. */
 export function SheetWorksPanel({ projectId }: { projectId: string }) {
-  const { data: works = [], isPending, error } = useSheetWorks(projectId);
-  // The route answers 404 outside dev and test; waiting for it keeps test-only text off prod pages.
-  if (isPending || (error instanceof ApiError && error.status === 404)) return null;
+  const { data: works, error } = useSheetWorks(projectId);
+  // Shown after one good read or a 403 only: outside dev and test the route is not served, and
+  // other failures have nothing for staff to act on. Works already shown stay on a later failure.
+  if (!works && !(error instanceof ApiError && error.status === 403)) return null;
   return (
     <section className="ps-section" aria-labelledby="ps-sheet-works-h">
       <h2 id="ps-sheet-works-h" className="ps-section__title">
@@ -201,7 +195,7 @@ export function SheetWorksPanel({ projectId }: { projectId: string }) {
       <p className="ps-section__lede">
         Loaded on test environments from the business spreadsheets. The public site does not show these works yet.
       </p>
-      <SheetWorksBody works={works} error={error} />
+      <SheetWorksBody works={works} />
     </section>
   );
 }

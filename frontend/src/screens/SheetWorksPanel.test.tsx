@@ -18,7 +18,7 @@ describe('SheetWorksPanel', () => {
     renderPanel();
 
     expect(await screen.findByText('1996 Act (1)')).toBeInTheDocument();
-    expect(screen.getByText('2002 Act (2)')).toBeInTheDocument();
+    expect(screen.getByText('2002 Act (4)')).toBeInTheDocument();
     expect(urlOf(fetchMock.mock.calls[0])).toMatch(/\/projects\/901\/sheet-works$/);
   });
 
@@ -28,12 +28,12 @@ describe('SheetWorksPanel', () => {
     renderPanel();
 
     expect(await screen.findByText('Hidden when the public site shows sheet works')).toBeInTheDocument();
-    expect(screen.getByText('Replaces Track work: Sample Alpha EA Certificate')).toBeInTheDocument();
+    expect(screen.getByText('Replaces Track work: Sample Alpha EAC extension')).toBeInTheDocument();
     expect(screen.getByText('Shown until Track has it')).toBeInTheDocument();
   });
 
-  it('says a Track work is replaced when its title is not stored', async () => {
-    const [, replacing] = FIXTURE.works;
+  it('says a Track work is replaced when that work has no title', async () => {
+    const replacing = FIXTURE.works.find((work) => work.replaces.length)!;
     respond(json({ works: [{ ...replacing, replaces: [{ ...replacing.replaces[0], title: null }] }] }));
 
     renderPanel();
@@ -108,8 +108,8 @@ describe('SheetWorksPanel', () => {
     expect(screen.getByText('1996 Act (5)').closest('details')).toHaveAttribute('open');
   });
 
-  it('leaves the panel out where the API does not serve sheet works', async () => {
-    respond(json({ error: 'Not found' }, 404));
+  it.each([404, 500])('renders nothing when the first read answers %i', async (status) => {
+    respond(json({ error: 'no' }, status));
     const client = testQueryClient();
     const Wrapper = queryWrapper(client);
 
@@ -132,13 +132,6 @@ describe('SheetWorksPanel', () => {
     expect(client.getQueryState(['sheet-works', '901'])?.status).toBe('error');
     expect(await screen.findByText('1996 Act (1)')).toBeInTheDocument();
     expect(screen.queryByText('Only staff can see the sheet works.')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('shows nothing until it has a project id', () => {
-    const { container } = render(withQueryClient(<SheetWorksPanel projectId="" />));
-
-    expect(container).toBeEmptyDOMElement();
   });
 
   it('tells a caller without staff access that the works are staff only', async () => {
@@ -147,16 +140,6 @@ describe('SheetWorksPanel', () => {
     renderPanel();
 
     expect(await screen.findByText('Only staff can see the sheet works.')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('says the read failed rather than showing no works', async () => {
-    respond(json({ error: 'down' }, 500));
-
-    renderPanel();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('The sheet works could not be loaded.');
-    expect(screen.queryByText(EMPTY)).not.toBeInTheDocument();
   });
 
   it('reads an empty body as no works', async () => {

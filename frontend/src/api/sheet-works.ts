@@ -66,7 +66,6 @@ export function useSheetWorks(projectId: string) {
   return useQuery({
     queryKey: ['sheet-works', projectId],
     queryFn: ({ signal }) => fetchSheetWorks(projectId, signal),
-    enabled: !!projectId,
     staleTime: 5 * 60_000,
   });
 }
