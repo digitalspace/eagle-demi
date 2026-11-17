@@ -134,6 +134,9 @@ async function listVisible(access, opts = {}) {
   return cosmos.query(CONTAINER, spec, options);
 }
 
+/** What a reader's list leaves out: Update-form images, unreleased uploads and rows Eagle deleted. */
+const listedRows = () => [notUpdateImage(), scanCleared(), NOT_DELETED];
+
 /**
  * Newest `dateUploaded` per readable project. GROUP BY, not a TOP window: one Eagle bulk push gives
  * hundreds of rows one date. Needs `/dateUploaded/?` indexed; the caller sorts (no ORDER BY allowed).
@@ -142,7 +145,7 @@ async function projectUploadMaxima(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage(), scanCleared(), NOT_DELETED],
+    criteria: [isDefinedAndNotNull('dateUploaded'), ...listedRows()],
     select: 'c.projectId, MAX(c.dateUploaded) AS dateUploaded',
     groupBy: 'c.projectId'
   });
@@ -161,13 +164,7 @@ async function newestUploads(access, projectId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [
-      eq('projectId', String(projectId), '@projectId'),
-      isDefinedAndNotNull('dateUploaded'),
-      notUpdateImage(),
-      scanCleared(),
-      NOT_DELETED
-    ],
+    criteria: [eq('projectId', String(projectId), '@projectId'), isDefinedAndNotNull('dateUploaded'), ...listedRows()],
     select: `TOP ${RECENT_UPLOAD_DOCUMENTS} ${selectFor('documents', access, PARTITION_FIELD)}`,
     orderBy: 'c.dateUploaded DESC'
   });
@@ -293,9 +290,7 @@ async function listByIds(access, ids, projectIds) {
       inList('id', unique, '@did'),
       inList(PARTITION_FIELD, projects, '@dpid'),
       // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
-      notUpdateImage(),
-      scanCleared(),
-      NOT_DELETED
+      ...listedRows()
     ],
     select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
   });

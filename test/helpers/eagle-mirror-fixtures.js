@@ -100,6 +100,22 @@ const DOCUMENT_EAGLE_ID = '58869abba4acd4014b81f55c';
 const TYPE_ID = '5cf00c03a266b7e1877504db';
 const MILESTONE_ID = '5cf00c03a266b7e1877504ef';
 
+/** A raw Eagle document, as eagle-api stores it. */
+function eagleDocument(overrides = {}) {
+  return {
+    _id: DOCUMENT_EAGLE_ID,
+    project: PROJECT_EAGLE_ID,
+    displayName: 'Application',
+    documentFileName: 'application.pdf',
+    internalURL: 'docs/application.pdf',
+    internalExt: '.pdf',
+    type: TYPE_ID,
+    milestone: MILESTONE_ID,
+    read: ['public', 'sysadmin'],
+    ...overrides
+  };
+}
+
 /**
  * A stored DEMI document row, as every chunk parent-field test reads it back: the ingest route
  * before chunking, the re-stamp handler, and the write paths that move a parent field.
@@ -568,6 +584,7 @@ module.exports = {
   eagleProject,
   storedPeriod,
   storedDocument,
+  eagleDocument,
   eaglePeriod,
   eagleComment,
   eagleOrganization,

@@ -58,6 +58,7 @@ test('native document creates queue sync-out', async (t) => {
     await t.test(`${name} puts the saved row in the documents index at once`, async () => {
       const saved = wireWrite(t);
       t.mock.method(syncOut, 'enqueue', async () => []);
+      t.mock.method(aiSearch, 'config', () => ({ configured: true }));
       const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
 
       await documentController[name](request(), mockRes());

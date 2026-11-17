@@ -82,6 +82,7 @@ test('No threats found: the row is clean, keyed, and takes its requested read li
 test('No threats found puts the stored row, not the pending listing, in the documents index', async (t) => {
   const { deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), displayName: 'Survey', createdAt: 'x' }));
   t.mock.method(documents, 'readForWrite', async id => ({ ...deps.store.rows.get(id) }));
+  t.mock.method(aiSearch, 'config', () => ({ configured: true }));
   const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
   const { id, projectId, createdAt, requestedRead, s3Key, fileExt } = deps.store.rows.get(DOC);
 

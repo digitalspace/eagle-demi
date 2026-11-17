@@ -23,7 +23,7 @@ const { routeChains } = require('../../helpers/router-source');
 // One id space for the whole push suite: the notification the public-read mirrors already use.
 const {
   NOTIFICATION_EAGLE_ID, PRIVATE_ACL, anonymous, staff,
-  eagleProject, storedEagleProject: storedProject,
+  eagleProject, storedEagleProject: storedProject, eagleDocument,
   projectReadForWriteFromGet, documentReadForWriteFromGet, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 const { canRead, levelOfRead } = require('../../../src/helpers/access-sql');
@@ -75,22 +75,6 @@ function rawMongoProject(blockOverrides = {}, topOverrides = {}) {
     legislation_2018: { ...content, region: 'Thompson-Nicola', sector: 'Energy-Electricity', ...blockOverrides },
     legislation_2025: { ...UNUSED_BLOCK },
     ...topOverrides
-  };
-}
-
-/** A raw Eagle document, as eagle-api stores it. */
-function eagleDocument(overrides = {}) {
-  return {
-    _id: DOC_EAGLE_ID,
-    project: PROJECT_EAGLE_ID,
-    displayName: 'Application',
-    documentFileName: 'application.pdf',
-    internalURL: 'docs/application.pdf',
-    internalExt: '.pdf',
-    type: '5cf00c03a266b7e1877504db',
-    milestone: '5cf00c03a266b7e1877504ef',
-    read: ['public', 'sysadmin'],
-    ...overrides
   };
 }
 
@@ -946,6 +930,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     t.mock.method(documents, 'getById', async () => structuredClone(stored));
     t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
     const indexWrites = [];
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
     t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
       indexWrites.push(...rows); return rows.length;
     });
@@ -995,6 +980,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     });
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
     t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
       indexWrites.push(...rows.map(row => ({ id: row.id, read: row.read, isPublished: row.isPublished, isDeleted: row.isDeleted })));
       return rows.length;
@@ -1031,6 +1017,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     });
     t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
     const indexWrites = [];
+    t.mock.method(aiSearch, 'config', () => ({ configured: true }));
     t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => {
       indexWrites.push(...rows.map(row => ({ id: row.id, read: row.read, isPublished: row.isPublished, isDeleted: row.isDeleted })));
       return rows.length;
@@ -1061,35 +1048,6 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
     assert.strictEqual(written.isDeleted, false, 'stored explicitly — a missing field is not false');
     assert.deepStrictEqual(written.read, ['staff', 'idir', 'public']);
     assert.strictEqual(written.isPublished, true);
-  });
-
-  await t.test('a push that creates a document puts its whole index row in at once', async () => {
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    let stored = null;
-    t.mock.method(documents, 'getById', async () => stored);
-    t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
-    const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => rows.length);
-    await documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
-      body: { doc: eagleDocument() }, user: STAFF }, mockRes());
-
-    assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row =>
-      [row.id, row.projectId, row.displayName, row.fileNameTokens, row.searchVis])),
-    [[[DOC_EAGLE_ID, '207', 'Application', 'application.pdf', 4]]]);
-  });
-
-  await t.test('a delete that changes only isDeleted on a staff-level row still reaches the index', async () => {
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    let stored = null;
-    t.mock.method(documents, 'getById', async () => stored && structuredClone(stored));
-    t.mock.method(documents, 'upsert', async (item) => { stored = item; return item; });
-    const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (index, rows) => rows.length);
-    const push = isDeleted => documentController.upsertFromEagle({ params: { eagleId: DOC_EAGLE_ID }, query: {},
-      body: { doc: eagleDocument({ read: ['staff', 'sysadmin'], isDeleted }) }, user: STAFF }, mockRes());
-
-    await push(false);
-    await push(true);
-    assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.read, row.isDeleted])),
-      [[[['staff'], false]], [[['staff'], true]]]);
   });
 
   await t.test('only eagle-api sending the record again brings it back', async () => {

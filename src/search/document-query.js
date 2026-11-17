@@ -65,6 +65,7 @@ function documentIndexRow(row) {
  * read back first, so a write that landed after the caller's is not undone with an older read or ACL.
  */
 async function indexDocumentsNow(rows) {
+  if (!aiSearch.config().configured) return 0;
   try {
     const stored = await Promise.all(rows.map(row => documents.readForWrite(row.id, row.projectId)));
     const indexRows = stored.map(documentIndexRow).filter(Boolean);
