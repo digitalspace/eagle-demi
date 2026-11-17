@@ -119,8 +119,9 @@ describe('SheetWorksPanel', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('keeps works already shown when a later read fails', async () => {
-    respond(json(FIXTURE), json({ error: 'down' }, 500));
+  it.each([500, 403])('keeps works already shown when a later read answers %i', async (status) => {
+    // A 403 is sent twice: the client refreshes the token and replays once.
+    respond(json(FIXTURE), json({ error: 'no' }, status), json({ error: 'no' }, status));
     const client = testQueryClient();
     const Wrapper = queryWrapper(client);
     render(<Wrapper><SheetWorksPanel projectId="901" /></Wrapper>);
@@ -130,7 +131,14 @@ describe('SheetWorksPanel', () => {
 
     expect(client.getQueryState(['sheet-works', '901'])?.status).toBe('error');
     expect(await screen.findByText('1996 Act (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Only staff can see the sheet works.')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows nothing until it has a project id', () => {
+    const { container } = render(withQueryClient(<SheetWorksPanel projectId="" />));
+
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('tells a caller without staff access that the works are staff only', async () => {

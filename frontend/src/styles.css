@@ -571,6 +571,17 @@ html, body {
   }
 }
 
+/* Phases and milestones under a work: the left rule carries the nesting, so rules between rows only split works. */
+.ps-list--nested {
+  margin: var(--layout-margin-xsmall) 0 var(--layout-margin-small);
+  padding-left: var(--layout-padding-medium);
+  border-left: var(--layout-border-width-medium) solid var(--surface-color-border-default);
+}
+
+.ps-list--nested > .ps-list__row {
+  border-bottom: none;
+}
+
 .ps-unmatched {
   display: flex;
   flex-wrap: wrap;

@@ -134,7 +134,7 @@ function WorkRow({ work }: { work: SheetWork }) {
             <p className="micro-label" id={`${listId}-phases`}>
               Phases
             </p>
-            <ul className="ps-list" aria-labelledby={`${listId}-phases`}>
+            <ul className="ps-list ps-list--nested" aria-labelledby={`${listId}-phases`}>
               {phases.map((phase, i) => (
                 <PhaseRow key={i} phase={phase} />
               ))}
@@ -146,7 +146,7 @@ function WorkRow({ work }: { work: SheetWork }) {
             <p className="micro-label" id={`${listId}-milestones`}>
               Milestones
             </p>
-            <ul className="ps-list" aria-labelledby={`${listId}-milestones`}>
+            <ul className="ps-list ps-list--nested" aria-labelledby={`${listId}-milestones`}>
               {work.milestones.map((milestone, i) => (
                 <MilestoneRow key={i} milestone={milestone} />
               ))}
@@ -176,8 +176,8 @@ function ActGroup({ actYear, works }: { actYear: number | null; works: SheetWork
 }
 
 function SheetWorksBody({ works, error }: { works: SheetWork[]; error: Error | null }) {
-  if (error instanceof ApiError && error.status === 403) return <p className="ps-note">Only staff can see the sheet works.</p>;
   if (works.length) return groupByAct(works).map(([actYear, group]) => <ActGroup key={actYear ?? 'none'} actYear={actYear} works={group} />);
+  if (error instanceof ApiError && error.status === 403) return <p className="ps-note">Only staff can see the sheet works.</p>;
   if (error) {
     return (
       <p className="ps-note" role="alert">
@@ -190,9 +190,9 @@ function SheetWorksBody({ works, error }: { works: SheetWork[]; error: Error | n
 
 /** Works loaded from the business spreadsheets for one project, with how the public read would treat each. */
 export function SheetWorksPanel({ projectId }: { projectId: string }) {
-  const { data: works = [], isLoading, error } = useSheetWorks(projectId);
+  const { data: works = [], isPending, error } = useSheetWorks(projectId);
   // The route answers 404 outside dev and test; waiting for it keeps test-only text off prod pages.
-  if (isLoading || (error instanceof ApiError && error.status === 404)) return null;
+  if (isPending || (error instanceof ApiError && error.status === 404)) return null;
   return (
     <section className="ps-section" aria-labelledby="ps-sheet-works-h">
       <h2 id="ps-sheet-works-h" className="ps-section__title">
