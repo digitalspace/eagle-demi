@@ -221,7 +221,8 @@ test('project staff history writes', async (t) => {
 
     assert.deepStrictEqual(await history.externalIdHolders(ORCS.system, ORCS.value), []);
     assert.ok(!spec.query.includes(ORCS.value) && !spec.query.includes(`'${ORCS.system}'`), spec.query);
-    assert.ok(!spec.query.includes('x.value'), `Cosmos rejects the keyword in dot notation: ${spec.query}`);
+    assert.doesNotMatch(spec.query, /\b\w+\.value\b/, 'Cosmos rejects the keyword in dot notation');
+    assert.ok(spec.query.includes('{"system": x.system, "value": x["value"]}'), `held items keep both names: ${spec.query}`);
     assert.deepStrictEqual(spec.parameters, [{ name: '@s0', value: 'orcs' }, { name: '@v0', value: ORCS.value }]);
     for (const [system, value] of [['orcs', ' 12345-20/AB'], ['eao-register', 412], ['orcs', '12345 20'], ['ORCS', ORCS.value], ['constructor', '1']]) {
       await assert.rejects(history.externalIdHolders(system, value), TypeError, `${system} ${value}: a padded, untyped or unknown pair could dodge the match`);
