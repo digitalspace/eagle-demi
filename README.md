@@ -752,11 +752,12 @@ has one, in the order `demi`, `track`, `eagle`, `sheet`, and `null` when no entr
 
 `GET /api/projects/{id}/sheet-works` returns a project's works loaded from the business spreadsheets,
 including the ones the public read hides. It needs the same staff-level access as the staff works route.
-It answers 404 unless `ENVIRONMENT` is `dev` or `test`.
+It is routed only when `ENVIRONMENT` is `dev` or `test`; elsewhere every caller gets 404.
 
 The response holds `projectId`, `overrideActive`, `boundary` and `works`. Each work has the public work
-fields plus `shownAfterFlip`, `untilTrack` and `replaces`, the Track works it stands in for. Contacts,
-notes, investments, the marker's certificates and `trackAlive` list, `sourceKey` and `sheetKey` are left out.
+fields plus `shownAfterFlip`, `untilTrack` and `replaces`, the stored Track works a `track,sheet` read
+hides in its favour. Contacts, notes, investments, the marker's certificates and `trackAlive` list,
+`sourceKey`, `sheetKey` and `provenance` are left out.
 
 ### Track project poll
 

@@ -13,10 +13,6 @@ const { credentialsMiddleware } = require('../middleware/credentials');
 // The sealed compartment's own verifier. NOT authMiddleware — see middleware/sealed-auth.js.
 const sealedAuth = require('../middleware/sealed-auth');
 
-// Allow-list read per request, ahead of auth: elsewhere every caller gets the plain 404, token or not.
-const devTestOnly = (_req, res, next) =>
-  (['dev', 'test'].includes(config.environmentName) ? next() : res.status(404).json({ error: 'Endpoint not found.' }));
-
 // Required lazily: the table loads on every cold start, and /health must not pay for the Cosmos
 // client, the search index definitions or pdf-lib.
 const healthController = () => require('../controllers/health');
@@ -124,7 +120,6 @@ const routes = [
   { method: 'put', path: '/projects/:id/summary', guards: [authMiddleware, requireWrite], load: () => projectSummaryController().putProjectSummary },
   // The controller also refuses any caller above level 2.
   { method: 'get', path: '/projects/:id/works-staff', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getWorksStaff },
-  { method: 'get', path: '/projects/:id/sheet-works', guards: [devTestOnly, authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks },
   { method: 'get', path: '/projects/:id/mines', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/nrpti').getMines },
   { method: 'get', path: '/projects/:id/regulatory-records', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/nrpti').getRegulatoryRecords },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
@@ -352,10 +347,13 @@ const routes = [
   // port: document-feature
 ];
 
-// Unauthenticated and names every route and role, so an allowlist: a deployment that forgets
-// ENVIRONMENT must 404 the spec, not publish it.
+// Allowlist: a deployment that forgets ENVIRONMENT must 404 these. The spec is unauthenticated and
+// names every route and role; sheet works are loaded on test only.
 if (['dev', 'test'].includes(config.environmentName)) {
-  routes.push({ method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec });
+  routes.push(
+    { method: 'get', path: '/api-docs', guards: [], load: () => openApiSpec },
+    { method: 'get', path: '/projects/:id/sheet-works', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/nosql/works-staff').getSheetWorks }
+  );
 }
 
 module.exports = routes;

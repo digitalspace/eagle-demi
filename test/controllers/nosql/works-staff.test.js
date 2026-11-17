@@ -139,7 +139,8 @@ test('a row dial narrower than the caller withholds that staff list', async (t) 
 
 const SHEET_WORK = {
   id: 'sheet-00000000-0000-4000-8000-000000000002', projectId: '412', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment',
-  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: []
+  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: [],
+  sourceKey: '412:amendment:1', sheetKey: 'sheet-row-7', provenance: { file: 'sample.xlsx', row: 7 }
 };
 const TRACK_WORK = { ...OPEN_WORK, source: 'track', trackWorkId: 9001, workTypeId: 7, decisionDate: '2024-06-01', phases: [] };
 const MARKER = {
@@ -160,36 +161,38 @@ async function callSheet(t, user, { id = ROW.id } = {}) {
   return { res, reads: read.mock.callCount() };
 }
 
-test('sheet-works answers 404 outside dev and test to every caller, before auth or any read', async (t) => {
+const ROUTER = require.resolve('../../../src/http/router');
+const ROUTES = require.resolve('../../../src/http/routes');
+
+/** Calls a router built as a deployment with ENVIRONMENT `environmentName`: routes.js reads it once at load. */
+async function asDeployment(t, environmentName, fn) {
   const before = config.environmentName;
-  t.after(() => { config.environmentName = before; });
+  const fresh = () => { delete require.cache[ROUTER]; delete require.cache[ROUTES]; };
+  t.after(() => { config.environmentName = before; fresh(); });
+  config.environmentName = environmentName;
+  fresh();
+  await withServer(fn);
+}
+
+test('sheet-works is not routed outside dev and test, token or not, and reaches auth on test', async (t) => {
   const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
   const results = [];
-  for (const environmentName of ['prod', 'staging']) {
-    config.environmentName = environmentName;
-    await withServer(async (call) => {
+  for (const environmentName of ['prod', 'staging', 'test']) {
+    await asDeployment(t, environmentName, async (call) => {
       for (const headers of [{}, { authorization: 'Bearer not-a-token' }]) {
-        const res = await call(`/api/projects/${ROW.id}/sheet-works`, { headers });
-        results.push([environmentName, res.status, await res.json()]);
+        results.push([environmentName, Boolean(headers.authorization), (await call(`/api/projects/${ROW.id}/sheet-works`, { headers })).status]);
       }
     });
   }
-  const notFound = { error: 'Endpoint not found.' };
   assert.deepStrictEqual(results, [
-    ['prod', 404, notFound], ['prod', 404, notFound], ['staging', 404, notFound], ['staging', 404, notFound]
+    ['prod', false, 404], ['prod', true, 404], ['staging', false, 404], ['staging', true, 404], ['test', false, 401], ['test', true, 401]
   ]);
   assert.strictEqual(read.mock.callCount(), 0);
-
-  config.environmentName = 'test';
-  await withServer(async (call) => {
-    const res = await call(`/api/projects/${ROW.id}/sheet-works`);
-    assert.strictEqual(res.status, 401, 'on test the request reaches auth');
-  });
 });
 
 test('sheet-works refuses anonymous and idir calls, and a malformed id, before any read', async (t) => {
   const route = routes.find(r => r.method === 'get' && r.path === '/projects/:id/sheet-works');
-  assert.strictEqual(route.guards[1], authMiddleware);
+  assert.strictEqual(route.guards[0], authMiddleware);
   const results = [];
   for (const [user, id] of [[undefined, ROW.id], [IDIR, ROW.id], [STAFF, '412/../x']]) {
     const { res, reads } = await callSheet(t, user, { id });
@@ -206,7 +209,7 @@ test('sheet-works returns only sheet works, with no staff entries, marker detail
   assert.deepStrictEqual(res.body.works.map(work => [work.workId, work.shownAfterFlip, work.replaces.map(r => r.workId)]),
     [[SHEET_WORK.id, true, [TRACK_WORK.id]]]);
   const text = JSON.stringify(res.body);
-  for (const key of ['contacts', 'notes', 'investments', 'certificates', 'trackAlive', 'sourceKey', 'sheetKey', EPD.name]) {
+  for (const key of ['contacts', 'notes', 'investments', 'certificates', 'trackAlive', 'sourceKey', 'sheetKey', 'provenance', 'sample.xlsx', EPD.name]) {
     assert.ok(!text.includes(key), `${key} is left out`);
   }
 });

@@ -1,7 +1,7 @@
 'use strict';
 
 // Staff reads of a project's works: the staff entries in effect for each, and the sheet works.
-// Level 2 and narrower only: the staff lists sit at level 2 or 3 and these routes return nothing else.
+// Level 2 and narrower only: the staff lists sit at level 2 or 3, and sheet works the public read hides are staff data.
 
 const projects = require('../../repositories/projects');
 const works = require('../../repositories/works');

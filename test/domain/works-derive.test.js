@@ -226,11 +226,13 @@ test('the sheet override on read', async (t) => {
 });
 
 test('sheetWorksOf', async (t) => {
-  await t.test('shownAfterFlip marks the sheet works a track and sheet read shows', async (t) => {
+  await t.test('shownAfterFlip and replaces match what a track and sheet read shows and hides', async (t) => {
     const cases = [
       [amendments, markerDoc(listed)],
       [amendments, markerDoc({ ...listed, active: false })],
       [amendments, null],
+      [amendments.filter(work => work.id !== 'track-7'), markerDoc(listed)],
+      [[trackWork(7, { decisionDate: '2025-03-01' }), sheetWork(1, { decisionDate: '2024-06-01' })], markerDoc(listed)],
       [[assessment, trackWork(7, { decisionDate: '2023-11-01' }), sheetWork(1, { decisionDate: '2023-11-01' })], markerDoc(listed)],
       [[sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })], markerDoc({ untilTrack: [sheetId(1)] })],
       [[sheetWork(2, { startDate: '2024-09-21' }), sheetWork(1, { startDate: '2024-09-01' }), trackWork(9, { startDate: '2024-09-11' })],
@@ -240,8 +242,11 @@ test('sheetWorksOf', async (t) => {
       store(t, docs, marker);
       const read = (await loadWorks({ id: 'p1' }, { sources: ['track', 'sheet'] })).worksForDerive;
       const expected = read.filter(work => work.source === 'sheet').map(work => work.workId).sort();
+      const readIds = new Set(read.map(work => work.workId));
+      const hidden = docs.filter(work => work.source === 'track' && !readIds.has(work.id)).map(work => work.id).sort();
       const { works: sheet } = await sheetWorksOf({ id: 'p1' });
       assert.deepStrictEqual(sheet.filter(work => work.shownAfterFlip).map(work => work.workId).sort(), expected);
+      assert.deepStrictEqual(sheet.flatMap(work => work.replaces.map(track => track.workId)).sort(), hidden);
       t.mock.restoreAll();
     }
   });
