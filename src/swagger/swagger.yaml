@@ -1763,7 +1763,9 @@ paths:
         sorted by `projectId`. The counts come from the same rules as
         `/api/projects/{id}/sheet-works`: `hidden` counts works with `shownAfterFlip` false,
         `replaces` counts shown works with a non-empty `replaces` list, and `untilTrack` counts
-        shown works that replace nothing and have `untilTrack`. Routed only when `ENVIRONMENT` is
+        shown works that replace nothing and have `untilTrack`. A work under any other or unknown
+        Act is not counted in `act1996` or `act2002`, but it still counts toward `hidden`, `replaces`
+        and `untilTrack`, and its project still appears. Routed only when `ENVIRONMENT` is
         `dev` or `test`; elsewhere every caller gets the router's 404. Needs the same roles as
         `works-staff`: a call with no token gets 401, and IDIR-only and other non-staff callers get
         403 before any works are read. Project names, work titles and marker details never appear.
@@ -1777,11 +1779,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [projects]
                 properties:
                   projects:
                     type: array
                     items:
                       type: object
+                      required: [projectId, act1996, act2002, hidden, replaces, untilTrack]
                       properties:
                         projectId:
                           type: string

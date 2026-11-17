@@ -290,18 +290,18 @@ test('works repository', async (t) => {
     await assert.rejects(works.liveProjectIds({ owner: '' }), TypeError);
   });
 
-  /** A mirror store that also judges `ARRAY_CONTAINS(@projectIds, c.projectId)`; gives each query's options. */
+  /** A mirror store that also judges `c.projectId IN (@pid0, ...)`; gives each query's options. */
   function acrossStore(t, rows) {
     mirrorStore(t, rows.map(row => ({ container: 'works', ...row })));
     const query = cosmos.query;
     const options = [];
-    const term = 'ARRAY_CONTAINS(@projectIds, c.projectId)';
     t.mock.method(cosmos, 'query', async (container, spec, opts) => {
       options.push(opts);
-      const { value: projectIds } = spec.parameters.find(p => p.name === '@projectIds');
-      assert.ok(spec.query.includes(term));
+      const [term, names] = spec.query.match(/c\.projectId IN \(([^)]*)\)/);
+      const listed = names.split(', ');
+      const projectIds = spec.parameters.filter(p => listed.includes(p.name)).map(p => p.value);
       const page = await query(container, { query: spec.query.replace(term, 'true'),
-        parameters: spec.parameters.filter(p => p.name !== '@projectIds') }, opts);
+        parameters: spec.parameters.filter(p => !listed.includes(p.name)) }, opts);
       return { ...page, items: page.items.filter(row => projectIds.includes(row.projectId)) };
     });
     return options;

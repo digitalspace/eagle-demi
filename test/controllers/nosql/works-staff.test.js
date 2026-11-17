@@ -11,6 +11,7 @@ const config = require('../../../src/config');
 const phaseCatalog = require('../../../src/domain/phase-catalog');
 const projects = require('../../../src/repositories/projects');
 const works = require('../../../src/repositories/works');
+const { resolveAccess } = require('../../../src/helpers/access-sql');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { getSheetWorks, getSheetWorksSummary, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
@@ -236,7 +237,7 @@ async function callSummary(t, user) {
   t.mock.method(phaseCatalog, 'load', async () => ({}));
   const res = mockRes();
   await getSheetWorksSummary({ params: {}, query: {}, user }, res);
-  return { res, reads: reads.map(read => read.mock.callCount()) };
+  return { res, reads: reads.map(read => read.mock.callCount()), projectReads: reads[1].mock.calls.map(call => call.arguments) };
 }
 
 test('sheet-works summary refuses anonymous and idir calls before any read', async (t) => {
@@ -252,7 +253,9 @@ test('sheet-works summary refuses anonymous and idir calls before any read', asy
 });
 
 test('sheet-works summary gives counts only, for the projects the caller may read', async (t) => {
-  const { res } = await callSummary(t, STAFF);
+  const { res, projectReads } = await callSummary(t, STAFF);
+  assert.deepStrictEqual(projectReads.map(([access, ids]) => [access, new Set(ids)]),
+    [[resolveAccess({ user: STAFF }), new Set(['412', '999'])]]);
   assert.strictEqual(res.statusCode, 200);
   assert.deepStrictEqual(res.body,
     { projects: [{ projectId: '412', act1996: 1, act2002: 0, hidden: 0, replaces: 1, untilTrack: 0 }] });

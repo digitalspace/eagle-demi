@@ -9,15 +9,13 @@ export interface Badge {
   content: ReactNode;
 }
 
-type Summary = SheetWorksSummary | undefined;
-
 /** Works the public read would hide, swap in for a Track work, or show only until Track has one. */
-const switchCases = (summary: Summary) =>
+const switchCases = (summary: SheetWorksSummary | undefined) =>
   summary ? summary.hidden + summary.replaces + summary.untilTrack : 0;
 
-const SHOW_OPTIONS: { key: string; label: string; keep: (summary: Summary) => boolean }[] = [
+const SHOW_OPTIONS: { key: string; label: string; keep: (summary: SheetWorksSummary | undefined) => boolean }[] = [
   { key: 'all', label: 'All projects', keep: () => true },
-  { key: 'any', label: 'With sheet works', keep: (summary) => sheetWorksBadges(summary).length > 0 },
+  { key: 'any', label: 'With sheet works', keep: (summary) => Boolean(summary) },
   { key: '1996', label: '1996 Act works', keep: (summary) => Boolean(summary?.act1996) },
   { key: '2002', label: '2002 Act works', keep: (summary) => Boolean(summary?.act2002) },
   { key: 'switch', label: 'Switch cases', keep: (summary) => switchCases(summary) > 0 },
@@ -34,7 +32,7 @@ function breakdown({ hidden, replaces, untilTrack }: SheetWorksSummary): string 
 }
 
 /** Act pills, then one marker whose count matches the pills on the project's details page. */
-function sheetWorksBadges(summary: Summary): Badge[] {
+function sheetWorksBadges(summary: SheetWorksSummary | undefined): Badge[] {
   if (!summary) return [];
   const badges: Badge[] = [];
   if (summary.act1996) badges.push({ key: 'act1996', tone: 'info', content: `1996 Act (${summary.act1996})` });

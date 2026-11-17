@@ -24,6 +24,8 @@ const SHEET_SUMMARY = {
   projects: [
     { projectId: '111', act1996: 2, act2002: 0, hidden: 1, replaces: 1, untilTrack: 1 },
     { projectId: '333', act1996: 0, act2002: 1, hidden: 0, replaces: 0, untilTrack: 0 },
+    // Sheet works under neither Act: listed, with no badge.
+    { projectId: '444', act1996: 0, act2002: 0, hidden: 0, replaces: 0, untilTrack: 0 },
   ],
 };
 
@@ -307,8 +309,8 @@ describe('ProjectPicker', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'Show' }), 'With sheet works');
     await user.type(screen.getByLabelText('Find a project'), 'ajax');
 
-    expect(hrefs()).toEqual(['/project-details/111']);
-    expect(screen.getByText('1 project · 4 of 900 loaded')).toBeInTheDocument();
+    expect(hrefs()).toEqual(['/project-details/444', '/project-details/111']);
+    expect(screen.getByText('2 projects · 4 of 900 loaded')).toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Show' }), 'Switch cases');
     expect(hrefs()).toEqual(['/project-details/111']);
