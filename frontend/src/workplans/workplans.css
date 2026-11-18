@@ -32,6 +32,16 @@
   }
 }
 
+/* The View switch drops under the title once the title would go under 16rem. */
+.wp-page > .screen-header {
+  flex-wrap: wrap;
+  gap: var(--layout-margin-small) var(--layout-margin-large);
+}
+
+.wp-page .screen-header__text {
+  flex: 1 1 16rem;
+}
+
 .wp-page > .screen-header,
 .wp-page > .callout,
 .wp-page > .wp-page__loading {
@@ -96,27 +106,9 @@
   gap: var(--layout-margin-xsmall);
 }
 
-/* Narrow: each chip group is one row that scrolls sideways; the padding keeps focus rings unclipped. */
 @media (max-width: 40rem) {
   .wp-filters {
-    flex-flow: column nowrap;
-    align-items: stretch;
-    gap: var(--layout-margin-xsmall);
-  }
-
-  .wp-filters__group {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding: var(--layout-padding-xsmall);
-    margin: calc(-1 * var(--layout-padding-xsmall));
-  }
-
-  .wp-filters__group > * {
-    flex: none;
-  }
-
-  .wp-filters > .wp-chip {
-    align-self: flex-start;
+    gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
   }
 }
 
