@@ -1,10 +1,14 @@
 /* Status list view: fills the page's data area; only the table region scrolls. */
 .sl {
+  --sl-border: #e1dfdd;
+  --sl-soon: #8a5a00;
+  --sl-on-track: #1f6b2a;
+  --sl-hover: #f8fbff;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  gap: var(--layout-margin-medium);
+  gap: var(--layout-margin-small);
 }
 
 .sl .sl-tiles {
@@ -18,18 +22,18 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--layout-margin-hair);
-  min-width: 9.5rem;
-  padding: var(--layout-padding-small) var(--layout-padding-medium);
-  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
-  border-radius: var(--layout-border-radius-medium);
-  background: var(--surface-color-secondary-default);
+  min-width: 150px;
+  padding: var(--layout-padding-small) 14px;
+  border: var(--layout-border-width-small) solid var(--sl-border);
+  border-radius: var(--layout-border-radius-large);
+  background: var(--surface-color-background-white);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
 .sl .sl-tile:hover {
-  background: var(--surface-color-secondary-hover);
+  background: var(--surface-color-background-light-gray);
 }
 
 /* Pressed reads by a thicker edge as well as the blue, so it is not colour alone. */
@@ -48,16 +52,26 @@
 
 .sl .sl-tile__count {
   font: var(--typography-bold-h5);
+  font-size: 22px;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
-  color: var(--typography-color-primary);
+  color: var(--typography-color-secondary);
 }
 
 .sl .sl-tile--overdue .sl-tile__count {
   color: var(--wp-overdue);
 }
 
+.sl .sl-tile--next-30 .sl-tile__count {
+  color: var(--sl-soon);
+}
+
+.sl .sl-tile--on-track .sl-tile__count {
+  color: var(--sl-on-track);
+}
+
 .sl .sl-tile__label {
-  font: var(--typography-regular-small-body);
+  font: var(--typography-regular-label);
   color: var(--typography-color-secondary);
 }
 
@@ -70,6 +84,8 @@
   min-height: 0;
   margin-bottom: 0;
   overflow: auto;
+  border-color: var(--sl-border);
+  border-radius: var(--layout-border-radius-large);
 }
 
 .sl .sl-table {
@@ -80,15 +96,34 @@
   border-spacing: 0;
 }
 
-.sl .sl-table th {
+.sl .sl-table th,
+.sl .sl-table th:first-child,
+.sl .sl-table th:last-child {
   position: sticky;
   top: 0;
   z-index: 1;
+  padding: var(--layout-padding-small) 10px;
+  border-bottom-color: var(--sl-border);
   white-space: nowrap;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--typography-color-secondary);
 }
 
-.sl .sl-table td {
-  padding-block: var(--layout-padding-small);
+.sl .sl-th-note {
+  font-weight: 400;
+  color: var(--theme-gray-80);
+}
+
+/* 13px rows, 12px second lines: two lines fit a 48px row. */
+.sl .sl-table td,
+.sl .sl-table td:first-child,
+.sl .sl-table td:last-child {
+  padding: 6px 10px;
+  border-bottom-color: var(--theme-gray-20);
+  font: var(--typography-regular-small-body);
+  font-size: 13px;
+  line-height: 1.3;
   vertical-align: middle;
 }
 
@@ -110,7 +145,7 @@
 }
 
 .sl .sl-table tbody tr:not(.sl-detail):hover td {
-  background: var(--surface-color-background-light-blue);
+  background: var(--sl-hover);
 }
 
 /* The detail cell spans the whole table; its panel sticks to the visible part when the table scrolls sideways. */
@@ -127,12 +162,13 @@
   max-width: 100cqi;
 }
 
-.sl .sl-col--work { width: 28%; }
+/* Days is wider than the design's 11 % so its 12px figure and bar share a line beside the open side nav. */
+.sl .sl-col--work { width: 24%; }
 .sl .sl-col--phase { width: 17%; }
-.sl .sl-col--days { width: 12%; }
-.sl .sl-col--next { width: 16%; }
+.sl .sl-col--days { width: 14%; }
+.sl .sl-col--next { width: 15%; }
 .sl .sl-col--life { width: 18%; }
-.sl .sl-col--decision { width: 9%; }
+.sl .sl-col--decision { width: 8%; }
 
 .sl .sl-work,
 .sl .sl-sub,
@@ -144,7 +180,7 @@
 }
 
 .sl .sl-work {
-  font: var(--typography-bold-small-body);
+  font-weight: 700;
   text-decoration: none;
 }
 
@@ -160,7 +196,8 @@
 .sl .sl-sub {
   margin-top: var(--layout-margin-hair);
   font: var(--typography-regular-label);
-  color: var(--typography-color-secondary);
+  line-height: 1.35;
+  color: var(--theme-gray-80);
 }
 
 .sl .sl-sub--overdue {
@@ -168,8 +205,7 @@
 }
 
 .sl .sl-sub--soon {
-  font: var(--typography-bold-label);
-  color: var(--typography-color-primary);
+  color: var(--sl-soon);
 }
 
 .sl .sl-cell--clip .pill {
@@ -257,15 +293,17 @@
 
 .sl .sl-days {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--layout-margin-small);
+  gap: var(--layout-margin-hair) var(--layout-margin-small);
 }
 
 .sl .sl-bar {
   display: block;
-  flex: 1;
-  max-width: 5rem;
+  flex: 1 1 32px;
+  max-width: 80px;
   height: 6px;
+  border-radius: 3px;
   background: var(--theme-gray-30);
 }
 
@@ -285,9 +323,10 @@
   background: var(--wp-overdue-bar);
 }
 
+/* Wraps rather than spill into the next column when the bar leaves it too little room. */
 .sl .sl-figure {
+  min-width: 0;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   color: var(--typography-color-secondary);
 }
 
@@ -314,10 +353,15 @@
 .sl .sl-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--layout-margin-medium);
-  font: var(--typography-regular-small-body);
-  color: var(--typography-color-secondary);
+  font: var(--typography-regular-label);
+  color: var(--theme-gray-80);
+}
+
+.sl .sl-footer__actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
 }
 
 /* Narrow: the page scrolls (workplans.css), so the table keeps its height and caps it to keep a sticky header. */
@@ -352,11 +396,11 @@
 }
 
 .sl .sl-more {
-  min-height: 32px;
+  min-height: 28px;
   padding: 0;
   border: none;
   background: transparent;
-  font: var(--typography-bold-small-body);
+  font: var(--typography-bold-label);
   color: var(--typography-color-link);
   text-decoration: underline;
   cursor: pointer;
