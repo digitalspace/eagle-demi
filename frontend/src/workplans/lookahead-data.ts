@@ -1,4 +1,6 @@
-import type { WorkRow } from './derive';
+import type { WorkplanPhase } from '../api/sheet-works';
+import { columnOf, type WorkRow } from './derive';
+import { phaseToneOf, type PhaseTone } from './phase-tone';
 import { dayNumber } from './timeline-scale';
 
 export type LookaheadWindow = '30d' | '90d' | '6m';
@@ -16,14 +18,24 @@ export const WINDOW_PHRASE: Record<LookaheadWindow, string> = {
   '6m': 'the next 6 months',
 };
 
+export type MilestoneKind = 'phase' | 'decision';
+
+export const MILESTONE_KINDS: { value: MilestoneKind; label: string }[] = [
+  { value: 'phase', label: 'Phase start' },
+  { value: 'decision', label: 'Decision' },
+];
+
 export interface Milestone {
   key: string;
   row: WorkRow;
   date: string;
   inDays: number;
-  kind: 'phase' | 'decision';
-  /** "Effects Assessment starts", "Decision due" or "Decision expected". */
+  kind: MilestoneKind;
+  tone: PhaseTone;
+  /** "Application Review → Effects Assessment"; the previous phase is left out before the first. */
   what: string;
+  /** The phase that starts, or the decision phase. */
+  phase: string;
 }
 
 /** One Monday-to-Sunday week of the window. */
@@ -52,28 +64,48 @@ export function windowEnd(today: string, window: LookaheadWindow): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Phase starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed and inactive works have none. */
+/** Same rule as the decision-date fallback in `derive.ts`: the last open "... Decision" phase in the Decision column. */
+function decisionPhaseIndex(phases: WorkplanPhase[]): number {
+  for (let i = phases.length - 1; i >= 0; i -= 1) {
+    const phase = phases[i];
+    const name = (phase.name ?? '').trim().toLowerCase();
+    if (!phase.isCompleted && name.endsWith('decision') && columnOf(phase) === 'Decision') return i;
+  }
+  return -1;
+}
+
+/**
+ * Starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed and inactive works have none.
+ * The decision phase shows once, at the work's decision date, instead of at its start.
+ */
 export function milestonesIn(rows: WorkRow[], today: string, end: string): Milestone[] {
   const from = dayNumber(today);
   const inWindow = (date: string | null): date is string => date !== null && date >= today && date <= end;
   const milestones = rows.flatMap((row) => {
     if (row.closed || row.status === 'inactive') return [];
     const id = `${row.work.source}:${row.work.workId}`;
-    const make = (kind: Milestone['kind'], date: string, what: string, index: number): Milestone => ({
+    const nameAt = (index: number) => row.phases[index]?.name || 'Unnamed phase';
+    const make = (kind: MilestoneKind, date: string, index: number, phase: string, tone: PhaseTone): Milestone => ({
       key: `${id}:${kind}:${index}`,
       row,
       date,
       inDays: dayNumber(date) - from,
       kind,
-      what,
+      tone,
+      what: index > 0 ? `${nameAt(index - 1)} → ${phase}` : phase,
+      phase,
     });
+    const decisionAt = decisionPhaseIndex(row.phases);
     const starts = row.phases.flatMap((phase, index) => {
       const date = phase.startDate ? phase.startDate.slice(0, 10) : null;
-      return !phase.isCompleted && inWindow(date) ? [make('phase', date, `${phase.name || 'Unnamed phase'} starts`, index)] : [];
+      if (phase.isCompleted || index === decisionAt || !inWindow(date)) return [];
+      return [make('phase', date, index, nameAt(index), phaseToneOf(phase))];
     });
-    const decision = row.decisionDate;
-    if (!inWindow(decision)) return starts;
-    return [...starts, make('decision', decision, row.decisionExpected ? 'Decision expected' : 'Decision due', 0)];
+    if (!inWindow(row.decisionDate)) return starts;
+    // With no decision phase, the decision follows the last phase.
+    const at = decisionAt >= 0 ? decisionAt : row.phases.length;
+    const name = decisionAt >= 0 ? nameAt(decisionAt) : 'Decision';
+    return [...starts, make('decision', row.decisionDate, at, name, 'decision')];
   });
   return milestones.sort(
     (a, b) => a.date.localeCompare(b.date) || (a.row.work.title ?? '').localeCompare(b.row.work.title ?? ''),
