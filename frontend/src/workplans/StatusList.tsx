@@ -1,14 +1,17 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
+import { WorkDetails } from './WorkDetails';
+import { closedNoteOf, hasDetails, projectDetailsPath } from './work-notes';
 import './workplans.css';
 import './status-list.css';
 
 const TILES: WorkStatus[] = ['overdue', 'next-30', 'on-track', 'not-started', 'closed'];
 const PAGE = 200;
+const COLUMNS = 6;
 const count = (n: number) => n.toLocaleString('en-CA');
 
 /** "1 Mar 2026" to "Mar 2026". */
@@ -24,29 +27,58 @@ function Blank({ says }: { says: string }) {
   );
 }
 
-function WorkCell({ row }: { row: WorkRow }) {
+const rowKey = (row: WorkRow) => `${row.work.source}:${row.work.workId}`;
+const detailsId = (row: WorkRow) => `sl-details-${row.work.workId}`;
+/** Module-level so React calls it once, when the pane mounts, not on every render. */
+const reveal = (pane: HTMLDivElement | null) => {
+  pane?.scrollIntoView({ block: 'nearest' });
+};
+
+interface Toggle {
+  open: boolean;
+  onToggle: () => void;
+}
+
+function WorkCell({ row, details }: { row: WorkRow; details: Toggle | null }) {
   const { work } = row;
   const kind = [work.workType ?? work.workTypeCode, work.actYear ? `${work.actYear} Act` : null].filter(Boolean);
+  const title = work.title || 'Untitled work';
   return (
     <td className="sl-cell--clip">
-      <Link className="sl-work" to={`/project-details/${encodeURIComponent(work.projectId)}`} title={work.title ?? undefined}>
-        {work.title || 'Untitled work'}
+      <Link className="sl-work" to={projectDetailsPath(work.projectId)} title={work.title ?? undefined}>
+        {title}
       </Link>
       {kind.length > 0 && <span className="sl-sub">{kind.join(' · ')}</span>}
       <WorkPill work={work} />
+      {details && (
+        <button
+          type="button"
+          className="sl-toggle"
+          aria-expanded={details.open}
+          aria-controls={detailsId(row)}
+          aria-label={`Details for ${title}`}
+          onClick={details.onToggle}
+        >
+          <svg className="sl-toggle__chevron" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+            <path d="M3.5 1.5 7 5 3.5 8.5" fill="none" stroke="currentColor" strokeWidth="2" />
+          </svg>
+          Details
+        </button>
+      )}
     </td>
   );
 }
 
 function PhaseCell({ row }: { row: WorkRow }) {
   if (row.closed) {
+    const closedNote = closedNoteOf(row.work);
     return (
       <td className="sl-cell--clip">
         <span className="sl-phase">
           <span className="sl-swatch sl-swatch--closed" aria-hidden="true" />
           Closed
         </span>
-        {row.work.outcome && <span className="sl-sub">{row.work.outcome}</span>}
+        {closedNote && <span className="sl-sub">{closedNote}</span>}
       </td>
     );
   }
@@ -219,7 +251,7 @@ const EMPTY: Record<WorkStatus | 'open', string> = {
   'next-30': 'No work has a milestone in the next 30 days.',
   'on-track': 'No work is on track with a later milestone.',
   'not-started': 'Every open work has started.',
-  unknown: 'Every open work has a planned end.',
+  unknown: 'Every open work has a planned end after its start.',
   inactive: 'No inactive works.',
   closed: 'No closed works.',
 };
@@ -255,6 +287,7 @@ function Tiles({
 export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string }) {
   const [pressed, setPressed] = useState<WorkStatus | null>(null);
   const [limit, setLimit] = useState(PAGE);
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const counts = useMemo(() => {
     const tally = Object.fromEntries(Object.keys(STATUS_LABEL).map((status) => [status, 0])) as Record<WorkStatus, number>;
     for (const row of rows) tally[row.status] += 1;
@@ -269,6 +302,13 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   );
   const visible = shown.slice(0, limit);
   const more = Math.min(PAGE, shown.length - visible.length);
+
+  const toggle = (key: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
 
   const press = (status: WorkStatus) => {
     setPressed((current) => (current === status ? null : status));
@@ -294,19 +334,34 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
             </tr>
           </thead>
           <tbody>
-            {visible.map((row) => (
-              <tr key={`${row.work.source}:${row.work.workId}`}>
-                <WorkCell row={row} />
-                <PhaseCell row={row} />
-                <DaysCell row={row} />
-                <NextCell row={row} />
-                <LifecycleCell row={row} />
-                <DecisionCell row={row} />
-              </tr>
-            ))}
+            {visible.map((row) => {
+              const key = rowKey(row);
+              const isOpen = open.has(key);
+              return (
+                <Fragment key={key}>
+                  <tr>
+                    <WorkCell row={row} details={hasDetails(row) ? { open: isOpen, onToggle: () => toggle(key) } : null} />
+                    <PhaseCell row={row} />
+                    <DaysCell row={row} />
+                    <NextCell row={row} />
+                    <LifecycleCell row={row} />
+                    <DecisionCell row={row} />
+                  </tr>
+                  {isOpen && (
+                    <tr className="sl-detail">
+                      <td colSpan={COLUMNS}>
+                        <div className="sl-detail__pane" ref={reveal}>
+                          <WorkDetails row={row} id={detailsId(row)} />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="sl-empty">
+                <td colSpan={COLUMNS} className="sl-empty">
                   {rows.length === 0 ? 'No works match these filters.' : EMPTY[pressed ?? 'open']}
                 </td>
               </tr>
