@@ -52,6 +52,11 @@ describe('PipelineView', () => {
     ]);
   });
 
+  it('shows Inactive in place of the days of a Track work switched off past its end', () => {
+    renderBoard([{ ...byTitle('Sample Alpha Transmission Line - Assessment'), isActive: false }]);
+    expect(within(column('Review')).getByText('Inactive')).toBeInTheDocument();
+  });
+
   it('renders 100 cards per column until Show more is pressed', async () => {
     const epsilon = byTitle('Sample Epsilon Terminal - Amendment');
     const many = Array.from({ length: 104 }, (_, i) => ({ ...epsilon, workId: `copy-${i}` }));

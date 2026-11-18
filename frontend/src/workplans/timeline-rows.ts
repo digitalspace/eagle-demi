@@ -1,5 +1,5 @@
 import { dayMonthYear } from '../dates';
-import type { WorkRow } from './derive';
+import { STATUS_LABEL, type WorkRow } from './derive';
 import { dayNumber } from './timeline-scale';
 
 export type GroupBy = 'act' | 'type' | 'region';
@@ -63,24 +63,34 @@ export function groupsOf(rows: WorkRow[], by: GroupBy): Group[] {
   return sorted.map(({ key, label, rows: groupRows, overdue }) => ({ key, label, rows: groupRows, overdue }));
 }
 
-/** The days-in-phase cell: "used/planned", "+Nd over", elapsed alone when nothing is planned. */
+/** Inactive and unknown works show their status in place of a day count, which would read as progress. */
+export const unmeasuredStatus = (row: WorkRow) =>
+  row.status === 'inactive' || row.status === 'unknown' ? STATUS_LABEL[row.status] : null;
+
+/** The days-in-phase cell: "used/planned", "+Nd over", "N d, suspended", elapsed alone when nothing is planned. */
 export function daysOf(row: WorkRow): string {
   if (row.closed) return 'Closed';
+  const status = unmeasuredStatus(row);
+  if (status) return status;
   if (row.notStarted) return 'Not started';
   if (row.overdue) return `+${row.daysOver}d over`;
   if (row.daysInPhase === null) return '—';
+  if (row.suspended) return `${row.daysInPhase} d, suspended`;
   return row.plannedDays ? `${row.daysInPhase}/${row.plannedDays}` : `${row.daysInPhase}d`;
 }
 
 const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;
-const STATE_TEXT = { past: 'Done', current: 'Current', upcoming: 'Planned' } as const;
+const STATE_TEXT = { past: 'Done', current: 'Current', incomplete: 'Not completed', upcoming: 'Planned' } as const;
 
 function progressText(row: WorkRow): string {
   if (row.closed) return 'Closed.';
+  const status = unmeasuredStatus(row);
+  if (status) return `${status}.`;
   if (row.notStarted) return 'Not started.';
   const phase = row.current?.name || 'Current phase';
   if (row.overdue) return `${phase}, ${days(row.daysOver)} overdue.`;
   if (row.daysInPhase === null) return 'No current phase.';
+  if (row.suspended) return `${phase}, ${days(row.daysInPhase)} in phase before the suspension.`;
   return row.plannedDays
     ? `${phase}, day ${row.daysInPhase} of ${row.plannedDays} planned.`
     : `${phase}, ${days(row.daysInPhase)} in phase.`;

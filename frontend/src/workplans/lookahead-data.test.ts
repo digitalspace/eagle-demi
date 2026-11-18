@@ -16,6 +16,10 @@ function phase(name: string, start: string, end: string | null = null): Workplan
     numberOfDays: null,
     isCompleted: false,
     isSuspended: false,
+    isCurrent: null,
+    suspendedDate: null,
+    extensionDays: 0,
+    suspendedDays: 0,
     undated: null,
     interruptions: [],
   };
@@ -31,8 +35,9 @@ function work(workId: string, phases: WorkplanPhase[], extra: Partial<WorkplanRo
     workTypeCode: 'assessment',
     workType: 'Assessment',
     actYear: 2018,
-    workState: 'in-progress',
+    workState: 'IN_PROGRESS',
     isActive: true,
+    decisionEventDate: null,
     startDate: null,
     decisionDate: null,
     anticipatedDecisionDate: null,
@@ -84,13 +89,14 @@ describe('milestonesIn', () => {
     ]);
   });
 
-  it('gives a closed work no milestones', () => {
-    const closed = work('w', [phase('Effects Assessment', '2026-12-01')], {
+  it.each(['COMPLETED', 'IN_PROGRESS'])('gives a switched-off work in state %s no milestones', (workState) => {
+    const off = work('w', [phase('Effects Assessment', '2026-12-01')], {
       isActive: false,
+      workState,
       anticipatedDecisionDate: '2026-12-20',
     });
 
-    expect(milestonesIn(rows([closed]), TODAY, windowEnd(TODAY, '90d'))).toEqual([]);
+    expect(milestonesIn(rows([off]), TODAY, windowEnd(TODAY, '90d'))).toEqual([]);
   });
 
   it('skips the start of a phase already completed', () => {

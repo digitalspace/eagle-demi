@@ -76,9 +76,8 @@ afterEach(() => {
 });
 
 describe('initKeycloak', () => {
-  // A first visit has nothing to resume. The silent iframe it used to try needs third-party
-  // cookies, which browsers block by default, so it only ever cost a round trip before the
-  // sign-in screen the visitor was getting anyway.
+  // A first visit has nothing to resume; a silent iframe check needs third-party cookies,
+  // which browsers block, so it would only add a round trip before the sign-in screen.
   it('builds no client at all on a first visit', async () => {
     const { initKeycloak, isAuthenticated } = await loadKeycloak();
 
@@ -188,17 +187,19 @@ describe('login', () => {
     expect(keycloak.login).not.toHaveBeenCalled();
   });
 
-  it('reuses the client a settled session already built', async () => {
+  it('reuses the client a settled session already built, returning to the same page and query', async () => {
+    window.history.pushState({}, '', '/workplans?view=list');
     localStorage.setItem('isLoggedIn', 'true');
     const { initKeycloak, login } = await loadKeycloak();
     await initKeycloak();
 
     login();
+    window.history.pushState({}, '', '/');
 
+    const back = window.location.origin + '/workplans?view=list';
+    expect(initOptions()['redirectUri']).toBe(back);
     expect(keycloak.constructed).toHaveBeenCalledTimes(1);
-    expect(keycloak.login).toHaveBeenCalledWith({
-      redirectUri: window.location.origin + window.location.pathname,
-    });
+    expect(keycloak.login).toHaveBeenCalledWith({ redirectUri: back });
   });
 });
 
@@ -462,7 +463,7 @@ describe('logout', () => {
   });
 
   // No client means no end-session endpoint to visit. Reload anyway, so privileged rows still
-  // resident in memory go; this used to return silently and the button appeared to do nothing.
+  // resident in memory go and the button visibly does something.
   it('reloads when there is no client to end a session with', async () => {
     const reload = vi.fn();
     vi.spyOn(window, 'location', 'get').mockReturnValue({
