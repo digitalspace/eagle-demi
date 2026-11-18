@@ -139,9 +139,10 @@ test('a row dial narrower than the caller withholds that staff list', async (t) 
   assert.deepStrictEqual(workOf(res.body, OPEN_WORK.id).investments, []);
 });
 
+const SHEET_INFO = { certificateKind: 'PAC', complexityCode: 'typical', transitionIn: { fromActYear: 1996, date: '1999-01-01' } };
 const SHEET_WORK = {
   id: 'sheet-00000000-0000-4000-8000-000000000002', projectId: '412', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment',
-  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: [],
+  title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: [], ...SHEET_INFO,
   sourceKey: '412:amendment:1', sheetKey: 'sheet-row-7', provenance: { file: 'sample.xlsx', row: 7 }
 };
 const TRACK_WORK = { ...OPEN_WORK, source: 'track', trackWorkId: 9001, workTypeId: 7, decisionDate: '2024-06-01', phases: [] };
@@ -287,7 +288,7 @@ test('workplans gives every work of the projects the caller may read, Track rows
     interruptions: [{ kind: 'extension', days: 20 }, { kind: 'extension', days: 10 }, { kind: 'suspension', days: null }]
   };
   const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans,
-    track: { ...TRACK_WORK, currentWorkPhaseId: 56, phases: [done, open] }, sheet: { ...SHEET_WORK, phases: [sheetPhase] } });
+    track: { ...TRACK_WORK, ...SHEET_INFO, currentWorkPhaseId: 56, phases: [done, open] }, sheet: { ...SHEET_WORK, phases: [sheetPhase] } });
   assert.deepStrictEqual(projectReads, [[resolveAccess({ user: STAFF }), ['412', '999']]]);
   assert.strictEqual(res.statusCode, 200);
   assert.deepStrictEqual(res.body.works.map(work => [work.projectId, work.workId, work.source]),
@@ -297,8 +298,11 @@ test('workplans gives every work of the projects the caller may read, Track rows
   assert.deepStrictEqual(sheet.replaces.map(work => work.workId), [TRACK_WORK.id]);
   assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'workId', 'source', 'title', 'workTypeCode',
     'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome',
-    'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'decisionEventDate', 'phases']);
+    'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'decisionEventDate', 'certificateKind', 'complexityCode',
+    'transitionIn', 'phases']);
   assert.deepStrictEqual([track.decisionEventDate, sheet.decisionEventDate], ['2025-06-01', null]);
+  const sheetInfo = (work) => [work.certificateKind, work.complexityCode, work.transitionIn];
+  assert.deepStrictEqual([sheetInfo(track), sheetInfo(sheet)], [[null, null, null], Object.values(SHEET_INFO)]);
   assert.deepStrictEqual(track.phases, [{
     name: 'Early Engagement', stage: null, order: 2, startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184,
     isCompleted: true, isSuspended: false, suspendedDate: null, undated: null,

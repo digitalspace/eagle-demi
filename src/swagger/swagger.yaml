@@ -1932,6 +1932,28 @@ paths:
                           description: >-
                             Track only: the anticipated date of the work's last Decision-category event
                             (event types 13 to 21), while that event has no actual date. Null on sheet works.
+                        certificateKind:
+                          type: string
+                          enum: [EAC, PAC]
+                          nullable: true
+                          description: Sheet only, from the stored work. Null on Track works.
+                        complexityCode:
+                          type: string
+                          nullable: true
+                          description: >-
+                            Sheet only, set on amendments: a `complexities` code from
+                            `src/data/works-catalog-map.json`. Null on Track works.
+                        transitionIn:
+                          type: object
+                          nullable: true
+                          description: Sheet only, the Act and date the work moved in from. Null on Track works.
+                          properties:
+                            fromActYear:
+                              type: integer
+                              nullable: true
+                            date:
+                              type: string
+                              nullable: true
                         phases:
                           type: array
                           items:
