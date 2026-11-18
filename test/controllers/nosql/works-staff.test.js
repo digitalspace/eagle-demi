@@ -1,6 +1,6 @@
 'use strict';
 
-// GET /projects/:id/works-staff, /projects/:id/sheet-works and /sheet-works/summary: who may call them, and what each carries.
+// GET /projects/:id/works-staff, /projects/:id/sheet-works, /sheet-works/summary and /workplans: who may call them, and what each carries.
 
 process.env.NODE_ENV = 'test';
 
@@ -14,7 +14,7 @@ const works = require('../../../src/repositories/works');
 const { resolveAccess } = require('../../../src/helpers/access-sql');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
-const { getSheetWorks, getSheetWorksSummary, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
+const { getSheetWorks, getSheetWorksSummary, getWorkplans, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
 const { mockRes } = require('../../helpers/mock-res');
 const { withServer } = require('../../helpers/with-server');
 
@@ -179,12 +179,12 @@ async function asDeployment(environmentName, fn) {
   }
 }
 
-test('both sheet-works paths are not routed outside dev and test, token or not, and reach auth on dev and test', async (t) => {
+test('the sheet-works and workplans paths are not routed outside dev and test, token or not, and reach auth on dev and test', async (t) => {
   const reads = [t.mock.method(projects, 'getById', async () => structuredClone(ROW)),
     t.mock.method(projects, 'listByIds', async () => [structuredClone(ROW)])];
   const results = [];
   const before = config.environmentName;
-  const urls = [`/api/projects/${ROW.id}/sheet-works`, '/api/sheet-works/summary'];
+  const urls = [`/api/projects/${ROW.id}/sheet-works`, '/api/sheet-works/summary', '/api/workplans'];
   for (const url of urls) {
     for (const environmentName of ['prod', 'staging', 'dev', 'test']) {
       await asDeployment(environmentName, async (call) => {
@@ -228,28 +228,30 @@ test('sheet-works returns only sheet works, with no staff entries, marker detail
 });
 
 // Project 999 has sheet works the caller's projects read does not return.
-async function callSummary(t, user) {
-  const stored = [TRACK_WORK, { ...SHEET_WORK, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
+async function callSummary(t, user, { handler = getSheetWorksSummary, track = TRACK_WORK } = {}) {
+  const stored = [track, { ...SHEET_WORK, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
   const reads = [t.mock.method(works, 'liveProjectIds', async () => ['412', '999', '412']),
     t.mock.method(projects, 'listByIds', async () => [{ id: ROW.id, name: ROW.name }])];
   t.mock.method(works, 'listForReadAcross', async (ids) => structuredClone(stored.filter(work => ids.includes(work.projectId))));
   t.mock.method(works, 'getEach', async (ids) => [structuredClone(MARKER)].filter(marker => ids.includes(marker.projectId)));
   t.mock.method(phaseCatalog, 'load', async () => ({}));
   const res = mockRes();
-  await getSheetWorksSummary({ params: {}, query: {}, user }, res);
+  await handler({ params: {}, query: {}, user }, res);
   return { res, reads: reads.map(read => read.mock.callCount()), projectReads: reads[1].mock.calls.map(call => call.arguments) };
 }
 
-test('sheet-works summary refuses anonymous and idir calls before any read', async (t) => {
-  const route = routes.find(r => r.method === 'get' && r.path === '/sheet-works/summary');
-  assert.strictEqual(route.guards[0], authMiddleware);
+test('sheet-works summary and workplans refuse anonymous and idir calls before any read', async (t) => {
+  const handlers = [['/sheet-works/summary', getSheetWorksSummary], ['/workplans', getWorkplans]];
   const results = [];
-  for (const user of [undefined, IDIR]) {
-    const { res, reads } = await callSummary(t, user);
-    results.push([res.statusCode, reads]);
-    t.mock.restoreAll();
+  for (const [path, handler] of handlers) {
+    const route = routes.find(r => r.method === 'get' && r.path === path);
+    for (const user of [undefined, IDIR]) {
+      const { res, reads } = await callSummary(t, user, { handler });
+      results.push([route.guards[0] === authMiddleware, res.statusCode, reads]);
+      t.mock.restoreAll();
+    }
   }
-  assert.deepStrictEqual(results, [[403, [0, 0]], [403, [0, 0]]]);
+  assert.deepStrictEqual(results, handlers.flatMap(() => [[true, 403, [0, 0]], [true, 403, [0, 0]]]));
 });
 
 test('sheet-works summary gives counts only, for the projects the caller may read', async (t) => {
@@ -261,4 +263,28 @@ test('sheet-works summary gives counts only, for the projects the caller may rea
     { projects: [{ projectId: '412', act1996: 1, act2002: 0, hidden: 0, replaces: 1, untilTrack: 0 }] });
   const text = JSON.stringify(res.body);
   for (const key of [SHEET_WORK.title, TRACK_WORK.title, ROW.name, EPD.name]) assert.ok(!text.includes(key), `${key} is left out`);
+});
+
+test('workplans gives every work of the projects the caller may read, Track rows never replacing', async (t) => {
+  const phase = {
+    trackName: 'Early Engagement', startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184, sortOrder: 2,
+    isCompleted: false, isSuspended: true, trackPhaseId: 55,
+    interruptions: [{ id: 'x1', kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
+  };
+  const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans, track: { ...TRACK_WORK, phases: [phase] } });
+  assert.deepStrictEqual(projectReads, [[resolveAccess({ user: STAFF }), ['412', '999']]]);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.works.map(work => [work.projectId, work.workId, work.source]),
+    [['412', TRACK_WORK.id, 'track'], ['412', SHEET_WORK.id, 'sheet']]);
+  const [track, sheet] = res.body.works;
+  assert.deepStrictEqual([track.shownAfterFlip, track.untilTrack, track.replaces], [false, false, []]);
+  assert.deepStrictEqual(sheet.replaces.map(work => work.workId), [TRACK_WORK.id]);
+  assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'workId', 'source', 'title', 'workTypeCode',
+    'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome',
+    'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'phases']);
+  assert.deepStrictEqual(track.phases, [{
+    name: 'Early Engagement', stage: null, order: 2, startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184,
+    isCompleted: false, isSuspended: true, undated: null,
+    interruptions: [{ kind: 'suspension', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
+  }]);
 });
