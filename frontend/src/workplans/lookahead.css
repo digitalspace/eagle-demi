@@ -1,0 +1,489 @@
+/* Lookahead view: fills the page's data area; the agenda and the side panels scroll inside themselves. */
+.la {
+  --la-phase: var(--theme-blue-80);
+  --la-decision: var(--wp-phase-decision-edge);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--layout-margin-medium);
+}
+
+.la .la-toolbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--layout-margin-small) var(--layout-margin-large);
+}
+
+.la .la-summary {
+  margin: 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: var(--layout-margin-medium);
+}
+
+.la .panel {
+  margin: 0;
+}
+
+.la .la-main,
+.la .la-side,
+.la .la-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.la .la-side {
+  gap: var(--layout-margin-medium);
+}
+
+/* Histogram */
+
+.la .la-hist {
+  flex: none;
+  padding: var(--layout-padding-small) var(--layout-padding-medium) var(--layout-padding-xsmall);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.la .la-hist__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  margin-bottom: var(--layout-margin-small);
+}
+
+.la .la-hist__title {
+  margin: 0;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.la .la-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+.la .la-legend__swatch {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.la .la-bar--phase {
+  background: var(--la-phase);
+}
+
+/* Decisions are hatched as well as amber, so they read apart from phase starts without colour. */
+.la .la-bar--decision {
+  box-sizing: border-box;
+  border: var(--layout-border-width-small) solid var(--la-decision);
+  background: repeating-linear-gradient(
+    45deg,
+    var(--la-decision) 0 2px,
+    var(--surface-color-background-white) 2px 4px
+  );
+}
+
+.la .la-hist__weeks {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.la .la-hist__week {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.la .la-hist__plot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 4.5rem;
+  /* Room above the tallest bar for its count. */
+  padding: 1rem 0 0;
+  border: none;
+  border-radius: var(--layout-border-radius-small) var(--layout-border-radius-small) 0 0;
+  background: transparent;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.la button.la-hist__plot {
+  cursor: pointer;
+}
+
+.la button.la-hist__plot:hover {
+  background: var(--surface-color-secondary-hover);
+}
+
+.la .la-hist__week--current .la-hist__plot {
+  background: var(--surface-color-background-light-blue);
+}
+
+.la .la-hist__plot:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 0;
+}
+
+.la .la-hist__count {
+  font: var(--typography-bold-label);
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-primary);
+}
+
+.la .la-hist__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(100%, 2rem);
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 4px 4px 0 0;
+}
+
+.la .la-hist__stack > span {
+  flex-basis: 0;
+  min-height: 3px;
+}
+
+/* Baseline under every week, empty ones included. */
+.la .la-hist__axis {
+  min-height: 1.25rem;
+  padding-top: var(--layout-padding-hair);
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  overflow: visible;
+  white-space: nowrap;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-hist__week--current .la-hist__axis {
+  font: var(--typography-bold-label);
+  color: var(--typography-color-primary);
+  border-top: var(--layout-border-width-medium) solid var(--wp-today);
+}
+
+/* Agenda */
+
+.la .la-agenda {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  container-type: inline-size;
+}
+
+.la .la-week__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  background: var(--surface-color-background-light-gray);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.la .la-week__head:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: -2px;
+}
+
+.la .la-week__now {
+  font: var(--typography-bold-label);
+  color: var(--surface-color-primary-default);
+}
+
+.la .la-week__count {
+  margin-left: auto;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-week__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.la .la-item {
+  display: grid;
+  grid-template-columns: 6.5rem 10px minmax(0, 1fr) minmax(0, 1.2fr) 4rem;
+  grid-template-areas: 'date marker what work in';
+  align-items: center;
+  gap: var(--layout-margin-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
+  font: var(--typography-regular-small-body);
+}
+
+.la .la-item:hover {
+  background: var(--surface-color-background-light-blue);
+}
+
+.la .la-item__date {
+  grid-area: date;
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.la .la-marker {
+  grid-area: marker;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--la-phase);
+}
+
+/* A diamond for a decision, a dot for a phase start. */
+.la .la-marker--decision {
+  width: 8px;
+  height: 8px;
+  margin-left: 1px;
+  border-radius: 1px;
+  background: var(--la-decision);
+  transform: rotate(45deg);
+}
+
+.la .la-item__what {
+  grid-area: what;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.la .la-item__work {
+  grid-area: work;
+  min-width: 0;
+}
+
+.la .la-item__in {
+  grid-area: in;
+  text-align: right;
+  white-space: nowrap;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-item__what,
+.la .la-work,
+.la .la-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Narrow agenda: date and countdown on one line, then what happens, then the work. */
+@container (max-width: 34rem) {
+  .la .la-item {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'date date in'
+      'marker what what'
+      '. work work';
+    row-gap: var(--layout-margin-hair);
+  }
+}
+
+/* Links and side panels */
+
+.la .la-work {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  text-decoration: none;
+}
+
+.la .la-work:hover {
+  text-decoration: underline;
+}
+
+.la .la-work:focus-visible,
+.la .la-more:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 2px;
+}
+
+.la .la-sub {
+  margin-top: var(--layout-margin-hair);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.la .la-panel__head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  font: var(--typography-bold-body);
+  color: var(--typography-color-primary);
+}
+
+.la .la-panel--overdue .la-panel__head {
+  background: var(--support-surface-color-danger);
+  color: var(--wp-overdue);
+}
+
+.la .la-panel__count {
+  font: var(--typography-bold-small-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.la .la-panel--overdue {
+  flex: 1 1 auto;
+}
+
+.la .la-panel--decisions {
+  flex: 0 1 auto;
+  max-height: 45%;
+}
+
+.la .la-panel__body {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.la .la-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.la .la-list__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--layout-margin-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
+}
+
+.la .la-list__item .la-sub {
+  grid-column: 1 / -1;
+}
+
+.la .la-list__figure {
+  font: var(--typography-regular-small-body);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--typography-color-secondary);
+}
+
+.la .la-list__figure--overdue {
+  font: var(--typography-bold-small-body);
+  color: var(--wp-overdue);
+}
+
+.la .la-more {
+  min-height: 32px;
+  margin: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.la .la-empty {
+  margin: 0;
+  padding: var(--layout-padding-large) var(--layout-padding-medium);
+  text-align: center;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Mid widths: the side panels go under the agenda and share one row. */
+@media (max-width: 56rem) {
+  .la .la-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 14rem);
+  }
+
+  .la .la-side {
+    flex-direction: row;
+  }
+
+  .la .la-side > .la-panel {
+    flex: 1 1 0;
+    min-width: 0;
+    max-height: none;
+  }
+}
+
+/* Narrow: the page scrolls (workplans.css), so everything stacks and the agenda caps its height to keep sticky week headings. */
+@media (max-width: 40rem) {
+  .la .la-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .la .la-side {
+    flex-direction: column;
+  }
+
+  .la .la-side > .la-panel {
+    flex: none;
+  }
+
+  .la .la-agenda {
+    max-height: 70vh;
+  }
+
+  .la .la-panel__body {
+    max-height: 50vh;
+  }
+
+  /* Six months is too many weeks for a count over each bar; the week list still reads them out. */
+  .la .la-hist__weeks--dense .la-hist__count {
+    visibility: hidden;
+  }
+
+  /* Text only, so the baseline stays whole. */
+  .la .la-hist__axis--minor {
+    color: transparent;
+  }
+}
