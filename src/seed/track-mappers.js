@@ -190,6 +190,7 @@ function docWorkFieldsOf(work, projectId) {
     workState: pub.workState,
     decisionDate: pub.decisionDate,
     anticipatedDecisionDate: pub.anticipatedDecisionDate,
+    currentWorkPhaseId: work.current_work_phase_id ?? null,
     schemaVersion: WORK_SCHEMA_VERSION,
     workTypeCode: workTypeCodeOf(pub),
     actYear: workActYear(pub)
