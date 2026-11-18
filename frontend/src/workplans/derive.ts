@@ -156,7 +156,7 @@ export function toneOf(row: WorkRow): string {
 }
 
 const OPEN_TRACK_STATES = new Set(['IN_PROGRESS', 'SUSPENDED']);
-const ENDED_TRACK_STATES = new Set(['COMPLETED', 'WITHDRAWN', 'TERMINATED']);
+const ENDED_TRACK_STATES = new Set(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED']);
 
 /** Inactive: a Track work switched off while still in progress, kept apart from closed works. */
 function closureOf(work: WorkplanRow, today: string) {

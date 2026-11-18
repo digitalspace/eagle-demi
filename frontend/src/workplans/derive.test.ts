@@ -184,6 +184,17 @@ describe('rowsOf', () => {
     expect(row.segments.map((segment) => segment.state)).toEqual(['current', 'incomplete']);
   });
 
+  it('leaves a phase that ends before it starts off the lifecycle strip unless it is the current phase', () => {
+    const row = rowOf(
+      work([
+        phase('Early Engagement', '2025-06-01', '2025-01-01', { isCompleted: true }),
+        phase('Application Review', '2026-01-01', '2026-12-01', { order: 2 }),
+      ]),
+    );
+
+    expect(row.segments.map((segment) => segment.name)).toEqual(['Application Review']);
+  });
+
   it('takes the decision event date, else the start of the open decision phase, never Readiness Decision', () => {
     const readiness = phase('Readiness Decision', '2026-10-01', '2027-01-01');
     const decision = phase('Decision', '2027-04-01', '2027-05-01', { order: 2 });
@@ -266,7 +277,7 @@ describe('rowsOf', () => {
     expect(row.status).toBe('closed');
   });
 
-  it.each(['COMPLETED', 'WITHDRAWN', 'TERMINATED'])('closes a Track work in state %s that is still flagged active', (workState) => {
+  it.each(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED'])('closes a Track work in state %s that is still flagged active', (workState) => {
     const decided = phase('Transfer Decision', '2025-11-01', '2025-12-05', { isCompleted: true });
 
     const row = rowOf(work([decided], { workState, isActive: true }));
