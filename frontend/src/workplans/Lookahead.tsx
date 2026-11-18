@@ -1,10 +1,11 @@
-import { useId, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { useId, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { dayMonthYear } from '../dates';
+import { ChipSelect } from './ChipSelect';
 import type { WorkRow } from './derive';
 import type { ViewProps } from './Filters';
+import { plural, shortDate, weekdayDate, weekOf } from './format';
 import {
+  MILESTONE_KINDS,
   WINDOWS,
   WINDOW_PHRASE,
   milestonesIn,
@@ -13,21 +14,15 @@ import {
   windowEnd,
   type LookaheadWindow,
   type Milestone,
+  type MilestoneKind,
   type Week,
 } from './lookahead-data';
 import { Segmented } from './Segmented';
-import { dayNumber } from './timeline-scale';
 import './workplans.css';
 import './lookahead.css';
 
-const OVERDUE_CAP = 8;
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-CA')} ${n === 1 ? one : many}`;
-/** "5 Dec" */
-const dayMon = (iso: string) => dayMonthYear(iso).replace(/ \d{4}$/, '');
-/** "Sat 5 Dec" */
-const weekdayDayMon = (iso: string) => `${WEEKDAYS[(dayNumber(iso) + 3) % 7]} ${dayMon(iso)}`;
+/** "Nov 16" whatever the year, for the histogram axis. */
+const monthDay = (iso: string) => shortDate(iso, iso);
 const inDays = (n: number) => (n === 0 ? 'today' : `in ${n} d`);
 const workPath = (row: WorkRow) => `/project-details/${encodeURIComponent(row.work.projectId)}`;
 
@@ -43,7 +38,7 @@ function WorkLink({ row }: { row: WorkRow }) {
 function weekLabel(week: Week) {
   const n = week.milestones.length;
   const decisions = week.decisions ? `, ${plural(week.decisions, 'decision')}` : '';
-  return `Week of ${dayMon(week.start)}${week.current ? ' (this week)' : ''}: ${n ? plural(n, 'milestone') : 'no milestones'}${decisions}`;
+  return `${weekOf(week.start)}${week.current ? ' (this week)' : ''}: ${n ? plural(n, 'milestone') : 'no milestones'}${decisions}`;
 }
 
 function Histogram({ weeks, idOf }: { weeks: Week[]; idOf: (week: Week) => string }) {
@@ -58,44 +53,29 @@ function Histogram({ weeks, idOf }: { weeks: Week[]; idOf: (week: Week) => strin
         <h2 id={titleId} className="la-hist__title">
           Milestones per week
         </h2>
-        <ul className="la-legend" aria-label="Legend">
-          <li>
-            <span className="la-legend__swatch la-bar--phase" aria-hidden="true" />
-            Phase starts
-          </li>
-          <li>
-            <span className="la-legend__swatch la-bar--decision" aria-hidden="true" />
-            Decisions
-          </li>
-        </ul>
+        <span className="la-hist__hint">click a week to jump</span>
       </div>
-      <ol className={`la-hist__weeks${weeks.length > 14 ? ' la-hist__weeks--dense' : ''}`} aria-labelledby={titleId}>
+      <ol className="la-hist__weeks" aria-labelledby={titleId}>
         {weeks.map((week, i) => {
           const n = week.milestones.length;
           const label = weekLabel(week);
-          const plot = (
-            <>
-              <span className="la-hist__count" aria-hidden="true">
-                {n || ''}
-              </span>
-              <span className="la-hist__stack" style={{ height: `${(n / max) * 100}%` }} aria-hidden="true">
-                {week.decisions > 0 && <span className="la-bar--decision" style={{ flexGrow: week.decisions }} />}
-                {n > week.decisions && <span className="la-bar--phase" style={{ flexGrow: n - week.decisions }} />}
-              </span>
-              <span className="visually-hidden">{label}</span>
-            </>
-          );
+          const className = `la-hist__bar${week.current ? ' la-hist__bar--current' : ''}`;
+          const style = { height: `${(n / max) * 100}%` };
           return (
-            <li key={week.start} className={`la-hist__week${week.current ? ' la-hist__week--current' : ''}`}>
-              {n > 0 ? (
-                <button type="button" className="la-hist__plot" title={label} onClick={() => jump(week)}>
-                  {plot}
-                </button>
-              ) : (
-                <span className="la-hist__plot">{plot}</span>
-              )}
+            <li key={week.start} className="la-hist__week">
+              <span className="la-hist__plot">
+                {n > 0 ? (
+                  <button type="button" className={className} style={style} title={label} onClick={() => jump(week)}>
+                    <span className="visually-hidden">{label}</span>
+                  </button>
+                ) : (
+                  <span className={className} style={style}>
+                    <span className="visually-hidden">{label}</span>
+                  </span>
+                )}
+              </span>
               <span className={`la-hist__axis${i % (2 * every) ? ' la-hist__axis--minor' : ''}`} aria-hidden="true">
-                {week.current ? 'This week' : i % every === 0 ? dayMon(week.start) : ''}
+                {i % every === 0 ? monthDay(week.start) : ''}
               </span>
             </li>
           );
@@ -108,13 +88,15 @@ function Histogram({ weeks, idOf }: { weeks: Week[]; idOf: (week: Week) => strin
 function AgendaItem({ milestone }: { milestone: Milestone }) {
   const { row } = milestone;
   return (
-    <li className={`la-item la-item--${milestone.kind}`}>
-      <span className="la-item__date">{weekdayDayMon(milestone.date)}</span>
-      <span className={`la-marker la-marker--${milestone.kind}`} aria-hidden="true" />
-      <span className="la-item__what">{milestone.what}</span>
+    <li className="la-item">
+      <span className="la-item__date">{weekdayDate(milestone.date)}</span>
+      <span className={`la-marker la-marker--${milestone.tone}`} aria-hidden="true" />
+      <span className="la-item__what" title={milestone.what}>
+        {milestone.what}
+      </span>
       <span className="la-item__work">
         <WorkLink row={row} />
-        {row.work.projectName && <span className="la-sub">{row.work.projectName}</span>}
+        {row.work.projectName && <span className="la-item__project"> · {row.work.projectName}</span>}
       </span>
       <span className="la-item__in">{inDays(milestone.inDays)}</span>
     </li>
@@ -130,11 +112,7 @@ function Agenda({ weeks, idOf, empty }: { weeks: Week[]; idOf: (week: Week) => s
         .map((week) => (
           <section key={week.start} className="la-week" aria-labelledby={idOf(week)}>
             <h3 id={idOf(week)} className="la-week__head" tabIndex={-1}>
-              <span className="la-week__range">
-                {dayMon(week.start)} – {dayMon(week.end)}
-              </span>{' '}
-              {week.current && <span className="la-week__now">This week</span>}{' '}
-              <span className="la-week__count">{plural(week.milestones.length, 'milestone')}</span>
+              {weekOf(week.start)} <span className="la-week__count">{plural(week.milestones.length, 'milestone')}</span>
             </h3>
             <ul className="la-week__items">
               {week.milestones.map((milestone) => (
@@ -148,15 +126,7 @@ function Agenda({ weeks, idOf, empty }: { weeks: Week[]; idOf: (week: Week) => s
 }
 
 function OverduePanel({ rows }: { rows: WorkRow[] }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, OVERDUE_CAP);
   const id = useId();
-  const list = useRef<HTMLUListElement>(null);
-  // The button goes away, so focus moves to the first item it revealed.
-  const showAll = () => {
-    flushSync(() => setAll(true));
-    list.current?.querySelectorAll<HTMLElement>('.la-work')[shown.length]?.focus();
-  };
   return (
     <section className="panel la-panel la-panel--overdue" aria-labelledby={id}>
       <h2 id={id} className="la-panel__head">
@@ -165,38 +135,31 @@ function OverduePanel({ rows }: { rows: WorkRow[] }) {
       {rows.length === 0 ? (
         <p className="la-empty">No work is past the planned end of its phase.</p>
       ) : (
-        <div className="la-panel__body">
-          <ul className="la-list" ref={list}>
-            {shown.map((row) => (
-              <li key={`${row.work.source}:${row.work.workId}`} className="la-list__item">
-                <WorkLink row={row} />
-                <span className="la-list__figure la-list__figure--overdue">
-                  +{row.daysOver} d<span className="visually-hidden"> over</span>
-                </span>
-                <span className="la-sub">
-                  {row.current?.name || 'Unnamed phase'}
-                  {row.daysInPhase !== null && row.plannedDays ? ` · ${row.daysInPhase} of ${row.plannedDays} d` : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {rows.length > shown.length && (
-            <button type="button" className="la-more" onClick={showAll}>
-              Show {rows.length - shown.length} more
-            </button>
-          )}
-        </div>
+        <ul className="la-list la-panel__body">
+          {rows.map((row) => (
+            <li key={`${row.work.source}:${row.work.workId}`} className="la-list__item">
+              <WorkLink row={row} />
+              <span className="la-list__figure la-list__figure--overdue">
+                +{row.daysOver} d<span className="visually-hidden"> over</span>
+              </span>
+              <span className="la-sub">
+                {row.current?.name || 'Unnamed phase'}
+                {row.daysInPhase !== null && row.plannedDays ? ` · ${row.daysInPhase}/${row.plannedDays} d` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
 }
 
-function DecisionsPanel({ decisions, phrase }: { decisions: Milestone[]; phrase: string }) {
+function DecisionsPanel({ decisions, phrase, today }: { decisions: Milestone[]; phrase: string; today: string }) {
   const id = useId();
   return (
     <section className="panel la-panel la-panel--decisions" aria-labelledby={id}>
       <h2 id={id} className="la-panel__head">
-        Decisions this window <span className="la-panel__count">{decisions.length.toLocaleString('en-CA')}</span>
+        Decisions this window
       </h2>
       {decisions.length === 0 ? (
         <p className="la-empty">No decisions in {phrase}.</p>
@@ -205,10 +168,8 @@ function DecisionsPanel({ decisions, phrase }: { decisions: Milestone[]; phrase:
           {decisions.map((decision) => (
             <li key={decision.key} className="la-list__item">
               <WorkLink row={decision.row} />
-              <span className="la-list__figure">{dayMon(decision.date)}</span>
-              <span className="la-sub">
-                {decision.what}, {inDays(decision.inDays)}
-              </span>
+              <span className="la-list__figure">{shortDate(decision.date, today)}</span>
+              <span className="la-sub">{decision.phase} due</span>
             </li>
           ))}
         </ul>
@@ -220,16 +181,19 @@ function DecisionsPanel({ decisions, phrase }: { decisions: Milestone[]; phrase:
 /** Phase starts and decisions in the next 30 days, 90 days or 6 months, by week, beside the works overdue now. */
 export function LookaheadView({ rows, today, bar }: ViewProps) {
   const [span, setSpan] = useState<LookaheadWindow>('90d');
+  const [kind, setKind] = useState<MilestoneKind | null>(null);
   const end = windowEnd(today, span);
-  const milestones = useMemo(() => milestonesIn(rows, today, end), [rows, today, end]);
+  const all = useMemo(() => milestonesIn(rows, today, end), [rows, today, end]);
+  const milestones = useMemo(() => (kind ? all.filter((milestone) => milestone.kind === kind) : all), [all, kind]);
   const weeks = useMemo(() => weeksOf(milestones, today, end), [milestones, today, end]);
   const overdue = useMemo(() => overdueNow(rows), [rows]);
-  const decisions = milestones.filter((milestone) => milestone.kind === 'decision');
+  // The panel lists every decision in the window, whatever the Milestone type.
+  const decisions = all.filter((milestone) => milestone.kind === 'decision');
   const prefix = useId();
   const idOf = (week: Week) => `${prefix}-week-${week.start}`;
   const phrase = WINDOW_PHRASE[span];
   const works = new Set(milestones.map((milestone) => milestone.row)).size;
-  const range = `${dayMonthYear(today)} to ${dayMonthYear(end)}`;
+  const range = `${shortDate(today, today)} – ${shortDate(end, today)}`;
 
   let empty: string | null = null;
   if (rows.length === 0) empty = 'No works match these filters.';
@@ -237,16 +201,17 @@ export function LookaheadView({ rows, today, bar }: ViewProps) {
     empty = `No milestones in ${phrase}.${span === '6m' ? '' : ' Choose a longer window to look further ahead.'}`;
   }
 
+  const lead = (
+    <>
+      <Segmented label="Window" options={WINDOWS} value={span} onChange={setSpan} />
+      <ChipSelect label="Milestone type" options={MILESTONE_KINDS} value={kind} onChange={setKind} clearable />
+    </>
+  );
+  const summary = `${milestones.length ? `${plural(milestones.length, 'milestone')} across ${plural(works, 'work')}` : 'No milestones'} · ${range}`;
+
   return (
     <div className="la">
-      {bar?.()}
-      <div className="la-toolbar">
-        <Segmented label="Window" options={WINDOWS} value={span} onChange={setSpan} />
-        <p className="la-summary" role="status">
-          {milestones.length ? `${plural(milestones.length, 'milestone')} across ${plural(works, 'work')}` : 'No milestones'},{' '}
-          {range}
-        </p>
-      </div>
+      {bar?.({ lead, summary })}
       <div className="la-body">
         <section className="panel la-main" aria-label="Upcoming milestones">
           {!empty && <Histogram weeks={weeks} idOf={idOf} />}
@@ -254,7 +219,7 @@ export function LookaheadView({ rows, today, bar }: ViewProps) {
         </section>
         <div className="la-side">
           <OverduePanel rows={overdue} />
-          <DecisionsPanel decisions={decisions} phrase={phrase} />
+          <DecisionsPanel decisions={decisions} phrase={phrase} today={today} />
         </div>
       </div>
     </div>
