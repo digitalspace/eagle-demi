@@ -6,10 +6,12 @@ import { Segmented } from './Segmented';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
+  drawsSuspension,
   extentOf,
   scaleFor,
   scrollFor,
   spansOf,
+  tagDayOf,
   ticksFor,
   xOf,
   ZOOMS,
@@ -21,8 +23,10 @@ import './timeline.css';
 /** Lane width before the first measure, and in JSDOM where nothing has a size. */
 const FALLBACK_LANE_PX = 960;
 const MIN_LANE_PX = 240;
+/** Narrowest bar that keeps its phase name; a few letters and an ellipsis say nothing. */
+const MIN_LABEL_PX = 56;
 
-function Legend() {
+function Legend({ suspension }: { suspension: boolean }) {
   return (
     <ul className="timeline__legend" aria-label="Legend">
       <li>
@@ -41,10 +45,12 @@ function Legend() {
         <span className="timeline__swatch timeline__bar--overrun" aria-hidden="true" />
         Overdue
       </li>
-      <li>
-        <span className="timeline__swatch timeline__bar--suspended" aria-hidden="true" />
-        Suspended
-      </li>
+      {suspension && (
+        <li>
+          <span className="timeline__swatch timeline__bar--suspended" aria-hidden="true" />
+          Suspended
+        </li>
+      )}
       <li>
         <span className="timeline__swatch timeline__swatch--today" aria-hidden="true" />
         Today
@@ -75,6 +81,7 @@ const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: Work
   const spans = spansOf(row, today);
   const tone = toneOf(row);
   const title = row.work.title || 'Untitled work';
+  const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
   return (
     <li className="timeline__row">
       <div className="timeline__left">
@@ -82,7 +89,15 @@ const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: Work
           <Link className="timeline__name" to={`/project-details/${encodeURIComponent(row.work.projectId)}`} title={title}>
             {title}
           </Link>
-          <WorkPill work={row.work} />
+          {/* WorkPill takes no title; its own text is the tooltip once CSS cuts it short. */}
+          <span
+            className="timeline__flag"
+            ref={(el) => {
+              if (el) el.title = el.textContent ?? '';
+            }}
+          >
+            <WorkPill work={row.work} />
+          </span>
         </span>
         <abbr className="timeline__type" title={type.name}>
           {type.code}
@@ -96,19 +111,24 @@ const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: Work
           const left = xOf(scale, dayNumber(span.start));
           const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
           const current = span.kind === 'current';
+          const label = current && width >= MIN_LABEL_PX && span.name;
           return (
             <span
               key={i}
               className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
               style={{ left, width }}
             >
-              {current && span.name}
+              {label && <span className="timeline__label">{label}</span>}
             </span>
           );
         })}
         {!spans.length && <span className="timeline__undated">No dated phases</span>}
         {row.suspended && (
-          <span className="timeline__note" style={{ left: xOf(scale, dayNumber(today)) + 6 }}>
+          <span
+            className="timeline__note"
+            // Slides back left by however much it would run past the lane end.
+            style={{ left: tagX, translate: `min(0px, calc(${scale.width - tagX}px - 100%))` }}
+          >
             Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
           </span>
         )}
@@ -137,10 +157,12 @@ function TimelineGroup({
       <summary className="timeline__group-head">
         <span className="timeline__group-label">
           <span className="timeline__group-name">{group.label}</span>
-          <span className="timeline__group-count">
-            {count} {count === 1 ? 'work' : 'works'}
+          <span className="timeline__group-meta">
+            <span className="timeline__group-count">
+              {count} {count === 1 ? 'work' : 'works'}
+            </span>
+            {group.overdue > 0 && <span className="pill pill--danger timeline__pill">{group.overdue} overdue</span>}
           </span>
-          {group.overdue > 0 && <span className="pill pill--danger timeline__pill">{group.overdue} overdue</span>}
         </span>
       </summary>
       {open && (
@@ -188,6 +210,7 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const extent = useMemo(() => extentOf(rows, today), [rows, today]);
   const scale = useMemo(() => scaleFor(extent, zoom, today, lanePx), [extent, zoom, today, lanePx]);
   const groups = useMemo(() => groupsOf(rows, groupBy), [rows, groupBy]);
+  const suspension = useMemo(() => drawsSuspension(rows, today), [rows, today]);
 
   // Waits for a measured width, else the first scroll lands on the fallback scale and drifts.
   useLayoutEffect(() => {
@@ -225,16 +248,24 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
           Today
         </button>
         <Segmented label="Group by" options={GROUP_BYS} value={groupBy} onChange={setGroupBy} />
-        <Legend />
+        <Legend suspension={suspension} />
       </div>
       {rows.length ? (
         <div className="timeline__scroll" ref={scroller}>
           <div className="timeline__canvas" style={{ '--timeline-lane': `${scale.width}px` } as CSSProperties}>
+            {/* First in the canvas, so bar labels and the suspended tag, on the same layer, paint over it. */}
+            <span
+              className="timeline__today-line"
+              style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
+              aria-hidden="true"
+            />
             <div className="timeline__head" aria-hidden="true">
               <div className="timeline__left timeline__left--head" ref={left}>
                 <span>Work</span>
                 <span className="timeline__type-head">Type</span>
-                <span className="timeline__days-head">Days in phase</span>
+                <span className="timeline__days-head" title="Days in phase">
+                  Days
+                </span>
               </div>
               <Axis scale={scale} />
             </div>
@@ -248,11 +279,6 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
                 today={today}
               />
             ))}
-            <span
-              className="timeline__today-line"
-              style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
-              aria-hidden="true"
-            />
           </div>
         </div>
       ) : (

@@ -3,7 +3,7 @@ import type { WorkplanRow } from '../api/sheet-works';
 import fixture from '../../parity/fixtures/workplans.json';
 import { rowsOf } from './derive';
 import { daysOf, groupsOf } from './timeline-rows';
-import { dayNumber, extentOf, scaleFor, scrollFor, xOf } from './timeline-scale';
+import { dayNumber, drawsSuspension, extentOf, scaleFor, scrollFor, spansOf, tagDayOf, ticksFor, xOf } from './timeline-scale';
 
 const TODAY = '2026-11-17';
 const VIEWPORT = 1000;
@@ -26,6 +26,29 @@ describe('timeline scale', () => {
     expect(scale.width).toBeGreaterThan(VIEWPORT);
     expect(todayInView).toBeGreaterThan(0);
     expect(todayInView).toBeLessThan(VIEWPORT);
+  });
+
+  it('a cell cut short at the axis edge drops its label, a full cell keeps it', () => {
+    const { bottom } = ticksFor(scaleFor(extent, 'fit', TODAY, 240));
+
+    expect(bottom[0]).toMatchObject({ label: '' });
+    expect(bottom[1]).toMatchObject({ label: '2000' });
+  });
+});
+
+describe('suspension', () => {
+  const suspended = rows.find((row) => row.suspended)!;
+
+  it('only a dated interruption draws a hatched span, which the legend keys', () => {
+    expect(drawsSuspension([suspended], TODAY)).toBe(false);
+    expect(drawsSuspension(rows, TODAY)).toBe(true);
+  });
+
+  it('the suspended tag starts after the current phase, clear of its label', () => {
+    const spans = spansOf(suspended, TODAY);
+    const current = spans.find((span) => span.kind === 'current')!;
+
+    expect(tagDayOf(spans, TODAY)).toBe(dayNumber(current.end));
   });
 });
 

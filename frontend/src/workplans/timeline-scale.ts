@@ -19,6 +19,9 @@ const VISIBLE_DAYS: Record<Exclude<Zoom, 'fit'>, number> = {
 };
 /** Narrowest axis cell that still holds a label such as "2026" or "Sep". */
 const MIN_TICK_PX = 40;
+/** Widest axis character (bold 12px digit) and a tick's side padding, to tell whether a label fits its cell. */
+const LABEL_CHAR_PX = 7;
+const TICK_PAD_PX = 8;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** UTC day count of an ISO day or timestamp. */
@@ -47,6 +50,16 @@ export function spansOf(row: WorkRow, today: string): Span[] {
     if (start && end && end >= start) spans.push({ kind: 'suspended', start, end, name: stop.legalSection });
   }
   return spans;
+}
+
+/** True when some row draws a dated suspension; a flag with no interruption dates draws only its tag. */
+export const drawsSuspension = (rows: WorkRow[], today: string) =>
+  rows.some((row) => spansOf(row, today).some((span) => span.kind === 'suspended'));
+
+/** Day the suspended tag starts at: after the current phase, its overrun or a suspension, so it covers no label. */
+export function tagDayOf(spans: Span[], today: string): number {
+  const ends = spans.filter((span) => span.kind !== 'past' && span.kind !== 'upcoming').map((span) => dayNumber(span.end));
+  return ends.length ? Math.max(...ends) : dayNumber(today);
 }
 
 export interface Extent {
@@ -138,7 +151,9 @@ function ticksOf(scale: Scale, unit: number, top: boolean): Tick[] {
     month %= 12;
     const next = Date.UTC(year, month, 1) / DAY_MS;
     const x = Math.max(0, xOf(scale, at));
-    ticks.push({ x, width: Math.min(scale.width, xOf(scale, next)) - x, label });
+    const width = Math.min(scale.width, xOf(scale, next)) - x;
+    // A cell cut short at either end of the axis drops a label it cannot hold.
+    ticks.push({ x, width, label: width < label.length * LABEL_CHAR_PX + TICK_PAD_PX ? '' : label });
     at = next;
   }
   return ticks;
