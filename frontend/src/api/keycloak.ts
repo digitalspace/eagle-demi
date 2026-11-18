@@ -165,7 +165,7 @@ async function start(): Promise<boolean> {
         checkLoginIframe: false,
         pkceMethod: 'S256',
         scope: 'openid roles',
-        redirectUri: window.location.origin + window.location.pathname,
+        redirectUri: returnUri(),
         silentCheckSsoRedirectUri: window.location.origin + '/silent-check-sso.html',
       }),
       new Promise<boolean>((_, reject) =>
@@ -199,6 +199,9 @@ async function start(): Promise<boolean> {
   return true;
 }
 
+/** Return address after sign-in: this page and its query string, so `?view=list` survives. */
+const returnUri = () => window.location.origin + window.location.pathname + window.location.search;
+
 function newClient(): Keycloak {
   const c = config();
   return new Keycloak({
@@ -210,7 +213,7 @@ function newClient(): Keycloak {
 
 /** The only route to a login: a first visit never builds a client until this is called. */
 export function login(): void {
-  const redirectUri = window.location.origin + window.location.pathname;
+  const redirectUri = returnUri();
   if (client) {
     void client.login({ redirectUri });
     return;

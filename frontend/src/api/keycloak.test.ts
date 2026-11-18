@@ -188,17 +188,19 @@ describe('login', () => {
     expect(keycloak.login).not.toHaveBeenCalled();
   });
 
-  it('reuses the client a settled session already built', async () => {
+  it('reuses the client a settled session already built, returning to the same page and query', async () => {
+    window.history.pushState({}, '', '/workplans?view=list');
     localStorage.setItem('isLoggedIn', 'true');
     const { initKeycloak, login } = await loadKeycloak();
     await initKeycloak();
 
     login();
+    window.history.pushState({}, '', '/');
 
+    const back = window.location.origin + '/workplans?view=list';
+    expect(initOptions()['redirectUri']).toBe(back);
     expect(keycloak.constructed).toHaveBeenCalledTimes(1);
-    expect(keycloak.login).toHaveBeenCalledWith({
-      redirectUri: window.location.origin + window.location.pathname,
-    });
+    expect(keycloak.login).toHaveBeenCalledWith({ redirectUri: back });
   });
 });
 
