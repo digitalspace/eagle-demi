@@ -1,0 +1,17 @@
+/* Colours shared by every Workplans view; view CSS reads only these plus bcgov tokens. Hex where no bcgov token has the design's value. */
+:root {
+  --wp-phase-review-fill: #dde8b8;
+  --wp-phase-review-edge: #6f7f2a;
+  --wp-phase-proponent-fill: #d9d9d9;
+  --wp-phase-proponent-edge: #7a7876;
+  --wp-phase-planning-fill: #cfdff5;
+  --wp-phase-planning-edge: var(--surface-color-border-active);
+  --wp-phase-readiness-fill: #f6d3d4;
+  --wp-phase-readiness-edge: #c74a50;
+  --wp-phase-decision-fill: #fde6b0;
+  --wp-phase-decision-edge: #a36f00;
+  --wp-overdue: #a4262c;
+  --wp-overdue-bar: #c74a50;
+  --wp-near-limit: #c58f00;
+  --wp-today: var(--surface-color-border-active);
+}
