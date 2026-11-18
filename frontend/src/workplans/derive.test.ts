@@ -184,6 +184,17 @@ describe('rowsOf', () => {
     expect(row.segments.map((segment) => segment.state)).toEqual(['current', 'incomplete']);
   });
 
+  it('leaves a phase that ends before it starts off the lifecycle strip unless it is the current phase', () => {
+    const row = rowOf(
+      work([
+        phase('Early Engagement', '2025-06-01', '2025-01-01', { isCompleted: true }),
+        phase('Application Review', '2026-01-01', '2026-12-01', { order: 2 }),
+      ]),
+    );
+
+    expect(row.segments.map((segment) => segment.name)).toEqual(['Application Review']);
+  });
+
   it('takes the decision event date, else the start of the open decision phase, never Readiness Decision', () => {
     const readiness = phase('Readiness Decision', '2026-10-01', '2027-01-01');
     const decision = phase('Decision', '2027-04-01', '2027-05-01', { order: 2 });
@@ -264,6 +275,27 @@ describe('rowsOf', () => {
     const row = rowOf(work([phase('Application Review', '2026-01-01', null)], { decisionDate: '2026-11-01' }));
 
     expect(row.status).toBe('closed');
+  });
+
+  it.each(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED'])('closes a Track work in state %s that is still flagged active', (workState) => {
+    const decided = phase('Transfer Decision', '2025-11-01', '2025-12-05', { isCompleted: true });
+
+    const row = rowOf(work([decided], { workState, isActive: true }));
+
+    expect(row.status).toBe('closed');
+  });
+
+  it('reads a Track current phase that ends before it starts as status unknown, unmeasured, with its bar running to today', () => {
+    const contact = phase('Initial Contact', '2026-03-23T09:00:00.000Z', '2024-11-02T09:00:00.000Z');
+
+    const row = rowOf(work([contact]));
+
+    expect(row.status).toBe('unknown');
+    expect(row.overdue).toBe(false);
+    expect(row.plannedDays).toBeNull();
+    expect(row.percentUsed).toBeNull();
+    expect(row.bar).toBeNull();
+    expect(row.segments[0]).toMatchObject({ end: TODAY, share: 1 });
   });
 
   it('marks a work next-30 when its next milestone is at most 30 days away, else on track', () => {

@@ -21,6 +21,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Early Engagement",
@@ -109,6 +112,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Initial Contact",
@@ -181,6 +187,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Readiness Decision",
@@ -253,6 +262,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Pre-EA",
@@ -309,6 +321,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Procedures Development",
@@ -381,6 +396,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "SubStart Assessment",
@@ -437,6 +455,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Evaluation",
@@ -461,7 +482,7 @@
       "projectName": "Sample Alpha Transmission Line",
       "workId": "track-9102",
       "source": "track",
-      "title": "Sample Alpha Transmission Line - Assessment (Track copy)",
+      "title": "Sample Alpha Transmission Line - Substation Assessment",
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 2002,
@@ -477,6 +498,9 @@
       "shownAfterFlip": false,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Application Review",
@@ -499,79 +523,50 @@
     {
       "projectId": "901",
       "projectName": "Sample Alpha Transmission Line",
-      "workId": "sheet-90000000-0000-4000-8000-000000000001",
+      "workId": "sheet-3f6c2a1e-8b4d-4c7a-9e21-5d0b7f9a1c01",
       "source": "sheet",
       "title": "Sample Alpha Transmission Line - Assessment (1996)",
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 1996,
-      "workState": "completed",
+      "workState": "transitioned",
       "isActive": false,
       "decisionEventDate": null,
-      "startDate": "1997-02-01",
-      "decisionDate": "1999-06-10",
+      "startDate": null,
+      "decisionDate": "2003-04-10",
       "anticipatedDecisionDate": null,
-      "outcome": "Approved",
-      "transitionOut": null,
-      "undated": null,
+      "outcome": "Withdrawn",
+      "transitionOut": {
+        "toActYear": 2002,
+        "date": null,
+        "dateSource": "none"
+      },
+      "undated": {
+        "startDate": {
+          "notAfter": "2001-03-01"
+        }
+      },
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
-      "phases": [
-        {
-          "name": "Application Review",
-          "stage": "Application Review",
-          "order": 1,
-          "startDate": "1997-02-01",
-          "endDate": "1999-06-10",
-          "numberOfDays": null,
-          "isCompleted": true,
-          "isSuspended": null,
-          "undated": null,
-          "interruptions": [],
-          "isCurrent": null,
-          "suspendedDate": null,
-          "extensionDays": 0,
-          "suspendedDays": 0
-        }
-      ]
-    },
-    {
-      "projectId": "901",
-      "projectName": "Sample Alpha Transmission Line",
-      "workId": "sheet-90000000-0000-4000-8000-000000000002",
-      "source": "sheet",
-      "title": "Sample Alpha Transmission Line - Assessment (2002)",
-      "workTypeCode": "assessment",
-      "workType": "Assessment",
-      "actYear": 2002,
-      "workState": "completed",
-      "isActive": false,
-      "decisionEventDate": null,
-      "startDate": "2004-03-01",
-      "decisionDate": "2007-03-01",
-      "anticipatedDecisionDate": null,
-      "outcome": "Approved",
-      "transitionOut": null,
-      "undated": null,
-      "shownAfterFlip": true,
-      "untilTrack": false,
-      "replaces": [
-        {
-          "title": "Sample Alpha Transmission Line - Assessment (Track copy)"
-        }
-      ],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Pre-Application",
           "stage": "Pre-Application",
           "order": 1,
-          "startDate": "2004-03-01",
-          "endDate": "2005-01-09",
+          "startDate": null,
+          "endDate": "2002-01-14",
           "numberOfDays": null,
           "isCompleted": true,
           "isSuspended": null,
-          "undated": null,
+          "undated": {
+            "startDate": {
+              "notAfter": "2001-03-01"
+            }
+          },
           "interruptions": [],
           "isCurrent": null,
           "suspendedDate": null,
@@ -582,9 +577,63 @@
           "name": "Application Review",
           "stage": "Application Review",
           "order": 2,
-          "startDate": "2005-01-10",
-          "endDate": "2007-03-01",
-          "numberOfDays": null,
+          "startDate": "2002-01-15",
+          "endDate": "2003-04-10",
+          "numberOfDays": 450,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": [
+            {
+              "kind": "suspension",
+              "legalSection": "s.30(1)",
+              "startDate": "2002-06-01",
+              "endDate": "2002-07-01",
+              "days": 30
+            }
+          ],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 30
+        }
+      ]
+    },
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "sheet-7a19d4c2-0e5b-4f83-a6d1-2c8e9b4f7d02",
+      "source": "sheet",
+      "title": "Sample Alpha Transmission Line - Assessment (2002)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "decisionEventDate": null,
+      "startDate": "2003-05-01",
+      "decisionDate": "2014-10-14",
+      "anticipatedDecisionDate": null,
+      "outcome": "Certificate Issued",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "certificateKind": "EAC",
+      "complexityCode": null,
+      "transitionIn": {
+        "fromActYear": 1996,
+        "date": null
+      },
+      "phases": [
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "2013-11-01",
+          "endDate": "2014-10-14",
+          "numberOfDays": 347,
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
@@ -605,41 +654,32 @@
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 1996,
-      "workState": "transitioned",
+      "workState": "completed",
       "isActive": false,
       "decisionEventDate": null,
-      "startDate": null,
-      "decisionDate": null,
+      "startDate": "1997-02-01",
+      "decisionDate": "1999-06-10",
       "anticipatedDecisionDate": null,
-      "outcome": null,
-      "transitionOut": {
-        "toActYear": 2002,
-        "date": null,
-        "dateSource": "none"
-      },
-      "undated": {
-        "startDate": {
-          "notAfter": "2001-03-01"
-        }
-      },
+      "outcome": "Certificate Issued",
+      "transitionOut": null,
+      "undated": null,
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": "PAC",
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Application Review",
           "stage": "Application Review",
           "order": 1,
-          "startDate": null,
-          "endDate": null,
+          "startDate": "1997-02-01",
+          "endDate": "1999-06-10",
           "numberOfDays": null,
-          "isCompleted": false,
+          "isCompleted": true,
           "isSuspended": null,
-          "undated": {
-            "startDate": {
-              "notAfter": "2001-03-01"
-            }
-          },
+          "undated": null,
           "interruptions": [],
           "isCurrent": null,
           "suspendedDate": null,
@@ -669,6 +709,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Application Review",
@@ -717,6 +760,9 @@
       "shownAfterFlip": true,
       "untilTrack": true,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": "typical",
+      "transitionIn": null,
       "phases": [
         {
           "name": "Amendment Review",
@@ -757,6 +803,9 @@
       "shownAfterFlip": true,
       "untilTrack": false,
       "replaces": [],
+      "certificateKind": null,
+      "complexityCode": null,
+      "transitionIn": null,
       "phases": [
         {
           "name": "Pre-Application",

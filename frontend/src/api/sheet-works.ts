@@ -130,6 +130,10 @@ export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   isActive: boolean | null;
   /** Anticipated date of the work's last decision event while it has no actual date; null on a sheet work. */
   decisionEventDate: string | null;
+  /** Sheet works only, like the two below; null on a Track row. Optional so hand-built rows in tests may leave them out. */
+  certificateKind?: 'EAC' | 'PAC' | null;
+  complexityCode?: 'pre-2014' | 'simple' | 'typical' | 'complex' | null;
+  transitionIn?: { fromActYear: number | null; date: string | null } | null;
   phases: WorkplanPhase[];
 }
 

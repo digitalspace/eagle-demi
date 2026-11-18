@@ -40,7 +40,8 @@
 
 .timeline__today:focus-visible,
 .timeline__group-head:focus-visible,
-.timeline__name:focus-visible {
+.timeline__name:focus-visible,
+.timeline__toggle:focus-visible {
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
   outline-offset: 2px;
 }
@@ -79,11 +80,13 @@
 
 /* Scroll box and canvas */
 
+/* A size container, so an open Details panel can be as wide as the visible part (100cqi). */
 .timeline__scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  container-type: inline-size;
 }
 
 .timeline__canvas {
@@ -328,6 +331,35 @@
 .timeline__lane {
   position: relative;
   overflow-x: clip;
+}
+
+.timeline__toggle {
+  margin-left: auto;
+  padding: 0 var(--layout-padding-xsmall);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-small);
+  background: var(--surface-color-secondary-default);
+  font: var(--typography-regular-label);
+  line-height: 16px;
+  color: var(--typography-color-primary);
+}
+
+.timeline__toggle:hover {
+  background: var(--surface-color-secondary-hover);
+}
+
+.timeline__toggle[aria-expanded='true'] {
+  border-color: var(--surface-color-border-active);
+}
+
+/* Pinned to the visible part of the lane, so it opens in view at any scroll position and zoom. */
+.timeline__detail-body {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  width: 100cqi;
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
 }
 
 .timeline__bar {

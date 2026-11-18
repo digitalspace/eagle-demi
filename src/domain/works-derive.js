@@ -185,6 +185,15 @@ function trackPhaseFieldsOf(phase, doc, storedByTrackId) {
   };
 }
 
+/** Sheet facts the public shape leaves out, from the stored work; all null on a Track work. */
+const sheetDocFieldsOf = (doc) => ({
+  certificateKind: doc?.certificateKind ?? null,
+  complexityCode: doc?.complexityCode ?? null,
+  transitionIn: doc?.transitionIn
+    ? { fromActYear: doc.transitionIn.fromActYear ?? null, date: doc.transitionIn.date ?? null }
+    : null
+});
+
 const sheetPhaseFieldsOf = (phase) => ({
   isCurrent: null,
   extensionDays: sheetDaysOf(phase.interruptions, 'extension'),
@@ -200,6 +209,7 @@ function workplanOf(projectId, projectName, work, doc) {
     projectName,
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
+    ...sheetDocFieldsOf(track ? null : doc),
     phases: work.phases.map(phase => ({
       ...pick(phase, PHASE_KEYS),
       ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),

@@ -1,8 +1,11 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
 import { Segmented } from './Segmented';
+import { useFollowDetails } from './use-follow-details';
+import { hasDetails, projectDetailsPath } from './work-notes';
+import { DetailsToggle, WorkDetails } from './WorkDetails';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
@@ -80,65 +83,127 @@ function Axis({ scale }: { scale: Scale }) {
   );
 }
 
-const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: WorkRow; scale: Scale; today: string }) {
+/** The sticky columns: work title with its Details toggle, work type, days in phase. */
+function RowLeft({ row, details }: { row: WorkRow; details?: { id: string; open: boolean; toggle: () => void } }) {
   const type = workTypeOf(row);
+  const title = row.work.title || 'Untitled work';
+  return (
+    <div className="timeline__left">
+      <span className="timeline__work">
+        <Link className="timeline__name" to={projectDetailsPath(row.work.projectId)} title={title}>
+          {title}
+        </Link>
+        {/* WorkPill takes no title; its own text is the tooltip once CSS cuts it short. */}
+        <span
+          className="timeline__flag"
+          ref={(el) => {
+            if (el) el.title = el.textContent ?? '';
+          }}
+        >
+          <WorkPill work={row.work} />
+        </span>
+        {details && (
+          <DetailsToggle
+            className="timeline__toggle"
+            title={title}
+            controls={details.id}
+            open={details.open}
+            onToggle={details.toggle}
+          />
+        )}
+      </span>
+      <abbr className="timeline__type" title={type.name}>
+        {type.code}
+      </abbr>
+      <span className={`timeline__days${row.overdue ? ' timeline__days--over' : ''}`} aria-hidden="true">
+        {daysOf(row)}
+      </span>
+    </div>
+  );
+}
+
+/** Scrolls an open panel into view, never so far that its row goes under the head. */
+function reveal(panel: HTMLElement) {
+  const box = panel.closest<HTMLElement>('.timeline__scroll');
+  const head = box?.querySelector<HTMLElement>('.timeline__head');
+  const row = panel.closest('li')?.previousElementSibling;
+  if (!box || !head || !row) return;
+  const top = box.getBoundingClientRect().top + box.clientTop;
+  const below = panel.getBoundingClientRect().bottom - (top + box.clientHeight);
+  const room = row.getBoundingClientRect().top - top - head.offsetHeight;
+  if (below > 0 && room > 0) box.scrollTop += Math.min(below, room);
+}
+
+const keyOf = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
+
+/** Rows with their details open; `follow` is the one last opened, scrolled along until its details load. */
+interface Opened {
+  open: ReadonlySet<string>;
+  follow: string | null;
+}
+
+interface RowProps {
+  row: WorkRow;
+  scale: Scale;
+  today: string;
+  open: boolean;
+  follow: boolean;
+  toggle: (key: string) => void;
+  unfollow: () => void;
+}
+
+const TimelineRow = memo(function TimelineRow({ row, scale, today, open, follow, toggle, unfollow }: RowProps) {
+  const detailsId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFollowDetails(panelRef, open && follow, reveal, unfollow);
   const spans = spansOf(row, today);
   const tone = toneOf(row);
-  const title = row.work.title || 'Untitled work';
   const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
+  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => toggle(keyOf(row)) } : undefined;
   return (
-    <li className="timeline__row">
-      <div className="timeline__left">
-        <span className="timeline__work">
-          <Link className="timeline__name" to={`/project-details/${encodeURIComponent(row.work.projectId)}`} title={title}>
-            {title}
-          </Link>
-          {/* WorkPill takes no title; its own text is the tooltip once CSS cuts it short. */}
-          <span
-            className="timeline__flag"
-            ref={(el) => {
-              if (el) el.title = el.textContent ?? '';
-            }}
-          >
-            <WorkPill work={row.work} />
-          </span>
-        </span>
-        <abbr className="timeline__type" title={type.name}>
-          {type.code}
-        </abbr>
-        <span className={`timeline__days${row.overdue ? ' timeline__days--over' : ''}`} aria-hidden="true">
-          {daysOf(row)}
-        </span>
-      </div>
-      <div className="timeline__lane" aria-hidden="true">
-        {spans.map((span, i) => {
-          const left = xOf(scale, dayNumber(span.start));
-          const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
-          const current = span.kind === 'current';
-          const label = current && width >= MIN_LABEL_PX && span.name;
-          return (
+    <>
+      <li className="timeline__row">
+        <RowLeft row={row} details={details} />
+        <div className="timeline__lane" aria-hidden="true">
+          {spans.map((span, i) => {
+            const left = xOf(scale, dayNumber(span.start));
+            const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
+            const current = span.kind === 'current';
+            const label = current && width >= MIN_LABEL_PX && span.name;
+            return (
+              <span
+                key={i}
+                className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
+                style={{ left, width }}
+              >
+                {label && <span className="timeline__label">{label}</span>}
+              </span>
+            );
+          })}
+          {!spans.length && <span className="timeline__undated">No dated phases</span>}
+          {row.suspended && (
             <span
-              key={i}
-              className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
-              style={{ left, width }}
+              className="timeline__note"
+              // Slides back left by however much it would run past the lane end.
+              style={{
+                left: tagX,
+                translate: `min(0px, calc(${scale.width - tagX}px - 100%))`,
+              }}
             >
-              {label && <span className="timeline__label">{label}</span>}
+              Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
             </span>
-          );
-        })}
-        {!spans.length && <span className="timeline__undated">No dated phases</span>}
-        {row.suspended && (
-          <span
-            className="timeline__note"
-            // Slides back left by however much it would run past the lane end.
-            style={{ left: tagX, translate: `min(0px, calc(${scale.width - tagX}px - 100%))` }}
-          >
-            Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
-          </span>
-        )}
-      </div>
-      <span className="visually-hidden">{summaryOf(row)}</span>
-    </li>
+          )}
+        </div>
+        <span className="visually-hidden">{summaryOf(row)}</span>
+      </li>
+      {open && (
+        <li className="timeline__detail">
+          <div className="timeline__detail-body" ref={panelRef}>
+            <WorkDetails row={row} id={detailsId} />
+          </div>
+        </li>
+      )}
+    </>
   );
 });
 
@@ -148,12 +213,18 @@ function TimelineGroup({
   onToggle,
   scale,
   today,
+  opened,
+  onDetails,
+  unfollow,
 }: {
   group: Group;
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
   scale: Scale;
   today: string;
+  opened: Opened;
+  onDetails: (key: string) => void;
+  unfollow: () => void;
 }) {
   const count = group.rows.length;
   return (
@@ -172,7 +243,16 @@ function TimelineGroup({
       {open && (
         <ul className="timeline__rows">
           {group.rows.map((row) => (
-            <TimelineRow key={`${row.work.source}-${row.work.workId}`} row={row} scale={scale} today={today} />
+            <TimelineRow
+              key={keyOf(row)}
+              row={row}
+              scale={scale}
+              today={today}
+              open={opened.open.has(keyOf(row))}
+              follow={opened.follow === keyOf(row)}
+              toggle={onDetails}
+              unfollow={unfollow}
+            />
           ))}
         </ul>
       )}
@@ -204,6 +284,18 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const [zoom, setZoom] = useState<Zoom>('quarter');
   const [groupBy, setGroupBy] = useState<GroupBy>('act');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  // Held here, not per row, so open details survive a group folding or a Group by change.
+  const [opened, setOpened] = useState<Opened>({ open: new Set(), follow: null });
+  const toggleDetails = useCallback(
+    (key: string) =>
+      setOpened(({ open, follow }) => {
+        const next = new Set(open);
+        if (!next.delete(key)) next.add(key);
+        return { open: next, follow: next.has(key) ? key : follow === key ? null : follow };
+      }),
+    [],
+  );
+  const unfollow = useCallback(() => setOpened((prev) => (prev.follow === null ? prev : { ...prev, follow: null })), []);
   const scroller = useRef<HTMLDivElement>(null);
   const left = useRef<HTMLDivElement>(null);
   // Set when the next layout should scroll today into view: first render, Today, and every zoom change.
@@ -215,6 +307,11 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const scale = useMemo(() => scaleFor(extent, zoom, today, lanePx), [extent, zoom, today, lanePx]);
   const groups = useMemo(() => groupsOf(rows, groupBy), [rows, groupBy]);
   const suspension = useMemo(() => drawsSuspension(rows, today), [rows, today]);
+  // A followed row hidden before its details load would jump the page when shown again.
+  const { follow } = opened;
+  if (follow && !groups.some((group) => !closed.has(group.key) && group.rows.some((row) => keyOf(row) === follow))) {
+    unfollow();
+  }
 
   // Waits for a measured width, else the first scroll lands on the fallback scale and drifts.
   useLayoutEffect(() => {
@@ -278,6 +375,9 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
                 onToggle={toggle}
                 scale={scale}
                 today={today}
+                opened={opened}
+                onDetails={toggleDetails}
+                unfollow={unfollow}
               />
             ))}
           </div>

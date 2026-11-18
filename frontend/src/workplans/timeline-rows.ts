@@ -1,6 +1,7 @@
 import { dayMonthYear } from '../dates';
 import { STATUS_LABEL, type WorkRow } from './derive';
 import { dayNumber } from './timeline-scale';
+import { closedNoteOf } from './work-notes';
 
 export type GroupBy = 'act' | 'type' | 'region';
 
@@ -85,8 +86,15 @@ export function daysOf(row: WorkRow): string {
 const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;
 const STATE_TEXT = { past: 'Done', current: 'Current', incomplete: 'Not completed', upcoming: 'Planned' } as const;
 
+/** "Closed. Certificate Issued (PAC), decision 3 Aug 2006." with whichever of the two is known. */
+function closedText(row: WorkRow): string {
+  const decided = dayMonthYear(row.work.decisionDate);
+  const detail = [closedNoteOf(row.work), decided && `decision ${decided}`].filter(Boolean).join(', ');
+  return detail ? `Closed. ${detail}.` : 'Closed.';
+}
+
 function progressText(row: WorkRow): string {
-  if (row.closed) return 'Closed.';
+  if (row.closed) return closedText(row);
   const status = unmeasuredStatus(row);
   if (status) return `${status}.`;
   if (row.notStarted) return 'Not started.';

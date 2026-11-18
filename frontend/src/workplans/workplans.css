@@ -152,3 +152,57 @@
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
   outline-offset: 2px;
 }
+
+/* Details toggle in List and Timeline; each view's stylesheet gives it its look. */
+.wp-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  box-sizing: border-box;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.wp-toggle__chevron {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  transition: transform 0.15s;
+}
+
+.wp-toggle[aria-expanded='true'] .wp-toggle__chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wp-toggle__chevron {
+    transition: none;
+  }
+}
+
+/* Details panel under a sheet work in List and Timeline; the host row or cell sets its width. */
+.wp-details {
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  background: var(--surface-color-background-light-gray);
+  border-left: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  text-align: left;
+  white-space: normal;
+}
+
+.wp-details__facts {
+  margin: 0 0 var(--layout-margin-xsmall);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-details__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+  padding: var(--layout-padding-small) 0;
+}
+
+.wp-details__note {
+  margin: 0;
+}

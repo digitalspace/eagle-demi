@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { useSheetWorks, type SheetMilestone, type SheetPhase, type SheetWork, type Undated } from '../api/sheet-works';
 import { dayMonthYear } from '../dates';
 import { phasesInOrder } from '../workplans/derive';
+import { movedText } from '../workplans/work-notes';
 
 // An Act with more works than this starts folded; each work lists all its phases and milestones.
 const OPEN_UP_TO = 5;
@@ -104,10 +105,13 @@ function MilestoneRow({ milestone }: { milestone: SheetMilestone }) {
   );
 }
 
-function WorkRow({ work }: { work: SheetWork }) {
+/**
+ * One sheet work as a `ps-list` row: dates, outcome, phases and milestones. Callers wrap it in a `ul.ps-list`.
+ * `heading={false}` leaves out the title and pill, for a caller that already shows them.
+ */
+export function SheetWorkRow({ work, heading = true }: { work: SheetWork; heading?: boolean }) {
   const expected = !work.decisionDate && work.anticipatedDecisionDate;
   const toAct = work.transitionOut?.toActYear;
-  const movedOn = work.transitionOut?.date;
   const lines = [
     joined([
       work.workType,
@@ -115,7 +119,7 @@ function WorkRow({ work }: { work: SheetWork }) {
       dated('Decision', work.decisionDate, work.undated, 'decisionDate'),
       expected && `Decision expected ${dayMonthYear(work.anticipatedDecisionDate)}`,
     ]),
-    joined([work.outcome, !!toAct && `Moved to the ${toAct} Act${movedOn ? ` on ${dayMonthYear(movedOn)}` : ''}`]),
+    joined([work.outcome, !!toAct && movedText('to', toAct, work.transitionOut?.date)]),
   ].filter(Boolean);
   const phases = phasesInOrder(work.phases);
   const listId = useId();
@@ -123,9 +127,11 @@ function WorkRow({ work }: { work: SheetWork }) {
     <li className="ps-list__row">
       <DateCell value={work.startDate} />
       <div>
-        <span className="ps-list__title">
-          {work.title || 'Untitled work'} <WorkPill work={work} />
-        </span>
+        {heading && (
+          <span className="ps-list__title">
+            {work.title || 'Untitled work'} <WorkPill work={work} />
+          </span>
+        )}
         {lines.map((line, i) => (
           <span key={i} className="ps-list__text">
             {line}
@@ -170,7 +176,7 @@ function ActGroup({ actYear, works }: { actYear: number | null; works: SheetWork
       </summary>
       <ul className="ps-list">
         {works.map((work) => (
-          <WorkRow key={work.workId} work={work} />
+          <SheetWorkRow key={work.workId} work={work} />
         ))}
       </ul>
     </details>

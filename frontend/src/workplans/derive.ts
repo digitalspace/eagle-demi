@@ -43,7 +43,7 @@ export interface WorkRow {
   current: WorkplanPhase | null;
   /** Current phase start to today, or to `suspendedSince`; null when the start is not known. */
   daysInPhase: number | null;
-  /** Current phase `endDate` minus its start; null with no end. */
+  /** Current phase `endDate` minus its start; null with no end or an end before the start. */
   plannedDays: number | null;
   /** Not capped: above 100 once past the end. */
   percentUsed: number | null;
@@ -156,11 +156,15 @@ export function toneOf(row: WorkRow): string {
 }
 
 const OPEN_TRACK_STATES = new Set(['IN_PROGRESS', 'SUSPENDED']);
+const ENDED_TRACK_STATES = new Set(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED']);
 
 /** Inactive: a Track work switched off while still in progress, kept apart from closed works. */
 function closureOf(work: WorkplanRow, today: string) {
   const decided = dayOf(work.decisionDate);
-  const ended = (decided !== null && decided <= today) || Boolean(work.transitionOut);
+  const ended =
+    (decided !== null && decided <= today) ||
+    Boolean(work.transitionOut) ||
+    ENDED_TRACK_STATES.has(work.workState ?? '');
   const inactive = !ended && work.isActive === false && OPEN_TRACK_STATES.has(work.workState ?? '');
   return { closed: !inactive && (ended || work.isActive === false), inactive };
 }
@@ -169,6 +173,15 @@ const hasStarted = (phase: WorkplanPhase, today: string) => {
   const start = startBound(phase.startDate, phase.undated);
   return start !== null && start <= today;
 };
+
+const endsBeforeStart = (phase: WorkplanPhase) => {
+  const start = dayOf(phase.startDate);
+  const end = dayOf(phase.endDate);
+  return start !== null && end !== null && end < start;
+};
+
+/** The end day, or null when it falls before the start. */
+const endOf = (phase: WorkplanPhase) => (endsBeforeStart(phase) ? null : dayOf(phase.endDate));
 
 /** Track's flag on the current phase (from `suspendedDate`), or a `suspension` interruption on it covering today. */
 function suspensionOf(current: WorkplanPhase | null, today: string) {
@@ -186,7 +199,7 @@ function suspensionOf(current: WorkplanPhase | null, today: string) {
 /** Planned days, percent and overdue all measure against the current phase `endDate`; a suspension stops the day count. */
 function progressOf(current: WorkplanPhase | null, today: string, suspendedSince: string | null) {
   const start = dayOf(current?.startDate);
-  const end = dayOf(current?.endDate);
+  const end = current ? endOf(current) : null;
   const daysInPhase = start ? daysBetween(start, suspendedSince ?? today) : null;
   const plannedDays = start && end ? daysBetween(start, end) : null;
   const overdue = end !== null && end < today && suspendedSince === null;
@@ -206,9 +219,8 @@ function progressOf(current: WorkplanPhase | null, today: string, suspendedSince
 }
 
 /** A sheet work with a current phase that has no end date, and no decision date. */
-const hasNoEnd = (work: WorkplanRow, current: WorkplanPhase | null) =>
+const hasNoEnd = (work: WorkplanRow, current: WorkplanPhase) =>
   work.source === 'sheet' &&
-  current !== null &&
   !work.decisionDate &&
   !current.endDate &&
   !current.undated?.['endDate']?.notAfter;
@@ -251,11 +263,11 @@ function stateOf(phase: WorkplanPhase, current: WorkplanPhase | null, today: str
   return hasStarted(phase, today) ? 'incomplete' : 'upcoming';
 }
 
-/** Dated phases on one strip, each sized by its share of the work's span; the open current phase runs to today. */
+/** Dated phases on one strip, each sized by its share of the work's span; the current phase with no valid end runs to today. */
 function lifecycleOf(phases: WorkplanPhase[], current: WorkplanPhase | null, overrunEnd: string | null, today: string) {
   const dated = phases.flatMap((phase) => {
     const start = dayOf(phase.startDate);
-    const end = dayOf(phase.endDate) ?? (phase === current ? today : null);
+    const end = endOf(phase) ?? (phase === current ? today : null);
     return start && end ? [{ phase, start, end }] : [];
   });
   if (!dated.length) return { segments: [], todayAt: null };
@@ -296,7 +308,7 @@ function rowOf(work: WorkplanRow, project: Project | undefined, today: string): 
   const starts = [startBound(work.startDate, work.undated), ...phases.map((p) => startBound(p.startDate, p.undated))];
   const nothingBegun = !closed && starts.every((start) => start === null || start > today);
   const notStarted = nothingBegun || (!closed && current === null && marked !== undefined);
-  const unknown = !closed && hasNoEnd(work, current);
+  const unknown = !closed && current !== null && (hasNoEnd(work, current) || endsBeforeStart(current));
   const suspension = suspensionOf(current, today);
   const measured = progressOf(current, today, suspension.suspendedSince);
   const progress = inactive ? { ...measured, bar: null, overdue: false, daysOver: 0, overrun: null } : measured;

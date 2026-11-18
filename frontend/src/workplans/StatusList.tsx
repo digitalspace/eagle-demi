@@ -1,14 +1,18 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
+import { DetailsToggle, WorkDetails } from './WorkDetails';
+import { useFollowDetails } from './use-follow-details';
+import { closedNoteOf, hasDetails, projectDetailsPath } from './work-notes';
 import './workplans.css';
 import './status-list.css';
 
 const TILES: WorkStatus[] = ['overdue', 'next-30', 'on-track', 'not-started', 'closed'];
 const PAGE = 200;
+const COLUMNS = 6;
 const count = (n: number) => n.toLocaleString('en-CA');
 
 /** "1 Mar 2026" to "Mar 2026". */
@@ -24,29 +28,63 @@ function Blank({ says }: { says: string }) {
   );
 }
 
-function WorkCell({ row }: { row: WorkRow }) {
+const rowKey = (row: WorkRow) => `${row.work.source}:${row.work.workId}`;
+const detailsId = (row: WorkRow) => `sl-details-${row.work.workId}`;
+/** Scrolls the pane into view below the sticky head and the row that opened it. */
+function reveal(pane: HTMLElement) {
+  const head = pane.closest('table')?.tHead?.offsetHeight ?? 0;
+  const row = pane.closest('tr')?.previousElementSibling as HTMLElement | null;
+  pane.style.scrollMarginTop = `${head + (row?.offsetHeight ?? 0)}px`;
+  pane.scrollIntoView({ block: 'nearest' });
+}
+
+interface Toggle {
+  open: boolean;
+  onToggle: () => void;
+}
+
+function WorkCell({ row, details }: { row: WorkRow; details: Toggle | null }) {
   const { work } = row;
   const kind = [work.workType ?? work.workTypeCode, work.actYear ? `${work.actYear} Act` : null].filter(Boolean);
+  const title = work.title || 'Untitled work';
   return (
     <td className="sl-cell--clip">
-      <Link className="sl-work" to={`/project-details/${encodeURIComponent(work.projectId)}`} title={work.title ?? undefined}>
-        {work.title || 'Untitled work'}
+      <Link className="sl-work" to={projectDetailsPath(work.projectId)} title={work.title ?? undefined}>
+        {title}
       </Link>
       {kind.length > 0 && <span className="sl-sub">{kind.join(' · ')}</span>}
       <WorkPill work={work} />
+      {details && (
+        <DetailsToggle className="sl-toggle" title={title} controls={detailsId(row)} open={details.open} onToggle={details.onToggle} />
+      )}
     </td>
+  );
+}
+
+function DetailRow({ row, follow, onFollowed }: { row: WorkRow; follow: boolean; onFollowed: () => void }) {
+  const pane = useRef<HTMLDivElement>(null);
+  useFollowDetails(pane, follow, reveal, onFollowed);
+  return (
+    <tr className="sl-detail">
+      <td colSpan={COLUMNS}>
+        <div className="sl-detail__pane" ref={pane}>
+          <WorkDetails row={row} id={detailsId(row)} />
+        </div>
+      </td>
+    </tr>
   );
 }
 
 function PhaseCell({ row }: { row: WorkRow }) {
   if (row.closed) {
+    const closedNote = closedNoteOf(row.work);
     return (
       <td className="sl-cell--clip">
         <span className="sl-phase">
           <span className="sl-swatch sl-swatch--closed" aria-hidden="true" />
           Closed
         </span>
-        {row.work.outcome && <span className="sl-sub">{row.work.outcome}</span>}
+        {closedNote && <span className="sl-sub">{closedNote}</span>}
       </td>
     );
   }
@@ -219,7 +257,7 @@ const EMPTY: Record<WorkStatus | 'open', string> = {
   'next-30': 'No work has a milestone in the next 30 days.',
   'on-track': 'No work is on track with a later milestone.',
   'not-started': 'Every open work has started.',
-  unknown: 'Every open work has a planned end.',
+  unknown: 'Every open work has a planned end after its start.',
   inactive: 'No inactive works.',
   closed: 'No closed works.',
 };
@@ -255,6 +293,10 @@ function Tiles({
 export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string }) {
   const [pressed, setPressed] = useState<WorkStatus | null>(null);
   const [limit, setLimit] = useState(PAGE);
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  // The row last opened by its toggle; only its panel scrolls into view, and only until its details load.
+  const [follow, setFollow] = useState<string | null>(null);
+  const unfollow = useCallback(() => setFollow(null), []);
   const counts = useMemo(() => {
     const tally = Object.fromEntries(Object.keys(STATUS_LABEL).map((status) => [status, 0])) as Record<WorkStatus, number>;
     for (const row of rows) tally[row.status] += 1;
@@ -269,6 +311,15 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   );
   const visible = shown.slice(0, limit);
   const more = Math.min(PAGE, shown.length - visible.length);
+  // A followed row hidden before its details load would jump the page when shown again.
+  if (follow && !visible.some((row) => rowKey(row) === follow)) setFollow(null);
+
+  const toggle = (key: string) => {
+    const next = new Set(open);
+    if (!next.delete(key)) next.add(key);
+    setOpen(next);
+    setFollow(next.has(key) ? key : follow === key ? null : follow);
+  };
 
   const press = (status: WorkStatus) => {
     setPressed((current) => (current === status ? null : status));
@@ -294,19 +345,26 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
             </tr>
           </thead>
           <tbody>
-            {visible.map((row) => (
-              <tr key={`${row.work.source}:${row.work.workId}`}>
-                <WorkCell row={row} />
-                <PhaseCell row={row} />
-                <DaysCell row={row} />
-                <NextCell row={row} />
-                <LifecycleCell row={row} />
-                <DecisionCell row={row} />
-              </tr>
-            ))}
+            {visible.map((row) => {
+              const key = rowKey(row);
+              const isOpen = open.has(key);
+              return (
+                <Fragment key={key}>
+                  <tr>
+                    <WorkCell row={row} details={hasDetails(row) ? { open: isOpen, onToggle: () => toggle(key) } : null} />
+                    <PhaseCell row={row} />
+                    <DaysCell row={row} />
+                    <NextCell row={row} />
+                    <LifecycleCell row={row} />
+                    <DecisionCell row={row} />
+                  </tr>
+                  {isOpen && <DetailRow row={row} follow={follow === key} onFollowed={unfollow} />}
+                </Fragment>
+              );
+            })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="sl-empty">
+                <td colSpan={COLUMNS} className="sl-empty">
                   {rows.length === 0 ? 'No works match these filters.' : EMPTY[pressed ?? 'open']}
                 </td>
               </tr>

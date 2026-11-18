@@ -40,7 +40,8 @@
 }
 
 .sl .sl-tile:focus-visible,
-.sl .sl-more:focus-visible {
+.sl .sl-more:focus-visible,
+.sl .sl-toggle:focus-visible {
   outline: var(--layout-border-width-medium) solid var(--surface-color-primary-default);
   outline-offset: 2px;
 }
@@ -64,6 +65,7 @@
    visually-hidden text stays inside it rather than stretching .app__main. */
 .sl .sl-region {
   position: relative;
+  container-type: inline-size;
   flex: 0 1 auto;
   min-height: 0;
   margin-bottom: 0;
@@ -107,8 +109,22 @@
   background: var(--surface-color-background-white);
 }
 
-.sl .sl-table tbody tr:hover td {
+.sl .sl-table tbody tr:not(.sl-detail):hover td {
   background: var(--surface-color-background-light-blue);
+}
+
+/* The detail cell spans the whole table; its panel sticks to the visible part when the table scrolls sideways. */
+.sl .sl-table .sl-detail > td {
+  position: static;
+  padding: 0 0 var(--layout-padding-small);
+  box-shadow: none;
+}
+
+.sl .sl-detail__pane {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  max-width: 100cqi;
 }
 
 .sl .sl-col--work { width: 28%; }
@@ -157,6 +173,7 @@
 }
 
 .sl .sl-cell--clip .pill {
+  box-sizing: border-box;
   max-width: 100%;
   margin-top: var(--layout-margin-xsmall);
   overflow: hidden;
@@ -343,4 +360,14 @@
   color: var(--typography-color-link);
   text-decoration: underline;
   cursor: pointer;
+}
+
+.sl .sl-toggle {
+  margin-top: var(--layout-margin-xsmall);
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: var(--typography-bold-label);
+  color: var(--typography-color-link);
+  text-decoration: underline;
 }

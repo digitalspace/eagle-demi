@@ -7,7 +7,7 @@ import { json } from '../test-http';
 import { withQueryClient } from '../test-query';
 import { Workplans } from './Workplans';
 
-const HIDDEN_TRACK_COPY = 'Sample Alpha Transmission Line - Assessment (Track copy)';
+const HIDDEN_TRACK_WORK = 'Sample Alpha Transmission Line - Substation Assessment';
 
 /** `/workplans` answers with `workplans`; the project list and anything else read as empty. */
 function renderAt(path: string, workplans: () => Response = () => json(FIXTURE)) {
@@ -38,10 +38,10 @@ describe('Workplans', () => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
-    expect(screen.queryByRole('link', { name: HIDDEN_TRACK_COPY })).toBeNull();
+    expect(screen.queryByRole('link', { name: HIDDEN_TRACK_WORK })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Show replaced and hidden' }));
-    expect(screen.getByRole('link', { name: HIDDEN_TRACK_COPY })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: HIDDEN_TRACK_WORK })).toBeInTheDocument();
   });
 
   it('narrows the works to one Act when its chip is pressed', async () => {
