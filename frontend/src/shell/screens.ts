@@ -22,6 +22,7 @@ export const SCREENS: Screen[] = [
   // The picker; /projects/:id under it is the same screen, so both share this key and info panel.
   { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects', ownsLoadError: true },
   { key: 'project-details', label: 'Project details', group: 'Discover', path: '/project-details', ownsLoadError: true },
+  { key: 'workplans', label: 'Workplans', group: 'Discover', path: '/workplans' },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },
@@ -66,6 +67,11 @@ export const TECH: Record<string, Tech> = {
     title: 'Project details',
     chips: ['DEMI GET /projects/:id', 'NRPTI public search API (live)', 'read in the browser, nothing stored'],
     note: 'One page per project with extra data beside the summary, one section per source. The project search is the same list AI Project Summary uses. NRPTI mines and compliance records are read live from the public NRPTI API by the project’s Eagle id; records that came from EPIC are left out, since EPIC already publishes them.'
+  },
+  workplans: {
+    title: 'Workplans',
+    chips: ['DEMI GET /workplans', 'Cosmos DB — works', 'Track works + 1996 and 2002 sheet works', 'staff only, dev and test only', 'read only'],
+    note: 'One read returns every live work, from Track and from the business spreadsheets, for the projects the caller may read at staff level. The route is registered on dev and test only, so anywhere else the page shows a note in place of the timeline. The screen writes nothing; filters and the timeline or list view are worked out in the browser.'
   },
   notify: {
     title: 'eagle-notify',
