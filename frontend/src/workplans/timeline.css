@@ -426,7 +426,11 @@
 
 /* Overdue at 135 degrees, suspended at 45, so the two read apart without colour. */
 .timeline__bar--overrun {
-  background: repeating-linear-gradient(135deg, var(--wp-overdue-bar) 0 1px, var(--support-surface-color-danger) 1px 5px);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--wp-overdue-bar) 0 1px,
+    var(--support-surface-color-danger) 1px 5px
+  );
   border-color: var(--wp-overdue-bar);
 }
 

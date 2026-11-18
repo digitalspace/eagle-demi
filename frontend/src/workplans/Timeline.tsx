@@ -314,9 +314,7 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
             {/* First in the canvas, so bar labels and the suspended tag, on the same layer, paint over it. */}
             <span
               className="timeline__today-line"
-              style={{
-                left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)`,
-              }}
+              style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
               aria-hidden="true"
             />
             <div className="timeline__head" aria-hidden="true">
