@@ -38,6 +38,8 @@ const unchanged = (status, doc) => ({ status, doc });
 function applyWork(doc, { pushedAt, work }, { projectId = null } = {}) {
   if (isStale(doc, 'work', pushedAt)) return unchanged(STATUS.STALE, doc);
   const fields = { ...docWorkFieldsOf(work, doc ? doc.projectId : projectId), ...TRACK_OWNED };
+  // Track's push body may omit the key; only the nightly's read always carries it.
+  if (doc && !Object.hasOwn(work, 'current_work_phase_id')) fields.currentWorkPhaseId = doc.currentWorkPhaseId ?? null;
   const stamps = { ...stampsOf(doc), work: Number(pushedAt) };
   return { status: STATUS.APPLIED,
     doc: settledDoc(fields, isLive(doc) ? doc.phases : [], stamps, doc ? doc.updatedAt ?? null : null) };
