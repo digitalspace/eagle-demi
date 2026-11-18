@@ -530,7 +530,7 @@
   box-sizing: border-box;
   border-right: 1px solid var(--theme-gray-10);
   border-radius: 1px 1px 0 0;
-  background: #9fb6d9;
+  background: var(--wp-muted-blue);
   background-clip: padding-box;
 }
 

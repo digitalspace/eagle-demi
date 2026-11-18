@@ -14,6 +14,7 @@
   --wp-overdue-bar: #c74a50;
   --wp-near-limit: #c58f00;
   --wp-today: var(--surface-color-border-active);
+  --wp-muted-blue: #9fb6d9;
 }
 
 /* Page shell: fills the shell's main column, so only the view's own region scrolls. */
@@ -54,6 +55,13 @@
   min-height: 30px;
   padding: 0 var(--layout-padding-medium);
   font: var(--typography-bold-small-body);
+}
+
+/* Four tabs fit a 390px screen only with the narrow padding. */
+@media (max-width: 40rem) {
+  .wp-header .wp-segmented__option {
+    padding: 0 var(--layout-padding-small);
+  }
 }
 
 .wp-page > .screen-header,
@@ -178,6 +186,12 @@
   color: var(--theme-gray-80);
 }
 
+@media (max-width: 40rem) {
+  .wp-search {
+    flex-basis: 100%;
+  }
+}
+
 .wp-search:focus-within {
   border-color: var(--surface-color-border-active);
 }
@@ -260,7 +274,7 @@
 
 .wp-filters__count {
   margin-left: auto;
-  font: var(--typography-regular-small-body);
+  font: var(--typography-regular-label);
   color: var(--theme-gray-80);
 }
 

@@ -201,6 +201,8 @@ describe('rowsOf', () => {
     expect(review.share).toBeCloseTo(261 / 379);
     expect(effects.offset).toBeCloseTo(320 / 379);
     expect(row.todayAt).toBeCloseTo(320 / 379);
+    // The 47-day overrun pushes the strip's end past Effects Assessment's planned end.
+    expect(row.stripEnd).toBe('2027-04-17');
   });
 
   it('puts today at the start of the next phase when no phase is under way', () => {

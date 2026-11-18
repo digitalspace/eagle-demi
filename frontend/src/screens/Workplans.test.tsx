@@ -106,6 +106,15 @@ describe('Workplans', () => {
     expect(await screen.findByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
   });
 
+  it('gives the Lookahead its Window and Milestone type in the shared bar, with no Work state', async () => {
+    renderAt('/workplans?view=lookahead');
+
+    expect(await screen.findByRole('group', { name: 'Window' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Milestone type' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search works' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Work state' })).toBeNull();
+  });
+
   it.each([
     ['List', () => screen.getByRole('link', { name: OPEN_WORK })],
     ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: OPEN_WORK })],

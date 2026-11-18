@@ -37,11 +37,12 @@ const NO_FILTERS: WorkFilters = {
 };
 
 /** Which filters each view applies. */
-const VIEW_FILTERS: Record<View, { states: readonly WorkState[]; status: boolean; phase: boolean }> = {
-  timeline: { states: ['open', 'inactive', 'closed'], status: true, phase: false },
-  list: { states: ['open', 'inactive', 'closed'], status: false, phase: true },
-  pipeline: { states: ['open', 'inactive'], status: false, phase: false },
-  lookahead: { states: [], status: false, phase: false },
+const VIEW_FILTERS: Record<View, { states: readonly WorkState[]; status: boolean; phase: boolean; placeholder: boolean }> = {
+  timeline: { states: ['open', 'inactive', 'closed'], status: true, phase: false, placeholder: true },
+  list: { states: ['open', 'inactive', 'closed'], status: false, phase: true, placeholder: true },
+  pipeline: { states: ['open', 'inactive'], status: false, phase: false, placeholder: true },
+  // The Window toggle and Milestone type take the room "+ Filter" would need to stay on one row.
+  lookahead: { states: [], status: false, phase: false, placeholder: false },
 };
 
 const viewOf = (param: string | null): View => VIEWS.find((view) => view.value === param)?.value ?? 'timeline';
@@ -145,18 +146,18 @@ export function Workplans() {
   else if (workplans.isError) body = <LoadFailure error={workplans.error} />;
   else {
     const ViewBody = VIEW_BODY[view];
-    const { states, status, phase } = VIEW_FILTERS[view];
+    const { states, status, phase, placeholder } = VIEW_FILTERS[view];
     const bar: BarSlot = (slots) => (
       <Filters
+        {...slots}
         rows={rows}
         value={appliedFilters(filters, view)}
         onChange={(change) => setFilters((current) => ({ ...current, ...change }))}
         states={states}
         withStatus={status}
         withPhase={phase}
+        withPlaceholder={placeholder}
         count={shown.length}
-        lead={slots?.lead}
-        summary={slots?.summary}
       />
     );
     body = <ViewBody rows={shown} today={today} bar={bar} />;

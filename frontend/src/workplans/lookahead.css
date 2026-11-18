@@ -1,12 +1,17 @@
 /* Lookahead view: fills the page's data area; the agenda and the side panels scroll inside themselves. */
 .la {
-  /* About 2:1 on white; each week button's name carries the counts the bars show. */
-  --la-bar: #9fb6d9;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   gap: var(--layout-margin-medium);
+}
+
+/* A narrower search keeps the Window toggle, the chips and the summary on one row. */
+@media (min-width: 40rem) {
+  .la .wp-search {
+    flex-basis: 12rem;
+  }
 }
 
 .la .la-body {
@@ -84,7 +89,8 @@
   padding: 0;
   border: none;
   border-radius: 3px 3px 0 0;
-  background: var(--la-bar);
+  /* About 2:1 on white; each week button's name carries the counts the bars show. */
+  background: var(--wp-muted-blue);
 }
 
 .la .la-hist__bar--current {

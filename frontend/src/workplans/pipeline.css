@@ -108,7 +108,7 @@
 }
 
 .pl .pl-card:hover {
-  border-color: #9fb6d9;
+  border-color: var(--wp-muted-blue);
 }
 
 .pl .pl-card > * {

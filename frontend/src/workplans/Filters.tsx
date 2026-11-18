@@ -19,8 +19,15 @@ export interface WorkFilters {
   showHidden: boolean;
 }
 
-/** The filter bar, rendered by each view. `lead` goes first in the row; `summary` replaces the "N works" count. */
-export type BarSlot = (slots?: { lead?: ReactNode; summary?: ReactNode }) => ReactNode;
+/** The view's own controls in the filter bar. `lead` goes first in the row, `chips` after Work type; `summary` replaces the "N works" count. */
+export interface BarSlots {
+  lead?: ReactNode;
+  chips?: ReactNode;
+  summary?: ReactNode;
+}
+
+/** The filter bar, rendered by each view. */
+export type BarSlot = (slots?: BarSlots) => ReactNode;
 
 /** Props of each view: `rows` arrive already narrowed by the bar. */
 export interface ViewProps {
@@ -72,10 +79,12 @@ export function Filters({
   states,
   withStatus,
   withPhase,
+  withPlaceholder,
   count,
   lead,
+  chips,
   summary,
-}: {
+}: BarSlots & {
   rows: WorkRow[];
   value: WorkFilters;
   onChange: (change: Partial<WorkFilters>) => void;
@@ -83,9 +92,9 @@ export function Filters({
   states: readonly WorkState[];
   withStatus: boolean;
   withPhase: boolean;
+  /** The disabled "+ Filter" stand-in for filters not built yet. */
+  withPlaceholder: boolean;
   count: number;
-  lead?: ReactNode;
-  summary?: ReactNode;
 }) {
   const { types, phases } = useOptions(rows);
   return (
@@ -122,6 +131,7 @@ export function Filters({
         clearable
       />
       <ChipSelect label="Work type" options={types} value={value.type} onChange={(type) => onChange({ type })} clearable />
+      {chips}
       {withStatus && (
         <ChipSelect
           label="Status"
@@ -137,9 +147,11 @@ export function Filters({
       <Chip pressed={value.showHidden} onClick={() => onChange({ showHidden: !value.showHidden })}>
         Show replaced and hidden
       </Chip>
-      <button type="button" className="wp-chip wp-chip--placeholder" disabled title="Not available yet">
-        + Filter
-      </button>
+      {withPlaceholder && (
+        <button type="button" className="wp-chip wp-chip--placeholder" disabled title="Not available yet">
+          + Filter
+        </button>
+      )}
       <span className="wp-filters__count" aria-live="polite">
         {summary ?? plural(count, 'work')}
       </span>

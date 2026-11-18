@@ -20,7 +20,8 @@ export function ChipSelect<T extends string | number>({
   const chosen = options.find((option) => option.value === value);
   const pick = (raw: string) => onChange(options.find((option) => String(option.value) === raw)?.value ?? null);
   return (
-    <span className={`wp-chip-select${chosen ? ' wp-chip-select--set' : ''}`}>
+    // Only a filter that can be cleared shows as set; a setting like Sort always has a value.
+    <span className={`wp-chip-select${clearable && chosen ? ' wp-chip-select--set' : ''}`}>
       <span className="wp-chip-select__text" aria-hidden="true">
         {chosen ? `${label}: ${chosen.label}` : label}
       </span>

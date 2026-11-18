@@ -201,17 +201,13 @@ export function LookaheadView({ rows, today, bar }: ViewProps) {
     empty = `No milestones in ${phrase}.${span === '6m' ? '' : ' Choose a longer window to look further ahead.'}`;
   }
 
-  const lead = (
-    <>
-      <Segmented label="Window" options={WINDOWS} value={span} onChange={setSpan} />
-      <ChipSelect label="Milestone type" options={MILESTONE_KINDS} value={kind} onChange={setKind} clearable />
-    </>
-  );
+  const lead = <Segmented label="Window" labelHidden options={WINDOWS} value={span} onChange={setSpan} />;
+  const chips = <ChipSelect label="Milestone type" options={MILESTONE_KINDS} value={kind} onChange={setKind} clearable />;
   const summary = `${milestones.length ? `${plural(milestones.length, 'milestone')} across ${plural(works, 'work')}` : 'No milestones'} · ${range}`;
 
   return (
     <div className="la">
-      {bar?.({ lead, summary })}
+      {bar?.({ lead, chips, summary })}
       <div className="la-body">
         <section className="panel la-main" aria-label="Upcoming milestones">
           {!empty && <Histogram weeks={weeks} idOf={idOf} />}

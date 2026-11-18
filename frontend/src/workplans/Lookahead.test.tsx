@@ -14,6 +14,7 @@ const WORKS = FIXTURE.works as WorkplanRow[];
 const bar: BarSlot = (slots) => (
   <div>
     {slots?.lead}
+    {slots?.chips}
     <output>{slots?.summary}</output>
   </div>
 );

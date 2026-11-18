@@ -70,6 +70,8 @@ export interface WorkRow {
   segments: Segment[];
   /** Today's place on the strip, 0..1, inside the current phase when there is one; null with no segments. */
   todayAt: number | null;
+  /** Where the strip's last phase ends once an overdue phase has pushed it; null with no segments. */
+  stripEnd: string | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -79,6 +81,7 @@ const SOON_DAYS = 30;
 /** The calendar day of a date-only or ISO timestamp string. */
 const dayOf = (iso: string | null | undefined): string | null => (iso ? iso.slice(0, 10) : null);
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
+const plusDays = (day: string, days: number) => new Date(Date.parse(day) + days * DAY_MS).toISOString().slice(0, 10);
 
 /** The start, or the latest day an undated start can be. */
 const startBound = (startDate: string | null, undated: Undated): string | null =>
@@ -219,14 +222,18 @@ const hasNoEnd = (work: WorkplanRow, current: WorkplanPhase) =>
   !current.endDate &&
   !current.undated?.['endDate']?.notAfter;
 
-/** Falls back to the start of the last open phase named "... Decision" in the Decision column, so not Readiness Decision. */
+/** An open phase named "... Decision" in the Decision column, so not Readiness Decision. */
+export const isDecisionPhase = (phase: WorkplanPhase) =>
+  !phase.isCompleted && fold(phase.name).endsWith('decision') && columnOf(phase) === 'Decision';
+
+/** Falls back to the start of the last decision phase. */
 function decisionOf(work: WorkplanRow, phases: WorkplanPhase[], closed: boolean): string | null {
   if (closed) return dayOf(work.decisionDate ?? work.anticipatedDecisionDate);
-  const decisions = phases.filter(
-    (phase) => !phase.isCompleted && fold(phase.name).endsWith('decision') && columnOf(phase) === 'Decision',
-  );
   return dayOf(
-    work.decisionDate ?? work.anticipatedDecisionDate ?? work.decisionEventDate ?? decisions.at(-1)?.startDate,
+    work.decisionDate ??
+      work.anticipatedDecisionDate ??
+      work.decisionEventDate ??
+      phases.filter(isDecisionPhase).at(-1)?.startDate,
   );
 }
 
@@ -278,7 +285,7 @@ function lifecycleOf(phases: WorkplanPhase[], current: WorkplanPhase | null, ove
     const until = phase === current && overrunEnd && end && overrunEnd > end ? overrunEnd : end;
     return start && end && until ? [{ phase, start, end, days: Math.max(1, daysBetween(start, until)) }] : [];
   });
-  if (!dated.length) return { segments: [], todayAt: null };
+  if (!dated.length) return { segments: [], todayAt: null, stripEnd: null };
   const total = dated.reduce((sum, d) => sum + d.days, 0);
   let offset = 0;
   const segments: Segment[] = dated.map(({ phase, start, end, days }) => {
@@ -287,7 +294,11 @@ function lifecycleOf(phases: WorkplanPhase[], current: WorkplanPhase | null, ove
     return segment;
   });
   const now = segments.find((segment) => segment.state === 'current');
-  return { segments, todayAt: todayOn(segments, now, today, total) };
+  const pushed = overrunEnd && now && overrunEnd > now.end ? daysBetween(now.end, overrunEnd) : 0;
+  const ends = segments.map((segment) =>
+    now && segment.offset >= now.offset ? plusDays(segment.end, pushed) : segment.end,
+  );
+  return { segments, todayAt: todayOn(segments, now, today, total), stripEnd: ends.reduce((a, b) => (b > a ? b : a)) };
 }
 
 /** A work waiting on its marked phase stays in that phase's column; only a work with nothing begun is in Intake. */

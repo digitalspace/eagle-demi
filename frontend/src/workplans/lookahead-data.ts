@@ -1,5 +1,4 @@
-import type { WorkplanPhase } from '../api/sheet-works';
-import { columnOf, type WorkRow } from './derive';
+import { isDecisionPhase, type WorkRow } from './derive';
 import { phaseToneOf, type PhaseTone } from './phase-tone';
 import { dayNumber } from './timeline-scale';
 
@@ -64,16 +63,6 @@ export function windowEnd(today: string, window: LookaheadWindow): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Same rule as the decision-date fallback in `derive.ts`: the last open "... Decision" phase in the Decision column. */
-function decisionPhaseIndex(phases: WorkplanPhase[]): number {
-  for (let i = phases.length - 1; i >= 0; i -= 1) {
-    const phase = phases[i];
-    const name = (phase.name ?? '').trim().toLowerCase();
-    if (!phase.isCompleted && name.endsWith('decision') && columnOf(phase) === 'Decision') return i;
-  }
-  return -1;
-}
-
 /**
  * Starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed and inactive works have none.
  * The decision phase shows once, at the work's decision date, instead of at its start.
@@ -95,7 +84,7 @@ export function milestonesIn(rows: WorkRow[], today: string, end: string): Miles
       what: index > 0 ? `${nameAt(index - 1)} → ${phase}` : phase,
       phase,
     });
-    const decisionAt = decisionPhaseIndex(row.phases);
+    const decisionAt = row.phases.reduce((last, phase, index) => (isDecisionPhase(phase) ? index : last), -1);
     const starts = row.phases.flatMap((phase, index) => {
       const date = phase.startDate ? phase.startDate.slice(0, 10) : null;
       if (phase.isCompleted || index === decisionAt || !inWindow(date)) return [];

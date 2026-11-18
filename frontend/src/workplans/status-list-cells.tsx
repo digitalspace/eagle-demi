@@ -207,8 +207,12 @@ export function LifecycleCell({ row }: { row: WorkRow }) {
     );
   }
   const first = segments.reduce((min, s) => (s.start < min ? s.start : min), segments[0].start);
-  const last = segments.reduce((max, s) => (s.end > max ? s.end : max), segments[0].end);
+  const last = row.stripEnd ?? first;
   const current = toneOf(row);
+  const now = segments.find((segment) => segment.state === 'current');
+  // Each segment is drawn 1px short; keep the 2px tick inside the current one when today is its last day.
+  let tickAt = todayAt === null || row.closed ? null : `${todayAt * 100}%`;
+  if (tickAt && now) tickAt = `min(${tickAt}, calc(${(now.offset + now.share) * 100}% - 2px))`;
   return (
     <td>
       <span className="sl-strip" aria-hidden="true">
@@ -220,7 +224,7 @@ export function LifecycleCell({ row }: { row: WorkRow }) {
             title={segment.name ? `${segment.name}, ${dayMonthYear(segment.start)} to ${dayMonthYear(segment.end)}` : undefined}
           />
         ))}
-        {todayAt !== null && !row.closed && <span className="sl-strip__today" style={{ left: `${todayAt * 100}%` }} />}
+        {tickAt && <span className="sl-strip__today" style={{ left: tickAt }} />}
       </span>
       <span className="sl-sub">
         {monthYear(first)} <span aria-hidden="true">→</span>
