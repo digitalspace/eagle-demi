@@ -60,8 +60,11 @@
   color: var(--typography-color-secondary);
 }
 
+/* No taller than the table; shrinks and scrolls when rows do not fit. Positioned so the cells'
+   visually-hidden text stays inside it rather than stretching .app__main. */
 .sl .sl-region {
-  flex: 1;
+  position: relative;
+  flex: 0 1 auto;
   min-height: 0;
   margin-bottom: 0;
   overflow: auto;
@@ -85,6 +88,23 @@
 .sl .sl-table td {
   padding-block: var(--layout-padding-small);
   vertical-align: middle;
+}
+
+/* Work column stays put when the table scrolls sideways; the header corner sits above both. */
+.sl .sl-table th:first-child,
+.sl .sl-table td:first-child {
+  position: sticky;
+  left: 0;
+  box-shadow: inset calc(-1 * var(--layout-border-width-small)) 0 0 var(--surface-color-border-default);
+}
+
+.sl .sl-table th:first-child {
+  z-index: 2;
+}
+
+.sl .sl-table td:first-child {
+  z-index: 1;
+  background: var(--surface-color-background-white);
 }
 
 .sl .sl-table tbody tr:hover td {
@@ -114,6 +134,11 @@
 
 .sl .sl-work:hover {
   text-decoration: underline;
+}
+
+.sl .sl-work:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 2px;
 }
 
 .sl .sl-sub {
@@ -270,6 +295,37 @@
   gap: var(--layout-margin-medium);
   font: var(--typography-regular-small-body);
   color: var(--typography-color-secondary);
+}
+
+/* Narrow: the page scrolls (workplans.css), so the table keeps its height and caps it to keep a sticky header. */
+@media (max-width: 40rem) {
+  .sl .sl-tiles {
+    gap: var(--layout-margin-xsmall);
+  }
+
+  .sl .sl-tile {
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--layout-margin-xsmall);
+    min-width: 0;
+    padding: var(--layout-padding-xsmall) var(--layout-padding-small);
+  }
+
+  .sl .sl-tile__count {
+    font: var(--typography-bold-small-body);
+  }
+
+  .sl .sl-region {
+    max-height: 75vh;
+  }
+
+  .sl .sl-table {
+    min-width: 52rem;
+  }
+
+  .sl .sl-col--work {
+    width: 12rem;
+  }
 }
 
 .sl .sl-more {

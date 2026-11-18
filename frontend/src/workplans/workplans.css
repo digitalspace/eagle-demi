@@ -25,6 +25,13 @@
   min-height: 0;
 }
 
+/* Narrow: title and chips leave too little height to share, so the page grows and the shell scrolls. */
+@media (max-width: 40rem) {
+  .wp-page {
+    height: auto;
+  }
+}
+
 .wp-page > .screen-header,
 .wp-page > .callout,
 .wp-page > .wp-page__loading {
@@ -87,6 +94,30 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--layout-margin-xsmall);
+}
+
+/* Narrow: each chip group is one row that scrolls sideways; the padding keeps focus rings unclipped. */
+@media (max-width: 40rem) {
+  .wp-filters {
+    flex-flow: column nowrap;
+    align-items: stretch;
+    gap: var(--layout-margin-xsmall);
+  }
+
+  .wp-filters__group {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: var(--layout-padding-xsmall);
+    margin: calc(-1 * var(--layout-padding-xsmall));
+  }
+
+  .wp-filters__group > * {
+    flex: none;
+  }
+
+  .wp-filters > .wp-chip {
+    align-self: flex-start;
+  }
 }
 
 .wp-segmented__label,
