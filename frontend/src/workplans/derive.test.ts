@@ -205,6 +205,19 @@ describe('rowsOf', () => {
     expect(row.stripEnd).toBe('2027-04-17');
   });
 
+  it('keeps today in an overdue current phase when the next phase has already started', () => {
+    const row = rowOf(
+      work([
+        phase('Application Review', '2026-03-01', '2026-10-01'),
+        phase('Effects Assessment', '2026-11-01', '2027-03-01', { order: 2 }),
+      ]),
+    );
+    const [review, effects] = row.segments;
+
+    expect([review.state, effects.state]).toEqual(['current', 'incomplete']);
+    expect(row.todayAt).toBeCloseTo(review.offset + review.share);
+  });
+
   it('puts today at the start of the next phase when no phase is under way', () => {
     const row = rowOf(
       work([

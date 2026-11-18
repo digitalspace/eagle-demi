@@ -25,6 +25,12 @@ describe('activeByQuarter', () => {
     expect(cells[0].start).toBe(range.start);
   });
 
+  it('counts a phase ending on a quarter’s first day in that quarter', () => {
+    const range = { start: dayNumber('2026-01-01'), end: dayNumber('2026-07-01') };
+
+    expect(activeByQuarter([row('2026-02-01', '2026-04-01')], range).map((cell) => cell.count)).toEqual([1, 1]);
+  });
+
   it('leaves a work out of a quarter that falls in the gap between its phases', () => {
     const range = { start: dayNumber('2026-01-01'), end: dayNumber('2027-01-01') };
     const gap = {
