@@ -74,6 +74,9 @@ export interface WorkRow {
   stripEnd: string | null;
 }
 
+/** Unique per work across both sources; React keys and open-row state use it. */
+export const rowKey = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
+
 const DAY_MS = 86_400_000;
 const NEAR_LIMIT_PERCENT = 80;
 const SOON_DAYS = 30;

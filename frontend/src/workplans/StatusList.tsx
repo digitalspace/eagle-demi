@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useMemo, useState } from 'react';
-import { byAttention } from './derive';
+import { byAttention, rowKey } from './derive';
 import type { ViewProps } from './Filters';
 import { count, plural } from './format';
 import {
@@ -13,7 +13,6 @@ import {
   WorkCell,
 } from './status-list-cells';
 import { StatusTiles, type TileStatus } from './StatusTiles';
-import { rowKey } from './timeline-rows';
 import { hasDetails } from './work-notes';
 import './workplans.css';
 import './status-list.css';

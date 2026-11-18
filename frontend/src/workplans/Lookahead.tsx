@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ChipSelect } from './ChipSelect';
-import type { WorkRow } from './derive';
+import { rowKey, type WorkRow } from './derive';
 import type { ViewProps } from './Filters';
 import { count, plural, shortDate, weekdayDate, weekOf } from './format';
 import {
@@ -18,7 +18,6 @@ import {
   type Week,
 } from './lookahead-data';
 import { Segmented } from './Segmented';
-import { rowKey } from './timeline-rows';
 import './workplans.css';
 import './lookahead.css';
 

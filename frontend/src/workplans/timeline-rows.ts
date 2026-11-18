@@ -19,8 +19,6 @@ export const SORTS: { value: SortBy; label: string }[] = [
   { value: 'attention', label: 'Attention' },
 ];
 
-export const rowKey = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
-
 export interface Group {
   key: string;
   label: string;

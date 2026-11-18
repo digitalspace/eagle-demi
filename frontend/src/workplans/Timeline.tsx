@@ -1,9 +1,10 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { ChipSelect } from './ChipSelect';
+import { rowKey } from './derive';
 import type { ViewProps } from './Filters';
 import { Segmented } from './Segmented';
 import { Axis, Legend } from './timeline-parts';
-import { GROUP_BYS, groupsOf, rowKey, SORTS, type GroupBy, type SortBy } from './timeline-rows';
+import { GROUP_BYS, groupsOf, SORTS, type GroupBy, type SortBy } from './timeline-rows';
 import { dayNumber, drawnKinds, extentOf, scaleFor, scrollFor, xOf, ZOOMS, type Zoom } from './timeline-scale';
 import { TimelineOverview } from './TimelineOverview';
 import { TimelineGroup, type Opened } from './TimelineRow';

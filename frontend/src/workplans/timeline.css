@@ -184,7 +184,8 @@
 /* Longer values ("311 d, suspended", "Status unknown") wrap to a second line inside the row's height. */
 .timeline__days {
   text-align: right;
-  line-height: 1.2;
+  /* Two lines must fit the 28px row. */
+  line-height: 13px;
   font-variant-numeric: tabular-nums;
   color: var(--typography-color-secondary);
 }

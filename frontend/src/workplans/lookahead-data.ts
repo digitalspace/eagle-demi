@@ -1,6 +1,5 @@
-import { isDecisionPhase, type WorkRow } from './derive';
+import { isDecisionPhase, rowKey, type WorkRow } from './derive';
 import { phaseToneOf, type PhaseTone } from './phase-tone';
-import { rowKey } from './timeline-rows';
 import { dayNumber } from './timeline-scale';
 
 export type LookaheadWindow = '30d' | '90d' | '6m';

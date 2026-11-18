@@ -72,7 +72,7 @@ describe('Workplans', () => {
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
     expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
     expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
-    // 13 works with the closed ones.
+    // Closed works stay out: with them the pipeline would count 13.
     expect(screen.getByText('6 works')).toBeInTheDocument();
   });
 
@@ -84,6 +84,18 @@ describe('Workplans', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(types()).toBeInTheDocument();
+  });
+
+  it('keeps a picked work type that Work state then rules out, so it can still be cleared', async () => {
+    const user = renderAt('/workplans');
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work type' }), 'EAC extension');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
+    expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Work type' }));
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
   });
 
   it('narrows the works to one Act when it is picked', async () => {
