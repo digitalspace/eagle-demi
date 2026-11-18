@@ -170,7 +170,7 @@
   border: var(--layout-border-width-small) solid transparent;
 }
 
-/* Edge colours, the design's solid swatch; tone names follow toneOf in timeline-rows.ts. */
+/* Edge colours, the design's solid swatch; tone names follow toneOf in derive.ts. */
 .sl .sl-swatch--readiness,
 .sl .sl-strip__seg--readiness {
   background: var(--wp-phase-readiness-edge);

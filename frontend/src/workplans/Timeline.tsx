@@ -1,8 +1,8 @@
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
-import type { WorkRow } from './derive';
-import { daysOf, GROUP_BYS, groupsOf, summaryOf, toneOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
+import { toneOf, type WorkRow } from './derive';
+import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
   extentOf,

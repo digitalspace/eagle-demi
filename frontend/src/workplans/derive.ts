@@ -135,6 +135,16 @@ export function columnOf(phase: Pick<WorkplanPhase, 'name' | 'stage'>): Pipeline
   return COLUMN_BY_STAGE.get(fold(phase.stage)) ?? 'Review';
 }
 
+/** Fill and edge pair of the current phase, by its pipeline column; readiness has its own pair. */
+export function toneOf(row: WorkRow): string {
+  if (!row.current) return 'review';
+  if ((row.current.name ?? '').toLowerCase().includes('readiness')) return 'readiness';
+  const column = columnOf(row.current);
+  if (column === 'Proponent time') return 'proponent';
+  if (column === 'Decision') return 'decision';
+  return column === 'Review' ? 'review' : 'planning';
+}
+
 function isClosed(work: WorkplanRow, today: string): boolean {
   const decided = dayOf(work.decisionDate);
   return work.isActive === false || (decided !== null && decided <= today) || Boolean(work.transitionOut);

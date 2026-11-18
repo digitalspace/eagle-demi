@@ -1,5 +1,5 @@
 import { dayMonthYear } from '../dates';
-import { columnOf, type WorkRow } from './derive';
+import type { WorkRow } from './derive';
 import { dayNumber } from './timeline-scale';
 
 export type GroupBy = 'act' | 'type' | 'region';
@@ -70,16 +70,6 @@ export function daysOf(row: WorkRow): string {
   if (row.overdue) return `+${row.daysOver}d over`;
   if (row.daysInPhase === null) return '—';
   return row.plannedDays ? `${row.daysInPhase}/${row.plannedDays}` : `${row.daysInPhase}d`;
-}
-
-/** Fill and edge pair of the current phase, by its pipeline column; readiness has its own pair. */
-export function toneOf(row: WorkRow): string {
-  if (!row.current) return 'review';
-  if ((row.current.name ?? '').toLowerCase().includes('readiness')) return 'readiness';
-  const column = columnOf(row.current);
-  if (column === 'Proponent time') return 'proponent';
-  if (column === 'Decision') return 'decision';
-  return column === 'Review' ? 'review' : 'planning';
 }
 
 const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;

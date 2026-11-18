@@ -2,8 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
-import { STATUS_LABEL, byAttention, type WorkRow, type WorkStatus } from './derive';
-import { toneOf } from './timeline-rows';
+import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
 import './workplans.css';
 import './status-list.css';
 
