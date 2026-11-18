@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +52,23 @@ describe('Workplans', () => {
 
     expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Sample Beta Quarry - Amendment' })).toBeNull();
+  });
+
+  it('leaves status to the list’s own tiles, and gives the timeline its status back', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('region', { name: 'Timeline' });
+    await user.click(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' }));
+    await user.click(screen.getByRole('button', { name: 'List' }));
+
+    expect(screen.queryByRole('group', { name: 'Status' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Sample Beta Quarry - Amendment' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Timeline' }));
+    expect(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('keeps the view in ?view=, opening the list from the link and the timeline from its button', async () => {

@@ -57,15 +57,17 @@ function ChipGroup<T extends string | number>({
   );
 }
 
-/** Act, work type and status chips over `rows`, plus the switch that brings back hidden works. */
+/** Act, work type and, with `withStatus`, status chips over `rows`, plus the switch that brings back hidden works. */
 export function Filters({
   rows,
   value,
   onChange,
+  withStatus,
 }: {
   rows: WorkRow[];
   value: WorkFilters;
   onChange: (next: WorkFilters) => void;
+  withStatus: boolean;
 }) {
   const types = useMemo(() => {
     const byCode = new Map(rows.map((row) => [row.work.workTypeCode ?? '', workTypeOf(row).name]));
@@ -84,12 +86,14 @@ export function Filters({
         onChange={(act) => onChange({ ...value, act })}
       />
       <ChipGroup label="Work type" options={types} value={value.type} onChange={(type) => onChange({ ...value, type })} />
-      <ChipGroup
-        label="Status"
-        options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
-        value={value.status}
-        onChange={(status) => onChange({ ...value, status })}
-      />
+      {withStatus && (
+        <ChipGroup
+          label="Status"
+          options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
+          value={value.status}
+          onChange={(status) => onChange({ ...value, status })}
+        />
+      )}
       <Chip pressed={value.showHidden} onClick={() => onChange({ ...value, showHidden: !value.showHidden })}>
         Show replaced and hidden
       </Chip>

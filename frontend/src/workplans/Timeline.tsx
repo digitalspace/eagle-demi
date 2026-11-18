@@ -1,7 +1,8 @@
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
+import { Segmented } from './Segmented';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
@@ -20,40 +21,6 @@ import './timeline.css';
 /** Lane width before the first measure, and in JSDOM where nothing has a size. */
 const FALLBACK_LANE_PX = 960;
 const MIN_LANE_PX = 240;
-
-function Segmented<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="timeline__control">
-      <span id={id} className="timeline__control-label">
-        {label}
-      </span>
-      <div className="timeline__segmented" role="group" aria-labelledby={id}>
-        {options.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className="timeline__option"
-            aria-pressed={option.value === value}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function Legend() {
   return (

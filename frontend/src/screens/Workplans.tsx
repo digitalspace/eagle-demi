@@ -6,6 +6,7 @@ import { useWorkplans } from '../api/sheet-works';
 import { isoDay } from '../dates';
 import { rowsOf, type WorkRow } from '../workplans/derive';
 import { Filters, type WorkFilters } from '../workplans/Filters';
+import { Segmented } from '../workplans/Segmented';
 import { StatusListView } from '../workplans/StatusList';
 import { TimelineView } from '../workplans/Timeline';
 import '../workplans/workplans.css';
@@ -21,30 +22,13 @@ const NO_FILTERS: WorkFilters = { act: null, type: null, status: null, showHidde
 
 const viewOf = (param: string | null): View => (param === 'list' ? 'list' : 'timeline');
 
-function matches(row: WorkRow, filters: WorkFilters): boolean {
+/** `status` is null in the list view, whose tiles are its status filter. */
+function matches(row: WorkRow, filters: WorkFilters, status: WorkFilters['status']): boolean {
   return (
     (filters.showHidden || row.work.shownAfterFlip !== false) &&
     (filters.act === null || row.work.actYear === filters.act) &&
     (filters.type === null || row.work.workTypeCode === filters.type) &&
-    (filters.status === null || row.status === filters.status)
-  );
-}
-
-function ViewSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  return (
-    <div className="wp-views" role="group" aria-label="View">
-      {VIEWS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className="wp-views__option"
-          aria-pressed={option.value === view}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    (status === null || row.status === status)
   );
 }
 
@@ -94,7 +78,9 @@ export function Workplans() {
     () => (workplans.data ? rowsOf(workplans.data, projectRows ?? [], today) : []),
     [workplans.data, projectRows, today],
   );
-  const shown = useMemo(() => rows.filter((row) => matches(row, filters)), [rows, filters]);
+  // Kept in state while the list is open, so going back to the timeline restores the chosen status.
+  const status = view === 'list' ? null : filters.status;
+  const shown = useMemo(() => rows.filter((row) => matches(row, filters, status)), [rows, filters, status]);
 
   const changeView = (next: View) =>
     setParams((current) => {
@@ -109,7 +95,7 @@ export function Workplans() {
   else {
     body = (
       <>
-        <Filters rows={rows} value={filters} onChange={setFilters} />
+        <Filters rows={rows} value={filters} onChange={setFilters} withStatus={view !== 'list'} />
         {view === 'list' ? <StatusListView rows={shown} today={today} /> : <TimelineView rows={shown} today={today} />}
       </>
     );
@@ -122,7 +108,7 @@ export function Workplans() {
           <h1>Workplans</h1>
           <p>Live works from Track and the business spreadsheets, as they stand today.</p>
         </div>
-        {workplans.isSuccess && <ViewSwitch view={view} onChange={changeView} />}
+        {workplans.isSuccess && <Segmented label="View" options={VIEWS} value={view} onChange={changeView} />}
       </div>
       {body}
     </div>
