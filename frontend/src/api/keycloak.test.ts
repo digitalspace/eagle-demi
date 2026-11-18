@@ -68,6 +68,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.history.pushState({}, '', '/');
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -194,7 +195,6 @@ describe('login', () => {
     await initKeycloak();
 
     login();
-    window.history.pushState({}, '', '/');
 
     const back = window.location.origin + '/workplans?view=list';
     expect(initOptions()['redirectUri']).toBe(back);

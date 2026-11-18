@@ -37,8 +37,9 @@ export interface WorkRow {
   /** Phases sorted by `order`. */
   phases: WorkplanPhase[];
   closed: boolean;
+  /** No phase under way yet, or the phase Track marks current has not started. */
   notStarted: boolean;
-  /** Open phase Track marks current, else the first open phase that has started; always null on a closed work. */
+  /** Open started phase Track marks current, else the first open phase that has started; always null on a closed work. */
   current: WorkplanPhase | null;
   /** Current phase start to today, or to `suspendedSince`; null when the start is not known. */
   daysInPhase: number | null;
@@ -53,13 +54,13 @@ export interface WorkRow {
   /** Planned end to today, the hatched part of an overdue phase. */
   overrun: { start: string; end: string } | null;
   suspended: boolean;
-  /** Day the current phase's open suspension began; null when not suspended now. */
+  /** Day the current phase's open suspension began, or the phase start if later; null when not suspended now. */
   suspendedSince: string | null;
   /** Legal section of the suspension covering today, as "s.30(1)". */
   suspendedUnder: string | null;
   /** Earliest phase start or decision after today; null on a closed, inactive or unknown work. */
   next: { name: string; date: string; inDays: number } | null;
-  /** `decisionDate`, else `anticipatedDecisionDate`, else `decisionEventDate`, else the start of the open decision phase. */
+  /** `decisionDate`, else `anticipatedDecisionDate`, else `decisionEventDate`, else the start of the open decision phase; a closed work takes only the first two. */
   decisionDate: string | null;
   decisionExpected: boolean;
   status: WorkStatus;
@@ -176,7 +177,9 @@ function suspensionOf(current: WorkplanPhase | null, today: string) {
     const end = dayOf(stop.endDate);
     return stop.kind === 'suspension' && start !== null && start <= today && (end === null || end >= today);
   });
-  const since = current?.isSuspended === true ? (dayOf(current.suspendedDate) ?? today) : dayOf(covering?.startDate);
+  const began = current?.isSuspended === true ? (dayOf(current.suspendedDate) ?? today) : dayOf(covering?.startDate);
+  const start = dayOf(current?.startDate);
+  const since = began !== null && start !== null && start > began ? start : began;
   return { suspended: since !== null, suspendedSince: since, suspendedUnder: covering?.legalSection ?? null };
 }
 
@@ -202,12 +205,17 @@ function progressOf(current: WorkplanPhase | null, today: string, suspendedSince
   };
 }
 
-/** A sheet work with no end date on its current phase and no decision date. */
+/** A sheet work with a current phase that has no end date, and no decision date. */
 const hasNoEnd = (work: WorkplanRow, current: WorkplanPhase | null) =>
-  work.source === 'sheet' && !work.decisionDate && !current?.endDate && !current?.undated?.['endDate']?.notAfter;
+  work.source === 'sheet' &&
+  current !== null &&
+  !work.decisionDate &&
+  !current.endDate &&
+  !current.undated?.['endDate']?.notAfter;
 
 /** Falls back to the start of the last open phase named "... Decision" in the Decision column, so not Readiness Decision. */
-function decisionOf(work: WorkplanRow, phases: WorkplanPhase[]): string | null {
+function decisionOf(work: WorkplanRow, phases: WorkplanPhase[], closed: boolean): string | null {
+  if (closed) return dayOf(work.decisionDate ?? work.anticipatedDecisionDate);
   const decisions = phases.filter(
     (phase) => !phase.isCompleted && fold(phase.name).endsWith('decision') && columnOf(phase) === 'Decision',
   );
@@ -265,25 +273,34 @@ function lifecycleOf(phases: WorkplanPhase[], current: WorkplanPhase | null, ove
   return { segments, todayAt: Math.min(1, Math.max(0, daysBetween(first, today) / span)) };
 }
 
-function columnOfWork(row: Pick<WorkRow, 'closed' | 'notStarted' | 'current' | 'phases'>): PipelineColumn | null {
-  if (row.closed) return null;
-  if (row.notStarted) return 'Intake';
-  const at = row.current ?? row.phases.find((phase) => !phase.isCompleted);
+/** A work waiting on its marked phase stays in that phase's column; only a work with nothing begun is in Intake. */
+function columnOfWork(closed: boolean, intake: boolean, at: WorkplanPhase | undefined): PipelineColumn | null {
+  if (closed) return null;
+  if (intake) return 'Intake';
   return at ? columnOf(at) : 'Review';
+}
+
+/** The open phase Track marks current once it has started, else the first open started phase; `marked` either way. */
+function currentOf(open: WorkplanPhase[], today: string) {
+  const marked = open.find((phase) => phase.isCurrent === true);
+  // Track moves its current phase id when the previous phase completes, before the next one starts.
+  const current = (marked && hasStarted(marked, today) ? marked : open.find((p) => hasStarted(p, today))) ?? null;
+  return { marked, current };
 }
 
 function rowOf(work: WorkplanRow, project: Project | undefined, today: string): WorkRow {
   const phases = phasesInOrder(work.phases);
   const { closed, inactive } = closureOf(work, today);
   const open = closed ? [] : phases.filter((phase) => !phase.isCompleted);
-  const current = open.find((phase) => phase.isCurrent === true) ?? open.find((p) => hasStarted(p, today)) ?? null;
+  const { marked, current } = currentOf(open, today);
   const starts = [startBound(work.startDate, work.undated), ...phases.map((p) => startBound(p.startDate, p.undated))];
-  const notStarted = !closed && starts.every((start) => start === null || start > today);
+  const nothingBegun = !closed && starts.every((start) => start === null || start > today);
+  const notStarted = nothingBegun || (!closed && current === null && marked !== undefined);
   const unknown = !closed && hasNoEnd(work, current);
   const suspension = suspensionOf(current, today);
   const measured = progressOf(current, today, suspension.suspendedSince);
   const progress = inactive ? { ...measured, bar: null, overdue: false, daysOver: 0, overrun: null } : measured;
-  const decisionDate = decisionOf(work, phases);
+  const decisionDate = decisionOf(work, phases, closed);
   const next = closed || inactive || unknown ? null : nextOf(phases, today, decisionDate);
   const state = { closed, notStarted, current, phases, next, overdue: progress.overdue };
   return {
@@ -295,7 +312,7 @@ function rowOf(work: WorkplanRow, project: Project | undefined, today: string): 
     decisionDate,
     decisionExpected: !work.decisionDate && decisionDate !== null,
     status: statusOf({ ...state, inactive, unknown }),
-    column: columnOfWork(state),
+    column: columnOfWork(closed, nothingBegun, current ?? marked ?? open[0]),
     ...lifecycleOf(phases, current, progress.overrun?.end ?? null, today),
   };
 }

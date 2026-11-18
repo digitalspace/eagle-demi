@@ -5,7 +5,7 @@ import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { useNarrow } from '../shell/useNarrow';
 import { PIPELINE_COLUMNS, toneOf, type PipelineColumn, type WorkRow } from './derive';
-import { unmeasuredStatus } from './timeline-rows';
+import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './pipeline.css';
 
@@ -50,7 +50,7 @@ function Days({ row }: { row: WorkRow }) {
   if (status) return <span className="pl-figure">{status}</span>;
   if (used === null) return null;
   if (!planned) {
-    return <span className="pl-figure">{`${used} d in phase, ${row.suspended ? 'suspended' : 'no planned length'}`}</span>;
+    return <span className="pl-figure">{row.suspended ? suspendedFigure(used, true) : `${used} d in phase, no planned length`}</span>;
   }
   const fill = row.bar ?? 'normal';
   return (
@@ -64,7 +64,8 @@ function Days({ row }: { row: WorkRow }) {
       <span className={`pl-figure${row.overdue ? ' pl-figure--overdue' : ''}`}>
         {row.suspended ? (
           <>
-            {used} d <span className="visually-hidden">in phase</span>, suspended
+            <span aria-hidden="true">{suspendedFigure(used)}</span>
+            <span className="visually-hidden">{suspendedFigure(used, true)}</span>
           </>
         ) : (
           <>

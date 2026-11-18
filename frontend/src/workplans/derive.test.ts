@@ -111,6 +111,16 @@ describe('rowsOf', () => {
     expect(row.daysInPhase).toBe(273);
   });
 
+  it('counts a suspension that began before the current phase from the phase start, never below 0', () => {
+    const stop = { kind: 'suspension', legalSection: 's.30(1)', startDate: '2026-01-01', endDate: null, days: null };
+    const review = phase('Application Review', '2026-05-01', null, { interruptions: [stop], isSuspended: null });
+
+    const row = rowOf(work([review], { source: 'sheet' }));
+
+    expect(row.suspendedSince).toBe('2026-05-01');
+    expect(row.daysInPhase).toBe(0);
+  });
+
   it('does not mark a sheet work suspended while an extension covers today', () => {
     const stop = { kind: 'extension', legalSection: 's.24(4)', startDate: '2026-10-01', endDate: '2027-01-31', days: 122 };
     const review = phase('Application Review', '2026-01-01', null, { interruptions: [stop], isSuspended: null });
@@ -181,6 +191,44 @@ describe('rowsOf', () => {
     expect(rowOf(work([readiness, decision], { decisionEventDate: '2027-03-15' })).decisionDate).toBe('2027-03-15');
     expect(rowOf(work([readiness, decision])).decisionDate).toBe('2027-04-01');
     expect(rowOf(work([readiness])).decisionDate).toBeNull();
+  });
+
+  it('gives a closed work no decision date from a pending decision event or an open decision phase', () => {
+    const closedWith = (decisionEventDate: string | null) =>
+      rowOf(
+        work([phase('Application Review', '2026-01-01', '2026-06-01'), phase('Decision', '2027-04-01', null, { order: 2 })], {
+          isActive: false,
+          workState: 'WITHDRAWN',
+          decisionEventDate,
+        }),
+      );
+
+    expect(closedWith('2027-03-15').decisionDate).toBeNull();
+    expect(closedWith(null).decisionDate).toBeNull();
+  });
+
+  it('waits on a phase Track marks current that starts after today, as not started in its column with it next', () => {
+    const marked = (previousDone: boolean) =>
+      rowOf(
+        work([
+          phase('Application Review', '2026-01-01', '2026-11-16', { isCompleted: previousDone }),
+          phase('Effects Assessment', '2026-11-18', '2027-03-18', { order: 2, isCurrent: true }),
+        ]),
+      );
+
+    const waiting = marked(true);
+    expect(waiting.current).toBeNull();
+    expect(waiting.status).toBe('not-started');
+    expect(waiting.column).toBe('Review');
+    expect(waiting.next).toEqual({ name: 'Effects Assessment', date: '2026-11-18', inDays: 1 });
+    expect(marked(false).current?.name).toBe('Application Review');
+  });
+
+  it('reads an open sheet work with no started phase as not started with its next date, not unknown', () => {
+    const row = rowOf(work([phase('Application Review', '2027-01-01', '2027-06-01')], { source: 'sheet' }));
+
+    expect(row.status).toBe('not-started');
+    expect(row.next).toEqual({ name: 'Application Review', date: '2027-01-01', inDays: 45 });
   });
 
   it('names the earliest of the next phase start and the decision as next', () => {

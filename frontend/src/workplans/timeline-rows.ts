@@ -67,6 +67,9 @@ export function groupsOf(rows: WorkRow[], by: GroupBy): Group[] {
 export const unmeasuredStatus = (row: WorkRow) =>
   row.status === 'inactive' || row.status === 'unknown' ? STATUS_LABEL[row.status] : null;
 
+/** Days a suspended phase ran before the suspension: "311 d, suspended"; `inPhase` names the unit where no header does. */
+export const suspendedFigure = (days: number, inPhase = false) => `${days} d${inPhase ? ' in phase' : ''}, suspended`;
+
 /** The days-in-phase cell: "used/planned", "+Nd over", "N d, suspended", elapsed alone when nothing is planned. */
 export function daysOf(row: WorkRow): string {
   if (row.closed) return 'Closed';
@@ -75,7 +78,7 @@ export function daysOf(row: WorkRow): string {
   if (row.notStarted) return 'Not started';
   if (row.overdue) return `+${row.daysOver}d over`;
   if (row.daysInPhase === null) return '—';
-  if (row.suspended) return `${row.daysInPhase} d, suspended`;
+  if (row.suspended) return suspendedFigure(row.daysInPhase);
   return row.plannedDays ? `${row.daysInPhase}/${row.plannedDays}` : `${row.daysInPhase}d`;
 }
 

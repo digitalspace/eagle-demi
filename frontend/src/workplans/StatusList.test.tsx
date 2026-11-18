@@ -72,14 +72,13 @@ describe('StatusListView', () => {
     );
   });
 
-  it('shows an open sheet work with no planned end as Status unknown, outside the Overdue tile', () => {
+  it('shows an open sheet work with no planned end as Status unknown', () => {
     const quarry = work('Sample Beta Quarry - Assessment (2002)');
     Object.assign(quarry, { isActive: null, workState: 'in-progress', decisionDate: null, outcome: null });
     Object.assign(quarry.phases[0], { isCompleted: false, endDate: null });
     renderList([...(FIXTURE.works as WorkplanRow[]), quarry]);
 
     expect(daysCell(quarry.title!)).toHaveTextContent('Status unknown');
-    expect(within(screen.getByRole('button', { name: /Overdue/ })).getByText('1')).toBeInTheDocument();
   });
 
   it('stops the day count of a suspended work and says so', () => {

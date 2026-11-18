@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
-import { unmeasuredStatus } from './timeline-rows';
+import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './status-list.css';
 
@@ -87,10 +87,10 @@ function DaysFigure({ row }: { row: WorkRow }) {
   if (status) return <span className="sl-figure">{status}</span>;
   if (used === null) return <Blank says="No current phase" />;
   if (!planned) {
+    if (row.suspended) return <span className="sl-figure">{suspendedFigure(used)}</span>;
     return (
       <span className="sl-figure">
-        {used} d<span className="visually-hidden"> in phase</span>
-        {row.suspended ? ', suspended' : <span className="visually-hidden">, no planned length</span>}
+        {used} d<span className="visually-hidden"> in phase, no planned length</span>
       </span>
     );
   }
@@ -101,7 +101,7 @@ function DaysFigure({ row }: { row: WorkRow }) {
     figure = `${used}/${planned} · +${row.daysOver}`;
     spoken = `${used} of ${planned} planned days, ${row.daysOver} over`;
   } else if (row.suspended) {
-    figure = `${used} d, suspended`;
+    figure = suspendedFigure(used);
     spoken = `${used} of ${planned} planned days, suspended`;
   }
   return (

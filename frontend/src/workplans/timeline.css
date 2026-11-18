@@ -1,7 +1,7 @@
 /* Workplans Timeline view. The panel fills its flex parent; only .timeline__scroll scrolls. */
 
 .timeline {
-  --timeline-left: 23rem;
+  --timeline-left: 24.25rem;
   --timeline-row: 28px;
   --timeline-head: 40px;
   display: flex;
@@ -115,7 +115,7 @@
   left: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.75rem 6rem;
+  grid-template-columns: minmax(0, 1fr) 2.75rem 7.25rem;
   align-items: center;
   gap: var(--layout-margin-small);
   padding: 0 var(--layout-padding-small) 0 var(--layout-padding-large);
