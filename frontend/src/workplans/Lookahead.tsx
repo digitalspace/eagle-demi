@@ -109,9 +109,7 @@ function AgendaItem({ milestone }: { milestone: Milestone }) {
     <li className={`la-item la-item--${milestone.kind}`}>
       <span className="la-item__date">{weekdayDayMon(milestone.date)}</span>
       <span className={`la-marker la-marker--${milestone.kind}`} aria-hidden="true" />
-      <span className="la-item__what" title={milestone.what}>
-        {milestone.what}
-      </span>
+      <span className="la-item__what">{milestone.what}</span>
       <span className="la-item__work">
         <WorkLink row={row} />
         {row.work.projectName && <span className="la-sub">{row.work.projectName}</span>}

@@ -1,12 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
+import { useNarrow } from '../shell/useNarrow';
 import { PIPELINE_COLUMNS, toneOf, type PipelineColumn, type WorkRow } from './derive';
 import './workplans.css';
 import './pipeline.css';
 
 const PAGE = 100;
+/** Stacked columns (pipeline.css) have no scroll box of their own, so each shows fewer cards before Show more. */
+const STACKED_PAGE = 5;
+const STACKED_QUERY = '(max-width: 40rem)';
 const count = (n: number) => n.toLocaleString('en-CA');
 const works = (n: number) => `${count(n)} ${n === 1 ? 'work' : 'works'}`;
 
@@ -96,9 +101,16 @@ function Card({ row }: { row: WorkRow }) {
 }
 
 function Column({ name, rows }: { name: PipelineColumn; rows: WorkRow[] }) {
-  const [limit, setLimit] = useState(PAGE);
-  const visible = rows.slice(0, limit);
-  const more = Math.min(PAGE, rows.length - visible.length);
+  const page = useNarrow(STACKED_QUERY) ? STACKED_PAGE : PAGE;
+  const [pages, setPages] = useState(1);
+  const visible = rows.slice(0, page * pages);
+  const more = Math.min(page, rows.length - visible.length);
+  const list = useRef<HTMLUListElement>(null);
+  // The button may go away, so focus moves to the first card it revealed.
+  const showMore = () => {
+    flushSync(() => setPages((n) => n + 1));
+    list.current?.querySelectorAll<HTMLElement>('.pl-work')[visible.length]?.focus();
+  };
   const overdue = rows.filter((row) => row.overdue).length;
   const id = `pl-col-${name.replace(/\s+/g, '-').toLowerCase()}`;
   return (
@@ -121,14 +133,14 @@ function Column({ name, rows }: { name: PipelineColumn; rows: WorkRow[] }) {
         {rows.length === 0 ? (
           <p className="pl-empty">No open works in this stage.</p>
         ) : (
-          <ul className="pl-cards">
+          <ul className="pl-cards" ref={list}>
             {visible.map((row) => (
               <Card key={`${row.work.source}:${row.work.workId}`} row={row} />
             ))}
           </ul>
         )}
         {more > 0 && (
-          <button type="button" className="pl-more" onClick={() => setLimit((n) => n + PAGE)}>
+          <button type="button" className="pl-more" onClick={showMore}>
             Show {more} more{' '}
             <span className="visually-hidden">in {name}</span>
           </button>

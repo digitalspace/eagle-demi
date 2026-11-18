@@ -248,7 +248,7 @@
   display: grid;
   grid-template-columns: 6.5rem 10px minmax(0, 1fr) minmax(0, 1.2fr) 4rem;
   grid-template-areas: 'date marker what work in';
-  align-items: center;
+  align-items: first baseline;
   gap: var(--layout-margin-small);
   padding: var(--layout-padding-small) var(--layout-padding-medium);
   border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
@@ -266,10 +266,13 @@
   white-space: nowrap;
 }
 
+/* Centred on the first line of text, since the row's text may wrap. */
 .la .la-marker {
   grid-area: marker;
+  align-self: start;
   width: 10px;
   height: 10px;
+  margin-top: calc((1lh - 10px) / 2);
   border-radius: 50%;
   background: var(--la-phase);
 }
@@ -278,7 +281,7 @@
 .la .la-marker--decision {
   width: 8px;
   height: 8px;
-  margin-left: 1px;
+  margin: calc((1lh - 8px) / 2) 0 0 1px;
   border-radius: 1px;
   background: var(--la-decision);
   transform: rotate(45deg);
@@ -303,13 +306,20 @@
   color: var(--typography-color-secondary);
 }
 
+/* Touch screens have no tooltip, so text wraps rather than ending in an ellipsis; a work title stops at two lines. */
 .la .la-item__what,
-.la .la-work,
 .la .la-sub {
   display: block;
+  overflow-wrap: anywhere;
+}
+
+.la .la-work {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* Narrow agenda: date and countdown on one line, then what happens, then the work. */
@@ -370,8 +380,9 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Panels take their content's height and shrink, then scroll, only when the side column runs out. */
 .la .la-panel--overdue {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
 .la .la-panel--decisions {
