@@ -35,7 +35,7 @@ export interface Span {
   name: string | null;
 }
 
-/** Every bar a row draws: its dated phases, the overdue overrun, and interruptions (an open one runs to today). */
+/** Every bar a row draws: its dated phases, the overdue overrun, and suspensions (an open one runs to today). */
 export function spansOf(row: WorkRow, today: string): Span[] {
   const spans: Span[] = row.segments.map((segment) => ({
     kind: segment.state,
@@ -44,7 +44,8 @@ export function spansOf(row: WorkRow, today: string): Span[] {
     name: segment.name,
   }));
   if (row.overrun) spans.push({ kind: 'overrun', ...row.overrun, name: null });
-  for (const stop of row.phases.flatMap((phase) => phase.interruptions)) {
+  const stops = row.phases.flatMap((phase) => phase.interruptions).filter((stop) => stop.kind === 'suspension');
+  for (const stop of stops) {
     const start = stop.startDate?.slice(0, 10);
     const end = stop.endDate?.slice(0, 10) ?? (row.closed ? null : today);
     if (start && end && end >= start) spans.push({ kind: 'suspended', start, end, name: stop.legalSection });
@@ -56,9 +57,11 @@ export function spansOf(row: WorkRow, today: string): Span[] {
 export const drawsSuspension = (rows: WorkRow[], today: string) =>
   rows.some((row) => spansOf(row, today).some((span) => span.kind === 'suspended'));
 
+const TAG_AFTER = new Set<SpanKind>(['current', 'overrun', 'suspended']);
+
 /** Day the suspended tag starts at: after the current phase, its overrun or a suspension, so it covers no label. */
 export function tagDayOf(spans: Span[], today: string): number {
-  const ends = spans.filter((span) => span.kind !== 'past' && span.kind !== 'upcoming').map((span) => dayNumber(span.end));
+  const ends = spans.filter((span) => TAG_AFTER.has(span.kind)).map((span) => dayNumber(span.end));
   return ends.length ? Math.max(...ends) : dayNumber(today);
 }
 

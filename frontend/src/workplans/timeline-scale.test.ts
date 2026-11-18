@@ -56,16 +56,32 @@ describe('suspension', () => {
 
     expect(tagDayOf(spans, TODAY)).toBe(dayNumber(current.end));
   });
+
+  it('an extension draws no suspended span', () => {
+    const work = structuredClone(suspended.work);
+    work.phases[1].interruptions = [
+      { kind: 'extension', startDate: '2026-03-01', endDate: '2026-04-01', days: 31, legalSection: null },
+    ];
+
+    expect(drawsSuspension(rowsOf([work], [], TODAY), TODAY)).toBe(false);
+  });
 });
 
 describe('timeline rows', () => {
   const byTitle = (title: string) => rows.find((row) => row.work.title === title)!;
 
-  it('days column reads overrun, used of planned, not started and closed', () => {
+  it('days column reads overrun, used of planned, suspended, not started and closed', () => {
     expect(daysOf(byTitle('Sample Alpha Transmission Line - Assessment'))).toBe('+47d over');
+    expect(daysOf(byTitle('Sample Epsilon Terminal - Amendment'))).toBe('311 d, suspended');
     expect(daysOf(byTitle('Sample Beta Quarry - Amendment'))).toBe('47/182');
     expect(daysOf(byTitle('sample gamma wind farm - Assessment'))).toBe('Not started');
     expect(daysOf(byTitle('Sample Delta Pipeline - EAC Extension'))).toBe('Closed');
+  });
+
+  it('days column reads Inactive for a Track work switched off past its end', () => {
+    const alpha = { ...byTitle('Sample Alpha Transmission Line - Assessment').work, isActive: false };
+
+    expect(daysOf(rowsOf([alpha], [], TODAY)[0])).toBe('Inactive');
   });
 
   it('groups by Act, newest first, with each group\'s overdue count', () => {

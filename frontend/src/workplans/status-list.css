@@ -232,6 +232,12 @@
   background: var(--theme-gray-70);
 }
 
+.sl .sl-strip__seg--incomplete {
+  background: var(--theme-gray-20);
+  border-style: dashed;
+  border-color: var(--theme-gray-80);
+}
+
 .sl .sl-days {
   display: flex;
   align-items: center;

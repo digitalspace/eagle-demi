@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
+import { unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './status-list.css';
 
@@ -72,42 +73,59 @@ function PhaseCell({ row }: { row: WorkRow }) {
   );
 }
 
-function DaysCell({ row }: { row: WorkRow }) {
+/** "includes 30 d extension, 12 d suspended", from whichever is above 0; planned days already count both. */
+function breakdownOf(row: WorkRow): string | null {
+  const extension = row.current?.extensionDays ?? 0;
+  const suspended = row.current?.suspendedDays ?? 0;
+  const parts = [extension > 0 && `${extension} d extension`, suspended > 0 && `${suspended} d suspended`].filter(Boolean);
+  return parts.length ? `includes ${parts.join(', ')}` : null;
+}
+
+function DaysFigure({ row }: { row: WorkRow }) {
   const { daysInPhase: used, plannedDays: planned } = row;
-  if (used === null) {
-    return (
-      <td>
-        <Blank says="No current phase" />
-      </td>
-    );
-  }
+  const status = unmeasuredStatus(row);
+  if (status) return <span className="sl-figure">{status}</span>;
+  if (used === null) return <Blank says="No current phase" />;
   if (!planned) {
     return (
-      <td className="sl-figure">
-        {used} d<span className="visually-hidden"> in phase, no planned length</span>
-      </td>
+      <span className="sl-figure">
+        {used} d<span className="visually-hidden"> in phase</span>
+        {row.suspended ? ', suspended' : <span className="visually-hidden">, no planned length</span>}
+      </span>
     );
   }
   const fill = row.bar ?? 'normal';
-  const extra = row.overdue ? ` · +${row.daysOver}` : fill === 'near-limit' ? ` · ${row.percentUsed} %` : '';
-  const spoken = row.overdue
-    ? `${used} of ${planned} planned days, ${row.daysOver} over`
-    : `${used} of ${planned} planned days${fill === 'near-limit' ? ', near the limit' : ''}`;
+  let figure = `${used}/${planned}${fill === 'near-limit' ? ` · ${row.percentUsed} %` : ''}`;
+  let spoken = `${used} of ${planned} planned days${fill === 'near-limit' ? ', near the limit' : ''}`;
+  if (row.overdue) {
+    figure = `${used}/${planned} · +${row.daysOver}`;
+    spoken = `${used} of ${planned} planned days, ${row.daysOver} over`;
+  } else if (row.suspended) {
+    figure = `${used} d, suspended`;
+    spoken = `${used} of ${planned} planned days, suspended`;
+  }
+  return (
+    <span className="sl-days">
+      <span className="progress sl-bar" aria-hidden="true">
+        <span
+          className={`progress__fill sl-bar__fill sl-bar__fill--${fill}`}
+          style={{ width: `${Math.min(100, row.percentUsed ?? 0)}%` }}
+        />
+      </span>
+      <span className={`sl-figure${row.overdue ? ' sl-figure--overdue' : ''}`} aria-hidden="true">
+        {figure}
+      </span>
+      <span className="visually-hidden">{spoken}</span>
+    </span>
+  );
+}
+
+function DaysCell({ row }: { row: WorkRow }) {
+  const breakdown = breakdownOf(row);
   return (
     <td>
-      <span className="sl-days">
-        <span className="progress sl-bar" aria-hidden="true">
-          <span
-            className={`progress__fill sl-bar__fill sl-bar__fill--${fill}`}
-            style={{ width: `${row.overdue ? 100 : (row.percentUsed ?? 0)}%` }}
-          />
-        </span>
-        <span className={`sl-figure${row.overdue ? ' sl-figure--overdue' : ''}`} aria-hidden="true">
-          {used}/{planned}
-          {extra}
-        </span>
-        <span className="visually-hidden">{spoken}</span>
-      </span>
+      <DaysFigure row={row} />
+      {breakdown && <span className="sl-sub">{breakdown}</span>}
     </td>
   );
 }
@@ -238,7 +256,7 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   const [pressed, setPressed] = useState<WorkStatus | null>(null);
   const [limit, setLimit] = useState(PAGE);
   const counts = useMemo(() => {
-    const tally = Object.fromEntries(TILES.map((status) => [status, 0])) as Record<WorkStatus, number>;
+    const tally = Object.fromEntries(Object.keys(STATUS_LABEL).map((status) => [status, 0])) as Record<WorkStatus, number>;
     for (const row of rows) tally[row.status] += 1;
     return tally;
   }, [rows]);
