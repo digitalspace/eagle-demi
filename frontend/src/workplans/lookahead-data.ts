@@ -1,5 +1,6 @@
 import { isDecisionPhase, type WorkRow } from './derive';
 import { phaseToneOf, type PhaseTone } from './phase-tone';
+import { rowKey } from './timeline-rows';
 import { dayNumber } from './timeline-scale';
 
 export type LookaheadWindow = '30d' | '90d' | '6m';
@@ -65,14 +66,14 @@ export function windowEnd(today: string, window: LookaheadWindow): string {
 
 /**
  * Starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed and inactive works have none.
- * The decision phase shows once, at the work's decision date, instead of at its start.
+ * A decision phase shows once: at the decision date when that is in the window, else at its start.
  */
 export function milestonesIn(rows: WorkRow[], today: string, end: string): Milestone[] {
   const from = dayNumber(today);
   const inWindow = (date: string | null): date is string => date !== null && date >= today && date <= end;
   const milestones = rows.flatMap((row) => {
     if (row.closed || row.status === 'inactive') return [];
-    const id = `${row.work.source}:${row.work.workId}`;
+    const id = rowKey(row);
     const nameAt = (index: number) => row.phases[index]?.name || 'Unnamed phase';
     const make = (kind: MilestoneKind, date: string, index: number, phase: string, tone: PhaseTone): Milestone => ({
       key: `${id}:${kind}:${index}`,
@@ -85,16 +86,17 @@ export function milestonesIn(rows: WorkRow[], today: string, end: string): Miles
       phase,
     });
     const decisionAt = row.phases.reduce((last, phase, index) => (isDecisionPhase(phase) ? index : last), -1);
+    const decision = inWindow(row.decisionDate) ? row.decisionDate : null;
     const starts = row.phases.flatMap((phase, index) => {
       const date = phase.startDate ? phase.startDate.slice(0, 10) : null;
-      if (phase.isCompleted || index === decisionAt || !inWindow(date)) return [];
+      if (phase.isCompleted || (index === decisionAt && decision) || !inWindow(date)) return [];
       return [make('phase', date, index, nameAt(index), phaseToneOf(phase))];
     });
-    if (!inWindow(row.decisionDate)) return starts;
+    if (!decision) return starts;
     // With no decision phase, the decision follows the last phase.
     const at = decisionAt >= 0 ? decisionAt : row.phases.length;
     const name = decisionAt >= 0 ? nameAt(decisionAt) : 'Decision';
-    return [...starts, make('decision', row.decisionDate, at, name, 'decision')];
+    return [...starts, make('decision', decision, at, name, 'decision')];
   });
   return milestones.sort(
     (a, b) => a.date.localeCompare(b.date) || (a.row.work.title ?? '').localeCompare(b.row.work.title ?? ''),

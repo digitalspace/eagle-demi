@@ -29,7 +29,7 @@ export const SCREENS = [
   { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
   { path: '/workplans', h1: 'Workplans', text: 'Sample Beta Quarry - Amendment' },
   { path: '/workplans?view=pipeline', h1: 'Workplans', text: 'Proponent time' },
-  { path: '/workplans?view=lookahead', h1: 'Workplans', text: 'Window' },
+  { path: '/workplans?view=lookahead', h1: 'Workplans', text: '90 days' },
   { path: '/notify', h1: 'eagle-notify' },
   { path: '/links', h1: 'Short URLs' },
   { path: '/rbac', h1: 'Access model' },

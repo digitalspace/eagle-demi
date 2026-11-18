@@ -1,4 +1,5 @@
 import type { WorkRow, WorkStatus } from './derive';
+import { count } from './format';
 
 export type TileStatus = 'overdue' | 'next-30' | 'on-track' | 'not-started';
 
@@ -32,7 +33,7 @@ export function StatusTiles({
           aria-pressed={pressed === status}
           onClick={() => onPress(status)}
         >
-          <span className="sl-tile__count">{(counts.get(status) ?? 0).toLocaleString('en-CA')}</span>
+          <span className="sl-tile__count">{count(counts.get(status) ?? 0)}</span>
           <span className="sl-tile__label">{TILE_LABEL[status]}</span>
         </button>
       ))}

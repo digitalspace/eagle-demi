@@ -3,7 +3,7 @@ import { ChipSelect } from './ChipSelect';
 import { STATUS_LABEL, type WorkRow, type WorkStatus } from './derive';
 import { plural } from './format';
 import { WORK_STATE_LABEL, type WorkState } from './work-state';
-import { workTypeOf } from './work-types';
+import { workTypeName, workTypeOf } from './work-types';
 
 export interface WorkFilters {
   /** Matched, case-insensitive, against the work title, the project name and the work type name. */
@@ -55,17 +55,20 @@ function Chip({ pressed, onClick, children }: { pressed: boolean; onClick: () =>
 
 const byLabel = (a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label);
 
-function useOptions(rows: WorkRow[]) {
+/** The options `rows` give, plus the picked one when `rows` lack it, so its chip still shows and clears. */
+function useOptions(rows: WorkRow[], type: string | null, phase: string | null) {
   return useMemo(() => {
     const types = new Map(
       rows.flatMap((row): [string, string][] => (row.work.workTypeCode ? [[row.work.workTypeCode, workTypeOf(row).name]] : [])),
     );
+    if (type && !types.has(type)) types.set(type, workTypeName(type));
     const phases = new Set(rows.flatMap((row) => (row.current?.name ? [row.current.name] : [])));
+    if (phase) phases.add(phase);
     return {
       types: [...types].map(([code, name]) => ({ value: code, label: name })).sort(byLabel),
       phases: [...phases].map((name) => ({ value: name, label: name })).sort(byLabel),
     };
-  }, [rows]);
+  }, [rows, type, phase]);
 }
 
 /**
@@ -96,7 +99,7 @@ export function Filters({
   withPlaceholder: boolean;
   count: number;
 }) {
-  const { types, phases } = useOptions(rows);
+  const { types, phases } = useOptions(rows, value.type, value.phase);
   return (
     <div className="wp-filters">
       {lead}

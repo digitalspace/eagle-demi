@@ -51,11 +51,15 @@ export function TimelineOverview({ rows, scale, lanePx, today, scroller, onPan }
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
     const at = laneAt(event.clientX);
     const inside = at >= x && at <= x + lanePx;
     grab.current = inside ? at - x : lanePx / 2;
     if (!inside) pan(at - grab.current);
     event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const release = () => {
+    grab.current = null;
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (grab.current !== null) pan(laneAt(event.clientX) - grab.current);
@@ -93,8 +97,9 @@ export function TimelineOverview({ rows, scale, lanePx, today, scroller, onPan }
         ref={track}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={() => (grab.current = null)}
-        onPointerCancel={() => (grab.current = null)}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onLostPointerCapture={release}
       >
         {cells.map((cell) => (
           <span

@@ -181,12 +181,10 @@
   border-radius: var(--layout-border-radius-medium);
 }
 
-/* Longer words ("Status unknown") cut short here; the cell's title and the row summary keep them whole. */
+/* Longer values ("311 d, suspended", "Status unknown") wrap to a second line inside the row's height. */
 .timeline__days {
-  overflow: hidden;
-  text-overflow: ellipsis;
   text-align: right;
-  white-space: nowrap;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
   color: var(--typography-color-secondary);
 }

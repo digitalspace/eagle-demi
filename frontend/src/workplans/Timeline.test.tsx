@@ -9,6 +9,7 @@ import { json } from '../test-http';
 import { renderScreen } from '../test-query';
 import { rowsOf } from './derive';
 import { TimelineView } from './Timeline';
+import { Legend } from './timeline-parts';
 
 const TODAY = '2026-11-17';
 const LEFT_PX = 368;
@@ -142,5 +143,15 @@ describe('TimelineView', () => {
     );
 
     expect(screen.getByText(/^Closed\. Certificate Issued \(PAC\), decision 10 Jun 1999\. /)).toBeInTheDocument();
+  });
+});
+
+describe('Legend', () => {
+  it('keys Not completed only while some bar draws it', () => {
+    const { rerender } = render(<Legend drawn={new Set()} />);
+    expect(screen.queryByText('Not completed')).toBeNull();
+
+    rerender(<Legend drawn={new Set(['incomplete'])} />);
+    expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Not completed')).toBeInTheDocument();
   });
 });

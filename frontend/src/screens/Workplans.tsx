@@ -26,7 +26,7 @@ const VIEWS: { value: View; label: string }[] = [
 
 const VIEW_BODY = { timeline: TimelineView, list: StatusListView, pipeline: PipelineView, lookahead: LookaheadView };
 
-const NO_FILTERS: WorkFilters = {
+const DEFAULT_FILTERS: WorkFilters = {
   query: '',
   state: 'open',
   act: null,
@@ -117,7 +117,7 @@ export function Workplans() {
   const workplans = useWorkplans();
   const projects = useProjects('');
   const [params, setParams] = useSearchParams();
-  const [filters, setFilters] = useState<WorkFilters>(NO_FILTERS);
+  const [filters, setFilters] = useState<WorkFilters>(DEFAULT_FILTERS);
   const view = viewOf(params.get('view'));
   const today = useMemo(() => isoDay(new Date().toISOString()), []);
 
@@ -133,6 +133,12 @@ export function Workplans() {
     const query = applied.query.trim().toLowerCase();
     return rows.filter((row) => matches(row, { ...applied, query }, VIEW_FILTERS[view].states));
   }, [rows, deferred, view]);
+  // Work type and Phase offer only what Work state and the hidden switch let through, so no option empties the view.
+  const optionRows = useMemo(() => {
+    const { state, showHidden } = appliedFilters(filters, view);
+    const only = { ...DEFAULT_FILTERS, state, showHidden };
+    return rows.filter((row) => matches(row, only, VIEW_FILTERS[view].states));
+  }, [rows, filters, view]);
 
   const changeView = (next: View) =>
     setParams((current) => {
@@ -150,7 +156,7 @@ export function Workplans() {
     const bar: BarSlot = (slots) => (
       <Filters
         {...slots}
-        rows={rows}
+        rows={optionRows}
         value={appliedFilters(filters, view)}
         onChange={(change) => setFilters((current) => ({ ...current, ...change }))}
         states={states}

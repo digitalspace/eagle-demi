@@ -102,7 +102,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: var(--layout-padding-small) 10px;
+  padding: 6px 10px;
   border-bottom-color: var(--sl-border);
   white-space: nowrap;
   text-transform: none;

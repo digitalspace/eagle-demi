@@ -29,7 +29,7 @@ describe('PipelineView', () => {
     expect(titlesIn('Intake')).toEqual(['sample gamma wind farm - Assessment']);
     expect(titlesIn('Planning')).toEqual(['Sample Delta Pipeline - Assessment']);
     expect(titlesIn('Proponent time')).toEqual(['Sample Epsilon Terminal - Amendment']);
-    expect(within(column('Decision')).getByText('No open works in this stage.')).toBeInTheDocument();
+    expect(within(column('Decision')).getByText('No works in this stage.')).toBeInTheDocument();
   });
 
   it('sorts a column by most days over, then by share of the phase used, inactive works last', () => {

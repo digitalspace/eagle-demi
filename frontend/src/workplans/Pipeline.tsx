@@ -5,8 +5,8 @@ import { WorkPill } from '../screens/SheetWorksPanel';
 import { useNarrow } from '../shell/useNarrow';
 import { PIPELINE_COLUMNS, toneOf, type PipelineColumn, type WorkRow } from './derive';
 import type { ViewProps } from './Filters';
-import { plural, shortDate } from './format';
-import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
+import { count, plural, shortDate } from './format';
+import { rowKey, suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './pipeline.css';
 
@@ -14,7 +14,6 @@ const PAGE = 100;
 /** Stacked columns (pipeline.css) have no scroll box of their own, so each shows fewer cards before Show more. */
 const STACKED_PAGE = 5;
 const STACKED_QUERY = '(max-width: 40rem)';
-const count = (n: number) => n.toLocaleString('en-CA');
 
 /** What each column holds, as `columnOf` in derive.ts maps phases to columns. */
 const COLUMN_NOTE: Record<PipelineColumn, string> = {
@@ -165,11 +164,11 @@ function Column({ name, rows, today }: { name: PipelineColumn; rows: WorkRow[]; 
       </div>
       <div className="pl-col__body">
         {rows.length === 0 ? (
-          <p className="pl-empty">No open works in this stage.</p>
+          <p className="pl-empty">No works in this stage.</p>
         ) : (
           <ul className="pl-cards" ref={list}>
             {visible.map((row) => (
-              <Card key={`${row.work.source}:${row.work.workId}`} row={row} today={today} />
+              <Card key={rowKey(row)} row={row} today={today} />
             ))}
           </ul>
         )}

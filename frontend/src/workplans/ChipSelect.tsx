@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import './workplans.css';
 
 /**
@@ -17,8 +18,14 @@ export function ChipSelect<T extends string | number>({
   onChange: (value: T | null) => void;
   clearable?: boolean;
 }) {
+  const select = useRef<HTMLSelectElement>(null);
   const chosen = options.find((option) => option.value === value);
   const pick = (raw: string) => onChange(options.find((option) => String(option.value) === raw)?.value ?? null);
+  // The × unmounts once cleared; focus moves to the select so it does not fall to the page.
+  const clear = () => {
+    onChange(null);
+    select.current?.focus();
+  };
   return (
     // Only a filter that can be cleared shows as set; a setting like Sort always has a value.
     <span className={`wp-chip-select${clearable && chosen ? ' wp-chip-select--set' : ''}`}>
@@ -26,6 +33,7 @@ export function ChipSelect<T extends string | number>({
         {chosen ? `${label}: ${chosen.label}` : label}
       </span>
       <select
+        ref={select}
         className="wp-chip-select__native"
         aria-label={label}
         value={chosen ? String(chosen.value) : ''}
@@ -39,7 +47,7 @@ export function ChipSelect<T extends string | number>({
         ))}
       </select>
       {clearable && chosen && (
-        <button type="button" className="wp-chip-select__clear" aria-label={`Clear ${label}`} onClick={() => onChange(null)}>
+        <button type="button" className="wp-chip-select__clear" aria-label={`Clear ${label}`} onClick={clear}>
           <span aria-hidden="true">×</span>
         </button>
       )}

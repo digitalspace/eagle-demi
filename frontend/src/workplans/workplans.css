@@ -265,6 +265,7 @@
 }
 
 .wp-chip:focus-visible,
+.wp-search:focus-within,
 .wp-segmented__option:focus-visible,
 .wp-chip-select__clear:focus-visible,
 .wp-chip-select:has(.wp-chip-select__native:focus-visible) {

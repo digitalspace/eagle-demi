@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { ChipSelect } from './ChipSelect';
 import type { WorkRow } from './derive';
 import type { ViewProps } from './Filters';
-import { plural, shortDate, weekdayDate, weekOf } from './format';
+import { count, plural, shortDate, weekdayDate, weekOf } from './format';
 import {
   MILESTONE_KINDS,
   WINDOWS,
@@ -18,6 +18,7 @@ import {
   type Week,
 } from './lookahead-data';
 import { Segmented } from './Segmented';
+import { rowKey } from './timeline-rows';
 import './workplans.css';
 import './lookahead.css';
 
@@ -130,14 +131,14 @@ function OverduePanel({ rows }: { rows: WorkRow[] }) {
   return (
     <section className="panel la-panel la-panel--overdue" aria-labelledby={id}>
       <h2 id={id} className="la-panel__head">
-        Overdue now <span className="la-panel__count">{rows.length.toLocaleString('en-CA')}</span>
+        Overdue now <span className="la-panel__count">{count(rows.length)}</span>
       </h2>
       {rows.length === 0 ? (
         <p className="la-empty">No work is past the planned end of its phase.</p>
       ) : (
         <ul className="la-list la-panel__body">
           {rows.map((row) => (
-            <li key={`${row.work.source}:${row.work.workId}`} className="la-list__item">
+            <li key={rowKey(row)} className="la-list__item">
               <WorkLink row={row} />
               <span className="la-list__figure la-list__figure--overdue">
                 +{row.daysOver} d<span className="visually-hidden"> over</span>

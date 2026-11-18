@@ -51,7 +51,7 @@ describe('StatusListView', () => {
       'Current phase',
       'Days in phase',
       'Next milestone',
-      'Lifecycle (start → decision)',
+      'Lifecycle (start → end)',
       'Est. decision',
     ]);
   });
@@ -120,7 +120,7 @@ describe('StatusListView', () => {
 
   it('counts the works shown in the footer', () => {
     renderList();
-    expect(screen.getByRole('status')).toHaveTextContent('Showing 1–14 of 14');
+    expect(screen.getByText('Showing 1–14 of 14')).toBeInTheDocument();
   });
 
   it('shows an open sheet work with no planned end as Status unknown', () => {

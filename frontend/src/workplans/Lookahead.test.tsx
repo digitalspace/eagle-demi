@@ -76,7 +76,7 @@ describe('LookaheadView', () => {
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Milestone type' }), 'Phase start');
 
-    expect(screen.getByRole('status')).toHaveTextContent(/^4 milestones across 3 works ·/);
+    expect(screen.getByRole('status')).toHaveTextContent(/^5 milestones across 4 works ·/);
     expect(within(region(/^Upcoming milestones$/)).queryByText('Amendment Review → Decision')).not.toBeInTheDocument();
     expect(within(region(/^Decisions this window$/)).getByText('Decision due')).toBeInTheDocument();
   });

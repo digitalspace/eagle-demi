@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useMemo, useState } from 'react';
-import { byAttention, type WorkRow } from './derive';
+import { byAttention } from './derive';
 import type { ViewProps } from './Filters';
-import { plural } from './format';
+import { count, plural } from './format';
 import {
   COLUMNS,
   DaysCell,
@@ -13,13 +13,12 @@ import {
   WorkCell,
 } from './status-list-cells';
 import { StatusTiles, type TileStatus } from './StatusTiles';
+import { rowKey } from './timeline-rows';
 import { hasDetails } from './work-notes';
 import './workplans.css';
 import './status-list.css';
 
 const PAGE = 200;
-const count = (n: number) => n.toLocaleString('en-CA');
-const rowKey = (row: WorkRow) => `${row.work.source}:${row.work.workId}`;
 
 /** Works sorted by attention; each status tile narrows the table to its status. */
 export function StatusListView({ rows, today, bar }: ViewProps) {
@@ -64,7 +63,7 @@ export function StatusListView({ rows, today, bar }: ViewProps) {
               <th scope="col" className="sl-col--days">Days in phase</th>
               <th scope="col" className="sl-col--next">Next milestone</th>
               <th scope="col" className="sl-col--life">
-                Lifecycle <span className="sl-th-note">(start → decision)</span>
+                Lifecycle <span className="sl-th-note">(start → end)</span>
               </th>
               <th scope="col" className="sl-col--decision">Est. decision</th>
             </tr>
@@ -98,7 +97,7 @@ export function StatusListView({ rows, today, bar }: ViewProps) {
         </table>
       </div>
       <div className="sl-footer">
-        <span role="status">
+        <span>
           Showing {visible.length > 0 ? `1–${count(visible.length)}` : '0'} of {count(shown.length)}
         </span>
         {more > 0 && (

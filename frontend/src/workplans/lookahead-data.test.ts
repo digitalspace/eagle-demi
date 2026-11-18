@@ -55,7 +55,7 @@ function work(workId: string, phases: WorkplanPhase[], extra: Partial<WorkplanRo
 const rows = (works: WorkplanRow[]) => rowsOf(works, [], TODAY);
 
 describe('milestonesIn', () => {
-  it('labels each phase start "previous → next" in its tone, and shows a decision phase once, at the decision date', () => {
+  it('labels each phase start "previous → next" in its tone, and shows a decision phase once, at the decision date when it is in the window', () => {
     const fixture = rows(FIXTURE.works as WorkplanRow[]);
 
     const found = milestonesIn(fixture, TODAY, windowEnd(TODAY, '6m'));
@@ -66,6 +66,8 @@ describe('milestonesIn', () => {
       ['2027-02-01', 'track-9401', 'Pre-EA', 'planning'],
       ['2027-05-01', 'track-9101', 'Effects Assessment → Referral', 'decision'],
       ['2027-05-01', 'track-9201', 'Amendment Review → Decision', 'decision'],
+      // Its decision, 2027-06-01, is past the window, so the decision phase shows at its start.
+      ['2027-05-01', 'track-9202', 'SubStart Assessment → SubStart Decision', 'decision'],
     ]);
   });
 

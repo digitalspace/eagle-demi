@@ -14,7 +14,7 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(13rem, 1fr));
   grid-template-rows: minmax(0, 1fr);
-  gap: var(--layout-margin-small);
+  gap: 10px;
   overflow-x: auto;
 }
 

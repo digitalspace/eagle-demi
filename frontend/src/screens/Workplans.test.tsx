@@ -59,6 +59,31 @@ describe('Workplans', () => {
     await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveFocus();
+  });
+
+  it('ignores Work state Closed on the pipeline, which never shows closed works', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
+    await user.click(screen.getByRole('button', { name: 'Pipeline' }));
+
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
+    expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    // 13 works with the closed ones.
+    expect(screen.getByText('6 works')).toBeInTheDocument();
+  });
+
+  it('offers only the work types Work state lets through', async () => {
+    const user = renderAt('/workplans');
+    await screen.findByRole('link', { name: OPEN_WORK });
+    const types = () => within(screen.getByRole('combobox', { name: 'Work type' })).queryByRole('option', { name: 'EAC extension' });
+    expect(types()).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    expect(types()).toBeInTheDocument();
   });
 
   it('narrows the works to one Act when it is picked', async () => {
