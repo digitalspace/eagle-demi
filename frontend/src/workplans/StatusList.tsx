@@ -201,6 +201,8 @@ const EMPTY: Record<WorkStatus | 'open', string> = {
   'next-30': 'No work has a milestone in the next 30 days.',
   'on-track': 'No work is on track with a later milestone.',
   'not-started': 'Every open work has started.',
+  unknown: 'Every open work has a planned end.',
+  inactive: 'No inactive works.',
   closed: 'No closed works.',
 };
 

@@ -110,6 +110,14 @@ export interface WorkplanPhase extends SheetPhase {
   isCompleted: boolean;
   /** Track only; null on a sheet phase. */
   isSuspended: boolean | null;
+  /** Track's current phase; null on a sheet phase and while Track has not sent its current phase. */
+  isCurrent: boolean | null;
+  /** Start of Track's open suspension; null on a sheet phase. */
+  suspendedDate: string | null;
+  /** Days added by extensions; null when a sheet interruption has no days. */
+  extensionDays: number | null;
+  /** Days added by finished suspensions; null when a sheet interruption has no days. */
+  suspendedDays: number | null;
 }
 
 /** One live work, Track or sheet, as `GET /workplans` sends it. */
@@ -120,6 +128,8 @@ export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   workTypeCode: string | null;
   workState: string | null;
   isActive: boolean | null;
+  /** Anticipated date of the work's last decision event while it has no actual date; null on a sheet work. */
+  decisionEventDate: string | null;
   phases: WorkplanPhase[];
 }
 

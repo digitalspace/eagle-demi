@@ -73,7 +73,7 @@ export function daysOf(row: WorkRow): string {
 }
 
 const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;
-const STATE_TEXT = { past: 'Done', current: 'Current', upcoming: 'Planned' } as const;
+const STATE_TEXT = { past: 'Done', current: 'Current', incomplete: 'Not completed', upcoming: 'Planned' } as const;
 
 function progressText(row: WorkRow): string {
   if (row.closed) return 'Closed.';

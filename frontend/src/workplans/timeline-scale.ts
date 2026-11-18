@@ -27,7 +27,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /** UTC day count of an ISO day or timestamp. */
 export const dayNumber = (iso: string) => Math.floor(Date.parse(iso.slice(0, 10)) / DAY_MS);
 
-export type SpanKind = 'past' | 'current' | 'upcoming' | 'overrun' | 'suspended';
+export type SpanKind = 'past' | 'current' | 'incomplete' | 'upcoming' | 'overrun' | 'suspended';
 export interface Span {
   kind: SpanKind;
   start: string;
