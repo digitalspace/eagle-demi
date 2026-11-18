@@ -12,6 +12,7 @@ const phaseCatalog = require('../../../src/domain/phase-catalog');
 const projects = require('../../../src/repositories/projects');
 const works = require('../../../src/repositories/works');
 const { resolveAccess } = require('../../../src/helpers/access-sql');
+const { ID_BATCH } = require('../../../src/domain/works-derive');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { getSheetWorks, getSheetWorksSummary, getWorkplans, getWorksStaff } = require('../../../src/controllers/nosql/works-staff');
@@ -287,4 +288,17 @@ test('workplans gives every work of the projects the caller may read, Track rows
     isCompleted: false, isSuspended: true, undated: null,
     interruptions: [{ kind: 'suspension', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
   }]);
+});
+
+test('workplans reads every project past the first id batch', async (t) => {
+  const ids = Array.from({ length: ID_BATCH * 2 + 1 }, (_, i) => String(1000 + i));
+  t.mock.method(works, 'liveProjectIds', async () => ids);
+  t.mock.method(projects, 'listByIds', async (access, batch) => batch.map(id => ({ id, name: `Project ${id}` })));
+  t.mock.method(works, 'listForReadAcross', async (batch) => batch.map(projectId => ({ ...SHEET_WORK, projectId })));
+  t.mock.method(works, 'getEach', async () => []);
+  t.mock.method(phaseCatalog, 'load', async () => ({}));
+  const res = mockRes();
+  await getWorkplans({ params: {}, query: {}, user: STAFF }, res);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.works.map(work => work.projectId), ids);
 });
