@@ -29,10 +29,10 @@ describe('PipelineView', () => {
     expect(titlesIn('Intake')).toEqual(['sample gamma wind farm - Assessment']);
     expect(titlesIn('Planning')).toEqual(['Sample Delta Pipeline - Assessment']);
     expect(titlesIn('Proponent time')).toEqual(['Sample Epsilon Terminal - Amendment']);
-    expect(within(column('Decision')).getByText('No open works in this stage.')).toBeInTheDocument();
+    expect(within(column('Decision')).getByText('No works in this stage.')).toBeInTheDocument();
   });
 
-  it('sorts a column by most days over, then by share of the phase used', () => {
+  it('sorts a column by most days over, then by share of the phase used, inactive works last', () => {
     const alpha = byTitle('Sample Alpha Transmission Line - Assessment');
     // Fewer days over than Alpha, but first by title.
     const aardvark: WorkplanRow = {
@@ -43,13 +43,28 @@ describe('PipelineView', () => {
         phase.name === 'Application Review' ? { ...phase, endDate: '2026-11-10T08:00:00.000Z' } : phase,
       ),
     };
-    renderBoard([...WORKS, aardvark]);
+    // Over its planned length, but inactive works show no bar, so that share must not rank it.
+    const idle: WorkplanRow = { ...alpha, workId: 'idle', title: 'Sample Aaa Idle - Assessment', isActive: false };
+    renderBoard([...WORKS, aardvark, idle]);
     expect(titlesIn('Review')).toEqual([
       'Sample Alpha Transmission Line - Assessment',
       'Sample Aardvark - Assessment',
       'Sample Beta Quarry - Substantial Start',
       'Sample Beta Quarry - Amendment',
+      'Sample Aaa Idle - Assessment',
     ]);
+  });
+
+  it('says in text what the red and amber bars show', () => {
+    renderBoard();
+    expect(within(column('Review')).getByText('47 days overdue')).toBeInTheDocument();
+    expect(column('Planning')).toHaveTextContent('88 % used');
+  });
+
+  it('shows when a not-started work starts and its first phase', () => {
+    renderBoard();
+    expect(column('Intake')).toHaveTextContent('Starts Feb 1, 2027');
+    expect(column('Intake')).toHaveTextContent('First phase: Pre-EA');
   });
 
   it('shows Inactive in place of the days of a Track work switched off past its end', () => {

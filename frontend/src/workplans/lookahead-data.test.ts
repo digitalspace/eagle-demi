@@ -55,19 +55,29 @@ function work(workId: string, phases: WorkplanPhase[], extra: Partial<WorkplanRo
 const rows = (works: WorkplanRow[]) => rowsOf(works, [], TODAY);
 
 describe('milestonesIn', () => {
-  it('lists every open phase start and the expected decision in six months, in date order', () => {
+  it('labels each phase start "previous → next" in its tone, and shows a decision phase once, at the decision date when it is in the window', () => {
     const fixture = rows(FIXTURE.works as WorkplanRow[]);
 
     const found = milestonesIn(fixture, TODAY, windowEnd(TODAY, '6m'));
 
-    expect(found.map((m) => [m.date, m.row.work.workId, m.what])).toEqual([
-      ['2026-12-01', 'track-9101', 'Effects Assessment starts'],
-      ['2026-12-15', 'track-9301', 'Application Development (Proponent) starts'],
-      ['2027-02-01', 'track-9401', 'Pre-EA starts'],
-      ['2027-04-01', 'track-9201', 'Decision starts'],
-      ['2027-05-01', 'track-9101', 'Referral starts'],
-      ['2027-05-01', 'track-9201', 'Decision expected'],
-      ['2027-05-01', 'track-9202', 'SubStart Decision starts'],
+    expect(found.map((m) => [m.date, m.row.work.workId, m.what, m.tone])).toEqual([
+      ['2026-12-01', 'track-9101', 'Application Review → Effects Assessment', 'review'],
+      ['2026-12-15', 'track-9301', 'Process Planning → Application Development (Proponent)', 'proponent'],
+      ['2027-02-01', 'track-9401', 'Pre-EA', 'planning'],
+      ['2027-05-01', 'track-9101', 'Effects Assessment → Referral', 'decision'],
+      ['2027-05-01', 'track-9201', 'Amendment Review → Decision', 'decision'],
+      // Its decision, 2027-06-01, is past the window, so the decision phase shows at its start.
+      ['2027-05-01', 'track-9202', 'SubStart Assessment → SubStart Decision', 'decision'],
+    ]);
+  });
+
+  it('puts a decision with no decision phase after the last phase', () => {
+    const row = work('w', [phase('Review', '2026-01-01')], { anticipatedDecisionDate: '2026-12-20' });
+
+    const found = milestonesIn(rows([row]), TODAY, windowEnd(TODAY, '90d'));
+
+    expect(found.map((m) => [m.date, m.kind, m.what, m.phase])).toEqual([
+      ['2026-12-20', 'decision', 'Review → Decision', 'Decision'],
     ]);
   });
 
@@ -84,8 +94,8 @@ describe('milestonesIn', () => {
 
     expect(end).toBe('2027-02-15');
     expect(found.map((m) => [m.what, m.inDays])).toEqual([
-      ['Today starts', 0],
-      ['Last day starts', 90],
+      ['Yesterday → Today', 0],
+      ['Today → Last day', 90],
     ]);
   });
 

@@ -1,7 +1,8 @@
 import { dayMonthYear } from '../dates';
-import { STATUS_LABEL, type WorkRow } from './derive';
+import { byAttention, STATUS_LABEL, type WorkRow } from './derive';
 import { dayNumber } from './timeline-scale';
 import { closedNoteOf } from './work-notes';
+import { WORK_TYPE_ORDER, workTypeOf } from './work-types';
 
 export type GroupBy = 'act' | 'type' | 'region';
 
@@ -11,17 +12,12 @@ export const GROUP_BYS: { value: GroupBy; label: string }[] = [
   { value: 'region', label: 'Region' },
 ];
 
-/** Short code and full name per `workTypeCode`, in the order type groups appear. */
-const WORK_TYPES: Record<string, { code: string; name: string }> = {
-  assessment: { code: 'EA', name: 'Assessment' },
-  amendment: { code: 'AMD', name: 'Amendment' },
-  'substantial-start': { code: 'SS', name: 'Substantial start' },
-  'eac-extension': { code: 'EXT', name: 'EAC extension' },
-};
-const TYPE_ORDER = Object.keys(WORK_TYPES);
+export type SortBy = 'start' | 'attention';
 
-export const workTypeOf = (row: WorkRow) =>
-  WORK_TYPES[row.work.workTypeCode ?? ''] ?? { code: '—', name: row.work.workTypeCode ?? 'Work type not known' };
+export const SORTS: { value: SortBy; label: string }[] = [
+  { value: 'start', label: 'Start date' },
+  { value: 'attention', label: 'Attention' },
+];
 
 export interface Group {
   key: string;
@@ -37,8 +33,12 @@ function keyOf(row: WorkRow, by: GroupBy): { key: string; label: string; rank: n
     return year ? { key: `act-${year}`, label: `${year} Act`, rank: -year } : { key: 'act-none', label: 'Act not known', rank: 0 };
   }
   if (by === 'type') {
-    const index = TYPE_ORDER.indexOf(row.work.workTypeCode ?? '');
-    return { key: `type-${row.work.workTypeCode}`, label: workTypeOf(row).name, rank: index < 0 ? TYPE_ORDER.length : index };
+    const index = WORK_TYPE_ORDER.indexOf(row.work.workTypeCode ?? '');
+    return {
+      key: `type-${row.work.workTypeCode}`,
+      label: workTypeOf(row).name,
+      rank: index < 0 ? WORK_TYPE_ORDER.length : index,
+    };
   }
   return row.region
     ? { key: `region-${row.region}`, label: row.region, rank: 0 }
@@ -46,9 +46,11 @@ function keyOf(row: WorkRow, by: GroupBy): { key: string; label: string; rank: n
 }
 
 const firstStart = (row: WorkRow) => (row.segments.length ? dayNumber(row.segments[0].start) : Infinity);
+const byStart = (a: WorkRow, b: WorkRow) =>
+  firstStart(a) - firstStart(b) || (a.work.title ?? '').localeCompare(b.work.title ?? '');
 
-/** Rows in groups (newest Act first, type order, regions A to Z); each group by first phase start, undated last. */
-export function groupsOf(rows: WorkRow[], by: GroupBy): Group[] {
+/** Rows in groups (newest Act first, type order, regions A to Z); each by first phase start, undated last, or attention. */
+export function groupsOf(rows: WorkRow[], by: GroupBy, sort: SortBy = 'start'): Group[] {
   const groups = new Map<string, Group & { rank: number }>();
   for (const row of rows) {
     const { key, label, rank } = keyOf(row, by);
@@ -59,7 +61,7 @@ export function groupsOf(rows: WorkRow[], by: GroupBy): Group[] {
   }
   const sorted = [...groups.values()].sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
   for (const group of sorted) {
-    group.rows.sort((a, b) => firstStart(a) - firstStart(b) || (a.work.title ?? '').localeCompare(b.work.title ?? ''));
+    group.rows.sort(sort === 'attention' ? byAttention : byStart);
   }
   return sorted.map(({ key, label, rows: groupRows, overdue }) => ({ key, label, rows: groupRows, overdue }));
 }

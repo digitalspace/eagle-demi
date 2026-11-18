@@ -46,7 +46,14 @@ describe('StatusListView', () => {
   it('exposes its column headers', () => {
     renderList();
     const headers = screen.getAllByRole('columnheader').map((th) => th.textContent);
-    expect(headers).toEqual(['Work', 'Current phase', 'Days in phase', 'Next milestone', 'Lifecycle', 'Est. decision']);
+    expect(headers).toEqual([
+      'Work',
+      'Current phase',
+      'Days in phase',
+      'Next milestone',
+      'Lifecycle (start → end)',
+      'Est. decision',
+    ]);
   });
 
   it('narrows to the overdue Track work when the Overdue tile is pressed', async () => {
@@ -68,18 +75,32 @@ describe('StatusListView', () => {
     expect(bodyRows().length).toBeGreaterThan(1);
   });
 
-  it('shows closed sheet works under the Closed tile', async () => {
-    const user = renderList();
-    expect(screen.queryByRole('link', { name: /\(1996\)/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: /Closed/ }));
+  it('puts the attention summary in the filter bar', () => {
+    render(
+      <MemoryRouter>
+        <StatusListView rows={rowsOf(FIXTURE.works as WorkplanRow[], [], TODAY)} today={TODAY} bar={(slots) => <p>{slots?.summary}</p>} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Sorted by attention · 14 works')).toBeInTheDocument();
+  });
+
+  it('marks an overdue work’s next milestone as blocked by its current phase', () => {
+    renderList();
+    expect(cellOf('Sample Alpha Transmission Line - Assessment', 3)).toHaveTextContent(
+      'Effects Assessment (blocked)Waiting on Application Review',
+    );
+  });
+
+  it('lists the closed works it is given, with no Closed tile', () => {
+    renderList();
     expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Closed/ })).toBeNull();
   });
 
   it('says how a closed work ended and opens a sheet work’s stored details under its row; a Track work has none', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => json(String(input).includes('/sheet-works') ? SHEET : {})));
     renderScreen(<StatusListView rows={rowsOf(FIXTURE.works as WorkplanRow[], [], TODAY)} today={TODAY} />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: /Closed/ }));
 
     expect(phaseCell(ALPHA_1996)).toHaveTextContent('ClosedWithdrawn');
     expect(phaseCell(ALPHA_2002)).toHaveTextContent('ClosedCertificate Issued (EAC)');
@@ -97,11 +118,9 @@ describe('StatusListView', () => {
     expect(within(panel).getByText('Certificate Issued')).toBeInTheDocument();
   });
 
-  it('counts only open works in the footer by default, and says where the closed ones are', () => {
+  it('counts the works shown in the footer', () => {
     renderList();
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Showing 6 of 6 open works. 8 closed works are under the Closed tile.',
-    );
+    expect(screen.getByText('Showing 1–14 of 14')).toBeInTheDocument();
   });
 
   it('shows an open sheet work with no planned end as Status unknown', () => {
@@ -123,10 +142,9 @@ describe('StatusListView', () => {
     expect(within(daysCell('Sample Epsilon Terminal - Amendment')).getByText('includes 30 d extension')).toBeInTheDocument();
   });
 
-  it('renders closed works 200 at a time', async () => {
+  it('renders works 200 at a time', async () => {
     const closed = (FIXTURE.works as WorkplanRow[]).find((work) => work.source === 'sheet')!;
     const user = renderList(Array.from({ length: 201 }, (_, i) => ({ ...closed, workId: `w${i}` })));
-    await user.click(screen.getByRole('button', { name: /Closed/ }));
     expect(bodyRows()).toHaveLength(200);
     await user.click(screen.getByRole('button', { name: 'Show 1 more' }));
     expect(bodyRows()).toHaveLength(201);

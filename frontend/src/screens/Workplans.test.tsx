@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,9 @@ import { withQueryClient } from '../test-query';
 import { Workplans } from './Workplans';
 
 const HIDDEN_TRACK_WORK = 'Sample Alpha Transmission Line - Substation Assessment';
+const OPEN_WORK = 'Sample Beta Quarry - Amendment';
+const OTHER_OPEN_WORK = 'Sample Alpha Transmission Line - Assessment';
+const CLOSED_1996_WORK = 'Sample Delta Pipeline - Assessment (1996)';
 
 /** `/workplans` answers with `workplans`; the project list and anything else read as empty. */
 function renderAt(path: string, workplans: () => Response = () => json(FIXTURE)) {
@@ -38,41 +41,133 @@ describe('Workplans', () => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
+    // The hidden work is completed, so Work state has to let closed works through first.
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(screen.queryByRole('link', { name: HIDDEN_TRACK_WORK })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Show replaced and hidden' }));
     expect(screen.getByRole('link', { name: HIDDEN_TRACK_WORK })).toBeInTheDocument();
   });
 
-  it('narrows the works to one Act when its chip is pressed', async () => {
+  it('shows works in progress by default, and every state once Work state is cleared', async () => {
     const user = renderAt('/workplans');
 
-    await screen.findByRole('link', { name: 'Sample Beta Quarry - Amendment' });
-    await user.click(screen.getByRole('button', { name: '1996' }));
+    await screen.findByRole('link', { name: OPEN_WORK });
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('In progress');
+    expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
 
-    expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Sample Beta Quarry - Amendment' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveFocus();
+  });
+
+  it('ignores Work state Closed on the pipeline, which never shows closed works', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
+    await user.click(screen.getByRole('button', { name: 'Pipeline' }));
+
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
+    expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    // Closed works stay out: with them the pipeline would count 13.
+    expect(screen.getByText('6 works')).toBeInTheDocument();
+  });
+
+  it('offers only the work types Work state lets through', async () => {
+    const user = renderAt('/workplans');
+    await screen.findByRole('link', { name: OPEN_WORK });
+    const types = () => within(screen.getByRole('combobox', { name: 'Work type' })).queryByRole('option', { name: 'EAC extension' });
+    expect(types()).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    expect(types()).toBeInTheDocument();
+  });
+
+  it('keeps a picked work type that Work state then rules out, so it can still be cleared', async () => {
+    const user = renderAt('/workplans');
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work type' }), 'EAC extension');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
+    expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Work type' }));
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+  });
+
+  it('narrows the works to one Act when it is picked', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Act' }), '1996');
+
+    expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
+  });
+
+  it('narrows the list to works whose current phase is the one picked', async () => {
+    const user = renderAt('/workplans?view=list');
+
+    await screen.findByRole('link', { name: OTHER_OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Phase' }), 'Amendment Review');
+
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: OTHER_OPEN_WORK })).toBeNull();
+  });
+
+  it('narrows the works to those whose title, project or type holds the search text', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    expect(screen.getByRole('link', { name: OTHER_OPEN_WORK })).toBeInTheDocument();
+    await user.type(screen.getByRole('searchbox', { name: 'Search works' }), 'BETA quarry');
+
+    await waitFor(() => expect(screen.queryByRole('link', { name: OTHER_OPEN_WORK })).toBeNull());
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+  });
+
+  it('keeps the search box on the pipeline when nothing matches, and brings the cards back once cleared', async () => {
+    const user = renderAt('/workplans?view=pipeline');
+    const search = await screen.findByRole('searchbox', { name: 'Search works' });
+
+    await user.type(search, 'no such work');
+    expect(await screen.findByText('No works match these filters.')).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search works' })).toBe(search);
+    expect(search).toHaveFocus();
+
+    await user.clear(search);
+    expect(await screen.findByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+  });
+
+  it('gives the Lookahead its Window and Milestone type in the shared bar, with no Work state', async () => {
+    renderAt('/workplans?view=lookahead');
+
+    expect(await screen.findByRole('group', { name: 'Window' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Milestone type' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search works' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Work state' })).toBeNull();
   });
 
   it.each([
-    ['List', () => screen.getByRole('link', { name: 'Sample Beta Quarry - Amendment' })],
-    ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: 'Sample Beta Quarry - Amendment' })],
+    ['List', () => screen.getByRole('link', { name: OPEN_WORK })],
+    ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: OPEN_WORK })],
     ['Lookahead', () => screen.getByRole('region', { name: 'Upcoming milestones' })],
-  ])('drops the Status chips in %s, and gives the timeline its status back', async (view, shownPart) => {
+  ])('drops the Status filter in %s, and gives the timeline its status back', async (view, shownPart) => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
-    await user.click(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Overdue');
     await user.click(screen.getByRole('button', { name: view }));
 
-    expect(screen.queryByRole('group', { name: 'Status' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Status' })).toBeNull();
     expect(shownPart()).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Timeline' }));
-    expect(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveDisplayValue('Overdue');
   });
 
   it('keeps the view in ?view=, opening the list from the link and the timeline from its button', async () => {

@@ -14,7 +14,7 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(13rem, 1fr));
   grid-template-rows: minmax(0, 1fr);
-  gap: var(--layout-margin-small);
+  gap: 10px;
   overflow-x: auto;
 }
 
@@ -23,17 +23,20 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-radius: var(--layout-border-radius-large);
+  border-radius: 8px;
   background: var(--theme-gray-20);
 }
 
 .pl .pl-col__head {
   flex: none;
+  padding: 10px 12px var(--layout-padding-small);
+}
+
+.pl .pl-col__title {
   display: flex;
   align-items: center;
   gap: var(--layout-margin-small);
   margin: 0;
-  padding: var(--layout-padding-small) var(--layout-padding-medium);
   font: var(--typography-bold-small-body);
   color: var(--typography-color-primary);
 }
@@ -43,6 +46,7 @@
   border-radius: var(--layout-border-radius-circular);
   background: var(--surface-color-background-white);
   font: var(--typography-bold-label);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--typography-color-secondary);
 }
@@ -50,7 +54,14 @@
 .pl .pl-col__overdue {
   margin-left: auto;
   font: var(--typography-bold-label);
+  font-weight: 600;
   color: var(--wp-overdue);
+}
+
+.pl .pl-col__note {
+  margin: 3px 0 0;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
 }
 
 /* Positioned so the cards' visually-hidden text stays inside the scroll box. */
@@ -86,9 +97,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--layout-margin-xsmall);
-  padding: var(--layout-padding-small);
-  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  gap: 6px;
+  padding: 10px;
+  border: var(--layout-border-width-small) solid var(--theme-gray-40);
   border-radius: var(--layout-border-radius-large);
   background: var(--surface-color-background-white);
   font: var(--typography-regular-label);
@@ -96,8 +107,28 @@
   overflow-wrap: anywhere;
 }
 
+.pl .pl-card:hover {
+  border-color: var(--wp-muted-blue);
+}
+
 .pl .pl-card > * {
   max-width: 100%;
+}
+
+.pl .pl-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+}
+
+.pl .pl-over {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #f6d3d4;
+  font: var(--typography-bold-label);
+  color: var(--wp-overdue);
 }
 
 .pl .pl-work {
@@ -105,8 +136,13 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   font: var(--typography-bold-small-body);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.125rem;
   text-decoration: none;
 }
 
@@ -130,10 +166,6 @@
   padding: 0 var(--layout-padding-small);
 }
 
-.pl .pl-phase .pl-flag {
-  margin-left: auto;
-}
-
 .pl .pl-sub {
   color: var(--typography-color-secondary);
 }
@@ -146,6 +178,13 @@
   gap: var(--layout-margin-small);
   width: 100%;
   min-width: 0;
+}
+
+.pl .pl-line {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .pl .pl-swatch {
@@ -165,18 +204,20 @@
 .pl .pl-swatch--decision { background: var(--wp-phase-decision-edge); }
 
 .pl .pl-swatch--waiting {
-  background: var(--surface-color-background-white);
-  border-color: var(--theme-gray-60);
+  background: var(--theme-gray-60);
 }
 
 .pl .pl-bar {
   flex: 1;
-  height: 6px;
+  height: 5px;
+  border-radius: 3px;
   background: var(--theme-gray-30);
+  overflow: hidden;
 }
 
 .pl .pl-bar__fill {
   display: block;
+  height: 100%;
 }
 
 .pl .pl-bar__fill--normal {
@@ -198,14 +239,11 @@
 }
 
 .pl .pl-figure--overdue {
-  font-weight: 700;
   color: var(--wp-overdue);
 }
 
 .pl .pl-next {
-  flex-wrap: wrap;
-  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
-  margin-top: var(--layout-margin-hair);
+  gap: 6px;
   padding-top: var(--layout-padding-xsmall);
   border-top: var(--layout-border-width-small) solid var(--theme-gray-20);
   color: var(--typography-color-secondary);
@@ -236,13 +274,6 @@
   margin: 0;
   padding: var(--layout-padding-large);
   text-align: center;
-  color: var(--typography-color-secondary);
-}
-
-.pl .pl-footer {
-  flex: none;
-  margin: 0;
-  font: var(--typography-regular-small-body);
   color: var(--typography-color-secondary);
 }
 

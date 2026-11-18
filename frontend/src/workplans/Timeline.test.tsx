@@ -9,6 +9,7 @@ import { json } from '../test-http';
 import { renderScreen } from '../test-query';
 import { rowsOf } from './derive';
 import { TimelineView } from './Timeline';
+import { Legend } from './timeline-parts';
 
 const TODAY = '2026-11-17';
 const LEFT_PX = 368;
@@ -52,6 +53,37 @@ describe('TimelineView', () => {
 
     expect(screen.getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'true');
     expect(todayInLane(region)).toBe(LANE_PX * 0.25);
+  });
+
+  it('pans the lane a quarter at a time from the overview window, which Fit all hides', async () => {
+    render(
+      <MemoryRouter>
+        <TimelineView rows={rows()} today={TODAY} />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    const scroller = screen.getByRole('region', { name: 'Timeline' }).querySelector<HTMLElement>('.timeline__scroll')!;
+    const slider = screen.getByRole('slider', { name: 'Visible range' });
+    const before = scroller.scrollLeft;
+
+    slider.focus();
+    await user.keyboard('{ArrowLeft}');
+
+    // Quarter zoom shows three years across the lane, so a quarter is a twelfth of it.
+    expect(scroller.scrollLeft).toBe(Math.round(before - LANE_PX / 12));
+    expect(slider).toHaveAttribute('aria-valuenow', String(scroller.scrollLeft));
+    await user.click(screen.getByRole('button', { name: 'Fit all' }));
+    expect(screen.queryByRole('slider', { name: 'Visible range' })).toBeNull();
+  });
+
+  it('names an overdue bar’s overrun on hover', () => {
+    render(
+      <MemoryRouter>
+        <TimelineView rows={rows()} today={TODAY} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTitle(/^\d+ days overdue$/)).toHaveClass('timeline__bar--overrun');
   });
 
   it('opens a 1996 work’s stored milestones and outcome under its row', async () => {
@@ -111,5 +143,15 @@ describe('TimelineView', () => {
     );
 
     expect(screen.getByText(/^Closed\. Certificate Issued \(PAC\), decision 10 Jun 1999\. /)).toBeInTheDocument();
+  });
+});
+
+describe('Legend', () => {
+  it('keys Not completed only while some bar draws it', () => {
+    const { rerender } = render(<Legend drawn={new Set()} />);
+    expect(screen.queryByText('Not completed')).toBeNull();
+
+    rerender(<Legend drawn={new Set(['incomplete'])} />);
+    expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Not completed')).toBeInTheDocument();
   });
 });

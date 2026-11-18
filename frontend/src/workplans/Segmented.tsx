@@ -7,16 +7,19 @@ export function Segmented<T extends string>({
   options,
   value,
   onChange,
+  labelHidden = false,
 }: {
   label: string;
   options: { value: T; label: string }[];
   value: T;
   onChange: (value: T) => void;
+  /** The label still names the group for screen readers. */
+  labelHidden?: boolean;
 }) {
   const id = useId();
   return (
     <div className="wp-segmented">
-      <span id={id} className="wp-segmented__label">
+      <span id={id} className={labelHidden ? 'visually-hidden' : 'wp-segmented__label'}>
         {label}
       </span>
       <div className="wp-segmented__options" role="group" aria-labelledby={id}>

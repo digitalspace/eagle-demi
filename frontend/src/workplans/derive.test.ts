@@ -184,6 +184,52 @@ describe('rowsOf', () => {
     expect(row.segments.map((segment) => segment.state)).toEqual(['current', 'incomplete']);
   });
 
+  it('packs the strip end to end by phase days, an overdue phase pushing later ones right with today inside it', () => {
+    const row = rowOf(
+      work([
+        phase('Early Engagement', '2026-01-01', '2026-03-01', { isCompleted: true }),
+        phase('Application Review', '2026-03-01', '2026-10-01', { order: 2 }),
+        phase('Effects Assessment', '2027-01-01', '2027-03-01', { order: 3 }),
+      ]),
+    );
+    // 59 days, then 261 days from start to today (214 planned plus the overrun), then 59 days.
+    const [early, review, effects] = row.segments;
+
+    expect(review).toMatchObject({ state: 'current', end: '2026-10-01' });
+    expect(early.share).toBeCloseTo(59 / 379);
+    expect(review.offset).toBeCloseTo(59 / 379);
+    expect(review.share).toBeCloseTo(261 / 379);
+    expect(effects.offset).toBeCloseTo(320 / 379);
+    expect(row.todayAt).toBeCloseTo(320 / 379);
+    // The 47-day overrun pushes the strip's end past Effects Assessment's planned end.
+    expect(row.stripEnd).toBe('2027-04-17');
+  });
+
+  it('keeps today in an overdue current phase when the next phase has already started', () => {
+    const row = rowOf(
+      work([
+        phase('Application Review', '2026-03-01', '2026-10-01'),
+        phase('Effects Assessment', '2026-11-01', '2027-03-01', { order: 2 }),
+      ]),
+    );
+    const [review, effects] = row.segments;
+
+    expect([review.state, effects.state]).toEqual(['current', 'incomplete']);
+    expect(row.todayAt).toBeCloseTo(review.offset + review.share);
+  });
+
+  it('puts today at the start of the next phase when no phase is under way', () => {
+    const row = rowOf(
+      work([
+        phase('Early Engagement', '2026-01-01', '2026-03-01', { isCompleted: true }),
+        phase('Application Review', '2027-01-01', '2027-03-01', { order: 2 }),
+      ]),
+    );
+
+    expect(row.todayAt).toBeCloseTo(row.segments[1].offset);
+    expect(row.todayAt).toBeCloseTo(0.5);
+  });
+
   it('leaves a phase that ends before it starts off the lifecycle strip unless it is the current phase', () => {
     const row = rowOf(
       work([

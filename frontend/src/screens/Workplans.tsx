@@ -1,16 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ApiError, errorMessage } from '../api/client';
 import { useProjects } from '../api/projects';
 import { useWorkplans } from '../api/sheet-works';
 import { isoDay } from '../dates';
 import { rowsOf, type WorkRow } from '../workplans/derive';
-import { Filters, type WorkFilters } from '../workplans/Filters';
+import { Filters, type BarSlot, type WorkFilters } from '../workplans/Filters';
 import { LookaheadView } from '../workplans/Lookahead';
 import { PipelineView } from '../workplans/Pipeline';
 import { Segmented } from '../workplans/Segmented';
 import { StatusListView } from '../workplans/StatusList';
 import { TimelineView } from '../workplans/Timeline';
+import { workStateOf, type WorkState } from '../workplans/work-state';
+import { workTypeName } from '../workplans/work-types';
 import '../workplans/workplans.css';
 
 type View = 'timeline' | 'list' | 'pipeline' | 'lookahead';
@@ -24,17 +26,57 @@ const VIEWS: { value: View; label: string }[] = [
 
 const VIEW_BODY = { timeline: TimelineView, list: StatusListView, pipeline: PipelineView, lookahead: LookaheadView };
 
-const NO_FILTERS: WorkFilters = { act: null, type: null, status: null, showHidden: false };
+const DEFAULT_FILTERS: WorkFilters = {
+  query: '',
+  state: 'open',
+  act: null,
+  type: null,
+  status: null,
+  phase: null,
+  showHidden: false,
+};
+
+/** Which filters each view applies. */
+const VIEW_FILTERS: Record<View, { states: readonly WorkState[]; status: boolean; phase: boolean; placeholder: boolean }> = {
+  timeline: { states: ['open', 'inactive', 'closed'], status: true, phase: false, placeholder: true },
+  list: { states: ['open', 'inactive', 'closed'], status: false, phase: true, placeholder: true },
+  pipeline: { states: ['open', 'inactive'], status: false, phase: false, placeholder: true },
+  // The Window toggle and Milestone type take the room "+ Filter" would need to stay on one row.
+  lookahead: { states: [], status: false, phase: false, placeholder: false },
+};
 
 const viewOf = (param: string | null): View => VIEWS.find((view) => view.value === param)?.value ?? 'timeline';
 
-/** `status` is null outside the timeline: the other views leave closed works out or filter status themselves. */
-function matches(row: WorkRow, filters: WorkFilters, status: WorkFilters['status']): boolean {
+/** The filters `view` applies; the others stay in state, so they come back with their view. */
+function appliedFilters(filters: WorkFilters, view: View): WorkFilters {
+  const rules = VIEW_FILTERS[view];
+  return {
+    ...filters,
+    state: filters.state !== null && rules.states.includes(filters.state) ? filters.state : null,
+    status: rules.status ? filters.status : null,
+    phase: rules.phase ? filters.phase : null,
+  };
+}
+
+/** `query` already trimmed and lower case. */
+const matchesQuery = (row: WorkRow, query: string) =>
+  !query ||
+  [row.work.title, row.work.projectName, workTypeName(row.work.workTypeCode)].some((text) =>
+    (text ?? '').toLowerCase().includes(query),
+  );
+
+/** `states` are the ones the view shows at all: a view without Closed never gets a closed work. */
+function matches(row: WorkRow, filters: WorkFilters, states: readonly WorkState[]): boolean {
+  const state = workStateOf(row);
   return (
     (filters.showHidden || row.work.shownAfterFlip !== false) &&
+    (state !== 'closed' || states.includes('closed')) &&
+    (filters.state === null || state === filters.state) &&
     (filters.act === null || row.work.actYear === filters.act) &&
     (filters.type === null || row.work.workTypeCode === filters.type) &&
-    (status === null || row.status === status)
+    (filters.status === null || row.status === filters.status) &&
+    (filters.phase === null || row.current?.name === filters.phase) &&
+    matchesQuery(row, filters.query)
   );
 }
 
@@ -75,7 +117,7 @@ export function Workplans() {
   const workplans = useWorkplans();
   const projects = useProjects('');
   const [params, setParams] = useSearchParams();
-  const [filters, setFilters] = useState<WorkFilters>(NO_FILTERS);
+  const [filters, setFilters] = useState<WorkFilters>(DEFAULT_FILTERS);
   const view = viewOf(params.get('view'));
   const today = useMemo(() => isoDay(new Date().toISOString()), []);
 
@@ -84,10 +126,19 @@ export function Workplans() {
     () => (workplans.data ? rowsOf(workplans.data, projectRows ?? [], today) : []),
     [workplans.data, projectRows, today],
   );
-  // Kept in state in the other views, so going back to the timeline restores the chosen status.
-  const withStatus = view === 'timeline';
-  const status = withStatus ? filters.status : null;
-  const shown = useMemo(() => rows.filter((row) => matches(row, filters, status)), [rows, filters, status]);
+  // Typing stays responsive: the views re-filter on the deferred copy.
+  const deferred = useDeferredValue(filters);
+  const shown = useMemo(() => {
+    const applied = appliedFilters(deferred, view);
+    const query = applied.query.trim().toLowerCase();
+    return rows.filter((row) => matches(row, { ...applied, query }, VIEW_FILTERS[view].states));
+  }, [rows, deferred, view]);
+  // Work type and Phase offer only what Work state and the hidden switch let through.
+  const { state, showHidden } = appliedFilters(filters, view);
+  const optionRows = useMemo(() => {
+    const only = { ...DEFAULT_FILTERS, state, showHidden };
+    return rows.filter((row) => matches(row, only, VIEW_FILTERS[view].states));
+  }, [rows, state, showHidden, view]);
 
   const changeView = (next: View) =>
     setParams((current) => {
@@ -101,22 +152,28 @@ export function Workplans() {
   else if (workplans.isError) body = <LoadFailure error={workplans.error} />;
   else {
     const ViewBody = VIEW_BODY[view];
-    body = (
-      <>
-        <Filters rows={rows} value={filters} onChange={setFilters} withStatus={withStatus} />
-        <ViewBody rows={shown} today={today} />
-      </>
+    const { states, status, phase, placeholder } = VIEW_FILTERS[view];
+    const bar: BarSlot = (slots) => (
+      <Filters
+        {...slots}
+        rows={optionRows}
+        value={appliedFilters(filters, view)}
+        onChange={(change) => setFilters((current) => ({ ...current, ...change }))}
+        states={states}
+        withStatus={status}
+        withPhase={phase}
+        withPlaceholder={placeholder}
+        count={shown.length}
+      />
     );
+    body = <ViewBody rows={shown} today={today} bar={bar} />;
   }
 
   return (
     <div className="wp-page">
-      <div className="screen-header">
-        <div className="screen-header__text">
-          <h1>Workplans</h1>
-          <p>Live works from Track and the business spreadsheets, as they stand today.</p>
-        </div>
-        {workplans.isSuccess && <Segmented label="View" options={VIEWS} value={view} onChange={changeView} />}
+      <div className="screen-header wp-header">
+        <h1>Workplans</h1>
+        {workplans.isSuccess && <Segmented label="View" labelHidden options={VIEWS} value={view} onChange={changeView} />}
       </div>
       {body}
     </div>

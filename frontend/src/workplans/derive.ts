@@ -1,5 +1,6 @@
 import type { Undated, WorkplanPhase, WorkplanRow } from '../api/sheet-works';
 import type { Project } from '../api/types';
+import { phaseToneOf, type PhaseTone } from './phase-tone';
 
 export type WorkStatus = 'overdue' | 'next-30' | 'on-track' | 'not-started' | 'unknown' | 'inactive' | 'closed';
 
@@ -19,7 +20,7 @@ export type BarState = 'overdue' | 'near-limit' | 'normal';
 export const PIPELINE_COLUMNS = ['Intake', 'Planning', 'Proponent time', 'Review', 'Decision'] as const;
 export type PipelineColumn = (typeof PIPELINE_COLUMNS)[number];
 
-/** One phase on the lifecycle strip. `offset` and `share` are fractions of the work's span. */
+/** One phase on the lifecycle strip. `offset` and `share` are fractions of the strip, phases packed end to end. */
 export interface Segment {
   name: string | null;
   /** `incomplete`: started, not completed, and not the current phase. */
@@ -67,9 +68,14 @@ export interface WorkRow {
   /** Null on a closed work. */
   column: PipelineColumn | null;
   segments: Segment[];
-  /** Today as a fraction of the segments' span, clamped to 0..1; null with no segments. */
+  /** Today's place on the strip, 0..1, inside the current phase when there is one; null with no segments. */
   todayAt: number | null;
+  /** Where the strip's last phase ends once an overdue phase has pushed it; null with no segments. */
+  stripEnd: string | null;
 }
+
+/** Unique per work across both sources; React keys and open-row state use it. */
+export const rowKey = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
 
 const DAY_MS = 86_400_000;
 const NEAR_LIMIT_PERCENT = 80;
@@ -78,6 +84,7 @@ const SOON_DAYS = 30;
 /** The calendar day of a date-only or ISO timestamp string. */
 const dayOf = (iso: string | null | undefined): string | null => (iso ? iso.slice(0, 10) : null);
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
+const plusDays = (day: string, days: number) => new Date(Date.parse(day) + days * DAY_MS).toISOString().slice(0, 10);
 
 /** The start, or the latest day an undated start can be. */
 const startBound = (startDate: string | null, undated: Undated): string | null =>
@@ -145,15 +152,8 @@ export function columnOf(phase: Pick<WorkplanPhase, 'name' | 'stage'>): Pipeline
   return COLUMN_BY_STAGE.get(fold(phase.stage)) ?? 'Review';
 }
 
-/** Fill and edge pair of the current phase, by its pipeline column; readiness has its own pair. */
-export function toneOf(row: WorkRow): string {
-  if (!row.current) return 'review';
-  if ((row.current.name ?? '').toLowerCase().includes('readiness')) return 'readiness';
-  const column = columnOf(row.current);
-  if (column === 'Proponent time') return 'proponent';
-  if (column === 'Decision') return 'decision';
-  return column === 'Review' ? 'review' : 'planning';
-}
+/** Fill and edge pair of the current phase. */
+export const toneOf = (row: WorkRow): PhaseTone => (row.current ? phaseToneOf(row.current) : 'review');
 
 const OPEN_TRACK_STATES = new Set(['IN_PROGRESS', 'SUSPENDED']);
 const ENDED_TRACK_STATES = new Set(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED']);
@@ -225,14 +225,18 @@ const hasNoEnd = (work: WorkplanRow, current: WorkplanPhase) =>
   !current.endDate &&
   !current.undated?.['endDate']?.notAfter;
 
-/** Falls back to the start of the last open phase named "... Decision" in the Decision column, so not Readiness Decision. */
+/** An open phase named "... Decision" in the Decision column, so not Readiness Decision. */
+export const isDecisionPhase = (phase: WorkplanPhase) =>
+  !phase.isCompleted && fold(phase.name).endsWith('decision') && columnOf(phase) === 'Decision';
+
+/** Falls back to the start of the last decision phase. */
 function decisionOf(work: WorkplanRow, phases: WorkplanPhase[], closed: boolean): string | null {
   if (closed) return dayOf(work.decisionDate ?? work.anticipatedDecisionDate);
-  const decisions = phases.filter(
-    (phase) => !phase.isCompleted && fold(phase.name).endsWith('decision') && columnOf(phase) === 'Decision',
-  );
   return dayOf(
-    work.decisionDate ?? work.anticipatedDecisionDate ?? work.decisionEventDate ?? decisions.at(-1)?.startDate,
+    work.decisionDate ??
+      work.anticipatedDecisionDate ??
+      work.decisionEventDate ??
+      phases.filter(isDecisionPhase).at(-1)?.startDate,
   );
 }
 
@@ -263,26 +267,41 @@ function stateOf(phase: WorkplanPhase, current: WorkplanPhase | null, today: str
   return hasStarted(phase, today) ? 'incomplete' : 'upcoming';
 }
 
-/** Dated phases on one strip, each sized by its share of the work's span; the current phase with no valid end runs to today. */
+/** Where today falls: inside the current phase, else in the phase holding it, else at the start of the next one. */
+function todayOn(segments: Segment[], current: Segment | undefined, today: string, total: number): number {
+  const at = (segment: Segment) =>
+    segment.offset + Math.min(segment.share, Math.max(0, daysBetween(segment.start, today) / total));
+  if (current) return at(current);
+  const holding = segments.find((segment) => today <= segment.end);
+  if (!holding) return 1;
+  return today < holding.start ? holding.offset : at(holding);
+}
+
+/**
+ * Dated phases end to end in phase order, each sized by its days; the current phase with no valid end runs to today.
+ * An overdue current phase runs to `overrunEnd`, pushing later phases right; `start` and `end` stay the real dates.
+ */
 function lifecycleOf(phases: WorkplanPhase[], current: WorkplanPhase | null, overrunEnd: string | null, today: string) {
   const dated = phases.flatMap((phase) => {
     const start = dayOf(phase.startDate);
     const end = endOf(phase) ?? (phase === current ? today : null);
-    return start && end ? [{ phase, start, end }] : [];
+    const until = phase === current && overrunEnd && end && overrunEnd > end ? overrunEnd : end;
+    return start && end && until ? [{ phase, start, end, days: Math.max(1, daysBetween(start, until)) }] : [];
   });
-  if (!dated.length) return { segments: [], todayAt: null };
-  const first = dated.reduce((min, d) => (d.start < min ? d.start : min), dated[0].start);
-  const last = dated.reduce((max, d) => (d.end > max ? d.end : max), overrunEnd ?? dated[0].end);
-  const span = Math.max(1, daysBetween(first, last));
-  const segments = dated.map(({ phase, start, end }) => ({
-    name: phase.name,
-    state: stateOf(phase, current, today),
-    start,
-    end,
-    offset: daysBetween(first, start) / span,
-    share: daysBetween(start, end) / span,
-  }));
-  return { segments, todayAt: Math.min(1, Math.max(0, daysBetween(first, today) / span)) };
+  if (!dated.length) return { segments: [], todayAt: null, stripEnd: null };
+  const total = dated.reduce((sum, d) => sum + d.days, 0);
+  let offset = 0;
+  const segments: Segment[] = dated.map(({ phase, start, end, days }) => {
+    const segment = { name: phase.name, state: stateOf(phase, current, today), start, end, offset, share: days / total };
+    offset += segment.share;
+    return segment;
+  });
+  const now = segments.find((segment) => segment.state === 'current');
+  const pushed = overrunEnd && now && overrunEnd > now.end ? daysBetween(now.end, overrunEnd) : 0;
+  const ends = segments.map((segment) =>
+    now && segment.offset >= now.offset ? plusDays(segment.end, pushed) : segment.end,
+  );
+  return { segments, todayAt: todayOn(segments, now, today, total), stripEnd: ends.reduce((a, b) => (b > a ? b : a)) };
 }
 
 /** A work waiting on its marked phase stays in that phase's column; only a work with nothing begun is in Intake. */
