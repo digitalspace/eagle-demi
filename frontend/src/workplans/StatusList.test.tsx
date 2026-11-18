@@ -54,6 +54,13 @@ describe('StatusListView', () => {
     expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
   });
 
+  it('counts only open works in the footer by default, and says where the closed ones are', () => {
+    renderList();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Showing 6 of 6 open works. 8 closed works are under the Closed tile.',
+    );
+  });
+
   it('renders closed works 200 at a time', async () => {
     const closed = (FIXTURE.works as WorkplanRow[]).find((work) => work.source === 'sheet')!;
     const user = renderList(Array.from({ length: 201 }, (_, i) => ({ ...closed, workId: `w${i}` })));

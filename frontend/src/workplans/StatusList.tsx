@@ -8,6 +8,7 @@ import './status-list.css';
 
 const TILES: WorkStatus[] = ['overdue', 'next-30', 'on-track', 'not-started', 'closed'];
 const PAGE = 200;
+const count = (n: number) => n.toLocaleString('en-CA');
 
 /** "1 Mar 2026" to "Mar 2026". */
 const monthYear = (iso: string | null) => dayMonthYear(iso).replace(/^\d+ /, '');
@@ -222,7 +223,7 @@ function Tiles({
           aria-pressed={pressed === status}
           onClick={() => onPress(status)}
         >
-          <span className="sl-tile__count">{counts[status].toLocaleString('en-CA')}</span>
+          <span className="sl-tile__count">{count(counts[status])}</span>
           <span className="sl-tile__label">{STATUS_LABEL[status]}</span>
         </button>
       ))}
@@ -295,7 +296,11 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
       </div>
       <div className="sl-footer">
         <span role="status">
-          Showing {visible.length.toLocaleString('en-CA')} of {rows.length.toLocaleString('en-CA')}
+          Showing {count(visible.length)} of {count(shown.length)}
+          {pressed ? '.' : ` open ${shown.length === 1 ? 'work' : 'works'}.`}
+          {!pressed &&
+            counts.closed > 0 &&
+            ` ${count(counts.closed)} closed ${counts.closed === 1 ? 'work is' : 'works are'} under the Closed tile.`}
         </span>
         {more > 0 && (
           <button type="button" className="sl-more" onClick={() => setLimit((n) => n + PAGE)}>
