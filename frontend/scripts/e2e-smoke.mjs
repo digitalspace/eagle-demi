@@ -28,6 +28,8 @@ export const SCREENS = [
   // `text` comes only from a panel's own fixture, so a panel reading the wrong id fails here.
   { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
   { path: '/workplans', h1: 'Workplans', text: 'Sample Alpha Transmission Line - Assessment (1996)' },
+  { path: '/workplans?view=pipeline', h1: 'Workplans', text: 'Proponent time' },
+  { path: '/workplans?view=lookahead', h1: 'Workplans', text: 'Window' },
   { path: '/notify', h1: 'eagle-notify' },
   { path: '/links', h1: 'Short URLs' },
   { path: '/rbac', h1: 'Access model' },
@@ -82,8 +84,10 @@ export const FITS = [
     panel: '.panel--scroll',
     panelFrom: 1280
   },
-  // The timeline scrolls inside its own view, so only the page and <main> are measured.
-  { path: '/workplans', h1: 'Workplans' }
+  // The timeline and the pipeline columns scroll inside their own views, so only the page and <main> are measured.
+  { path: '/workplans', h1: 'Workplans' },
+  { path: '/workplans?view=pipeline', h1: 'Workplans' },
+  { path: '/workplans?view=lookahead', h1: 'Workplans' }
 ];
 
 function parseArgs(argv) {

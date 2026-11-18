@@ -54,15 +54,19 @@ describe('Workplans', () => {
     expect(screen.queryByRole('link', { name: 'Sample Beta Quarry - Amendment' })).toBeNull();
   });
 
-  it('leaves status to the list’s own tiles, and gives the timeline its status back', async () => {
+  it.each([
+    ['List', () => screen.getByRole('link', { name: 'Sample Beta Quarry - Amendment' })],
+    ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: 'Sample Beta Quarry - Amendment' })],
+    ['Lookahead', () => screen.getByRole('region', { name: 'Upcoming milestones' })],
+  ])('drops the Status chips in %s, and gives the timeline its status back', async (view, shownPart) => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
     await user.click(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' }));
-    await user.click(screen.getByRole('button', { name: 'List' }));
+    await user.click(screen.getByRole('button', { name: view }));
 
     expect(screen.queryByRole('group', { name: 'Status' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Sample Beta Quarry - Amendment' })).toBeInTheDocument();
+    expect(shownPart()).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Timeline' }));
     expect(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Closed' })).toHaveAttribute(

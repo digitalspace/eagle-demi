@@ -6,23 +6,29 @@ import { useWorkplans } from '../api/sheet-works';
 import { isoDay } from '../dates';
 import { rowsOf, type WorkRow } from '../workplans/derive';
 import { Filters, type WorkFilters } from '../workplans/Filters';
+import { LookaheadView } from '../workplans/Lookahead';
+import { PipelineView } from '../workplans/Pipeline';
 import { Segmented } from '../workplans/Segmented';
 import { StatusListView } from '../workplans/StatusList';
 import { TimelineView } from '../workplans/Timeline';
 import '../workplans/workplans.css';
 
-type View = 'timeline' | 'list';
+type View = 'timeline' | 'list' | 'pipeline' | 'lookahead';
 
 const VIEWS: { value: View; label: string }[] = [
   { value: 'timeline', label: 'Timeline' },
   { value: 'list', label: 'List' },
+  { value: 'pipeline', label: 'Pipeline' },
+  { value: 'lookahead', label: 'Lookahead' },
 ];
+
+const VIEW_BODY = { timeline: TimelineView, list: StatusListView, pipeline: PipelineView, lookahead: LookaheadView };
 
 const NO_FILTERS: WorkFilters = { act: null, type: null, status: null, showHidden: false };
 
-const viewOf = (param: string | null): View => (param === 'list' ? 'list' : 'timeline');
+const viewOf = (param: string | null): View => VIEWS.find((view) => view.value === param)?.value ?? 'timeline';
 
-/** `status` is null in the list view, whose tiles are its status filter. */
+/** `status` is null outside the timeline: the other views leave closed works out or filter status themselves. */
 function matches(row: WorkRow, filters: WorkFilters, status: WorkFilters['status']): boolean {
   return (
     (filters.showHidden || row.work.shownAfterFlip !== false) &&
@@ -64,7 +70,7 @@ function Loading() {
   );
 }
 
-/** Every live Track and sheet work the staff reader can see, as a timeline or a status list. */
+/** Every live Track and sheet work the staff reader can see, as a timeline, status list, pipeline or lookahead. */
 export function Workplans() {
   const workplans = useWorkplans();
   const projects = useProjects('');
@@ -78,8 +84,9 @@ export function Workplans() {
     () => (workplans.data ? rowsOf(workplans.data, projectRows ?? [], today) : []),
     [workplans.data, projectRows, today],
   );
-  // Kept in state while the list is open, so going back to the timeline restores the chosen status.
-  const status = view === 'list' ? null : filters.status;
+  // Kept in state in the other views, so going back to the timeline restores the chosen status.
+  const withStatus = view === 'timeline';
+  const status = withStatus ? filters.status : null;
   const shown = useMemo(() => rows.filter((row) => matches(row, filters, status)), [rows, filters, status]);
 
   const changeView = (next: View) =>
@@ -93,10 +100,11 @@ export function Workplans() {
   if (workplans.isPending) body = <Loading />;
   else if (workplans.isError) body = <LoadFailure error={workplans.error} />;
   else {
+    const ViewBody = VIEW_BODY[view];
     body = (
       <>
-        <Filters rows={rows} value={filters} onChange={setFilters} withStatus={view !== 'list'} />
-        {view === 'list' ? <StatusListView rows={shown} today={today} /> : <TimelineView rows={shown} today={today} />}
+        <Filters rows={rows} value={filters} onChange={setFilters} withStatus={withStatus} />
+        <ViewBody rows={shown} today={today} />
       </>
     );
   }
