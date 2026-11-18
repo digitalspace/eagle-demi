@@ -5,6 +5,7 @@ import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { useNarrow } from '../shell/useNarrow';
 import { PIPELINE_COLUMNS, toneOf, type PipelineColumn, type WorkRow } from './derive';
+import type { ViewProps } from './Filters';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './pipeline.css';
@@ -165,7 +166,7 @@ function Column({ name, rows }: { name: PipelineColumn; rows: WorkRow[] }) {
 }
 
 /** Open works in five stage columns by their current phase; not-started works wait in Intake, closed ones are left out. */
-export function PipelineView({ rows, today }: { rows: WorkRow[]; today: string }) {
+export function PipelineView({ rows, today, bar }: ViewProps) {
   const byColumn = useMemo(() => {
     const groups = new Map<PipelineColumn, WorkRow[]>(PIPELINE_COLUMNS.map((name) => [name, []]));
     for (const row of rows) if (row.column) groups.get(row.column)?.push(row);
@@ -178,12 +179,14 @@ export function PipelineView({ rows, today }: { rows: WorkRow[]; today: string }
   if (rows.length === 0) {
     return (
       <div className="pl">
+        {bar?.()}
         <p className="panel pl-none">No works match these filters.</p>
       </div>
     );
   }
   return (
     <div className="pl">
+      {bar?.()}
       <div className="pl-board">
         {PIPELINE_COLUMNS.map((name) => (
           <Column key={name} name={name} rows={byColumn.get(name) ?? []} />

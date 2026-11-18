@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
+import type { ViewProps } from './Filters';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import { DetailsToggle, WorkDetails } from './WorkDetails';
 import { useFollowDetails } from './use-follow-details';
@@ -290,7 +291,7 @@ function Tiles({
 }
 
 /** Works sorted by attention, open ones by default; each status tile narrows the table to its status. */
-export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string }) {
+export function StatusListView({ rows, today, bar }: ViewProps) {
   const [pressed, setPressed] = useState<WorkStatus | null>(null);
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -328,6 +329,7 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
 
   return (
     <div className="sl">
+      {bar?.()}
       <Tiles counts={counts} pressed={pressed} onPress={press} />
       <div className="panel panel--scroll sl-region">
         <table className="sl-table">

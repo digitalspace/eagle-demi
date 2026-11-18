@@ -81,10 +81,9 @@
 }
 
 .wp-segmented__option[aria-pressed='true'] {
-  background: var(--theme-gray-white);
-  box-shadow: var(--surface-shadow-small);
+  background: var(--theme-primary-blue);
   font: var(--typography-bold-label);
-  color: var(--typography-color-primary);
+  color: var(--typography-color-primary-invert);
 }
 
 .wp-segmented__option:hover:not([aria-pressed='true']) {
@@ -147,10 +146,121 @@
   background: var(--surface-color-primary-hover);
 }
 
+/* Today in the Timeline toolbar: an action, not a filter. */
+.wp-chip--accent {
+  border-color: var(--theme-blue-30);
+  font: var(--typography-bold-label);
+  color: var(--surface-color-border-active);
+}
+
+/* Design controls with nothing behind them yet; disabled, titled "Not available yet". */
+.wp-chip--placeholder,
+.wp-chip--placeholder:hover:not([aria-pressed='true']) {
+  border-style: dashed;
+  background: var(--surface-color-background-white);
+  color: var(--typography-color-secondary);
+  cursor: not-allowed;
+}
+
+.wp-search {
+  display: flex;
+  flex: 0 1 260px;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  box-sizing: border-box;
+  min-width: 10rem;
+  height: 30px;
+  padding: 0 var(--layout-padding-small);
+  border: var(--layout-border-width-small) solid var(--theme-gray-60);
+  border-radius: var(--layout-border-radius-circular);
+  background: var(--surface-color-background-white);
+  color: var(--theme-gray-80);
+}
+
+.wp-search:focus-within {
+  border-color: var(--surface-color-border-active);
+}
+
+.wp-search__input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+/* The native select is invisible over the pill text, so the browser's own picker opens on click and keys. */
+.wp-chip-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 0 var(--layout-padding-small);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-circular);
+  background: var(--surface-color-background-white);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+  white-space: nowrap;
+}
+
+.wp-chip-select:hover {
+  background: var(--surface-color-secondary-hover);
+}
+
+.wp-chip-select--set,
+.wp-chip-select--set:hover {
+  border-color: var(--theme-blue-30);
+  background: var(--surface-color-background-light-blue);
+  font: var(--typography-bold-label);
+  color: var(--theme-blue-90);
+}
+
+.wp-chip-select__native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wp-chip-select__clear {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: calc(-1 * var(--layout-margin-xsmall));
+  padding: 0;
+  border: none;
+  border-radius: var(--layout-border-radius-circular);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.wp-chip-select__clear:hover {
+  background: var(--theme-blue-20);
+}
+
 .wp-chip:focus-visible,
-.wp-segmented__option:focus-visible {
+.wp-segmented__option:focus-visible,
+.wp-chip-select__clear:focus-visible,
+.wp-chip-select:has(.wp-chip-select__native:focus-visible) {
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
   outline-offset: 2px;
+}
+
+.wp-filters__count {
+  margin-left: auto;
+  font: var(--typography-regular-small-body);
+  color: var(--theme-gray-80);
 }
 
 /* Details toggle in List and Timeline; each view's stylesheet gives it its look. */

@@ -1,5 +1,6 @@
 import type { Undated, WorkplanPhase, WorkplanRow } from '../api/sheet-works';
 import type { Project } from '../api/types';
+import { phaseToneOf, type PhaseTone } from './phase-tone';
 
 export type WorkStatus = 'overdue' | 'next-30' | 'on-track' | 'not-started' | 'unknown' | 'inactive' | 'closed';
 
@@ -145,15 +146,8 @@ export function columnOf(phase: Pick<WorkplanPhase, 'name' | 'stage'>): Pipeline
   return COLUMN_BY_STAGE.get(fold(phase.stage)) ?? 'Review';
 }
 
-/** Fill and edge pair of the current phase, by its pipeline column; readiness has its own pair. */
-export function toneOf(row: WorkRow): string {
-  if (!row.current) return 'review';
-  if ((row.current.name ?? '').toLowerCase().includes('readiness')) return 'readiness';
-  const column = columnOf(row.current);
-  if (column === 'Proponent time') return 'proponent';
-  if (column === 'Decision') return 'decision';
-  return column === 'Review' ? 'review' : 'planning';
-}
+/** Fill and edge pair of the current phase. */
+export const toneOf = (row: WorkRow): PhaseTone => (row.current ? phaseToneOf(row.current) : 'review');
 
 const OPEN_TRACK_STATES = new Set(['IN_PROGRESS', 'SUSPENDED']);
 const ENDED_TRACK_STATES = new Set(['COMPLETED', 'CLOSED', 'WITHDRAWN', 'TERMINATED']);

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import type { WorkRow } from './derive';
+import type { ViewProps } from './Filters';
 import {
   WINDOWS,
   WINDOW_PHRASE,
@@ -217,7 +218,7 @@ function DecisionsPanel({ decisions, phrase }: { decisions: Milestone[]; phrase:
 }
 
 /** Phase starts and decisions in the next 30 days, 90 days or 6 months, by week, beside the works overdue now. */
-export function LookaheadView({ rows, today }: { rows: WorkRow[]; today: string }) {
+export function LookaheadView({ rows, today, bar }: ViewProps) {
   const [span, setSpan] = useState<LookaheadWindow>('90d');
   const end = windowEnd(today, span);
   const milestones = useMemo(() => milestonesIn(rows, today, end), [rows, today, end]);
@@ -238,6 +239,7 @@ export function LookaheadView({ rows, today }: { rows: WorkRow[]; today: string 
 
   return (
     <div className="la">
+      {bar?.()}
       <div className="la-toolbar">
         <Segmented label="Window" options={WINDOWS} value={span} onChange={setSpan} />
         <p className="la-summary" role="status">

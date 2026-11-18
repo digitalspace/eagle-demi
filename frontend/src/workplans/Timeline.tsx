@@ -2,6 +2,7 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, t
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
+import type { ViewProps } from './Filters';
 import { Segmented } from './Segmented';
 import { useFollowDetails } from './use-follow-details';
 import { hasDetails, projectDetailsPath } from './work-notes';
@@ -280,7 +281,7 @@ function useLaneWidth(scroller: RefObject<HTMLDivElement | null>, left: RefObjec
 }
 
 /** Gantt of every work in `rows`, grouped, on a zoomable axis that scrolls inside its own panel. */
-export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }) {
+export function TimelineView({ rows, today, bar }: ViewProps) {
   const [zoom, setZoom] = useState<Zoom>('quarter');
   const [groupBy, setGroupBy] = useState<GroupBy>('act');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
@@ -339,52 +340,55 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
     });
 
   return (
-    <section className="panel timeline" aria-label="Timeline">
-      <div className="timeline__toolbar">
-        <Segmented label="Zoom" options={ZOOMS} value={zoom} onChange={changeZoom} />
-        <button type="button" className="timeline__today" onClick={goToToday}>
-          Today
-        </button>
-        <Segmented label="Group by" options={GROUP_BYS} value={groupBy} onChange={setGroupBy} />
-        <Legend suspension={suspension} />
-      </div>
-      {rows.length ? (
-        <div className="timeline__scroll" ref={scroller}>
-          <div className="timeline__canvas" style={{ '--timeline-lane': `${scale.width}px` } as CSSProperties}>
-            {/* First in the canvas, so bar labels and the suspended tag, on the same layer, paint over it. */}
-            <span
-              className="timeline__today-line"
-              style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
-              aria-hidden="true"
-            />
-            <div className="timeline__head" aria-hidden="true">
-              <div className="timeline__left timeline__left--head" ref={left}>
-                <span>Work</span>
-                <span className="timeline__type-head">Type</span>
-                <span className="timeline__days-head" title="Days in phase">
-                  Days
-                </span>
-              </div>
-              <Axis scale={scale} />
-            </div>
-            {groups.map((group) => (
-              <TimelineGroup
-                key={group.key}
-                group={group}
-                open={!closed.has(group.key)}
-                onToggle={toggle}
-                scale={scale}
-                today={today}
-                opened={opened}
-                onDetails={toggleDetails}
-                unfollow={unfollow}
-              />
-            ))}
-          </div>
+    <>
+      {bar?.()}
+      <section className="panel timeline" aria-label="Timeline">
+        <div className="timeline__toolbar">
+          <Segmented label="Zoom" options={ZOOMS} value={zoom} onChange={changeZoom} />
+          <button type="button" className="timeline__today" onClick={goToToday}>
+            Today
+          </button>
+          <Segmented label="Group by" options={GROUP_BYS} value={groupBy} onChange={setGroupBy} />
+          <Legend suspension={suspension} />
         </div>
-      ) : (
-        <p className="timeline__empty">No works match these filters. Clear a filter to see more.</p>
-      )}
-    </section>
+        {rows.length ? (
+          <div className="timeline__scroll" ref={scroller}>
+            <div className="timeline__canvas" style={{ '--timeline-lane': `${scale.width}px` } as CSSProperties}>
+              {/* First in the canvas, so bar labels and the suspended tag, on the same layer, paint over it. */}
+              <span
+                className="timeline__today-line"
+                style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
+                aria-hidden="true"
+              />
+              <div className="timeline__head" aria-hidden="true">
+                <div className="timeline__left timeline__left--head" ref={left}>
+                  <span>Work</span>
+                  <span className="timeline__type-head">Type</span>
+                  <span className="timeline__days-head" title="Days in phase">
+                    Days
+                  </span>
+                </div>
+                <Axis scale={scale} />
+              </div>
+              {groups.map((group) => (
+                <TimelineGroup
+                  key={group.key}
+                  group={group}
+                  open={!closed.has(group.key)}
+                  onToggle={toggle}
+                  scale={scale}
+                  today={today}
+                  opened={opened}
+                  onDetails={toggleDetails}
+                  unfollow={unfollow}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="timeline__empty">No works match these filters. Clear a filter to see more.</p>
+        )}
+      </section>
+    </>
   );
 }
