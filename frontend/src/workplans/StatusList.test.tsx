@@ -13,6 +13,7 @@ import { StatusListView } from './StatusList';
 const TODAY = '2026-11-17';
 const ALPHA_1996 = 'Sample Alpha Transmission Line - Assessment (1996)';
 const ALPHA_2002 = 'Sample Alpha Transmission Line - Assessment (2002)';
+const TRACK_COPY = 'Sample Alpha Transmission Line - Assessment (Track copy)';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -27,9 +28,11 @@ function renderList(works = FIXTURE.works as WorkplanRow[]) {
 }
 
 const bodyRows = () => within(screen.getAllByRole('rowgroup')[1]).getAllByRole('row');
-/** The Days in phase cell of the one body row whose work link is `title`. */
-const daysCell = (title: string) =>
-  within(bodyRows().find((row) => within(row).queryByRole('link', { name: title }))!).getAllByRole('cell')[2];
+/** A cell of the one body row whose work link is `title`. */
+const cellOf = (title: string, column: number) =>
+  within(bodyRows().find((row) => within(row).queryByRole('link', { name: title }))!).getAllByRole('cell')[column];
+const phaseCell = (title: string) => cellOf(title, 1);
+const daysCell = (title: string) => cellOf(title, 2);
 const work = (title: string) => structuredClone((FIXTURE.works as WorkplanRow[]).find((w) => w.title === title)!);
 
 /** Epsilon's current phase is suspended in the fixture. */
@@ -72,23 +75,25 @@ describe('StatusListView', () => {
     expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
   });
 
-  it('says how a closed 1996 work ended and opens a sheet work’s stored milestones under its row', async () => {
-    Element.prototype.scrollIntoView = vi.fn();
-    vi.stubGlobal('fetch',vi.fn(async (input: RequestInfo | URL) => json(String(input).includes('/sheet-works') ? SHEET : {})));
+  it('says how a closed work ended and opens a sheet work’s stored details under its row; a Track work has none', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => json(String(input).includes('/sheet-works') ? SHEET : {})));
     renderScreen(<StatusListView rows={rowsOf(FIXTURE.works as WorkplanRow[], [], TODAY)} today={TODAY} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /Closed/ }));
 
-    const closed1996 = bodyRows().find((row) => within(row).queryByRole('link', { name: ALPHA_1996 }))!;
-    expect(within(closed1996).getAllByRole('cell')[1]).toHaveTextContent('ClosedApproved (PAC)');
+    expect(phaseCell(ALPHA_1996)).toHaveTextContent('ClosedWithdrawn');
+    expect(phaseCell(ALPHA_2002)).toHaveTextContent('ClosedCertificate Issued (EAC)');
+    expect(screen.queryByRole('button', { name: `Details for ${TRACK_COPY}` })).toBeNull();
 
     const toggle = screen.getByRole('button', { name: `Details for ${ALPHA_2002}` });
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const panel = screen.getByRole('region', { name: ALPHA_2002 });
+    const panel = screen.getByRole('region', { name: `${ALPHA_2002}, 2002 Act` });
     expect(toggle).toHaveAttribute('aria-controls', panel.id);
     const milestones = await within(panel).findByRole('list', { name: 'Milestones' });
     expect(within(milestones).getByText('Public comment period')).toBeInTheDocument();
+    expect(within(panel).getByText('Assessment · Decision 14 Oct 2014')).toBeInTheDocument();
+    expect(within(panel).getByText('Certificate Issued')).toBeInTheDocument();
   });
 
   it('counts only open works in the footer by default, and says where the closed ones are', () => {

@@ -153,6 +153,34 @@
   outline-offset: 2px;
 }
 
+/* Details toggle in List and Timeline; each view's stylesheet gives it its look. */
+.wp-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  box-sizing: border-box;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.wp-toggle__chevron {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  transition: transform 0.15s;
+}
+
+.wp-toggle[aria-expanded='true'] .wp-toggle__chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wp-toggle__chevron {
+    transition: none;
+  }
+}
+
 /* Details panel under a sheet work in List and Timeline; the host row or cell sets its width. */
 .wp-details {
   padding: var(--layout-padding-small) var(--layout-padding-medium);

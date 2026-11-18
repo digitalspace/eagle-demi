@@ -1,11 +1,11 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
-import { WorkDetails } from './WorkDetails';
-import { closedNoteOf, hasDetails, projectDetailsPath } from './work-notes';
+import { DetailsToggle, WorkDetails } from './WorkDetails';
+import { closedNoteOf, hasDetails, projectDetailsPath, useFollowDetails } from './work-notes';
 import './workplans.css';
 import './status-list.css';
 
@@ -29,10 +29,13 @@ function Blank({ says }: { says: string }) {
 
 const rowKey = (row: WorkRow) => `${row.work.source}:${row.work.workId}`;
 const detailsId = (row: WorkRow) => `sl-details-${row.work.workId}`;
-/** Module-level so React calls it once, when the pane mounts, not on every render. */
-const reveal = (pane: HTMLDivElement | null) => {
-  pane?.scrollIntoView({ block: 'nearest' });
-};
+/** Scrolls the pane into view below the sticky head and the row that opened it. */
+function reveal(pane: HTMLElement) {
+  const head = pane.closest('table')?.tHead?.offsetHeight ?? 0;
+  const row = pane.closest('tr')?.previousElementSibling as HTMLElement | null;
+  pane.style.scrollMarginTop = `${head + (row?.offsetHeight ?? 0)}px`;
+  pane.scrollIntoView({ block: 'nearest' });
+}
 
 interface Toggle {
   open: boolean;
@@ -51,21 +54,23 @@ function WorkCell({ row, details }: { row: WorkRow; details: Toggle | null }) {
       {kind.length > 0 && <span className="sl-sub">{kind.join(' · ')}</span>}
       <WorkPill work={work} />
       {details && (
-        <button
-          type="button"
-          className="sl-toggle"
-          aria-expanded={details.open}
-          aria-controls={detailsId(row)}
-          aria-label={`Details for ${title}`}
-          onClick={details.onToggle}
-        >
-          <svg className="sl-toggle__chevron" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
-            <path d="M3.5 1.5 7 5 3.5 8.5" fill="none" stroke="currentColor" strokeWidth="2" />
-          </svg>
-          Details
-        </button>
+        <DetailsToggle className="sl-toggle" title={title} controls={detailsId(row)} open={details.open} onToggle={details.onToggle} />
       )}
     </td>
+  );
+}
+
+function DetailRow({ row, follow, onFollowed }: { row: WorkRow; follow: boolean; onFollowed: () => void }) {
+  const pane = useRef<HTMLDivElement>(null);
+  useFollowDetails(pane, follow, reveal, onFollowed);
+  return (
+    <tr className="sl-detail">
+      <td colSpan={COLUMNS}>
+        <div className="sl-detail__pane" ref={pane}>
+          <WorkDetails row={row} id={detailsId(row)} />
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -288,6 +293,9 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   const [pressed, setPressed] = useState<WorkStatus | null>(null);
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  // The row last opened by its toggle; only its panel scrolls into view, and only until its details load.
+  const [follow, setFollow] = useState<string | null>(null);
+  const unfollow = useCallback(() => setFollow(null), []);
   const counts = useMemo(() => {
     const tally = Object.fromEntries(Object.keys(STATUS_LABEL).map((status) => [status, 0])) as Record<WorkStatus, number>;
     for (const row of rows) tally[row.status] += 1;
@@ -303,12 +311,12 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   const visible = shown.slice(0, limit);
   const more = Math.min(PAGE, shown.length - visible.length);
 
-  const toggle = (key: string) =>
-    setOpen((current) => {
-      const next = new Set(current);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
+  const toggle = (key: string) => {
+    const next = new Set(open);
+    if (!next.delete(key)) next.add(key);
+    setOpen(next);
+    setFollow(next.has(key) ? key : null);
+  };
 
   const press = (status: WorkStatus) => {
     setPressed((current) => (current === status ? null : status));
@@ -347,15 +355,7 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
                     <LifecycleCell row={row} />
                     <DecisionCell row={row} />
                   </tr>
-                  {isOpen && (
-                    <tr className="sl-detail">
-                      <td colSpan={COLUMNS}>
-                        <div className="sl-detail__pane" ref={reveal}>
-                          <WorkDetails row={row} id={detailsId(row)} />
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                  {isOpen && <DetailRow row={row} follow={follow === key} onFollowed={unfollow} />}
                 </Fragment>
               );
             })}

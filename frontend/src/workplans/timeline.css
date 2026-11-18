@@ -334,7 +334,6 @@
 }
 
 .timeline__toggle {
-  flex: none;
   margin-left: auto;
   padding: 0 var(--layout-padding-xsmall);
   border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
@@ -343,7 +342,6 @@
   font: var(--typography-regular-label);
   line-height: 16px;
   color: var(--typography-color-primary);
-  cursor: pointer;
 }
 
 .timeline__toggle:hover {

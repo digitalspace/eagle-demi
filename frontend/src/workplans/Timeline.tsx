@@ -3,8 +3,8 @@ import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
 import { Segmented } from './Segmented';
-import { hasDetails, projectDetailsPath } from './work-notes';
-import { WorkDetails } from './WorkDetails';
+import { hasDetails, projectDetailsPath, useFollowDetails } from './work-notes';
+import { DetailsToggle, WorkDetails } from './WorkDetails';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
@@ -102,16 +102,13 @@ function RowLeft({ row, details }: { row: WorkRow; details?: { id: string; open:
           <WorkPill work={row.work} />
         </span>
         {details && (
-          <button
-            type="button"
+          <DetailsToggle
             className="timeline__toggle"
-            aria-expanded={details.open}
-            aria-controls={details.id}
-            aria-label={`Details for ${title}`}
-            onClick={details.toggle}
-          >
-            Details
-          </button>
+            title={title}
+            controls={details.id}
+            open={details.open}
+            onToggle={details.toggle}
+          />
         )}
       </span>
       <abbr className="timeline__type" title={type.name}>
@@ -124,37 +121,41 @@ function RowLeft({ row, details }: { row: WorkRow; details?: { id: string; open:
   );
 }
 
-/** Scrolls an open panel into view as its content loads and grows, never so far that its row goes under the head. */
-function useReveal(row: RefObject<HTMLLIElement | null>, panel: RefObject<HTMLDivElement | null>, open: boolean) {
-  useLayoutEffect(() => {
-    const box = row.current?.closest<HTMLElement>('.timeline__scroll');
-    const head = box?.querySelector<HTMLElement>('.timeline__head');
-    if (!open || !box || !head || !panel.current || typeof ResizeObserver === 'undefined') return;
-    const reveal = () => {
-      const top = box.getBoundingClientRect().top + box.clientTop;
-      const below = panel.current!.getBoundingClientRect().bottom - (top + box.clientHeight);
-      const room = row.current!.getBoundingClientRect().top - top - head.offsetHeight;
-      if (below > 0 && room > 0) box.scrollTop += Math.min(below, room);
-    };
-    const observer = new ResizeObserver(reveal);
-    observer.observe(panel.current);
-    return () => observer.disconnect();
-  }, [row, panel, open]);
+/** Scrolls an open panel into view, never so far that its row goes under the head. */
+function reveal(panel: HTMLElement) {
+  const box = panel.closest<HTMLElement>('.timeline__scroll');
+  const head = box?.querySelector<HTMLElement>('.timeline__head');
+  const row = panel.closest('li')?.previousElementSibling;
+  if (!box || !head || !row) return;
+  const top = box.getBoundingClientRect().top + box.clientTop;
+  const below = panel.getBoundingClientRect().bottom - (top + box.clientHeight);
+  const room = row.getBoundingClientRect().top - top - head.offsetHeight;
+  if (below > 0 && room > 0) box.scrollTop += Math.min(below, room);
 }
 
-const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: WorkRow; scale: Scale; today: string }) {
-  const [open, setOpen] = useState(false);
+const keyOf = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
+
+/** Rows with their details open; `follow` is the one last opened, scrolled along until its details load. */
+interface Opened {
+  open: ReadonlySet<string>;
+  follow: string | null;
+  toggle: (key: string) => void;
+  unfollow: () => void;
+}
+
+const TimelineRow = memo(function TimelineRow(props: { row: WorkRow; scale: Scale; today: string; opened: Opened }) {
+  const { row, scale, today, opened } = props;
+  const open = opened.open.has(keyOf(row));
   const detailsId = useId();
-  const rowRef = useRef<HTMLLIElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  useReveal(rowRef, panelRef, open);
+  useFollowDetails(panelRef, open && opened.follow === keyOf(row), reveal, opened.unfollow);
   const spans = spansOf(row, today);
   const tone = toneOf(row);
   const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
-  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => setOpen(!open) } : undefined;
+  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => opened.toggle(keyOf(row)) } : undefined;
   return (
     <>
-      <li className="timeline__row" ref={rowRef}>
+      <li className="timeline__row">
         <RowLeft row={row} details={details} />
         <div className="timeline__lane" aria-hidden="true">
           {spans.map((span, i) => {
@@ -205,12 +206,14 @@ function TimelineGroup({
   onToggle,
   scale,
   today,
+  opened,
 }: {
   group: Group;
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
   scale: Scale;
   today: string;
+  opened: Opened;
 }) {
   const count = group.rows.length;
   return (
@@ -229,7 +232,7 @@ function TimelineGroup({
       {open && (
         <ul className="timeline__rows">
           {group.rows.map((row) => (
-            <TimelineRow key={`${row.work.source}-${row.work.workId}`} row={row} scale={scale} today={today} />
+            <TimelineRow key={keyOf(row)} row={row} scale={scale} today={today} opened={opened} />
           ))}
         </ul>
       )}
@@ -261,6 +264,17 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const [zoom, setZoom] = useState<Zoom>('quarter');
   const [groupBy, setGroupBy] = useState<GroupBy>('act');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  // Held here, not per row, so open details survive a group folding or a Group by change.
+  const [details, setDetails] = useState<Pick<Opened, 'open' | 'follow'>>({ open: new Set(), follow: null });
+  const opened = useMemo<Opened>(() => {
+    const toggle = (key: string) =>
+      setDetails(({ open }) => {
+        const next = new Set(open);
+        if (!next.delete(key)) next.add(key);
+        return { open: next, follow: next.has(key) ? key : null };
+      });
+    return { ...details, toggle, unfollow: () => setDetails((prev) => ({ ...prev, follow: null })) };
+  }, [details]);
   const scroller = useRef<HTMLDivElement>(null);
   const left = useRef<HTMLDivElement>(null);
   // Set when the next layout should scroll today into view: first render, Today, and every zoom change.
@@ -335,6 +349,7 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
                 onToggle={toggle}
                 scale={scale}
                 today={today}
+                opened={opened}
               />
             ))}
           </div>

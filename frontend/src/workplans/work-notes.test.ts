@@ -18,7 +18,12 @@ describe('closedNoteOf', () => {
     expect(closedNoteOf({ ...sheetWork, ...change })).toBe(note);
   });
 
-  it('gives nothing for a Track work with no outcome, whatever its state', () => {
-    expect(closedNoteOf({ ...trackWork, outcome: null, workState: 'completed' })).toBeNull();
+  it.each([
+    ['WITHDRAWN', 'Withdrawn'],
+    ['TERMINATED', 'Terminated'],
+    ['COMPLETED', null],
+    ['CLOSED', null],
+  ])('gives a Track work in state %s with no outcome %s', (workState, note) => {
+    expect(closedNoteOf({ ...trackWork, outcome: null, workState })).toBe(note);
   });
 });

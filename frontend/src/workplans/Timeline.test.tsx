@@ -78,10 +78,9 @@ describe('TimelineView', () => {
     await userEvent.setup().click(toggle);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const panel = screen.getByRole('region', { name: ALPHA_1996 });
+    const panel = screen.getByRole('region', { name: `${ALPHA_1996}, 1996 Act` });
     expect(toggle).toHaveAttribute('aria-controls', panel.id);
     expect(await within(panel).findByText('Section 11 Order')).toBeInTheDocument();
-    // The stored work reads Withdrawn even though the workplans row says Approved.
     expect(within(panel).getByText('Withdrawn · Moved to the 2002 Act')).toBeInTheDocument();
   });
 
@@ -92,6 +91,6 @@ describe('TimelineView', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/^Closed\. Approved \(PAC\), decision 10 Jun 1999\. /)).toBeInTheDocument();
+    expect(screen.getByText(/^Closed\. Certificate Issued \(PAC\), decision 10 Jun 1999\. /)).toBeInTheDocument();
   });
 });
