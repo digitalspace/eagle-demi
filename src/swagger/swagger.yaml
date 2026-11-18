@@ -1815,6 +1815,179 @@ paths:
         '500':
           description: The read failed.
 
+  /api/workplans:
+    get:
+      summary: List every live work of every readable project
+      description: >-
+        Every live work, Track and sheet, of each project the caller can read, as one flat list
+        sorted by `projectId`. A project with no live work does not appear. Each row has the work's
+        dates, state and phases, and carries the project's id and name. A row has `shownAfterFlip`,
+        `untilTrack` and `replaces` with the same meaning as on `/api/projects/{id}/sheet-works`;
+        on a Track work `shownAfterFlip` is false when a shown sheet work replaces it, `untilTrack`
+        is false and `replaces` is empty. The route does not read `WORKS_READ_SOURCES` and does not
+        change what the public project read returns. Routed only when `ENVIRONMENT` is `dev` or
+        `test`; unset reads as `dev`. Elsewhere every caller gets the router's 404. The edge read
+        allowlist does not include this path, so it also answers 404 on the public host. Needs the
+        same roles as `works-staff`: a call with no token gets 401, and IDIR-only and other
+        non-staff callers get 403 before any works are read. Contacts, notes, investments and
+        milestones never appear.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The works, one row each.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [works]
+                properties:
+                  works:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        projectId:
+                          type: string
+                        projectName:
+                          type: string
+                          nullable: true
+                        workId:
+                          type: string
+                        source:
+                          type: string
+                          nullable: true
+                          enum: [track, sheet, demi, null]
+                        title:
+                          type: string
+                          nullable: true
+                        workTypeCode:
+                          type: string
+                          nullable: true
+                        workType:
+                          type: string
+                          nullable: true
+                        actYear:
+                          type: integer
+                          nullable: true
+                          enum: [1996, 2002, 2018, 2025, null]
+                        workState:
+                          type: string
+                          nullable: true
+                          description: Same values as `ProjectWork.workState`.
+                        isActive:
+                          type: boolean
+                          nullable: true
+                        startDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        decisionDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        anticipatedDecisionDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        outcome:
+                          type: string
+                          nullable: true
+                        transitionOut:
+                          type: object
+                          nullable: true
+                          description: Same shape as `ProjectWork.transitionOut`.
+                        undated:
+                          $ref: '#/components/schemas/WorkUndated'
+                        shownAfterFlip:
+                          type: boolean
+                          description: A read with `WORKS_READ_SOURCES` `track,sheet` shows this work.
+                        untilTrack:
+                          type: boolean
+                          description: The work shows only until a matching Track work is stored.
+                        replaces:
+                          type: array
+                          description: >-
+                            The stored Track works a read with `WORKS_READ_SOURCES` `track,sheet`
+                            hides in favour of this work.
+                          items:
+                            type: object
+                            properties:
+                              workId:
+                                type: string
+                              title:
+                                type: string
+                                nullable: true
+                              startDate:
+                                type: string
+                                nullable: true
+                              decisionDate:
+                                type: string
+                                nullable: true
+                        phases:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                                nullable: true
+                              stage:
+                                type: string
+                                nullable: true
+                              order:
+                                type: integer
+                                nullable: true
+                              startDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                              endDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                              numberOfDays:
+                                type: integer
+                                nullable: true
+                                description: The day budget for the phase, not the days it took.
+                              isCompleted:
+                                type: boolean
+                              isSuspended:
+                                type: boolean
+                                nullable: true
+                              undated:
+                                $ref: '#/components/schemas/WorkUndated'
+                              interruptions:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    kind:
+                                      type: string
+                                      enum: [extension, suspension, interregnum]
+                                    legalSection:
+                                      type: string
+                                      nullable: true
+                                    startDate:
+                                      type: string
+                                      nullable: true
+                                    endDate:
+                                      type: string
+                                      nullable: true
+                                    days:
+                                      type: integer
+                                      nullable: true
+                                      description: End minus start.
+        '401':
+          description: No token, or the credential is rejected.
+        '403':
+          description: The caller holds only an IDIR login or has no staff-level role.
+        '404':
+          description: Not on `dev` or `test`.
+        '500':
+          description: The read failed.
+
   /api/projects/{id}/mines:
     get:
       summary: List a project's NRPTI mines

@@ -767,6 +767,18 @@ unknown Act is left out of `act1996` and `act2002`, but it still counts toward t
 its project still appears. It has the same staff access and dev/test routing as the route above, and the
 Project details picker shows the counts as badges with a filter.
 
+### Workplans route
+
+`GET /api/workplans` returns `{ works: [...] }`: every live work, Track and sheet, of every project the
+caller may read, sorted by `projectId`. Each row holds the project's `projectId` and `projectName`, the
+work's id, source, title, type, Act, state, dates, `outcome` and `transitionOut`, plus `shownAfterFlip`,
+`untilTrack` and `replaces` as on the sheet works route. Its `phases` list carries each phase's
+`interruptions`.
+
+The route does not read `WORKS_READ_SOURCES` and does not change the public project read. It has the
+same staff access and dev/test routing as the sheet works routes. The edge read allowlist does not
+include it, so the public host answers 404; the demo front end's Workplans screen reads it.
+
 ### Track project poll
 
 Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five

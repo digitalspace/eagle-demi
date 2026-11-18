@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useSheetWorks, type SheetMilestone, type SheetPhase, type SheetWork, type Undated } from '../api/sheet-works';
 import { dayMonthYear } from '../dates';
+import { phasesInOrder } from '../workplans/derive';
 
 // An Act with more works than this starts folded; each work lists all its phases and milestones.
 const OPEN_UP_TO = 5;
@@ -41,7 +42,8 @@ function groupByAct(works: SheetWork[]): [number | null, SheetWork[]][] {
   return [...groups].sort(([a], [b]) => (a ?? Infinity) - (b ?? Infinity));
 }
 
-function WorkPill({ work }: { work: SheetWork }) {
+/** How the public read treats a sheet work once it shows sheet works; null for a work it shows as is. */
+export function WorkPill({ work }: { work: Pick<SheetWork, 'shownAfterFlip' | 'replaces' | 'untilTrack'> }) {
   if (!work.shownAfterFlip) return <span className="pill pill--neutral">Hidden when the public site shows sheet works</span>;
   if (work.replaces.length) {
     const titles = work.replaces.map((track) => track.title).filter(Boolean);
@@ -115,7 +117,7 @@ function WorkRow({ work }: { work: SheetWork }) {
     ]),
     joined([work.outcome, !!toAct && `Moved to the ${toAct} Act${movedOn ? ` on ${dayMonthYear(movedOn)}` : ''}`]),
   ].filter(Boolean);
-  const phases = [...work.phases].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+  const phases = phasesInOrder(work.phases);
   const listId = useId();
   return (
     <li className="ps-list__row">

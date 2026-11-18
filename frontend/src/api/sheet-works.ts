@@ -4,7 +4,7 @@ import { READ_TIMEOUT_MS, api } from './client';
 /** A date the source left out, with the latest day it can be. Keyed by the date field it stands in for. */
 export type Undated = Record<string, { notAfter: string | null }> | null;
 
-interface SheetInterruption {
+export interface SheetInterruption {
   kind: string | null;
   startDate: string | null;
   endDate: string | null;
@@ -102,4 +102,40 @@ export function useSheetWorksSummary(): Map<string, SheetWorksSummary> {
     staleTime: 5 * 60_000,
   });
   return data ?? NO_SUMMARY;
+}
+
+/** A phase on the Workplans screen: a sheet phase plus Track's stage and state flags. */
+export interface WorkplanPhase extends SheetPhase {
+  stage: string | null;
+  isCompleted: boolean;
+  /** Track only; null on a sheet phase. */
+  isSuspended: boolean | null;
+}
+
+/** One live work, Track or sheet, as `GET /workplans` sends it. */
+export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
+  projectId: string;
+  projectName: string | null;
+  source: 'track' | 'sheet';
+  workTypeCode: string | null;
+  workState: string | null;
+  isActive: boolean | null;
+  phases: WorkplanPhase[];
+}
+
+// Every live work in one body, so it gets most of APIM's 30 s cap rather than the 5 s read budget.
+const WORKPLANS_TIMEOUT_MS = 25_000;
+
+async function fetchWorkplans(signal: AbortSignal): Promise<WorkplanRow[]> {
+  const body = await api<{ works?: WorkplanRow[] } | null>('/workplans', { signal, timeoutMs: WORKPLANS_TIMEOUT_MS });
+  return Array.isArray(body?.works) ? body.works : [];
+}
+
+/** Every live work the staff reader can see, dev and test only. The full query result, so a 404 or 403 reaches the page. */
+export function useWorkplans() {
+  return useQuery({
+    queryKey: ['workplans'],
+    queryFn: ({ signal }) => fetchWorkplans(signal),
+    staleTime: 5 * 60_000,
+  });
 }

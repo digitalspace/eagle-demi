@@ -1,0 +1,662 @@
+{
+  "works": [
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "track-9101",
+      "source": "track",
+      "title": "Sample Alpha Transmission Line - Assessment",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2018,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2025-06-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2027-06-30T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Early Engagement",
+          "stage": "Early Engagement",
+          "order": 1,
+          "startDate": "2025-06-01T08:00:00.000Z",
+          "endDate": "2026-02-28T08:00:00.000Z",
+          "numberOfDays": 272,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 2,
+          "startDate": "2026-03-01T08:00:00.000Z",
+          "endDate": "2026-10-01T08:00:00.000Z",
+          "numberOfDays": 214,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Effects Assessment",
+          "stage": "Effects Assessment and Recommendation",
+          "order": 3,
+          "startDate": "2026-12-01T08:00:00.000Z",
+          "endDate": "2027-05-01T08:00:00.000Z",
+          "numberOfDays": 151,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Referral",
+          "stage": "Referral and Decision",
+          "order": 4,
+          "startDate": "2027-05-01T08:00:00.000Z",
+          "endDate": "2027-06-30T08:00:00.000Z",
+          "numberOfDays": 60,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "902",
+      "projectName": "Sample Beta Quarry",
+      "workId": "track-9201",
+      "source": "track",
+      "title": "Sample Beta Quarry - Amendment",
+      "workTypeCode": "amendment",
+      "workType": "Amendment",
+      "actYear": 2018,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2026-08-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2027-05-01T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Initial Contact",
+          "stage": "Pre-EA",
+          "order": 1,
+          "startDate": "2026-08-01T08:00:00.000Z",
+          "endDate": "2026-09-30T08:00:00.000Z",
+          "numberOfDays": 60,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Amendment Review",
+          "stage": "Application Review",
+          "order": 2,
+          "startDate": "2026-10-01T08:00:00.000Z",
+          "endDate": "2027-04-01T08:00:00.000Z",
+          "numberOfDays": 182,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Decision",
+          "stage": "Referral and Decision",
+          "order": 3,
+          "startDate": "2027-04-01T08:00:00.000Z",
+          "endDate": "2027-05-01T08:00:00.000Z",
+          "numberOfDays": 30,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "903",
+      "projectName": "Sample Delta Pipeline",
+      "workId": "track-9301",
+      "source": "track",
+      "title": "Sample Delta Pipeline - Assessment",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2018,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2026-02-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2028-06-30T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Readiness Decision",
+          "stage": "Readiness Decision",
+          "order": 1,
+          "startDate": "2026-02-01T08:00:00.000Z",
+          "endDate": "2026-04-30T08:00:00.000Z",
+          "numberOfDays": 88,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Process Planning",
+          "stage": "Process Planning",
+          "order": 2,
+          "startDate": "2026-05-01T08:00:00.000Z",
+          "endDate": "2026-12-15T08:00:00.000Z",
+          "numberOfDays": 228,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Application Development (Proponent)",
+          "stage": "Application Development and Review",
+          "order": 3,
+          "startDate": "2026-12-15T08:00:00.000Z",
+          "endDate": "2027-12-15T08:00:00.000Z",
+          "numberOfDays": 365,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "904",
+      "projectName": "sample gamma wind farm",
+      "workId": "track-9401",
+      "source": "track",
+      "title": "sample gamma wind farm - Assessment",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2018,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2027-02-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2029-06-30T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Pre-EA",
+          "stage": "Pre-EA",
+          "order": 1,
+          "startDate": "2027-02-01T08:00:00.000Z",
+          "endDate": "2027-08-01T08:00:00.000Z",
+          "numberOfDays": 181,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Early Engagement",
+          "stage": "Early Engagement",
+          "order": 2,
+          "startDate": "2027-08-01T08:00:00.000Z",
+          "endDate": "2028-02-01T08:00:00.000Z",
+          "numberOfDays": 184,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "905",
+      "projectName": "Sample Epsilon Terminal",
+      "workId": "track-9501",
+      "source": "track",
+      "title": "Sample Epsilon Terminal - Amendment",
+      "workTypeCode": "amendment",
+      "workType": "Amendment",
+      "actYear": 2018,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2025-10-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2028-01-31T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Procedures Development",
+          "stage": "Process Planning",
+          "order": 1,
+          "startDate": "2025-10-01T08:00:00.000Z",
+          "endDate": "2026-01-09T08:00:00.000Z",
+          "numberOfDays": 100,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Application Development (Proponent)",
+          "stage": null,
+          "order": 2,
+          "startDate": "2026-01-10T08:00:00.000Z",
+          "endDate": "2027-06-30T08:00:00.000Z",
+          "numberOfDays": 536,
+          "isCompleted": false,
+          "isSuspended": true,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Amendment Review",
+          "stage": "Application Review",
+          "order": 3,
+          "startDate": "2027-07-01T08:00:00.000Z",
+          "endDate": "2027-12-31T08:00:00.000Z",
+          "numberOfDays": 183,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "902",
+      "projectName": "Sample Beta Quarry",
+      "workId": "track-9202",
+      "source": "track",
+      "title": "Sample Beta Quarry - Substantial Start",
+      "workTypeCode": "substantial-start",
+      "workType": "Substantial Start",
+      "actYear": 2002,
+      "workState": "in-progress",
+      "isActive": true,
+      "startDate": "2026-09-01T08:00:00.000Z",
+      "decisionDate": null,
+      "anticipatedDecisionDate": "2027-06-01T08:00:00.000Z",
+      "outcome": null,
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "SubStart Assessment",
+          "stage": null,
+          "order": 1,
+          "startDate": "2026-09-01T08:00:00.000Z",
+          "endDate": "2027-05-01T08:00:00.000Z",
+          "numberOfDays": 242,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "SubStart Decision",
+          "stage": null,
+          "order": 2,
+          "startDate": "2027-05-01T08:00:00.000Z",
+          "endDate": "2027-06-01T08:00:00.000Z",
+          "numberOfDays": 31,
+          "isCompleted": false,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "903",
+      "projectName": "Sample Delta Pipeline",
+      "workId": "track-9302",
+      "source": "track",
+      "title": "Sample Delta Pipeline - EAC Extension",
+      "workTypeCode": "eac-extension",
+      "workType": "EAC Extension",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "2025-01-15T08:00:00.000Z",
+      "decisionDate": "2025-04-15T08:00:00.000Z",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Evaluation",
+          "stage": "Evaluation",
+          "order": 1,
+          "startDate": "2025-01-15T08:00:00.000Z",
+          "endDate": "2025-04-15T08:00:00.000Z",
+          "numberOfDays": 90,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "track-9102",
+      "source": "track",
+      "title": "Sample Alpha Transmission Line - Assessment (Track copy)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "2005-01-10T08:00:00.000Z",
+      "decisionDate": "2007-03-01T08:00:00.000Z",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": false,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "2005-01-10T08:00:00.000Z",
+          "endDate": "2007-03-01T08:00:00.000Z",
+          "numberOfDays": 780,
+          "isCompleted": true,
+          "isSuspended": false,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "sheet-90000000-0000-4000-8000-000000000001",
+      "source": "sheet",
+      "title": "Sample Alpha Transmission Line - Assessment (1996)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 1996,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "1997-02-01",
+      "decisionDate": "1999-06-10",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "1997-02-01",
+          "endDate": "1999-06-10",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "sheet-90000000-0000-4000-8000-000000000002",
+      "source": "sheet",
+      "title": "Sample Alpha Transmission Line - Assessment (2002)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "2004-03-01",
+      "decisionDate": "2007-03-01",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [
+        {
+          "title": "Sample Alpha Transmission Line - Assessment (Track copy)"
+        }
+      ],
+      "phases": [
+        {
+          "name": "Pre-Application",
+          "stage": "Pre-Application",
+          "order": 1,
+          "startDate": "2004-03-01",
+          "endDate": "2005-01-09",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": []
+        },
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 2,
+          "startDate": "2005-01-10",
+          "endDate": "2007-03-01",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "903",
+      "projectName": "Sample Delta Pipeline",
+      "workId": "sheet-90000000-0000-4000-8000-000000000003",
+      "source": "sheet",
+      "title": "Sample Delta Pipeline - Assessment (1996)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 1996,
+      "workState": "transitioned",
+      "isActive": false,
+      "startDate": null,
+      "decisionDate": null,
+      "anticipatedDecisionDate": null,
+      "outcome": null,
+      "transitionOut": {
+        "toActYear": 2002,
+        "date": null,
+        "dateSource": "none"
+      },
+      "undated": {
+        "startDate": {
+          "notAfter": "2001-03-01"
+        }
+      },
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "isCompleted": false,
+          "isSuspended": null,
+          "undated": {
+            "startDate": {
+              "notAfter": "2001-03-01"
+            }
+          },
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "904",
+      "projectName": "sample gamma wind farm",
+      "workId": "sheet-90000000-0000-4000-8000-000000000004",
+      "source": "sheet",
+      "title": "sample gamma wind farm - Assessment (2002)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "2008-05-01",
+      "decisionDate": "2010-02-15",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "2008-05-01",
+          "endDate": "2010-02-15",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": [
+            {
+              "kind": "suspension",
+              "legalSection": "s.30(1)",
+              "startDate": "2009-01-05",
+              "endDate": "2009-06-30",
+              "days": 176
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "projectId": "905",
+      "projectName": "Sample Epsilon Terminal",
+      "workId": "sheet-90000000-0000-4000-8000-000000000005",
+      "source": "sheet",
+      "title": "Sample Epsilon Terminal - Amendment (2002)",
+      "workTypeCode": "amendment",
+      "workType": "Amendment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "startDate": "2014-03-01",
+      "decisionDate": "2015-01-20",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": true,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Amendment Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "2014-03-01",
+          "endDate": "2015-01-20",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    },
+    {
+      "projectId": "902",
+      "projectName": "Sample Beta Quarry",
+      "workId": "sheet-90000000-0000-4000-8000-000000000006",
+      "source": "sheet",
+      "title": "Sample Beta Quarry - Assessment (2002)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 2002,
+      "workState": "withdrawn",
+      "isActive": false,
+      "startDate": "2011-06-01",
+      "decisionDate": "2012-09-30",
+      "anticipatedDecisionDate": null,
+      "outcome": "Withdrawn",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "phases": [
+        {
+          "name": "Pre-Application",
+          "stage": "Pre-Application",
+          "order": 1,
+          "startDate": "2011-06-01",
+          "endDate": "2012-09-30",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": []
+        }
+      ]
+    }
+  ]
+}

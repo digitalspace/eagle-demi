@@ -63,6 +63,7 @@ export const routes: RouteObject[] = [
       { path: 'projects/:id', lazy: async () => ({ Component: (await import('./screens/ProjectSummary')).ProjectSummary }) },
       { path: 'project-details', lazy: async () => ({ Component: (await import('./screens/ProjectPicker')).ProjectDetailsPicker }) },
       { path: 'project-details/:id', lazy: async () => ({ Component: (await import('./screens/ProjectDetails')).ProjectDetails }) },
+      { path: 'workplans', lazy: async () => ({ Component: (await import('./screens/Workplans')).Workplans }) },
       { path: 'notify', lazy: async () => ({ Component: (await import('./screens/Notify')).Notify }) },
       { path: 'links', lazy: async () => ({ Component: (await import('./screens/ShortLinks')).ShortLinks }) },
       { path: 'rbac', lazy: async () => ({ Component: (await import('./screens/AccessModel')).AccessModel }) },

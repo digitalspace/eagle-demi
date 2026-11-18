@@ -1,6 +1,6 @@
 'use strict';
 
-// Staff reads of works: a project's staff entries in effect for each and its sheet works, and sheet work counts across projects.
+// Staff reads of works: a project's staff entries in effect for each and its sheet works; sheet work counts and every work across projects.
 // Level 2 and narrower only: the staff lists sit at level 2 or 3, and sheet works the public read hides are staff data.
 
 const projects = require('../../repositories/projects');
@@ -10,7 +10,7 @@ const { levelOf } = require('../../vis/level');
 const { redactForAccess } = require('../../vis/redact');
 const { inEffect, workRangeOf } = require('../../domain/work-model');
 const { given, listOf } = require('../../domain/work-override');
-const { sheetWorksOf, sheetWorksSummaryOf } = require('../../domain/works-derive');
+const { ID_BATCH, sheetWorksOf, sheetWorksSummaryOf, workplansOf } = require('../../domain/works-derive');
 const { ENTRY_SCHEMAS, SERVER_KEYS, currentInvestment } = require('../../domain/project-staff-fields');
 const { serverError } = require('../../helpers/response');
 
@@ -105,5 +105,20 @@ exports.getSheetWorksSummary = async (req, res) => {
     return res.json({ projects: await sheetWorksSummaryOf(rows) });
   } catch (err) {
     return serverError(res, err, 'sheet-works summary read failed');
+  }
+};
+
+/** `GET /workplans`: every live work, Track and sheet, of the projects the caller may read. */
+exports.getWorkplans = async (req, res) => {
+  try {
+    const access = staffAccessOf(req, res);
+    if (!access) return undefined;
+    // One id per work, so a project with many works would repeat in every batch.
+    const ids = [...new Set((await works.liveProjectIds()).map(String))];
+    const rows = [];
+    for (let i = 0; i < ids.length; i += ID_BATCH) rows.push(...await projects.listByIds(access, ids.slice(i, i + ID_BATCH)));
+    return res.json({ works: await workplansOf(rows) });
+  } catch (err) {
+    return serverError(res, err, 'workplans read failed');
   }
 };
