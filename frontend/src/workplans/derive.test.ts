@@ -145,6 +145,11 @@ describe('columnOf', () => {
     ['READINESS DECISION', 'Referral', 'Planning'],
     ['DPD Development (Proponent Time)', 'Early Engagement', 'Proponent time'],
     ['SubStart Decision', null, 'Decision'],
+    ["Minister's Designation Intake", null, 'Intake'],
+    ['Pre-EA (Exemption Request)', 'Pre-Application', 'Intake'],
+    ['Transfer Pre-Application', null, 'Planning'],
+    ['Information Requirement Planning', null, 'Planning'],
+    ['Amendment Procedures', null, 'Planning'],
     ['A renamed phase', 'Referral and Decision', 'Decision'],
     ['A renamed phase', 'a stage nobody mapped', 'Review'],
   ])('puts %s (stage %s) in %s: name first, then stage, then Review', (name, stage, column) => {

@@ -1,0 +1,268 @@
+/* Pipeline view: fills the page's data area; each column's card list scrolls on its own. */
+.pl {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--layout-margin-small);
+}
+
+/* Columns keep a readable width; below that the board scrolls sideways inside itself, not the page. */
+.pl .pl-board {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(13rem, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--layout-margin-small);
+  overflow-x: auto;
+}
+
+.pl .pl-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--layout-border-radius-large);
+  background: var(--theme-gray-20);
+}
+
+.pl .pl-col__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.pl .pl-col__count {
+  padding: 0 var(--layout-padding-small);
+  border-radius: var(--layout-border-radius-circular);
+  background: var(--surface-color-background-white);
+  font: var(--typography-bold-label);
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-col__overdue {
+  margin-left: auto;
+  font: var(--typography-bold-label);
+  color: var(--wp-overdue);
+}
+
+/* Positioned so the cards' visually-hidden text stays inside the scroll box. */
+.pl .pl-col__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--layout-padding-small);
+}
+
+/* Bottom space after the last card; while more cards sit below, it sticks to the edge and fades them out. */
+.pl .pl-col__body::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: var(--layout-padding-medium);
+  background: linear-gradient(transparent, var(--theme-gray-20));
+  pointer-events: none;
+}
+
+.pl .pl-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pl .pl-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--layout-margin-xsmall);
+  padding: var(--layout-padding-small);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-large);
+  background: var(--surface-color-background-white);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+  overflow-wrap: anywhere;
+}
+
+.pl .pl-card > * {
+  max-width: 100%;
+}
+
+.pl .pl-work {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font: var(--typography-bold-small-body);
+  text-decoration: none;
+}
+
+.pl .pl-work:hover {
+  text-decoration: underline;
+}
+
+.pl .pl-work:focus-visible,
+.pl .pl-more:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 2px;
+}
+
+.pl .pl-card .pill {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pl .pl-flag {
+  flex: none;
+  padding: 0 var(--layout-padding-small);
+}
+
+.pl .pl-phase .pl-flag {
+  margin-left: auto;
+}
+
+.pl .pl-sub {
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-phase,
+.pl .pl-days,
+.pl .pl-next {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  width: 100%;
+  min-width: 0;
+}
+
+.pl .pl-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border-radius: var(--layout-border-radius-small);
+  border: var(--layout-border-width-small) solid transparent;
+}
+
+/* Edge colours, as the Status list swatch; tone names follow toneOf in derive.ts. */
+.pl .pl-swatch--readiness { background: var(--wp-phase-readiness-edge); }
+.pl .pl-swatch--planning { background: var(--wp-phase-planning-edge); }
+.pl .pl-swatch--proponent { background: var(--wp-phase-proponent-edge); }
+.pl .pl-swatch--review { background: var(--wp-phase-review-edge); }
+.pl .pl-swatch--decision { background: var(--wp-phase-decision-edge); }
+
+.pl .pl-swatch--waiting {
+  background: var(--surface-color-background-white);
+  border-color: var(--theme-gray-60);
+}
+
+.pl .pl-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--theme-gray-30);
+}
+
+.pl .pl-bar__fill {
+  display: block;
+}
+
+.pl .pl-bar__fill--normal {
+  background: var(--surface-color-border-active);
+}
+
+.pl .pl-bar__fill--near-limit {
+  background: var(--wp-near-limit);
+}
+
+.pl .pl-bar__fill--overdue {
+  background: var(--wp-overdue-bar);
+}
+
+.pl .pl-figure {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-figure--overdue {
+  font-weight: 700;
+  color: var(--wp-overdue);
+}
+
+.pl .pl-next {
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
+  margin-top: var(--layout-margin-hair);
+  padding-top: var(--layout-padding-xsmall);
+  border-top: var(--layout-border-width-small) solid var(--theme-gray-20);
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-empty {
+  margin: 0;
+  padding: var(--layout-padding-medium) var(--layout-padding-small);
+  text-align: center;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-more {
+  display: block;
+  min-height: 32px;
+  margin: var(--layout-margin-small) auto 0;
+  padding: 0 var(--layout-padding-small);
+  border: none;
+  background: transparent;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pl .pl-none {
+  margin: 0;
+  padding: var(--layout-padding-large);
+  text-align: center;
+  color: var(--typography-color-secondary);
+}
+
+.pl .pl-footer {
+  flex: none;
+  margin: 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Narrow: the page scrolls (workplans.css), so stages stack at full length; Show more, not a nested scroll box, keeps each short. */
+@media (max-width: 40rem) {
+  .pl {
+    flex: none;
+  }
+
+  .pl .pl-board {
+    display: flex;
+    flex-direction: column;
+    overflow-x: visible;
+  }
+
+  .pl .pl-col__body {
+    overflow-y: visible;
+  }
+
+  .pl .pl-col__body::after {
+    position: static;
+  }
+}

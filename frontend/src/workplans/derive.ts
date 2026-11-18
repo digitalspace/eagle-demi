@@ -84,8 +84,8 @@ const fold = (text: string | null) => (text ?? '').trim().toLowerCase();
 const COLUMN_BY_NAME = new Map<string, PipelineColumn>(
   (
     [
-      ['Intake', ['Initial Contact', 'Pre-EA', 'Project Designation']],
-      ['Planning', ['Procedures Development', 'Early Engagement', 'Readiness Decision', 'Process Planning', 'Pre-Application']],
+      ['Intake', ['Initial Contact', 'Project Designation']],
+      ['Planning', ['Early Engagement', 'Readiness Decision']],
       ['Proponent time', ['Application Development']],
       [
         'Review',
@@ -124,13 +124,15 @@ const COLUMN_BY_STAGE = new Map<string, PipelineColumn>(
   ).flatMap(([column, stages]) => stages.map((stage) => [fold(stage), column] as const)),
 );
 
-/** Pipeline column of a phase: by name, then by `stage`, then Review. */
+/** Pipeline column of a phase: by name, then by words in the name, then by `stage`, then Review. */
 export function columnOf(phase: Pick<WorkplanPhase, 'name' | 'stage'>): PipelineColumn {
   const name = fold(phase.name);
   const named = COLUMN_BY_NAME.get(name);
   if (named) return named;
   if (name.includes('proponent')) return 'Proponent time';
   if (name.endsWith('decision')) return 'Decision';
+  if (name.startsWith('pre-ea') || name.includes('intake')) return 'Intake';
+  if (/pre-|planning|procedures/.test(name)) return 'Planning';
   return COLUMN_BY_STAGE.get(fold(phase.stage)) ?? 'Review';
 }
 

@@ -71,7 +71,7 @@ export const TECH: Record<string, Tech> = {
   workplans: {
     title: 'Workplans',
     chips: ['DEMI GET /workplans', 'Cosmos DB — works', 'Track works + 1996 and 2002 sheet works', 'staff only, dev and test only', 'read only'],
-    note: 'One read returns every live work, from Track and from the business spreadsheets, for the projects the caller may read at staff level. The route is registered on dev and test only, so anywhere else the page shows a note in place of the timeline. The screen writes nothing; filters and the timeline or list view are worked out in the browser.'
+    note: 'One read returns every live work, from Track and from the business spreadsheets, for the projects the caller may read at staff level. The route is registered on dev and test only, so anywhere else the page shows a note in place of the works. The screen writes nothing; filters and the timeline, list, pipeline and lookahead views are worked out in the browser.'
   },
   notify: {
     title: 'eagle-notify',
