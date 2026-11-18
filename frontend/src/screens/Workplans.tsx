@@ -164,12 +164,9 @@ export function Workplans() {
 
   return (
     <div className="wp-page">
-      <div className="screen-header">
-        <div className="screen-header__text">
-          <h1>Workplans</h1>
-          <p>Live works from Track and the business spreadsheets, as they stand today.</p>
-        </div>
-        {workplans.isSuccess && <Segmented label="View" options={VIEWS} value={view} onChange={changeView} />}
+      <div className="screen-header wp-header">
+        <h1>Workplans</h1>
+        {workplans.isSuccess && <Segmented label="View" labelHidden options={VIEWS} value={view} onChange={changeView} />}
       </div>
       {body}
     </div>

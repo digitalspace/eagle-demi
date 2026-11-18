@@ -32,14 +32,28 @@
   }
 }
 
-/* The View switch drops under the title once the title would go under 16rem. */
-.wp-page > .screen-header {
+.wp-header {
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
   gap: var(--layout-margin-small) var(--layout-margin-large);
 }
 
-.wp-page .screen-header__text {
-  flex: 1 1 16rem;
+.wp-header h1 {
+  font: var(--typography-bold-h5);
+  color: var(--theme-primary-blue);
+}
+
+.wp-header .wp-segmented__options {
+  padding: 3px;
+  border-color: var(--surface-color-secondary-hover);
+  background: var(--surface-color-background-light-gray);
+}
+
+.wp-header .wp-segmented__option {
+  min-height: 30px;
+  padding: 0 var(--layout-padding-medium);
+  font: var(--typography-bold-small-body);
 }
 
 .wp-page > .screen-header,
@@ -65,15 +79,16 @@
   display: flex;
   gap: 2px;
   padding: 2px;
-  border-radius: var(--layout-border-radius-medium);
-  background: var(--theme-gray-20);
+  border: var(--layout-border-width-small) solid var(--theme-gray-40);
+  border-radius: var(--layout-border-radius-large);
+  background: var(--surface-color-background-white);
 }
 
 .wp-segmented__option {
-  min-height: 28px;
+  min-height: 26px;
   padding: 0 var(--layout-padding-small);
   border: none;
-  border-radius: var(--layout-border-radius-small);
+  border-radius: var(--layout-border-radius-medium);
   background: transparent;
   font: var(--typography-regular-label);
   color: var(--typography-color-secondary);
@@ -95,24 +110,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--layout-margin-small) var(--layout-margin-large);
+  gap: var(--layout-margin-small);
 }
 
-.wp-filters__group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--layout-margin-xsmall);
-}
-
-@media (max-width: 40rem) {
-  .wp-filters {
-    gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
-  }
-}
-
-.wp-segmented__label,
-.wp-filters__label {
+.wp-segmented__label {
   font: var(--typography-regular-label);
   color: var(--typography-color-secondary);
 }

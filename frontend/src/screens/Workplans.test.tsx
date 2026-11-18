@@ -61,15 +61,25 @@ describe('Workplans', () => {
     expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
   });
 
-  it('narrows the works to one Act when its chip is pressed', async () => {
+  it('narrows the works to one Act when it is picked', async () => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('link', { name: OPEN_WORK });
     await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
-    await user.click(screen.getByRole('button', { name: '1996' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Act' }), '1996');
 
     expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
+  });
+
+  it('narrows the list to works whose current phase is the one picked', async () => {
+    const user = renderAt('/workplans?view=list');
+
+    await screen.findByRole('link', { name: OTHER_OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Phase' }), 'Amendment Review');
+
+    expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: OTHER_OPEN_WORK })).toBeNull();
   });
 
   it('narrows the works to those whose title, project or type holds the search text', async () => {
@@ -90,6 +100,7 @@ describe('Workplans', () => {
     await user.type(search, 'no such work');
     expect(await screen.findByText('No works match these filters.')).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: 'Search works' })).toBe(search);
+    expect(search).toHaveFocus();
 
     await user.clear(search);
     expect(await screen.findByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
@@ -99,21 +110,18 @@ describe('Workplans', () => {
     ['List', () => screen.getByRole('link', { name: OPEN_WORK })],
     ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: OPEN_WORK })],
     ['Lookahead', () => screen.getByRole('region', { name: 'Upcoming milestones' })],
-  ])('drops the Status chips in %s, and gives the timeline its status back', async (view, shownPart) => {
+  ])('drops the Status filter in %s, and gives the timeline its status back', async (view, shownPart) => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
-    await user.click(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Overdue' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Overdue');
     await user.click(screen.getByRole('button', { name: view }));
 
-    expect(screen.queryByRole('group', { name: 'Status' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Status' })).toBeNull();
     expect(shownPart()).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Timeline' }));
-    expect(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'Overdue' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveDisplayValue('Overdue');
   });
 
   it('keeps the view in ?view=, opening the list from the link and the timeline from its button', async () => {

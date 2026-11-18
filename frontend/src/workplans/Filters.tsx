@@ -1,4 +1,4 @@
-import { useId, useMemo, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ChipSelect } from './ChipSelect';
 import { STATUS_LABEL, type WorkRow, type WorkStatus } from './derive';
 import { plural } from './format';
@@ -43,37 +43,6 @@ function Chip({ pressed, onClick, children }: { pressed: boolean; onClick: () =>
         </span>
       )}
     </button>
-  );
-}
-
-/** One labelled set of chips; pressing the active chip clears it. */
-function ChipGroup<T extends string | number>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { value: T; label: string }[];
-  value: T | null;
-  onChange: (value: T | null) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="wp-filters__group" role="group" aria-labelledby={id}>
-      <span id={id} className="wp-filters__label">
-        {label}
-      </span>
-      {options.map((option) => (
-        <Chip
-          key={option.value}
-          pressed={option.value === value}
-          onClick={() => onChange(option.value === value ? null : option.value)}
-        >
-          {option.label}
-        </Chip>
-      ))}
-    </div>
   );
 }
 
@@ -145,27 +114,32 @@ export function Filters({
           clearable
         />
       )}
-      {withPhase && (
-        <ChipSelect label="Phase" options={phases} value={value.phase} onChange={(phase) => onChange({ phase })} clearable />
-      )}
-      <ChipGroup
+      <ChipSelect
         label="Act"
         options={ACTS.map((year) => ({ value: year, label: String(year) }))}
         value={value.act}
         onChange={(act) => onChange({ act })}
+        clearable
       />
-      <ChipGroup label="Work type" options={types} value={value.type} onChange={(type) => onChange({ type })} />
+      <ChipSelect label="Work type" options={types} value={value.type} onChange={(type) => onChange({ type })} clearable />
       {withStatus && (
-        <ChipGroup
+        <ChipSelect
           label="Status"
           options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
           value={value.status}
           onChange={(status) => onChange({ status })}
+          clearable
         />
+      )}
+      {withPhase && (
+        <ChipSelect label="Phase" options={phases} value={value.phase} onChange={(phase) => onChange({ phase })} clearable />
       )}
       <Chip pressed={value.showHidden} onClick={() => onChange({ showHidden: !value.showHidden })}>
         Show replaced and hidden
       </Chip>
+      <button type="button" className="wp-chip wp-chip--placeholder" disabled title="Not available yet">
+        + Filter
+      </button>
       <span className="wp-filters__count" aria-live="polite">
         {summary ?? plural(count, 'work')}
       </span>
