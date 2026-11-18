@@ -32,11 +32,8 @@ let auth: AuthState = SIGNED_OUT;
 let initPromise: Promise<boolean> | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
-/**
- * Auth state is a store, not a value read once: a refresh can fail at any moment and the gate,
- * the account menu and every screen have to see that happen. `useSyncExternalStore` in
- * SessionProvider is the only consumer.
- */
+/** A store, not a value read once: a refresh can fail at any moment and every screen must see it.
+ * Read only through `useSyncExternalStore` in SessionProvider. */
 const listeners = new Set<() => void>();
 
 export function subscribeAuth(listener: () => void): () => void {
@@ -149,12 +146,8 @@ async function start(): Promise<boolean> {
 
   client = newClient();
 
-  // keycloak-js processes a valid callback code before it even looks at onLoad, but if that
-  // processing fails onLoad is what decides what happens next, so it is always set.
-  // A remembered login uses 'login-required': a full redirect to the IdP, which holds a
-  // first-party cookie and bounces straight back with a code, no prompt. 'check-sso' does the same
-  // through a hidden iframe, which needs third-party cookies that browsers now block by default,
-  // so it is left for the callback, where the code in hand is what settles the session.
+  // 'login-required' redirects to the IdP, whose first-party cookie bounces straight back with a code;
+  // 'check-sso' needs third-party cookies browsers block, so it is kept for the callback only.
   const onLoad = remembered() && !isOAuthCallback ? 'login-required' : 'check-sso';
 
   let authenticated: boolean;
@@ -234,14 +227,8 @@ export function login(): void {
     });
 }
 
-/**
- * The end-session URL for this session, or null when there is no client to end.
- *
- * `client_id` + `post_logout_redirect_uri` is the pair this realm acts on; a bare `redirect_uri`
- * is ignored and leaves the browser on Keycloak's "Do you want to log out?" page. An expired
- * `id_token_hint` is a 400, so the hint goes only when a token is in hand. Exported so it can be
- * read back without a test navigating the runner away.
- */
+/** End-session URL, or null with no client. The realm ignores a bare `redirect_uri`, so it gets
+ * `client_id` + `post_logout_redirect_uri`; an expired `id_token_hint` is a 400, so sent only when held. */
 export function logoutUrl(): string | null {
   if (!client) return null;
   const c = config();
@@ -254,8 +241,7 @@ export function logoutUrl(): string | null {
 }
 
 export function logout(): void {
-  // Before the redirect, not left to it: a null client or a blocked navigation used to leave the
-  // header reading "signed in" over a session that no longer existed.
+  // Before the redirect: a null client or a blocked navigation must not leave the header signed in.
   clearAuthState();
 
   const kc = client;
@@ -273,12 +259,8 @@ export function logout(): void {
   window.location.reload();
 }
 
-/**
- * Refresh the access token, sharing one request across every caller — the 401 replay and the
- * keep-fresh tick both land here, so a tick mid-401 cannot start a second refresh. A failed
- * refresh means the session is over: say so, rather than leaving the app claiming a live one over
- * data the API has already started refusing.
- */
+/** One shared refresh for the 401 replay and the keep-fresh tick, so they never race.
+ * A failed refresh ends the session in the store too, since the API already refuses it. */
 let refreshing: Promise<boolean> | null = null;
 
 export function refreshToken(minValidity = REPLAY_MIN_VALIDITY): Promise<boolean> {
