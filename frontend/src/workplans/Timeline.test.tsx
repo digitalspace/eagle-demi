@@ -54,6 +54,37 @@ describe('TimelineView', () => {
     expect(todayInLane(region)).toBe(LANE_PX * 0.25);
   });
 
+  it('pans the lane a quarter at a time from the overview window, which Fit all hides', async () => {
+    render(
+      <MemoryRouter>
+        <TimelineView rows={rows()} today={TODAY} />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    const scroller = screen.getByRole('region', { name: 'Timeline' }).querySelector<HTMLElement>('.timeline__scroll')!;
+    const slider = screen.getByRole('slider', { name: 'Visible range' });
+    const before = scroller.scrollLeft;
+
+    slider.focus();
+    await user.keyboard('{ArrowLeft}');
+
+    // Quarter zoom shows three years across the lane, so a quarter is a twelfth of it.
+    expect(scroller.scrollLeft).toBe(Math.round(before - LANE_PX / 12));
+    expect(slider).toHaveAttribute('aria-valuenow', String(scroller.scrollLeft));
+    await user.click(screen.getByRole('button', { name: 'Fit all' }));
+    expect(screen.queryByRole('slider', { name: 'Visible range' })).toBeNull();
+  });
+
+  it('names an overdue bar’s overrun on hover', () => {
+    render(
+      <MemoryRouter>
+        <TimelineView rows={rows()} today={TODAY} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTitle(/^\d+ days overdue$/)).toHaveClass('timeline__bar--overrun');
+  });
+
   it('opens a 1996 work’s stored milestones and outcome under its row', async () => {
     // The fixture's 1996 work has no milestones; give it one so the panel has one to show.
     const sheet = {

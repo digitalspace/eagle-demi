@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkplanRow } from '../api/sheet-works';
 import fixture from '../../parity/fixtures/workplans.json';
-import { rowsOf } from './derive';
+import { byAttention, rowsOf } from './derive';
 import { daysOf, groupsOf, summaryOf } from './timeline-rows';
-import { dayNumber, drawsSuspension, extentOf, scaleFor, scrollFor, spansOf, tagDayOf, ticksFor, xOf } from './timeline-scale';
+import { dayNumber, drawnKinds, extentOf, scaleFor, scrollFor, spansOf, tagDayOf, ticksFor, xOf } from './timeline-scale';
 
 const TODAY = '2026-11-17';
 const VIEWPORT = 1000;
@@ -46,8 +46,8 @@ describe('suspension', () => {
   const suspended = rows.find((row) => row.suspended)!;
 
   it('only a dated interruption draws a hatched span, which the legend keys', () => {
-    expect(drawsSuspension([suspended], TODAY)).toBe(false);
-    expect(drawsSuspension(rows, TODAY)).toBe(true);
+    expect(drawnKinds([suspended], TODAY).has('suspended')).toBe(false);
+    expect(drawnKinds(rows, TODAY).has('suspended')).toBe(true);
   });
 
   it('the suspended tag starts after the current phase, clear of its label', () => {
@@ -63,7 +63,7 @@ describe('suspension', () => {
       { kind: 'extension', startDate: '2026-03-01', endDate: '2026-04-01', days: 31, legalSection: null },
     ];
 
-    expect(drawsSuspension(rowsOf([work], [], TODAY), TODAY)).toBe(false);
+    expect(drawnKinds(rowsOf([work], [], TODAY), TODAY).has('suspended')).toBe(false);
   });
 });
 
@@ -99,5 +99,14 @@ describe('timeline rows', () => {
       ['2002 Act', 7, 0],
       ['1996 Act', 2, 0],
     ]);
+  });
+
+  it('sorts each group by attention when asked, by first phase start otherwise', () => {
+    const titles = (group: { rows: typeof rows }) => group.rows.map((row) => row.work.title);
+    const byStart = groupsOf(rows, 'act')[0];
+    const attention = groupsOf(rows, 'act', 'attention')[0];
+
+    expect(titles(attention)).toEqual(titles({ rows: [...byStart.rows].sort(byAttention) }));
+    expect(titles(attention)).not.toEqual(titles(byStart));
   });
 });

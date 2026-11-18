@@ -1,7 +1,7 @@
 /* Workplans Timeline view. The panel fills its flex parent; only .timeline__scroll scrolls. */
 
 .timeline {
-  --timeline-left: 24.25rem;
+  --timeline-left: 330px;
   --timeline-row: 28px;
   --timeline-head: 40px;
   display: flex;
@@ -11,7 +11,14 @@
   margin-bottom: 0;
 }
 
-/* Toolbar: zoom, Today, group by, legend */
+/* Scoped here so the shared .panel keeps its look on other screens. */
+.panel.timeline {
+  overflow: hidden;
+  border: var(--layout-border-width-small) solid var(--theme-gray-40);
+  border-radius: var(--layout-border-radius-large);
+}
+
+/* Toolbar: zoom, Today, group by, sort, legend */
 
 .timeline__toolbar {
   flex: none;
@@ -23,22 +30,7 @@
   border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
 }
 
-.timeline__today {
-  min-height: 28px;
-  padding: 0 var(--layout-padding-small);
-  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
-  border-radius: var(--layout-border-radius-small);
-  background: var(--surface-color-secondary-default);
-  font: var(--typography-bold-label);
-  color: var(--typography-color-primary);
-  cursor: pointer;
-}
-
-.timeline__today:hover {
-  background: var(--surface-color-secondary-hover);
-}
-
-.timeline__today:focus-visible,
+.timeline__overview-window:focus-visible,
 .timeline__group-head:focus-visible,
 .timeline__name:focus-visible,
 .timeline__toggle:focus-visible {
@@ -63,19 +55,12 @@
   gap: var(--layout-margin-xsmall);
 }
 
-/* Swatches reuse the bar classes, so the legend can never drift from the bars. */
 .timeline__swatch {
   box-sizing: border-box;
-  width: 16px;
-  height: 10px;
+  width: 14px;
+  height: 9px;
   border: var(--layout-border-width-small) solid transparent;
   border-radius: var(--layout-border-radius-small);
-}
-
-.timeline__swatch--today {
-  width: 2px;
-  height: 14px;
-  background: var(--wp-today);
 }
 
 /* Scroll box and canvas */
@@ -118,10 +103,10 @@
   left: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.75rem 7.25rem;
+  grid-template-columns: minmax(0, 1fr) 34px 70px;
   align-items: center;
-  gap: var(--layout-margin-small);
-  padding: 0 var(--layout-padding-small) 0 var(--layout-padding-large);
+  gap: 6px;
+  padding: 0 10px 0 28px;
   background: var(--surface-color-background-white);
   border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
 }
@@ -140,6 +125,7 @@
 
 .timeline__days-head {
   text-align: right;
+  line-height: 1.2;
 }
 
 .timeline__work {
@@ -184,17 +170,21 @@
 }
 
 .timeline__type {
+  overflow: hidden;
   text-align: center;
   text-decoration: none;
-  font: var(--typography-bold-label);
-  font-size: 0.6875rem;
+  font: var(--typography-regular-label);
+  font-weight: 600;
   line-height: 16px;
   color: var(--typography-color-secondary);
-  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
-  border-radius: var(--layout-border-radius-small);
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-medium);
 }
 
+/* Longer words ("Status unknown") cut short here; the cell's title and the row summary keep them whole. */
 .timeline__days {
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -240,7 +230,8 @@
 /* Groups */
 
 .timeline__group-head {
-  display: block;
+  display: grid;
+  grid-template-columns: var(--timeline-left) var(--timeline-lane);
   list-style: none;
   cursor: pointer;
   background: var(--theme-gray-20);
@@ -307,6 +298,26 @@
 
 .timeline__pill {
   margin-left: auto;
+  border-radius: var(--layout-border-radius-circular);
+  background: var(--support-surface-color-danger);
+  color: var(--wp-overdue);
+}
+
+/* Quarter cells: one hue, deeper as more of the group's works are active. */
+.timeline__activity {
+  position: relative;
+}
+
+.timeline__heat {
+  position: absolute;
+  top: calc(50% - 5px);
+  box-sizing: border-box;
+  height: 10px;
+  border: 0 solid var(--theme-gray-20);
+  border-width: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--wp-today) var(--heat), transparent);
+  background-clip: padding-box;
 }
 
 /* Rows */
@@ -325,7 +336,7 @@
 
 .timeline__row:hover,
 .timeline__row:hover .timeline__left {
-  background: var(--surface-color-background-light-blue);
+  background: var(--theme-blue-10);
 }
 
 .timeline__lane {
@@ -364,20 +375,20 @@
 
 .timeline__bar {
   position: absolute;
-  top: 5px;
+  top: 6px;
   box-sizing: border-box;
-  height: 18px;
+  height: 16px;
   overflow: hidden;
   padding: 0 var(--layout-padding-xsmall);
   white-space: nowrap;
-  line-height: 16px;
+  line-height: 14px;
   border: var(--layout-border-width-small) solid transparent;
-  border-radius: var(--layout-border-radius-small);
+  border-radius: 3px;
 }
 
 /* White edge leaves a 2px gap between back-to-back done phases. */
 .timeline__bar--past {
-  background: var(--theme-gray-40);
+  background: var(--theme-gray-30);
   border-color: var(--surface-color-background-white);
 }
 
@@ -394,7 +405,7 @@
 }
 
 .timeline__bar--current {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .timeline__bar--review {
@@ -426,8 +437,8 @@
 .timeline__bar--overrun {
   background: repeating-linear-gradient(
     135deg,
-    var(--wp-overdue-bar) 0 1px,
-    var(--support-surface-color-danger) 1px 5px
+    var(--wp-phase-readiness-fill) 0 3px,
+    var(--surface-color-background-white) 3px 6px
   );
   border-color: var(--wp-overdue-bar);
 }
@@ -453,7 +464,7 @@
 
 .timeline__note {
   position: absolute;
-  top: 5px;
+  top: 6px;
   z-index: 1;
   padding: 0 var(--layout-padding-xsmall);
   line-height: 16px;
@@ -482,6 +493,70 @@
   margin-left: -1px;
   background: var(--wp-today);
   pointer-events: none;
+}
+
+/* Overview: works active per quarter over the whole lane, and a window on the part in view */
+
+.timeline__overview {
+  flex: none;
+  display: grid;
+  grid-template-columns: var(--timeline-left) minmax(0, 1fr);
+  align-items: center;
+  min-height: 46px;
+  border-top: var(--layout-border-width-small) solid var(--theme-gray-40);
+  background: var(--theme-gray-10);
+}
+
+.timeline__overview-label {
+  margin: 0;
+  padding: 0 10px 0 28px;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__overview-track {
+  position: relative;
+  height: 32px;
+  margin-right: 10px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+/* Same blue as the Lookahead histogram; the counts it shows are also in each group's activity cells. */
+.timeline__overview-bar {
+  position: absolute;
+  bottom: 0;
+  box-sizing: border-box;
+  border-right: 1px solid var(--theme-gray-10);
+  border-radius: 1px 1px 0 0;
+  background: #9fb6d9;
+  background-clip: padding-box;
+}
+
+.timeline__overview-today {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--wp-today);
+}
+
+.timeline__overview-window {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  box-sizing: border-box;
+  min-width: 8px;
+  border: var(--layout-border-width-medium) solid var(--theme-primary-blue);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--theme-primary-blue) 6%, transparent);
+  cursor: grab;
+}
+
+.timeline__overview-window:active {
+  cursor: grabbing;
 }
 
 /* Narrow: the page grows and the shell scrolls, so the scroll box takes a fixed share of the screen. */
@@ -518,6 +593,10 @@
   .timeline__days-head {
     display: none;
   }
+
+  .timeline__overview-label {
+    padding-left: var(--layout-padding-small);
+  }
 }
 
 .timeline__empty {
@@ -534,7 +613,15 @@
   }
 
   .timeline__today-line,
-  .timeline__swatch--today {
+  .timeline__overview-today {
     background: Highlight;
+  }
+
+  .timeline__overview-bar {
+    background: CanvasText;
+  }
+
+  .timeline__overview-window {
+    border-color: Highlight;
   }
 }

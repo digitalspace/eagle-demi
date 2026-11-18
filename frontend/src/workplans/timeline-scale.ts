@@ -53,9 +53,9 @@ export function spansOf(row: WorkRow, today: string): Span[] {
   return spans;
 }
 
-/** True when some row draws a dated suspension; a flag with no interruption dates draws only its tag. */
-export const drawsSuspension = (rows: WorkRow[], today: string) =>
-  rows.some((row) => spansOf(row, today).some((span) => span.kind === 'suspended'));
+/** Every bar kind some row draws; a suspended flag with no interruption dates draws only its tag. */
+export const drawnKinds = (rows: WorkRow[], today: string): Set<SpanKind> =>
+  new Set(rows.flatMap((row) => spansOf(row, today).map((span) => span.kind)));
 
 const TAG_AFTER = new Set<SpanKind>(['current', 'overrun', 'suspended']);
 
