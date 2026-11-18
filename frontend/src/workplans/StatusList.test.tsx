@@ -1,13 +1,20 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import FIXTURE from '../../parity/fixtures/workplans.json';
+import SHEET from '../../parity/fixtures/projects-901-sheet-works.json';
 import type { WorkplanRow } from '../api/sheet-works';
+import { json } from '../test-http';
+import { renderScreen } from '../test-query';
 import { rowsOf } from './derive';
 import { StatusListView } from './StatusList';
 
 const TODAY = '2026-11-17';
+const ALPHA_1996 = 'Sample Alpha Transmission Line - Assessment (1996)';
+const ALPHA_2002 = 'Sample Alpha Transmission Line - Assessment (2002)';
+
+afterEach(() => vi.unstubAllGlobals());
 
 function renderList(works = FIXTURE.works as WorkplanRow[]) {
   const rows = rowsOf(works, [], TODAY);
@@ -63,6 +70,25 @@ describe('StatusListView', () => {
     expect(screen.queryByRole('link', { name: /\(1996\)/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /Closed/ }));
     expect(screen.getByRole('link', { name: 'Sample Delta Pipeline - Assessment (1996)' })).toBeInTheDocument();
+  });
+
+  it('says how a closed 1996 work ended and opens a sheet work’s stored milestones under its row', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.stubGlobal('fetch',vi.fn(async (input: RequestInfo | URL) => json(String(input).includes('/sheet-works') ? SHEET : {})));
+    renderScreen(<StatusListView rows={rowsOf(FIXTURE.works as WorkplanRow[], [], TODAY)} today={TODAY} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Closed/ }));
+
+    const closed1996 = bodyRows().find((row) => within(row).queryByRole('link', { name: ALPHA_1996 }))!;
+    expect(within(closed1996).getAllByRole('cell')[1]).toHaveTextContent('ClosedApproved (PAC)');
+
+    const toggle = screen.getByRole('button', { name: `Details for ${ALPHA_2002}` });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const panel = screen.getByRole('region', { name: ALPHA_2002 });
+    expect(toggle).toHaveAttribute('aria-controls', panel.id);
+    const milestones = await within(panel).findByRole('list', { name: 'Milestones' });
+    expect(within(milestones).getByText('Public comment period')).toBeInTheDocument();
   });
 
   it('counts only open works in the footer by default, and says where the closed ones are', () => {
