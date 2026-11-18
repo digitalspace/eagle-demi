@@ -1,4 +1,5 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import type { WorkRow } from './derive';
@@ -130,8 +131,8 @@ function Agenda({ weeks, idOf, empty }: { weeks: Week[]; idOf: (week: Week) => s
             <h3 id={idOf(week)} className="la-week__head" tabIndex={-1}>
               <span className="la-week__range">
                 {dayMon(week.start)} – {dayMon(week.end)}
-              </span>
-              {week.current && <span className="la-week__now">This week</span>}
+              </span>{' '}
+              {week.current && <span className="la-week__now">This week</span>}{' '}
               <span className="la-week__count">{plural(week.milestones.length, 'milestone')}</span>
             </h3>
             <ul className="la-week__items">
@@ -149,6 +150,12 @@ function OverduePanel({ rows }: { rows: WorkRow[] }) {
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, OVERDUE_CAP);
   const id = useId();
+  const list = useRef<HTMLUListElement>(null);
+  // The button goes away, so focus moves to the first item it revealed.
+  const showAll = () => {
+    flushSync(() => setAll(true));
+    list.current?.querySelectorAll<HTMLElement>('.la-work')[shown.length]?.focus();
+  };
   return (
     <section className="panel la-panel la-panel--overdue" aria-labelledby={id}>
       <h2 id={id} className="la-panel__head">
@@ -158,7 +165,7 @@ function OverduePanel({ rows }: { rows: WorkRow[] }) {
         <p className="la-empty">No work is past the planned end of its phase.</p>
       ) : (
         <div className="la-panel__body">
-          <ul className="la-list">
+          <ul className="la-list" ref={list}>
             {shown.map((row) => (
               <li key={`${row.work.source}:${row.work.workId}`} className="la-list__item">
                 <WorkLink row={row} />
@@ -173,7 +180,7 @@ function OverduePanel({ rows }: { rows: WorkRow[] }) {
             ))}
           </ul>
           {rows.length > shown.length && (
-            <button type="button" className="la-more" onClick={() => setAll(true)}>
+            <button type="button" className="la-more" onClick={showAll}>
               Show {rows.length - shown.length} more
             </button>
           )}

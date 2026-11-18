@@ -92,6 +92,12 @@ describe('milestonesIn', () => {
 
     expect(milestonesIn(rows([closed]), TODAY, windowEnd(TODAY, '90d'))).toEqual([]);
   });
+
+  it('skips the start of a phase already completed', () => {
+    const done = work('w', [{ ...phase('Early Engagement', '2026-12-01'), isCompleted: true }]);
+
+    expect(milestonesIn(rows([done]), TODAY, windowEnd(TODAY, '90d'))).toEqual([]);
+  });
 });
 
 describe('weeksOf', () => {
