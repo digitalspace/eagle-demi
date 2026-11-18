@@ -57,6 +57,11 @@ describe('PipelineView', () => {
     expect(within(column('Review')).getByText('Inactive')).toBeInTheDocument();
   });
 
+  it('stops the day count of a work suspended now and says so, not used of planned', () => {
+    renderBoard([byTitle('Sample Epsilon Terminal - Amendment')]);
+    expect(column('Proponent time')).toHaveTextContent('311 d in phase, suspended');
+  });
+
   it('renders 100 cards per column until Show more is pressed', async () => {
     const epsilon = byTitle('Sample Epsilon Terminal - Amendment');
     const many = Array.from({ length: 104 }, (_, i) => ({ ...epsilon, workId: `copy-${i}` }));

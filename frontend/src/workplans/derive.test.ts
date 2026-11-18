@@ -134,11 +134,20 @@ describe('rowsOf', () => {
   });
 
   it('marks an in-progress Track work switched off as inactive, in its column and never overdue', () => {
-    const row = rowOf(work([phase('Application Review', '2026-03-01', '2026-10-01')], { isActive: false }));
+    const row = rowOf(
+      work(
+        [
+          phase('Application Review', '2026-03-01', '2026-10-01'),
+          phase('Effects Assessment', '2027-01-01', '2027-06-01', { order: 2 }),
+        ],
+        { isActive: false },
+      ),
+    );
 
     expect(row.status).toBe('inactive');
     expect(row.overdue).toBe(false);
     expect(row.column).toBe('Review');
+    expect(row.next).toBeNull();
   });
 
   it('takes the open phase Track marks current over phase order, not a completed one', () => {

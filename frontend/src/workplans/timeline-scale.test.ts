@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkplanRow } from '../api/sheet-works';
 import fixture from '../../parity/fixtures/workplans.json';
 import { rowsOf } from './derive';
-import { daysOf, groupsOf } from './timeline-rows';
+import { daysOf, groupsOf, summaryOf } from './timeline-rows';
 import { dayNumber, drawsSuspension, extentOf, scaleFor, scrollFor, spansOf, tagDayOf, ticksFor, xOf } from './timeline-scale';
 
 const TODAY = '2026-11-17';
@@ -82,6 +82,13 @@ describe('timeline rows', () => {
     const alpha = { ...byTitle('Sample Alpha Transmission Line - Assessment').work, isActive: false };
 
     expect(daysOf(rowsOf([alpha], [], TODAY)[0])).toBe('Inactive');
+  });
+
+  it('screen-reader summary names a started phase that is neither done nor current as not completed', () => {
+    const alpha = structuredClone(byTitle('Sample Alpha Transmission Line - Assessment').work);
+    alpha.phases[2] = { ...alpha.phases[2], startDate: '2026-10-02T08:00:00.000Z', isCurrent: true };
+
+    expect(summaryOf(rowsOf([alpha], [], TODAY)[0])).toContain('Not completed: Application Review,');
   });
 
   it('groups by Act, newest first, with each group\'s overdue count', () => {
