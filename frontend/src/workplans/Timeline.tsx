@@ -1,8 +1,10 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
 import { Segmented } from './Segmented';
+import { hasDetails, projectDetailsPath } from './work-notes';
+import { WorkDetails } from './WorkDetails';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
   dayNumber,
@@ -80,65 +82,120 @@ function Axis({ scale }: { scale: Scale }) {
   );
 }
 
-const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: WorkRow; scale: Scale; today: string }) {
+/** The sticky columns: work title with its Details toggle, work type, days in phase. */
+function RowLeft({ row, details }: { row: WorkRow; details?: { id: string; open: boolean; toggle: () => void } }) {
   const type = workTypeOf(row);
+  const title = row.work.title || 'Untitled work';
+  return (
+    <div className="timeline__left">
+      <span className="timeline__work">
+        <Link className="timeline__name" to={projectDetailsPath(row.work.projectId)} title={title}>
+          {title}
+        </Link>
+        {/* WorkPill takes no title; its own text is the tooltip once CSS cuts it short. */}
+        <span
+          className="timeline__flag"
+          ref={(el) => {
+            if (el) el.title = el.textContent ?? '';
+          }}
+        >
+          <WorkPill work={row.work} />
+        </span>
+        {details && (
+          <button
+            type="button"
+            className="timeline__toggle"
+            aria-expanded={details.open}
+            aria-controls={details.id}
+            aria-label={`Details for ${title}`}
+            onClick={details.toggle}
+          >
+            Details
+          </button>
+        )}
+      </span>
+      <abbr className="timeline__type" title={type.name}>
+        {type.code}
+      </abbr>
+      <span className={`timeline__days${row.overdue ? ' timeline__days--over' : ''}`} aria-hidden="true">
+        {daysOf(row)}
+      </span>
+    </div>
+  );
+}
+
+/** Scrolls an open panel into view as its content loads and grows, never so far that its row goes under the head. */
+function useReveal(row: RefObject<HTMLLIElement | null>, panel: RefObject<HTMLDivElement | null>, open: boolean) {
+  useLayoutEffect(() => {
+    const box = row.current?.closest<HTMLElement>('.timeline__scroll');
+    const head = box?.querySelector<HTMLElement>('.timeline__head');
+    if (!open || !box || !head || !panel.current || typeof ResizeObserver === 'undefined') return;
+    const reveal = () => {
+      const top = box.getBoundingClientRect().top + box.clientTop;
+      const below = panel.current!.getBoundingClientRect().bottom - (top + box.clientHeight);
+      const room = row.current!.getBoundingClientRect().top - top - head.offsetHeight;
+      if (below > 0 && room > 0) box.scrollTop += Math.min(below, room);
+    };
+    const observer = new ResizeObserver(reveal);
+    observer.observe(panel.current);
+    return () => observer.disconnect();
+  }, [row, panel, open]);
+}
+
+const TimelineRow = memo(function TimelineRow({ row, scale, today }: { row: WorkRow; scale: Scale; today: string }) {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const rowRef = useRef<HTMLLIElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useReveal(rowRef, panelRef, open);
   const spans = spansOf(row, today);
   const tone = toneOf(row);
-  const title = row.work.title || 'Untitled work';
   const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
+  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => setOpen(!open) } : undefined;
   return (
-    <li className="timeline__row">
-      <div className="timeline__left">
-        <span className="timeline__work">
-          <Link className="timeline__name" to={`/project-details/${encodeURIComponent(row.work.projectId)}`} title={title}>
-            {title}
-          </Link>
-          {/* WorkPill takes no title; its own text is the tooltip once CSS cuts it short. */}
-          <span
-            className="timeline__flag"
-            ref={(el) => {
-              if (el) el.title = el.textContent ?? '';
-            }}
-          >
-            <WorkPill work={row.work} />
-          </span>
-        </span>
-        <abbr className="timeline__type" title={type.name}>
-          {type.code}
-        </abbr>
-        <span className={`timeline__days${row.overdue ? ' timeline__days--over' : ''}`} aria-hidden="true">
-          {daysOf(row)}
-        </span>
-      </div>
-      <div className="timeline__lane" aria-hidden="true">
-        {spans.map((span, i) => {
-          const left = xOf(scale, dayNumber(span.start));
-          const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
-          const current = span.kind === 'current';
-          const label = current && width >= MIN_LABEL_PX && span.name;
-          return (
+    <>
+      <li className="timeline__row" ref={rowRef}>
+        <RowLeft row={row} details={details} />
+        <div className="timeline__lane" aria-hidden="true">
+          {spans.map((span, i) => {
+            const left = xOf(scale, dayNumber(span.start));
+            const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
+            const current = span.kind === 'current';
+            const label = current && width >= MIN_LABEL_PX && span.name;
+            return (
+              <span
+                key={i}
+                className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
+                style={{ left, width }}
+              >
+                {label && <span className="timeline__label">{label}</span>}
+              </span>
+            );
+          })}
+          {!spans.length && <span className="timeline__undated">No dated phases</span>}
+          {row.suspended && (
             <span
-              key={i}
-              className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
-              style={{ left, width }}
+              className="timeline__note"
+              // Slides back left by however much it would run past the lane end.
+              style={{
+                left: tagX,
+                translate: `min(0px, calc(${scale.width - tagX}px - 100%))`,
+              }}
             >
-              {label && <span className="timeline__label">{label}</span>}
+              Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
             </span>
-          );
-        })}
-        {!spans.length && <span className="timeline__undated">No dated phases</span>}
-        {row.suspended && (
-          <span
-            className="timeline__note"
-            // Slides back left by however much it would run past the lane end.
-            style={{ left: tagX, translate: `min(0px, calc(${scale.width - tagX}px - 100%))` }}
-          >
-            Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
-          </span>
-        )}
-      </div>
-      <span className="visually-hidden">{summaryOf(row)}</span>
-    </li>
+          )}
+        </div>
+        <span className="visually-hidden">{summaryOf(row)}</span>
+      </li>
+      {open && (
+        <li className="timeline__detail">
+          <div className="timeline__detail-body" ref={panelRef}>
+            <WorkDetails row={row} id={detailsId} />
+          </div>
+        </li>
+      )}
+    </>
   );
 });
 
@@ -257,7 +314,9 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
             {/* First in the canvas, so bar labels and the suspended tag, on the same layer, paint over it. */}
             <span
               className="timeline__today-line"
-              style={{ left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)` }}
+              style={{
+                left: `calc(var(--timeline-left) + ${xOf(scale, dayNumber(today))}px)`,
+              }}
               aria-hidden="true"
             />
             <div className="timeline__head" aria-hidden="true">
