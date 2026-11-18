@@ -266,6 +266,27 @@ describe('rowsOf', () => {
     expect(row.status).toBe('closed');
   });
 
+  it.each(['COMPLETED', 'WITHDRAWN', 'TERMINATED'])('closes a Track work in state %s that is still flagged active', (workState) => {
+    const decided = phase('Transfer Decision', '2025-11-01', '2025-12-05', { isCompleted: true });
+
+    const row = rowOf(work([decided], { workState, isActive: true }));
+
+    expect(row.status).toBe('closed');
+  });
+
+  it('reads a Track current phase that ends before it starts as status unknown, unmeasured, with its bar running to today', () => {
+    const contact = phase('Initial Contact', '2026-03-23T09:00:00.000Z', '2024-11-02T09:00:00.000Z');
+
+    const row = rowOf(work([contact]));
+
+    expect(row.status).toBe('unknown');
+    expect(row.overdue).toBe(false);
+    expect(row.plannedDays).toBeNull();
+    expect(row.percentUsed).toBeNull();
+    expect(row.bar).toBeNull();
+    expect(row.segments[0]).toMatchObject({ end: TODAY, share: 1 });
+  });
+
   it('marks a work next-30 when its next milestone is at most 30 days away, else on track', () => {
     const nextOn = (start: string) =>
       rowOf(work([phase('A', '2026-10-01', '2027-06-01'), phase('B', start, null, { order: 2 })]));
