@@ -152,3 +152,29 @@
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
   outline-offset: 2px;
 }
+
+/* Details panel under a sheet work in List and Timeline; the host row or cell sets its width. */
+.wp-details {
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  background: var(--surface-color-background-light-gray);
+  border-left: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  text-align: left;
+  white-space: normal;
+}
+
+.wp-details__facts {
+  margin: 0 0 var(--layout-margin-xsmall);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-details__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+  padding: var(--layout-padding-small) 0;
+}
+
+.wp-details__note {
+  margin: 0;
+}

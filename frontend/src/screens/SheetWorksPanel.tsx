@@ -104,7 +104,8 @@ function MilestoneRow({ milestone }: { milestone: SheetMilestone }) {
   );
 }
 
-function WorkRow({ work }: { work: SheetWork }) {
+/** One sheet work as a `ps-list` row: dates, outcome, phases and milestones. Callers wrap it in a `ul.ps-list`. */
+export function SheetWorkRow({ work }: { work: SheetWork }) {
   const expected = !work.decisionDate && work.anticipatedDecisionDate;
   const toAct = work.transitionOut?.toActYear;
   const movedOn = work.transitionOut?.date;
@@ -170,7 +171,7 @@ function ActGroup({ actYear, works }: { actYear: number | null; works: SheetWork
       </summary>
       <ul className="ps-list">
         {works.map((work) => (
-          <WorkRow key={work.workId} work={work} />
+          <SheetWorkRow key={work.workId} work={work} />
         ))}
       </ul>
     </details>
