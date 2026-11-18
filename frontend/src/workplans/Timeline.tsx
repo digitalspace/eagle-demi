@@ -1,9 +1,10 @@
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { toneOf, type WorkRow } from './derive';
 import { Segmented } from './Segmented';
-import { hasDetails, projectDetailsPath, useFollowDetails } from './work-notes';
+import { useFollowDetails } from './use-follow-details';
+import { hasDetails, projectDetailsPath } from './work-notes';
 import { DetailsToggle, WorkDetails } from './WorkDetails';
 import { daysOf, GROUP_BYS, groupsOf, summaryOf, workTypeOf, type Group, type GroupBy } from './timeline-rows';
 import {
@@ -139,20 +140,26 @@ const keyOf = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
 interface Opened {
   open: ReadonlySet<string>;
   follow: string | null;
+}
+
+interface RowProps {
+  row: WorkRow;
+  scale: Scale;
+  today: string;
+  open: boolean;
+  follow: boolean;
   toggle: (key: string) => void;
   unfollow: () => void;
 }
 
-const TimelineRow = memo(function TimelineRow(props: { row: WorkRow; scale: Scale; today: string; opened: Opened }) {
-  const { row, scale, today, opened } = props;
-  const open = opened.open.has(keyOf(row));
+const TimelineRow = memo(function TimelineRow({ row, scale, today, open, follow, toggle, unfollow }: RowProps) {
   const detailsId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  useFollowDetails(panelRef, open && opened.follow === keyOf(row), reveal, opened.unfollow);
+  useFollowDetails(panelRef, open && follow, reveal, unfollow);
   const spans = spansOf(row, today);
   const tone = toneOf(row);
   const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
-  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => opened.toggle(keyOf(row)) } : undefined;
+  const details = hasDetails(row) ? { id: detailsId, open, toggle: () => toggle(keyOf(row)) } : undefined;
   return (
     <>
       <li className="timeline__row">
@@ -207,6 +214,8 @@ function TimelineGroup({
   scale,
   today,
   opened,
+  onDetails,
+  unfollow,
 }: {
   group: Group;
   open: boolean;
@@ -214,6 +223,8 @@ function TimelineGroup({
   scale: Scale;
   today: string;
   opened: Opened;
+  onDetails: (key: string) => void;
+  unfollow: () => void;
 }) {
   const count = group.rows.length;
   return (
@@ -232,7 +243,16 @@ function TimelineGroup({
       {open && (
         <ul className="timeline__rows">
           {group.rows.map((row) => (
-            <TimelineRow key={keyOf(row)} row={row} scale={scale} today={today} opened={opened} />
+            <TimelineRow
+              key={keyOf(row)}
+              row={row}
+              scale={scale}
+              today={today}
+              open={opened.open.has(keyOf(row))}
+              follow={opened.follow === keyOf(row)}
+              toggle={onDetails}
+              unfollow={unfollow}
+            />
           ))}
         </ul>
       )}
@@ -265,16 +285,17 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const [groupBy, setGroupBy] = useState<GroupBy>('act');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   // Held here, not per row, so open details survive a group folding or a Group by change.
-  const [details, setDetails] = useState<Pick<Opened, 'open' | 'follow'>>({ open: new Set(), follow: null });
-  const opened = useMemo<Opened>(() => {
-    const toggle = (key: string) =>
-      setDetails(({ open }) => {
+  const [opened, setOpened] = useState<Opened>({ open: new Set(), follow: null });
+  const toggleDetails = useCallback(
+    (key: string) =>
+      setOpened(({ open, follow }) => {
         const next = new Set(open);
         if (!next.delete(key)) next.add(key);
-        return { open: next, follow: next.has(key) ? key : null };
-      });
-    return { ...details, toggle, unfollow: () => setDetails((prev) => ({ ...prev, follow: null })) };
-  }, [details]);
+        return { open: next, follow: next.has(key) ? key : follow === key ? null : follow };
+      }),
+    [],
+  );
+  const unfollow = useCallback(() => setOpened((prev) => (prev.follow === null ? prev : { ...prev, follow: null })), []);
   const scroller = useRef<HTMLDivElement>(null);
   const left = useRef<HTMLDivElement>(null);
   // Set when the next layout should scroll today into view: first render, Today, and every zoom change.
@@ -286,6 +307,11 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const scale = useMemo(() => scaleFor(extent, zoom, today, lanePx), [extent, zoom, today, lanePx]);
   const groups = useMemo(() => groupsOf(rows, groupBy), [rows, groupBy]);
   const suspension = useMemo(() => drawsSuspension(rows, today), [rows, today]);
+  // A followed row hidden before its details load would jump the page when shown again.
+  const { follow } = opened;
+  if (follow && !groups.some((group) => !closed.has(group.key) && group.rows.some((row) => keyOf(row) === follow))) {
+    unfollow();
+  }
 
   // Waits for a measured width, else the first scroll lands on the fallback scale and drifts.
   useLayoutEffect(() => {
@@ -350,6 +376,8 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
                 scale={scale}
                 today={today}
                 opened={opened}
+                onDetails={toggleDetails}
+                unfollow={unfollow}
               />
             ))}
           </div>

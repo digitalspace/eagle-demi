@@ -1934,12 +1934,12 @@ paths:
                             (event types 13 to 21), while that event has no actual date. Null on sheet works.
                         certificateKind:
                           type: string
-                          enum: [EAC, PAC]
+                          enum: [EAC, PAC, null]
                           nullable: true
                           description: Sheet only, from the stored work. Null on Track works.
                         complexityCode:
                           type: string
-                          enum: [pre-2014, simple, typical, complex]
+                          enum: [pre-2014, simple, typical, complex, null]
                           nullable: true
                           description: >-
                             Sheet only, set on amendments: a `complexities` code from

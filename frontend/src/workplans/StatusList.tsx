@@ -5,7 +5,8 @@ import { WorkPill } from '../screens/SheetWorksPanel';
 import { STATUS_LABEL, byAttention, toneOf, type WorkRow, type WorkStatus } from './derive';
 import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import { DetailsToggle, WorkDetails } from './WorkDetails';
-import { closedNoteOf, hasDetails, projectDetailsPath, useFollowDetails } from './work-notes';
+import { useFollowDetails } from './use-follow-details';
+import { closedNoteOf, hasDetails, projectDetailsPath } from './work-notes';
 import './workplans.css';
 import './status-list.css';
 
@@ -310,12 +311,14 @@ export function StatusListView({ rows, today }: { rows: WorkRow[]; today: string
   );
   const visible = shown.slice(0, limit);
   const more = Math.min(PAGE, shown.length - visible.length);
+  // A followed row hidden before its details load would jump the page when shown again.
+  if (follow && !visible.some((row) => rowKey(row) === follow)) setFollow(null);
 
   const toggle = (key: string) => {
     const next = new Set(open);
     if (!next.delete(key)) next.add(key);
     setOpen(next);
-    setFollow(next.has(key) ? key : null);
+    setFollow(next.has(key) ? key : follow === key ? null : follow);
   };
 
   const press = (status: WorkStatus) => {

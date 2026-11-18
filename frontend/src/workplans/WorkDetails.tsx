@@ -48,7 +48,7 @@ export function WorkDetails({ row, id }: { row: WorkRow; id: string }) {
   const { work } = row;
   const { data } = useProjects('');
   const proponent = data?.projects.find((candidate) => String(candidate.id) === work.projectId)?.proponent;
-  const { data: works, isLoading } = useSheetWorks(work.projectId);
+  const { data: works, isPending } = useSheetWorks(work.projectId);
   const stored: SheetWork | undefined = works?.find((sheet) => sheet.workId === work.workId);
   const facts = [
     work.certificateKind && CERTIFICATE[work.certificateKind],
@@ -63,17 +63,17 @@ export function WorkDetails({ row, id }: { row: WorkRow; id: string }) {
       id={id}
       className="wp-details"
       aria-label={work.actYear ? `${title}, ${work.actYear} Act` : title}
-      aria-busy={isLoading}
+      aria-busy={isPending}
     >
       {facts.length > 0 && <p className="wp-details__facts">{facts.join(' · ')}</p>}
-      {isLoading && <Loading />}
+      {isPending && <Loading />}
       {stored && (
         <ul className="ps-list">
           <SheetWorkRow work={stored} heading={false} />
         </ul>
       )}
       <div role="status">
-        {!isLoading &&
+        {!isPending &&
           (stored ? (
             <span className="visually-hidden">Details loaded</span>
           ) : (

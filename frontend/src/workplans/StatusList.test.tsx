@@ -13,7 +13,7 @@ import { StatusListView } from './StatusList';
 const TODAY = '2026-11-17';
 const ALPHA_1996 = 'Sample Alpha Transmission Line - Assessment (1996)';
 const ALPHA_2002 = 'Sample Alpha Transmission Line - Assessment (2002)';
-const TRACK_COPY = 'Sample Alpha Transmission Line - Assessment (Track copy)';
+const TRACK_WORK = 'Sample Alpha Transmission Line - Substation Assessment';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -83,7 +83,8 @@ describe('StatusListView', () => {
 
     expect(phaseCell(ALPHA_1996)).toHaveTextContent('ClosedWithdrawn');
     expect(phaseCell(ALPHA_2002)).toHaveTextContent('ClosedCertificate Issued (EAC)');
-    expect(screen.queryByRole('button', { name: `Details for ${TRACK_COPY}` })).toBeNull();
+    expect(screen.getByRole('link', { name: TRACK_WORK })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Details for ${TRACK_WORK}` })).toBeNull();
 
     const toggle = screen.getByRole('button', { name: `Details for ${ALPHA_2002}` });
     await user.click(toggle);

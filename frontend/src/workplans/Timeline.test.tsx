@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -82,6 +82,25 @@ describe('TimelineView', () => {
     expect(toggle).toHaveAttribute('aria-controls', panel.id);
     expect(await within(panel).findByText('Section 11 Order')).toBeInTheDocument();
     expect(within(panel).getByText('Withdrawn · Moved to the 2002 Act')).toBeInTheDocument();
+  });
+
+  it('keeps a work’s details open when its group folds and unfolds', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => (String(input).includes('/sheet-works') ? json(SHEET) : json({}))),
+    );
+    renderScreen(<TimelineView rows={rows()} today={TODAY} />);
+    const user = userEvent.setup();
+    const panel = () => screen.queryByRole('region', { name: `${ALPHA_1996}, 1996 Act` });
+    await user.click(screen.getByRole('button', { name: `Details for ${ALPHA_1996}` }));
+    const group = screen.getByText('1996 Act');
+
+    await user.click(group);
+    await waitFor(() => expect(panel()).toBeNull());
+    await user.click(group);
+
+    await waitFor(() => expect(panel()).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: `Details for ${ALPHA_1996}` })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('tells screen readers how a closed work ended and when', () => {
