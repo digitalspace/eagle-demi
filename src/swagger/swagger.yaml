@@ -1939,6 +1939,7 @@ paths:
                           description: Sheet only, from the stored work. Null on Track works.
                         complexityCode:
                           type: string
+                          enum: [pre-2014, simple, typical, complex]
                           nullable: true
                           description: >-
                             Sheet only, set on amendments: a `complexities` code from
@@ -1953,6 +1954,7 @@ paths:
                               nullable: true
                             date:
                               type: string
+                              format: date
                               nullable: true
                         phases:
                           type: array

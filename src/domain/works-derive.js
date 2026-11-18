@@ -150,7 +150,6 @@ const WORKPLAN_KEYS = ['workId', 'source', 'title', 'workTypeCode', 'workType', 
 const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'isCompleted', 'isSuspended',
   'suspendedDate', 'undated'];
 const INTERRUPTION_KEYS = ['kind', 'legalSection', 'startDate', 'endDate', 'days'];
-const SHEET_DOC_KEYS = ['certificateKind', 'complexityCode', 'transitionIn'];
 
 // Track event type ids (EventTypeEnum): 10 and 11 extension, 38 time limit resumption, 13-21 the Decision category.
 const EXTENSION_EVENT_TYPES = [10, 11];
@@ -186,6 +185,15 @@ function trackPhaseFieldsOf(phase, doc, storedByTrackId) {
   };
 }
 
+/** Sheet facts the public shape leaves out, from the stored work; all null on a Track work. */
+const sheetDocFieldsOf = (doc) => ({
+  certificateKind: doc?.certificateKind ?? null,
+  complexityCode: doc?.complexityCode ?? null,
+  transitionIn: doc?.transitionIn
+    ? { fromActYear: doc.transitionIn.fromActYear ?? null, date: doc.transitionIn.date ?? null }
+    : null
+});
+
 const sheetPhaseFieldsOf = (phase) => ({
   isCurrent: null,
   extensionDays: sheetDaysOf(phase.interruptions, 'extension'),
@@ -201,7 +209,7 @@ function workplanOf(projectId, projectName, work, doc) {
     projectName,
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
-    ...Object.fromEntries(SHEET_DOC_KEYS.map(key => [key, track ? null : doc?.[key] ?? null])),
+    ...sheetDocFieldsOf(track ? null : doc),
     phases: work.phases.map(phase => ({
       ...pick(phase, PHASE_KEYS),
       ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),

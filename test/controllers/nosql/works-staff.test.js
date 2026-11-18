@@ -143,6 +143,7 @@ const SHEET_INFO = { certificateKind: 'PAC', complexityCode: 'typical', transiti
 const SHEET_WORK = {
   id: 'sheet-00000000-0000-4000-8000-000000000002', projectId: '412', source: 'sheet', owner: 'sheet', workTypeCode: 'amendment',
   title: 'Example 1999 amendment', decisionDate: '1999-04-01', phases: [], ...SHEET_INFO,
+  transitionIn: { ...SHEET_INFO.transitionIn, dateSource: 'split' },
   sourceKey: '412:amendment:1', sheetKey: 'sheet-row-7', provenance: { file: 'sample.xlsx', row: 7 }
 };
 const TRACK_WORK = { ...OPEN_WORK, source: 'track', trackWorkId: 9001, workTypeId: 7, decisionDate: '2024-06-01', phases: [] };
