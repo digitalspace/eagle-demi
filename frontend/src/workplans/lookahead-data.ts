@@ -52,12 +52,12 @@ export function windowEnd(today: string, window: LookaheadWindow): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Phase starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed works have none. */
+/** Phase starts of open phases and decision dates from today to `end`, both inclusive, in date order. Closed and inactive works have none. */
 export function milestonesIn(rows: WorkRow[], today: string, end: string): Milestone[] {
   const from = dayNumber(today);
   const inWindow = (date: string | null): date is string => date !== null && date >= today && date <= end;
   const milestones = rows.flatMap((row) => {
-    if (row.closed) return [];
+    if (row.closed || row.status === 'inactive') return [];
     const id = `${row.work.source}:${row.work.workId}`;
     const make = (kind: Milestone['kind'], date: string, what: string, index: number): Milestone => ({
       key: `${id}:${kind}:${index}`,

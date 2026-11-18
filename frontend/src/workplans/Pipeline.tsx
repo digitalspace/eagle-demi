@@ -5,6 +5,7 @@ import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { useNarrow } from '../shell/useNarrow';
 import { PIPELINE_COLUMNS, toneOf, type PipelineColumn, type WorkRow } from './derive';
+import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './pipeline.css';
 
@@ -45,19 +46,32 @@ function Phase({ row }: { row: WorkRow }) {
 
 function Days({ row }: { row: WorkRow }) {
   const { daysInPhase: used, plannedDays: planned } = row;
+  const status = unmeasuredStatus(row);
+  if (status) return <span className="pl-figure">{status}</span>;
   if (used === null) return null;
-  if (!planned) return <span className="pl-figure">{used} d in phase, no planned length</span>;
+  if (!planned) {
+    return <span className="pl-figure">{row.suspended ? suspendedFigure(used, true) : `${used} d in phase, no planned length`}</span>;
+  }
   const fill = row.bar ?? 'normal';
   return (
     <span className="pl-days">
       <span className="progress pl-bar" aria-hidden="true">
         <span
           className={`progress__fill pl-bar__fill pl-bar__fill--${fill}`}
-          style={{ width: `${row.overdue ? 100 : (row.percentUsed ?? 0)}%` }}
+          style={{ width: `${Math.min(100, row.percentUsed ?? 0)}%` }}
         />
       </span>
       <span className={`pl-figure${row.overdue ? ' pl-figure--overdue' : ''}`}>
-        {used} / {planned} d <span className="visually-hidden">in phase</span>
+        {row.suspended ? (
+          <>
+            <span aria-hidden="true">{suspendedFigure(used)}</span>
+            <span className="visually-hidden">{suspendedFigure(used, true)}</span>
+          </>
+        ) : (
+          <>
+            {used} / {planned} d <span className="visually-hidden">in phase</span>
+          </>
+        )}
       </span>
     </span>
   );

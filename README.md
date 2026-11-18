@@ -772,8 +772,8 @@ Project details picker shows the counts as badges with a filter.
 `GET /api/workplans` returns `{ works: [...] }`: every live work, Track and sheet, of every project the
 caller may read, sorted by `projectId`. Each row holds the project's `projectId` and `projectName`, the
 work's id, source, title, type, Act, state, dates, `outcome` and `transitionOut`, plus `shownAfterFlip`,
-`untilTrack` and `replaces` as on the sheet works route. Its `phases` list carries each phase's
-`interruptions`.
+`untilTrack` and `replaces` as on the sheet works route. Each row also carries `decisionEventDate`, and
+each of its `phases` carries `interruptions`, `isCurrent`, `suspendedDate`, `extensionDays` and `suspendedDays`.
 
 The route does not read `WORKS_READ_SOURCES` and does not change the public project read. It has the
 same staff access and dev/test routing as the sheet works routes. The edge read allowlist does not

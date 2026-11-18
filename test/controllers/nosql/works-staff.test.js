@@ -229,8 +229,8 @@ test('sheet-works returns only sheet works, with no staff entries, marker detail
 });
 
 // Project 999 has sheet works the caller's projects read does not return.
-async function callSummary(t, user, { handler = getSheetWorksSummary, track = TRACK_WORK } = {}) {
-  const stored = [track, { ...SHEET_WORK, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
+async function callSummary(t, user, { handler = getSheetWorksSummary, track = TRACK_WORK, sheet = SHEET_WORK } = {}) {
+  const stored = [track, { ...sheet, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
   const reads = [t.mock.method(works, 'liveProjectIds', async () => ['412', '999', '412']),
     t.mock.method(projects, 'listByIds', async () => [{ id: ROW.id, name: ROW.name }])];
   t.mock.method(works, 'listForReadAcross', async (ids) => structuredClone(stored.filter(work => ids.includes(work.projectId))));
@@ -266,13 +266,28 @@ test('sheet-works summary gives counts only, for the projects the caller may rea
   for (const key of [SHEET_WORK.title, TRACK_WORK.title, ROW.name, EPD.name]) assert.ok(!text.includes(key), `${key} is left out`);
 });
 
+const milestone = (eventType, actualDate, numberOfDays, anticipatedDate = null) =>
+  ({ eventType, actualDate, anticipatedDate, numberOfDays });
+
 test('workplans gives every work of the projects the caller may read, Track rows never replacing', async (t) => {
-  const phase = {
+  const done = {
     trackName: 'Early Engagement', startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184, sortOrder: 2,
-    isCompleted: false, isSuspended: true, trackPhaseId: 55,
+    isCompleted: true, isSuspended: false, suspendedDate: null, trackPhaseId: 55, interruptions: [],
+    milestones: [milestone(10, '2024-04-01', 30), milestone(10, null, 99), milestone(14, '2024-08-01', null, '2024-08-01')]
+  };
+  const open = {
+    trackName: 'Process Planning', startDate: '2024-09-01', endDate: '2025-01-01', numberOfDays: 122, sortOrder: 3,
+    isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', trackPhaseId: 56,
+    milestones: [milestone(38, '2024-10-15', 14), milestone(14, null, null, '2025-06-01')],
     interruptions: [{ id: 'x1', kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
   };
-  const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans, track: { ...TRACK_WORK, phases: [phase] } });
+  const sheetPhase = {
+    id: 'pre-application', catalogId: 'list-9', name: 'Pre-Application', startDate: '1997-01-01', endDate: '1998-01-01',
+    sortOrder: 1, isCompleted: true,
+    interruptions: [{ kind: 'extension', days: 20 }, { kind: 'extension', days: 10 }, { kind: 'suspension', days: null }]
+  };
+  const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans,
+    track: { ...TRACK_WORK, currentWorkPhaseId: 56, phases: [done, open] }, sheet: { ...SHEET_WORK, phases: [sheetPhase] } });
   assert.deepStrictEqual(projectReads, [[resolveAccess({ user: STAFF }), ['412', '999']]]);
   assert.strictEqual(res.statusCode, 200);
   assert.deepStrictEqual(res.body.works.map(work => [work.projectId, work.workId, work.source]),
@@ -282,12 +297,20 @@ test('workplans gives every work of the projects the caller may read, Track rows
   assert.deepStrictEqual(sheet.replaces.map(work => work.workId), [TRACK_WORK.id]);
   assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'workId', 'source', 'title', 'workTypeCode',
     'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome',
-    'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'phases']);
+    'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'decisionEventDate', 'phases']);
+  assert.deepStrictEqual([track.decisionEventDate, sheet.decisionEventDate], ['2025-06-01', null]);
   assert.deepStrictEqual(track.phases, [{
     name: 'Early Engagement', stage: null, order: 2, startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184,
-    isCompleted: false, isSuspended: true, undated: null,
+    isCompleted: true, isSuspended: false, suspendedDate: null, undated: null,
+    isCurrent: false, extensionDays: 30, suspendedDays: 0, interruptions: []
+  }, {
+    name: 'Process Planning', stage: null, order: 3, startDate: '2024-09-01', endDate: '2025-01-01', numberOfDays: 122,
+    isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', undated: null,
+    isCurrent: true, extensionDays: 0, suspendedDays: 14,
     interruptions: [{ kind: 'suspension', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
   }]);
+  assert.deepStrictEqual(sheet.phases.map(p => [p.isCurrent, p.suspendedDate, p.extensionDays, p.suspendedDays]),
+    [[null, null, 30, null]]);
 });
 
 test('workplans reads every project past the first id batch', async (t) => {

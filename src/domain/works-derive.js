@@ -147,19 +147,66 @@ async function sheetWorksSummaryOf(rows) {
 const WORKPLAN_KEYS = ['workId', 'source', 'title', 'workTypeCode', 'workType', 'actYear', 'workState', 'isActive',
   'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome', 'transitionOut', 'undated',
   'shownAfterFlip', 'untilTrack', 'replaces'];
-const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'isCompleted', 'isSuspended', 'undated'];
+const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'isCompleted', 'isSuspended',
+  'suspendedDate', 'undated'];
 const INTERRUPTION_KEYS = ['kind', 'legalSection', 'startDate', 'endDate', 'days'];
+
+// Track event type ids (EventTypeEnum): 10 and 11 extension, 38 time limit resumption, 13-21 the Decision category.
+const EXTENSION_EVENT_TYPES = [10, 11];
+const RESUMPTION_EVENT_TYPES = [38];
+const isDecisionEvent = (milestone) => milestone.eventType >= 13 && milestone.eventType <= 21;
 
 const pick = (value, keys) => Object.fromEntries(keys.map(key => [key, value[key]]));
 
-const workplanOf = (projectId, projectName, work) => ({
-  projectId,
-  projectName,
-  ...pick(work, WORKPLAN_KEYS),
-  phases: work.phases.map(phase => ({
-    ...pick(phase, PHASE_KEYS), interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
-  }))
+/** Days of the stored milestones of `types` that happened, as Track sums them; 0 when none. */
+const trackDaysOf = (milestones, types) => milestones
+  .filter(m => types.includes(m.eventType) && m.actualDate)
+  .reduce((sum, m) => sum + (m.numberOfDays ?? 0), 0);
+
+/** Days of the interruptions of `kind`; 0 when none, null when one of them has no day count. */
+function sheetDaysOf(interruptions, kind) {
+  const days = interruptions.filter(entry => entry.kind === kind).map(entry => entry.days);
+  return days.includes(null) ? null : days.reduce((sum, value) => sum + value, 0);
+}
+
+/** The work's last Decision-category event's anticipated date while that event has not happened. */
+function decisionEventDateOf(doc) {
+  const last = listOf(doc?.phases).flatMap(phase => listOf(phase.milestones)).filter(isDecisionEvent).at(-1);
+  return last && !last.actualDate ? last.anticipatedDate ?? null : null;
+}
+
+function trackPhaseFieldsOf(phase, doc, storedByTrackId) {
+  const milestones = listOf(storedByTrackId.get(phase.trackPhaseId)?.milestones);
+  const currentId = doc?.currentWorkPhaseId ?? null;
+  return {
+    isCurrent: currentId === null ? null : phase.trackPhaseId === currentId,
+    extensionDays: trackDaysOf(milestones, EXTENSION_EVENT_TYPES),
+    suspendedDays: trackDaysOf(milestones, RESUMPTION_EVENT_TYPES)
+  };
+}
+
+const sheetPhaseFieldsOf = (phase) => ({
+  isCurrent: null,
+  extensionDays: sheetDaysOf(phase.interruptions, 'extension'),
+  suspendedDays: sheetDaysOf(phase.interruptions, 'suspension')
 });
+
+/** `work` in the Workplans shape; `doc` is its stored document, read for what the public shape leaves out. */
+function workplanOf(projectId, projectName, work, doc) {
+  const track = work.source === 'track';
+  const storedByTrackId = new Map(listOf(doc?.phases).map(phase => [phase.trackPhaseId, phase]));
+  return {
+    projectId,
+    projectName,
+    ...pick(work, WORKPLAN_KEYS),
+    decisionEventDate: track ? decisionEventDateOf(doc) : null,
+    phases: work.phases.map(phase => ({
+      ...pick(phase, PHASE_KEYS),
+      ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
+      interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
+    }))
+  };
+}
 
 /**
  * Every live work, Track and sheet, of each of `rows` in the slim Workplans shape, sorted by `projectId`.
@@ -168,8 +215,11 @@ const workplanOf = (projectId, projectName, work) => ({
 async function workplansOf(rows) {
   if (!rows.length) return [];
   const catalog = await catalogOf();
-  return (await storedAcross(rows)).sort(byProjectId).flatMap(({ row, projectId, stored, marker }) =>
-    markedWorksFrom(stored, marker, row, catalog).works.map(work => workplanOf(projectId, row.name ?? null, work)));
+  return (await storedAcross(rows)).sort(byProjectId).flatMap(({ row, projectId, stored, marker }) => {
+    const storedById = new Map(stored.map(doc => [doc.id, doc]));
+    return markedWorksFrom(stored, marker, row, catalog).works
+      .map(work => workplanOf(projectId, row.name ?? null, work, storedById.get(work.workId)));
+  });
 }
 
 module.exports = { ID_BATCH, deriveInputs, loadWorks, sheetWorksOf, sheetWorksSummaryOf, workplansOf };

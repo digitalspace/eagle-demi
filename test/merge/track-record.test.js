@@ -89,6 +89,15 @@ test('a plain work PUT changes the work and keeps its phases with their mileston
   assert.deepStrictEqual(doc.phases, stored().phases);
 });
 
+test('a work PUT without current_work_phase_id keeps the stored one; an explicit null clears it', () => {
+  const held = { ...stored(), currentWorkPhaseId: 3002 };
+  const work = fixture('work').work;
+
+  assert.strictEqual(applyWork(held, { pushedAt: LATER, work }).doc.currentWorkPhaseId, 3002);
+  assert.strictEqual(applyWork(held, { pushedAt: LATER, work: { ...work, current_work_phase_id: null } })
+    .doc.currentWorkPhaseId, null);
+});
+
 test('an event PUT moves the work outcome when it decides the last phase', () => {
   const decision = nestedWork().phases.flatMap(p => p.events).find(e => e.id === 4005);
 

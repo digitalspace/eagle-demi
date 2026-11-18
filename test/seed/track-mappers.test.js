@@ -108,12 +108,12 @@ function transitionedTrackWork() {
 
 const TRANSITION_OUT = { toActYear: 2018, date: '2019-12-20', dateSource: 'track' };
 
-test('Track work carries workTypeCode and actYear', () => {
+test('Track work carries workTypeCode, actYear and Track\'s current phase id', () => {
   const amendment = { ...nestedWork(), work_type_id: 16, work_type: { id: 16, name: 'Joint Complex Amendment' },
-    ea_act: { id: 2, name: 'EA Act (2002)' } };
+    ea_act: { id: 2, name: 'EA Act (2002)' }, current_work_phase_id: 3002 };
 
-  assert.deepStrictEqual([workDocOf(nestedWork()), workDocOf(amendment)].map(d => [d.workTypeCode, d.actYear]),
-    [['assessment', 2018], ['amendment', 2002]]);
+  assert.deepStrictEqual([workDocOf(nestedWork()), workDocOf(amendment)].map(d => [d.workTypeCode, d.actYear, d.currentWorkPhaseId]),
+    [['assessment', 2018, null], ['amendment', 2002, 3002]]);
   const { workTypeCode, actYear, ...unstamped } = workDocOf(amendment);
   const [read] = publicWorksOf([unstamped], ROW);
   assert.deepStrictEqual([read.workTypeCode, read.actYear], [workTypeCode, actYear], 'a document the nightly has not rewritten');

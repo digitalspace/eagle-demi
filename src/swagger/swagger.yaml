@@ -1925,6 +1925,13 @@ paths:
                               decisionDate:
                                 type: string
                                 nullable: true
+                        decisionEventDate:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: >-
+                            Track only: the anticipated date of the work's last Decision-category event
+                            (event types 13 to 21), while that event has no actual date. Null on sheet works.
                         phases:
                           type: array
                           items:
@@ -1956,6 +1963,29 @@ paths:
                               isSuspended:
                                 type: boolean
                                 nullable: true
+                              suspendedDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                                description: Track only, the day the open suspension started. Null on sheet phases.
+                              isCurrent:
+                                type: boolean
+                                nullable: true
+                                description: >-
+                                  Track only, true on the phase Track names as the work's current phase.
+                                  Null on sheet phases and on a Track work stored before the id was kept.
+                              extensionDays:
+                                type: integer
+                                nullable: true
+                                description: >-
+                                  Track: days of the phase's type 10 and 11 extension events that have an actual
+                                  date. Sheet: days of its `extension` interruptions, null when one has no day count.
+                              suspendedDays:
+                                type: integer
+                                nullable: true
+                                description: >-
+                                  Track: days of the phase's type 38 resumption events that have an actual date.
+                                  Sheet: days of its `suspension` interruptions, null when one has no day count.
                               undated:
                                 $ref: '#/components/schemas/WorkUndated'
                               interruptions:

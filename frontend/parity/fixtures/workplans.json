@@ -9,8 +9,9 @@
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 2018,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2025-06-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2027-06-30T08:00:00.000Z",
@@ -31,7 +32,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Application Review",
@@ -43,7 +48,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Effects Assessment",
@@ -55,7 +64,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Referral",
@@ -67,7 +80,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -80,8 +97,9 @@
       "workTypeCode": "amendment",
       "workType": "Amendment",
       "actYear": 2018,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2026-08-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2027-05-01T08:00:00.000Z",
@@ -102,7 +120,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Amendment Review",
@@ -114,7 +136,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Decision",
@@ -126,7 +152,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -139,8 +169,9 @@
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 2018,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2026-02-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2028-06-30T08:00:00.000Z",
@@ -161,7 +192,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Process Planning",
@@ -173,7 +208,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Application Development (Proponent)",
@@ -185,7 +224,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -198,8 +241,9 @@
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 2018,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2027-02-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2029-06-30T08:00:00.000Z",
@@ -220,7 +264,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Early Engagement",
@@ -232,7 +280,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -245,8 +297,9 @@
       "workTypeCode": "amendment",
       "workType": "Amendment",
       "actYear": 2018,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2025-10-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2028-01-31T08:00:00.000Z",
@@ -267,7 +320,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Application Development (Proponent)",
@@ -279,7 +336,11 @@
           "isCompleted": false,
           "isSuspended": true,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Amendment Review",
@@ -291,7 +352,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -304,8 +369,9 @@
       "workTypeCode": "substantial-start",
       "workType": "Substantial Start",
       "actYear": 2002,
-      "workState": "in-progress",
+      "workState": "IN_PROGRESS",
       "isActive": true,
+      "decisionEventDate": null,
       "startDate": "2026-09-01T08:00:00.000Z",
       "decisionDate": null,
       "anticipatedDecisionDate": "2027-06-01T08:00:00.000Z",
@@ -326,7 +392,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "SubStart Decision",
@@ -338,7 +408,11 @@
           "isCompleted": false,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -351,8 +425,9 @@
       "workTypeCode": "eac-extension",
       "workType": "EAC Extension",
       "actYear": 2002,
-      "workState": "completed",
+      "workState": "COMPLETED",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2025-01-15T08:00:00.000Z",
       "decisionDate": "2025-04-15T08:00:00.000Z",
       "anticipatedDecisionDate": null,
@@ -373,7 +448,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -386,8 +465,9 @@
       "workTypeCode": "assessment",
       "workType": "Assessment",
       "actYear": 2002,
-      "workState": "completed",
+      "workState": "COMPLETED",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2005-01-10T08:00:00.000Z",
       "decisionDate": "2007-03-01T08:00:00.000Z",
       "anticipatedDecisionDate": null,
@@ -408,7 +488,11 @@
           "isCompleted": true,
           "isSuspended": false,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -423,6 +507,7 @@
       "actYear": 1996,
       "workState": "completed",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "1997-02-01",
       "decisionDate": "1999-06-10",
       "anticipatedDecisionDate": null,
@@ -443,7 +528,11 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -458,6 +547,7 @@
       "actYear": 2002,
       "workState": "completed",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2004-03-01",
       "decisionDate": "2007-03-01",
       "anticipatedDecisionDate": null,
@@ -482,7 +572,11 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         },
         {
           "name": "Application Review",
@@ -494,7 +588,11 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -509,6 +607,7 @@
       "actYear": 1996,
       "workState": "transitioned",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": null,
       "decisionDate": null,
       "anticipatedDecisionDate": null,
@@ -541,7 +640,11 @@
               "notAfter": "2001-03-01"
             }
           },
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -556,6 +659,7 @@
       "actYear": 2002,
       "workState": "completed",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2008-05-01",
       "decisionDate": "2010-02-15",
       "anticipatedDecisionDate": null,
@@ -584,7 +688,11 @@
               "endDate": "2009-06-30",
               "days": 176
             }
-          ]
+          ],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -599,6 +707,7 @@
       "actYear": 2002,
       "workState": "completed",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2014-03-01",
       "decisionDate": "2015-01-20",
       "anticipatedDecisionDate": null,
@@ -619,7 +728,11 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     },
@@ -634,6 +747,7 @@
       "actYear": 2002,
       "workState": "withdrawn",
       "isActive": false,
+      "decisionEventDate": null,
       "startDate": "2011-06-01",
       "decisionDate": "2012-09-30",
       "anticipatedDecisionDate": null,
@@ -654,7 +768,11 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": []
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
         }
       ]
     }

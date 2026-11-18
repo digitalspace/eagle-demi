@@ -20,6 +20,17 @@ function renderList(works = FIXTURE.works as WorkplanRow[]) {
 }
 
 const bodyRows = () => within(screen.getAllByRole('rowgroup')[1]).getAllByRole('row');
+/** The Days in phase cell of the one body row whose work link is `title`. */
+const daysCell = (title: string) =>
+  within(bodyRows().find((row) => within(row).queryByRole('link', { name: title }))!).getAllByRole('cell')[2];
+const work = (title: string) => structuredClone((FIXTURE.works as WorkplanRow[]).find((w) => w.title === title)!);
+
+/** Epsilon's current phase is suspended in the fixture. */
+function epsilonWith(extensionDays: number, suspendedDays: number): WorkplanRow {
+  const epsilon = work('Sample Epsilon Terminal - Amendment');
+  Object.assign(epsilon.phases[1], { extensionDays, suspendedDays });
+  return epsilon;
+}
 
 describe('StatusListView', () => {
   it('exposes its column headers', () => {
@@ -59,6 +70,25 @@ describe('StatusListView', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Showing 6 of 6 open works. 8 closed works are under the Closed tile.',
     );
+  });
+
+  it('shows an open sheet work with no planned end as Status unknown', () => {
+    const quarry = work('Sample Beta Quarry - Assessment (2002)');
+    Object.assign(quarry, { isActive: null, workState: 'in-progress', decisionDate: null, outcome: null });
+    Object.assign(quarry.phases[0], { isCompleted: false, endDate: null });
+    renderList([...(FIXTURE.works as WorkplanRow[]), quarry]);
+
+    expect(daysCell(quarry.title!)).toHaveTextContent('Status unknown');
+  });
+
+  it('stops the day count of a suspended work and says so', () => {
+    renderList([epsilonWith(0, 0)]);
+    expect(daysCell('Sample Epsilon Terminal - Amendment')).toHaveTextContent('311 d, suspended');
+  });
+
+  it('breaks out extension and suspended days above 0', () => {
+    renderList([epsilonWith(30, 0)]);
+    expect(within(daysCell('Sample Epsilon Terminal - Amendment')).getByText('includes 30 d extension')).toBeInTheDocument();
   });
 
   it('renders closed works 200 at a time', async () => {

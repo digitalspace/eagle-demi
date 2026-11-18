@@ -38,6 +38,10 @@ function Legend({ suspension }: { suspension: boolean }) {
         Current phase, named
       </li>
       <li>
+        <span className="timeline__swatch timeline__bar--incomplete" aria-hidden="true" />
+        Not completed
+      </li>
+      <li>
         <span className="timeline__swatch timeline__bar--upcoming" aria-hidden="true" />
         Planned
       </li>
@@ -202,8 +206,8 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const scroller = useRef<HTMLDivElement>(null);
   const left = useRef<HTMLDivElement>(null);
-  // Day to bring into view, and where in the viewport, after the next layout.
-  const anchor = useRef<{ day: number; at: number } | null>({ day: dayNumber(today), at: 0.25 });
+  // Set when the next layout should scroll today into view: first render, Today, and every zoom change.
+  const toToday = useRef(true);
   const measured = useLaneWidth(scroller, left, rows.length > 0);
   const lanePx = measured ?? FALLBACK_LANE_PX;
 
@@ -215,21 +219,18 @@ export function TimelineView({ rows, today }: { rows: WorkRow[]; today: string }
   // Waits for a measured width, else the first scroll lands on the fallback scale and drifts.
   useLayoutEffect(() => {
     const box = scroller.current;
-    if (!box || !anchor.current || measured === null) return;
-    box.scrollLeft = scrollFor(scale, anchor.current.day, lanePx, anchor.current.at);
-    anchor.current = null;
-  }, [scale, lanePx, measured]);
+    if (!box || !toToday.current || measured === null) return;
+    box.scrollLeft = scrollFor(scale, dayNumber(today), lanePx);
+    toToday.current = false;
+  }, [scale, lanePx, measured, today]);
 
   const changeZoom = (next: Zoom) => {
-    const box = scroller.current;
-    const centre = box ? scale.start + (box.scrollLeft + lanePx / 2) / scale.pxPerDay : dayNumber(today);
-    anchor.current = { day: centre, at: 0.5 };
+    toToday.current = true;
     setZoom(next);
   };
   const goToToday = () => {
-    anchor.current = { day: dayNumber(today), at: 0.25 };
-    if (zoom === 'fit') setZoom('quarter');
-    else if (scroller.current) scroller.current.scrollLeft = scrollFor(scale, anchor.current.day, lanePx, 0.25);
+    if (zoom === 'fit') changeZoom('quarter');
+    else if (scroller.current) scroller.current.scrollLeft = scrollFor(scale, dayNumber(today), lanePx);
   };
   const toggle = (key: string, open: boolean) =>
     setClosed((prev) => {
