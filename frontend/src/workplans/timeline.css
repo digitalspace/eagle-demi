@@ -1,0 +1,467 @@
+/* Workplans Timeline view. The panel fills its flex parent; only .timeline__scroll scrolls. */
+
+.timeline {
+  --timeline-left: 23rem;
+  --timeline-row: 28px;
+  --timeline-head: 40px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+@media (max-width: 40rem) {
+  .timeline {
+    --timeline-left: 12rem;
+  }
+}
+
+/* Toolbar: zoom, Today, group by, legend */
+
+.timeline__toolbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__control {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+}
+
+.timeline__control-label {
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--theme-gray-20);
+}
+
+.timeline__option,
+.timeline__today {
+  min-height: 28px;
+  padding: 0 var(--layout-padding-small);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  background: transparent;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+  cursor: pointer;
+}
+
+.timeline__option[aria-pressed='true'] {
+  background: var(--theme-gray-white);
+  box-shadow: var(--surface-shadow-small);
+  font: var(--typography-bold-label);
+  color: var(--typography-color-primary);
+}
+
+.timeline__today {
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  background: var(--surface-color-secondary-default);
+  font: var(--typography-bold-label);
+  color: var(--typography-color-primary);
+}
+
+.timeline__option:hover:not([aria-pressed='true']),
+.timeline__today:hover {
+  background: var(--surface-color-secondary-hover);
+}
+
+.timeline__option:focus-visible,
+.timeline__today:focus-visible,
+.timeline__group-head:focus-visible,
+.timeline__name:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 2px;
+}
+
+.timeline__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+/* Swatches reuse the bar classes, so the legend can never drift from the bars. */
+.timeline__swatch {
+  box-sizing: border-box;
+  width: 16px;
+  height: 10px;
+  border: var(--layout-border-width-small) solid transparent;
+  border-radius: var(--layout-border-radius-small);
+}
+
+.timeline__swatch--today {
+  width: 2px;
+  height: 14px;
+  background: var(--wp-today);
+}
+
+/* Scroll box and canvas */
+
+.timeline__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.timeline__canvas {
+  position: relative;
+  width: calc(var(--timeline-left) + var(--timeline-lane));
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+}
+
+.timeline__head,
+.timeline__row {
+  display: grid;
+  grid-template-columns: var(--timeline-left) var(--timeline-lane);
+}
+
+.timeline__head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: var(--timeline-head);
+  background: var(--surface-color-background-light-gray);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+/* Sticky left columns: work, type, days in phase */
+
+.timeline__left {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.75rem 4.75rem;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  padding: 0 var(--layout-padding-small) 0 var(--layout-padding-large);
+  background: var(--surface-color-background-white);
+  border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__left--head {
+  align-items: end;
+  padding-bottom: var(--layout-padding-xsmall);
+  background: var(--surface-color-background-light-gray);
+  font: var(--typography-bold-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__type-head {
+  text-align: center;
+}
+
+.timeline__days-head {
+  text-align: right;
+}
+
+.timeline__work {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  min-width: 0;
+}
+
+.timeline__name {
+  flex: 1 1 auto;
+  min-width: 4rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--typography-color-link);
+}
+
+/* WorkPill in a 28px row: same pill, tighter box. */
+.timeline__work .pill,
+.timeline__pill {
+  flex: none;
+  padding: 0 var(--layout-padding-xsmall);
+  line-height: 16px;
+}
+
+.timeline__type {
+  text-align: center;
+  text-decoration: none;
+  font: var(--typography-bold-label);
+  font-size: 0.6875rem;
+  line-height: 16px;
+  color: var(--typography-color-secondary);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-small);
+}
+
+.timeline__days {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-secondary);
+}
+
+.timeline__days--over {
+  font-weight: 700;
+  color: var(--wp-overdue);
+}
+
+/* Time axis, two tiers */
+
+.timeline__axis {
+  position: relative;
+  overflow: hidden;
+}
+
+.timeline__tier {
+  position: relative;
+  height: 50%;
+}
+
+.timeline__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  padding: 2px var(--layout-padding-xsmall) 0;
+  white-space: nowrap;
+  border-left: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__tier--top .timeline__tick {
+  font: var(--typography-bold-label);
+}
+
+.timeline__tier--bottom .timeline__tick {
+  color: var(--typography-color-secondary);
+  border-left-color: var(--theme-gray-30);
+}
+
+/* Groups */
+
+.timeline__group-head {
+  display: block;
+  height: 30px;
+  list-style: none;
+  cursor: pointer;
+  background: var(--theme-gray-20);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__group-head::-webkit-details-marker {
+  display: none;
+}
+
+.timeline__group-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  width: var(--timeline-left);
+  height: 100%;
+  padding: 0 var(--layout-padding-small);
+  background: var(--theme-gray-20);
+  border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+/* Chevron drawn in CSS: right when folded, down when open. */
+.timeline__group-label::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px;
+  border-right: 2px solid var(--icons-color-secondary);
+  border-bottom: 2px solid var(--icons-color-secondary);
+  transform: rotate(-45deg);
+}
+
+.timeline__group[open] > .timeline__group-head .timeline__group-label::before {
+  transform: rotate(45deg);
+}
+
+.timeline__group-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--typography-bold-label);
+}
+
+.timeline__group-count {
+  flex: none;
+  color: var(--typography-color-secondary);
+}
+
+.timeline__pill {
+  margin-left: auto;
+}
+
+/* Rows */
+
+.timeline__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline__row {
+  position: relative;
+  height: var(--timeline-row);
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
+}
+
+.timeline__row:hover,
+.timeline__row:hover .timeline__left {
+  background: var(--surface-color-background-light-blue);
+}
+
+.timeline__lane {
+  position: relative;
+}
+
+.timeline__bar {
+  position: absolute;
+  top: 5px;
+  box-sizing: border-box;
+  height: 18px;
+  overflow: hidden;
+  padding: 0 var(--layout-padding-xsmall);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 16px;
+  border: var(--layout-border-width-small) solid transparent;
+  border-radius: var(--layout-border-radius-small);
+}
+
+/* White edge leaves a 2px gap between back-to-back done phases. */
+.timeline__bar--past {
+  background: var(--theme-gray-40);
+  border-color: var(--surface-color-background-white);
+}
+
+.timeline__bar--upcoming {
+  background: var(--surface-color-background-white);
+  border-color: var(--surface-color-border-medium);
+}
+
+.timeline__bar--current {
+  font-weight: 700;
+}
+
+.timeline__bar--review {
+  background: var(--wp-phase-review-fill);
+  border-color: var(--wp-phase-review-edge);
+}
+
+.timeline__bar--proponent {
+  background: var(--wp-phase-proponent-fill);
+  border-color: var(--wp-phase-proponent-edge);
+}
+
+.timeline__bar--planning {
+  background: var(--wp-phase-planning-fill);
+  border-color: var(--wp-phase-planning-edge);
+}
+
+.timeline__bar--readiness {
+  background: var(--wp-phase-readiness-fill);
+  border-color: var(--wp-phase-readiness-edge);
+}
+
+.timeline__bar--decision {
+  background: var(--wp-phase-decision-fill);
+  border-color: var(--wp-phase-decision-edge);
+}
+
+/* Overdue at 135 degrees, suspended at 45, so the two read apart without colour. */
+.timeline__bar--overrun {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--wp-overdue-bar) 0 1px,
+    var(--support-surface-color-danger) 1px 5px
+  );
+  border-color: var(--wp-overdue-bar);
+}
+
+.timeline__bar--suspended {
+  background: repeating-linear-gradient(45deg, var(--theme-gray-80) 0 1px, transparent 1px 5px);
+  border-color: var(--theme-gray-80);
+}
+
+.timeline__note {
+  position: absolute;
+  top: 5px;
+  z-index: 1;
+  padding: 0 var(--layout-padding-xsmall);
+  line-height: 16px;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--typography-color-primary);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--theme-gray-80);
+  border-radius: var(--layout-border-radius-small);
+}
+
+.timeline__undated {
+  position: sticky;
+  display: inline-block;
+  left: calc(var(--timeline-left) + var(--layout-padding-small));
+  line-height: var(--timeline-row);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__today-line {
+  position: absolute;
+  top: var(--timeline-head);
+  bottom: 0;
+  z-index: 1;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--wp-today);
+  pointer-events: none;
+}
+
+.timeline__empty {
+  margin: 0;
+  padding: var(--layout-padding-xlarge) var(--layout-padding-large);
+  text-align: center;
+  color: var(--typography-color-secondary);
+}
+
+@media (forced-colors: active) {
+  .timeline__bar,
+  .timeline__swatch {
+    border-color: CanvasText;
+  }
+
+  .timeline__today-line,
+  .timeline__swatch--today {
+    background: Highlight;
+  }
+}
