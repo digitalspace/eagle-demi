@@ -31,7 +31,6 @@ export interface WorkRow {
   work: WorkplanRow;
   /** `Project.region` joined by `projectId`; null when the project is not in the list. */
   region: string | null;
-  projectType: string | null;
   /** Phases sorted by `order`. */
   phases: WorkplanPhase[];
   closed: boolean;
@@ -262,7 +261,6 @@ function rowOf(work: WorkplanRow, project: Project | undefined, today: string): 
   return {
     work,
     region: project?.region ?? null,
-    projectType: project?.type ?? null,
     ...state,
     ...progress,
     ...(closed ? { suspended: false, suspendedUnder: null } : suspensionOf(phases, today)),
@@ -274,7 +272,7 @@ function rowOf(work: WorkplanRow, project: Project | undefined, today: string): 
   };
 }
 
-/** Each work's state on `today` (an ISO day, `YYYY-MM-DD`), with region and type from its project. */
+/** Each work's state on `today` (an ISO day, `YYYY-MM-DD`), with region from its project. */
 export function rowsOf(works: WorkplanRow[], projects: Project[], today: string): WorkRow[] {
   const byId = new Map(projects.map((project) => [String(project.id), project]));
   return works.map((work) => rowOf(work, byId.get(String(work.projectId)), today));

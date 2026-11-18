@@ -28,6 +28,12 @@ describe('timeline scale', () => {
     expect(todayInView).toBeLessThan(VIEWPORT);
   });
 
+  it('Year zoom runs past the latest phase end', () => {
+    const scale = scaleFor(extent, 'year', TODAY, VIEWPORT);
+
+    expect(scale.end).toBeGreaterThanOrEqual(dayNumber('2028-02-01'));
+  });
+
   it('a cell cut short at the axis edge drops its label, a full cell keeps it', () => {
     const { bottom } = ticksFor(scaleFor(extent, 'fit', TODAY, 240));
 

@@ -117,13 +117,26 @@ describe('rowsOf', () => {
     expect(row.closed).toBe(true);
   });
 
-  it('joins region and project type by projectId', () => {
+  it('closes an active work whose decision date has passed', () => {
+    const row = rowOf(work([phase('Application Review', '2026-01-01', null)], { decisionDate: '2026-11-01' }));
+
+    expect(row.status).toBe('closed');
+  });
+
+  it('marks a work next-30 when its next milestone is at most 30 days away, else on track', () => {
+    const nextOn = (start: string) =>
+      rowOf(work([phase('A', '2026-10-01', '2027-06-01'), phase('B', start, null, { order: 2 })]));
+
+    expect(nextOn('2026-12-17').status).toBe('next-30');
+    expect(nextOn('2026-12-18').status).toBe('on-track');
+  });
+
+  it('joins region by projectId', () => {
     const project: Project = { id: 901, name: 'Sample', gatingState: 'admitted', region: 'Sample Region North', type: 'Mines' };
 
     const row = rowOf(work([]), [project]);
 
     expect(row.region).toBe('Sample Region North');
-    expect(row.projectType).toBe('Mines');
   });
 });
 
