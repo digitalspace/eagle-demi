@@ -1,11 +1,11 @@
-import { memo, useId, useMemo, useRef, type CSSProperties } from 'react';
+import { memo, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import { dayMonthYear } from '../dates';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { rowKey, toneOf, type WorkRow } from './derive';
 import { plural } from './format';
-import { activeByQuarter } from './timeline-activity';
-import { daysOf, summaryOf, type Group } from './timeline-rows';
+import { markerSummaryOf } from './timeline-markers';
+import { daysOf, kindClassOf, MARK_KINDS, railOf, summaryOf, undatedTextOf } from './timeline-rows';
 import { dayNumber, spansOf, tagDayOf, xOf, type Scale, type Span } from './timeline-scale';
 import { useFollowDetails } from './use-follow-details';
 import { hasDetails, projectDetailsPath } from './work-notes';
@@ -55,20 +55,36 @@ function RowLeft({ row, details }: { row: WorkRow; details?: { id: string; open:
 /** A bar's hover text: phase and dates, or how far the overrun runs past the planned end. */
 function titleOf(span: Span, row: WorkRow): string {
   if (span.kind === 'overrun') return `${plural(row.daysOver, 'day')} overdue`;
+  if (span.layer === 'marker') return `${span.name}, ${dayMonthYear(span.start)}`;
   const name =
     span.kind === 'suspended' ? `Suspended${span.name ? ` under ${span.name}` : ''}` : span.name || 'Unnamed phase';
-  return `${name}, ${dayMonthYear(span.start)} to ${dayMonthYear(span.end)}`;
+  const about = (approx: boolean) => (approx ? 'about ' : '');
+  return `${name}, ${about(span.approx.start)}${dayMonthYear(span.start)} to ${about(span.approx.end)}${dayMonthYear(span.end)}`;
 }
 
-/** Scrolls an open panel into view, never so far that its row goes under the head. */
+/** Bars for phases, overruns and suspensions; marks for every other kind, shaped by its modifier. */
+function classOf(span: Span, tone: string): string {
+  if (MARK_KINDS.has(span.kind)) return `timeline__mark ${kindClassOf(span.kind)}`;
+  const names = ['timeline__bar', kindClassOf(span.kind)];
+  if (span.kind === 'current') names.push(`timeline__bar--${tone}`);
+  if (span.approx.start) names.push('timeline__bar--approx-start');
+  if (span.approx.end) names.push('timeline__bar--approx-end');
+  return names.join(' ');
+}
+
+const LAYER_ORDER = { overlay: 0, phase: 1, marker: 2 } as const;
+
+/** Places a tag `left` px into the lane, slid back left by however much it would run past the lane end. */
+const tagStyle = (left: number, scale: Scale) => ({ left, translate: `min(0px, calc(${scale.width - left}px - 100%))` });
+
+/** Scrolls an open panel into view, never so far that its row goes above the top of the Act list. */
 function reveal(panel: HTMLElement) {
-  const box = panel.closest<HTMLElement>('.timeline__scroll');
-  const head = box?.querySelector<HTMLElement>('.timeline__head');
+  const box = panel.closest<HTMLElement>('.timeline__acts');
   const row = panel.closest('li')?.previousElementSibling;
-  if (!box || !head || !row) return;
+  if (!box || !row) return;
   const top = box.getBoundingClientRect().top + box.clientTop;
   const below = panel.getBoundingClientRect().bottom - (top + box.clientHeight);
-  const room = row.getBoundingClientRect().top - top - head.offsetHeight;
+  const room = row.getBoundingClientRect().top - top;
   if (below > 0 && room > 0) box.scrollTop += Math.min(below, room);
 }
 
@@ -78,7 +94,7 @@ export interface Opened {
   follow: string | null;
 }
 
-interface RowProps {
+export interface RowProps {
   row: WorkRow;
   scale: Scale;
   today: string;
@@ -86,51 +102,73 @@ interface RowProps {
   follow: boolean;
   toggle: (key: string) => void;
   unfollow: () => void;
+  /** `rowKey` of the other part of a work that switched Act, when that part is shown. */
+  partner?: string;
+  /** Opens the panel and group of the row with this key, and moves focus to it. */
+  onJump: (key: string) => void;
 }
 
-const TimelineRow = memo(function TimelineRow({ row, scale, today, open, follow, toggle, unfollow }: RowProps) {
+/** "To 2002 Act, 30 Apr 2003" and "From 1996 Act" tags; a button to the other part when it is shown. */
+function SwitchTags({ spans, scale, partner, onJump }: { spans: Span[]; scale: Scale; partner?: string; onJump: (key: string) => void }) {
+  return spans
+    .filter((span) => span.kind === 'transition-out' || span.kind === 'transition-in')
+    .map((span) => {
+      const label = span.kind === 'transition-out' ? `${span.name}, ${dayMonthYear(span.start)}` : (span.name ?? '');
+      const style = tagStyle(xOf(scale, dayNumber(span.start)) + 6, scale);
+      return partner ? (
+        <button key={span.kind} type="button" className="timeline__tag" style={style} onClick={() => onJump(partner)}>
+          {label}
+        </button>
+      ) : (
+        <span key={span.kind} className="timeline__tag timeline__tag--plain" style={style}>
+          {label}
+        </span>
+      );
+    });
+}
+
+export const TimelineRow = memo(function TimelineRow({ row, scale, today, open, follow, toggle, unfollow, partner, onJump }: RowProps) {
   const detailsId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   useFollowDetails(panelRef, open && follow, reveal, unfollow);
-  const spans = spansOf(row, today);
+  const spans = spansOf(row, today, { layers: 'all' }).sort((a, b) => LAYER_ORDER[a.layer] - LAYER_ORDER[b.layer]);
+  const rail = railOf(row, today);
   const tone = toneOf(row);
   const tagX = xOf(scale, tagDayOf(spans, today)) + 4;
   const details = hasDetails(row) ? { id: detailsId, open, toggle: () => toggle(rowKey(row)) } : undefined;
+  const summary = [summaryOf(row, today), markerSummaryOf(row, today)].filter(Boolean).join(' ');
   return (
     <>
-      <li className="timeline__row">
+      <li className={`timeline__row${row.work.shownAfterFlip === false ? ' timeline__row--hidden' : ''}`} data-row={rowKey(row)}>
         <RowLeft row={row} details={details} />
-        <div className="timeline__lane" aria-hidden="true">
-          {spans.map((span, i) => {
-            const left = xOf(scale, dayNumber(span.start));
-            const width = Math.max(2, xOf(scale, dayNumber(span.end)) - left);
-            const current = span.kind === 'current';
-            return (
+        <div className="timeline__lane">
+          <span className="timeline__draw" aria-hidden="true">
+            {rail && rail.end > rail.start && (
               <span
-                key={i}
-                className={`timeline__bar timeline__bar--${span.kind}${current ? ` timeline__bar--${tone}` : ''}`}
-                style={{ left, width }}
-                title={titleOf(span, row)}
-              >
-                {current && span.name && <span className="timeline__label">{span.name}</span>}
+                className="timeline__rail"
+                style={{ left: xOf(scale, rail.start), width: (rail.end - rail.start) * scale.pxPerDay }}
+              />
+            )}
+            {spans.map((span, i) => {
+              const left = xOf(scale, dayNumber(span.start));
+              const width = span.layer === 'marker' ? undefined : Math.max(2, xOf(scale, dayNumber(span.end)) - left);
+              const current = span.kind === 'current';
+              return (
+                <span key={i} className={classOf(span, tone)} style={{ left, width }} title={titleOf(span, row)}>
+                  {current && span.name && <span className="timeline__label">{span.name}</span>}
+                </span>
+              );
+            })}
+            {!spans.some((span) => span.layer === 'phase') && <span className="timeline__undated">{undatedTextOf(row)}</span>}
+            {row.suspended && (
+              <span className="timeline__note" style={tagStyle(tagX, scale)}>
+                Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
               </span>
-            );
-          })}
-          {!spans.length && <span className="timeline__undated">No dated phases</span>}
-          {row.suspended && (
-            <span
-              className="timeline__note"
-              // Slides back left by however much it would run past the lane end.
-              style={{
-                left: tagX,
-                translate: `min(0px, calc(${scale.width - tagX}px - 100%))`,
-              }}
-            >
-              Suspended{row.suspendedUnder ? ` ${row.suspendedUnder}` : ''}
-            </span>
-          )}
+            )}
+          </span>
+          <SwitchTags spans={spans} scale={scale} partner={partner} onJump={onJump} />
         </div>
-        <span className="visually-hidden">{summaryOf(row)}</span>
+        <span className="visually-hidden">{summary}</span>
       </li>
       {open && (
         <li className="timeline__detail">
@@ -142,75 +180,3 @@ const TimelineRow = memo(function TimelineRow({ row, scale, today, open, follow,
     </>
   );
 });
-
-/** Quarter cells across the group head's lane, shaded by how many of the group's works are active. */
-function Activity({ rows, scale }: { rows: WorkRow[]; scale: Scale }) {
-  const cells = useMemo(() => activeByQuarter(rows, scale), [rows, scale]);
-  return (
-    <span className="timeline__activity" aria-hidden="true">
-      {cells.map((cell) => (
-        <span
-          key={cell.start}
-          className="timeline__heat"
-          title={`${cell.label}: ${plural(cell.count, 'active work')}`}
-          style={{
-            left: xOf(scale, cell.start),
-            width: (cell.end - cell.start) * scale.pxPerDay,
-            '--heat': `${Math.round(8 + (80 * cell.count) / rows.length)}%`,
-          } as CSSProperties}
-        />
-      ))}
-    </span>
-  );
-}
-
-export function TimelineGroup({
-  group,
-  open,
-  onToggle,
-  scale,
-  today,
-  opened,
-  onDetails,
-  unfollow,
-}: {
-  group: Group;
-  open: boolean;
-  onToggle: (key: string, open: boolean) => void;
-  scale: Scale;
-  today: string;
-  opened: Opened;
-  onDetails: (key: string) => void;
-  unfollow: () => void;
-}) {
-  return (
-    <details className="timeline__group" open={open} onToggle={(event) => onToggle(group.key, event.currentTarget.open)}>
-      <summary className="timeline__group-head">
-        <span className="timeline__group-label">
-          <span className="timeline__group-name">{group.label}</span>
-          <span className="timeline__group-meta">
-            <span className="timeline__group-count">{plural(group.rows.length, 'work')}</span>
-            {group.overdue > 0 && <span className="timeline__pill">{group.overdue} overdue</span>}
-          </span>
-        </span>
-        <Activity rows={group.rows} scale={scale} />
-      </summary>
-      {open && (
-        <ul className="timeline__rows">
-          {group.rows.map((row) => (
-            <TimelineRow
-              key={rowKey(row)}
-              row={row}
-              scale={scale}
-              today={today}
-              open={opened.open.has(rowKey(row))}
-              follow={opened.follow === rowKey(row)}
-              toggle={onDetails}
-              unfollow={unfollow}
-            />
-          ))}
-        </ul>
-      )}
-    </details>
-  );
-}

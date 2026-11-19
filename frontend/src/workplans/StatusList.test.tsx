@@ -81,7 +81,7 @@ describe('StatusListView', () => {
         <StatusListView rows={rowsOf(FIXTURE.works as WorkplanRow[], [], TODAY)} today={TODAY} bar={(slots) => <p>{slots?.summary}</p>} />
       </MemoryRouter>,
     );
-    expect(screen.getByText('Sorted by attention · 14 works')).toBeInTheDocument();
+    expect(screen.getByText(`Sorted by attention · ${FIXTURE.works.length} works`)).toBeInTheDocument();
   });
 
   it('marks an overdue work’s next milestone as blocked by its current phase', () => {
@@ -120,7 +120,7 @@ describe('StatusListView', () => {
 
   it('counts the works shown in the footer', () => {
     renderList();
-    expect(screen.getByText('Showing 1–14 of 14')).toBeInTheDocument();
+    expect(screen.getByText(`Showing 1–${FIXTURE.works.length} of ${FIXTURE.works.length}`)).toBeInTheDocument();
   });
 
   it('shows an open sheet work with no planned end as Status unknown', () => {

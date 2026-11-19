@@ -36,7 +36,7 @@ export function TimelineOverview({ rows, scale, lanePx, today, scroller, onPan }
     // Re-read on a new scale too: the view sets scrollLeft in a layout effect, before any scroll event fires.
   }, [scroller, scale, lanePx]);
 
-  const cells = useMemo(() => activeByQuarter(rows, scale), [rows, scale]);
+  const cells = useMemo(() => activeByQuarter(rows, scale, today), [rows, scale, today]);
   const peak = Math.max(1, ...cells.map((cell) => cell.count));
   const max = Math.max(0, scale.width - lanePx);
   const pct = (px: number) => `${(px / scale.width) * 100}%`;

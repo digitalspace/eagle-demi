@@ -1,3 +1,4 @@
+import { kindClassOf } from './timeline-rows';
 import { ticksFor, type Scale, type SpanKind } from './timeline-scale';
 
 const ALWAYS: [SpanKind, string][] = [
@@ -19,20 +20,27 @@ const WHEN_DRAWN: [SpanKind, string][] = [
   ['transition-out', 'To next Act'],
 ];
 
-export function Legend({ drawn }: { drawn: ReadonlySet<SpanKind> }) {
+/** `approx`: some bar has a bound that is not a real date. */
+export function Legend({ drawn, approx = false }: { drawn: ReadonlySet<SpanKind>; approx?: boolean }) {
   const items = [...ALWAYS, ...WHEN_DRAWN.filter(([kind]) => drawn.has(kind))];
   return (
     <ul className="timeline__legend" aria-label="Legend">
       {items.map(([kind, label]) => (
         <li key={kind}>
-          {/* Swatches reuse the bar classes, so the legend can never drift from the bars. */}
+          {/* Swatches reuse the bar and mark classes, so the legend can never drift from the rows. */}
           <span
-            className={`timeline__swatch timeline__bar--${kind}${kind === 'current' ? ' timeline__bar--review' : ''}`}
+            className={`timeline__swatch ${kindClassOf(kind)}${kind === 'current' ? ' timeline__bar--review' : ''}`}
             aria-hidden="true"
           />
           {label}
         </li>
       ))}
+      {approx && (
+        <li>
+          <span className="timeline__swatch timeline__bar--past timeline__bar--approx-start" aria-hidden="true" />
+          Approximate dates
+        </li>
+      )}
     </ul>
   );
 }

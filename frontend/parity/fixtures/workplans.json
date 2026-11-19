@@ -239,6 +239,20 @@
           "extensionDays": 0,
           "suspendedDays": 0
         }
+      ],
+      "milestones": [
+        {
+          "name": "Public Comment Period",
+          "code": null,
+          "eventType": null,
+          "position": null,
+          "actualDate": "2026-05-04",
+          "anticipatedDate": null,
+          "endDate": "2026-06-03",
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "comment-period"
+        }
       ]
     },
     {
@@ -597,6 +611,20 @@
           "extensionDays": 0,
           "suspendedDays": 30
         }
+      ],
+      "milestones": [
+        {
+          "name": "Moved to the 2002 Act",
+          "code": "act-transition",
+          "eventType": null,
+          "position": null,
+          "actualDate": "2003-04-30",
+          "anticipatedDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "act-transition"
+        }
       ]
     },
     {
@@ -642,6 +670,20 @@
           "suspendedDate": null,
           "extensionDays": 0,
           "suspendedDays": 0
+        }
+      ],
+      "milestones": [
+        {
+          "name": "Moved from the 1996 Act",
+          "code": "act-transition",
+          "eventType": null,
+          "position": null,
+          "actualDate": "2003-04-30",
+          "anticipatedDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "act-transition"
         }
       ]
     },
@@ -774,7 +816,16 @@
           "isCompleted": true,
           "isSuspended": null,
           "undated": null,
-          "interruptions": [],
+          "interruptions": [
+            {
+              "kind": "extension",
+              "typeCode": "extension-s24-4",
+              "startDate": "2014-09-01",
+              "endDate": "2014-11-30",
+              "days": 90,
+              "legalSection": "s.24(4)"
+            }
+          ],
           "isCurrent": null,
           "suspendedDate": null,
           "extensionDays": 0,
@@ -822,6 +873,184 @@
           "suspendedDate": null,
           "extensionDays": 0,
           "suspendedDays": 0
+        }
+      ],
+      "milestones": [
+        {
+          "name": "Section 13 Order",
+          "code": "order-variation",
+          "eventType": null,
+          "position": null,
+          "actualDate": "2011-09-15",
+          "anticipatedDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "section-13"
+        },
+        {
+          "name": "Section 13 Order",
+          "code": "order-variation",
+          "eventType": null,
+          "position": null,
+          "actualDate": "2012-02-01",
+          "anticipatedDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "section-13"
+        },
+        {
+          "name": "Public Comment Period",
+          "code": "comment-period",
+          "eventType": null,
+          "position": null,
+          "actualDate": "2012-03-01",
+          "anticipatedDate": null,
+          "endDate": "2012-04-15",
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "comment-period"
+        }
+      ]
+    },
+    {
+      "projectId": "901",
+      "projectName": "Sample Alpha Transmission Line",
+      "workId": "sheet-90000000-0000-4000-8000-000000000007",
+      "source": "sheet",
+      "title": "Sample Alpha Transmission Line - Amendment (2002)",
+      "workTypeCode": "amendment",
+      "workType": "Amendment",
+      "actYear": 2002,
+      "workState": "completed",
+      "isActive": false,
+      "decisionEventDate": null,
+      "startDate": "2004-06-01",
+      "decisionDate": "2005-03-15",
+      "anticipatedDecisionDate": null,
+      "outcome": "Approved",
+      "transitionOut": null,
+      "undated": null,
+      "shownAfterFlip": true,
+      "untilTrack": true,
+      "replaces": [],
+      "certificateKind": null,
+      "complexityCode": "typical",
+      "transitionIn": null,
+      "phases": [
+        {
+          "name": "Amendment Review",
+          "stage": "Application Review",
+          "order": 1,
+          "startDate": "2004-06-01",
+          "endDate": "2005-03-15",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
+        }
+      ]
+    },
+    {
+      "projectId": "904",
+      "projectName": "sample gamma wind farm",
+      "workId": "sheet-90000000-0000-4000-8000-000000000008",
+      "source": "sheet",
+      "title": "sample gamma wind farm - Assessment (1996)",
+      "workTypeCode": "assessment",
+      "workType": "Assessment",
+      "actYear": 1996,
+      "workState": "completed",
+      "isActive": false,
+      "decisionEventDate": null,
+      "startDate": null,
+      "decisionDate": "1998-04-27",
+      "anticipatedDecisionDate": null,
+      "outcome": "Certificate Issued",
+      "transitionOut": null,
+      "undated": {
+        "startDate": {
+          "notAfter": "1995-07-18"
+        }
+      },
+      "shownAfterFlip": true,
+      "untilTrack": false,
+      "replaces": [],
+      "certificateKind": "PAC",
+      "complexityCode": null,
+      "transitionIn": null,
+      "phases": [
+        {
+          "name": "Pre-EA",
+          "stage": "Pre-EA",
+          "order": 1,
+          "startDate": null,
+          "endDate": "1996-02-01",
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": {
+            "startDate": {
+              "notAfter": "1995-07-18"
+            }
+          },
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
+        },
+        {
+          "name": "Application Review",
+          "stage": "Application Review",
+          "order": 2,
+          "startDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
+        },
+        {
+          "name": "Decision",
+          "stage": "Decision",
+          "order": 3,
+          "startDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "isCompleted": true,
+          "isSuspended": null,
+          "undated": null,
+          "interruptions": [],
+          "isCurrent": null,
+          "suspendedDate": null,
+          "extensionDays": 0,
+          "suspendedDays": 0
+        }
+      ],
+      "milestones": [
+        {
+          "name": "Decision",
+          "code": "decision",
+          "eventType": null,
+          "position": null,
+          "actualDate": "1998-04-27",
+          "anticipatedDate": null,
+          "endDate": null,
+          "numberOfDays": null,
+          "outcome": null,
+          "kind": "decision"
         }
       ]
     }
