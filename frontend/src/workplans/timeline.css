@@ -183,9 +183,11 @@
 
 /* Longer values ("311 d, suspended", "Status unknown") wrap to a second line inside the row's height. */
 .timeline__days {
+  --days-pad: 2.5px;
   text-align: right;
-  /* Two lines must fit the 28px row. */
-  line-height: 13px;
+  /* BC Sans content area is 1.36em, taller than the line; the padding holds the spill so two lines fill the row exactly. */
+  padding-block: var(--days-pad);
+  line-height: calc(var(--timeline-row) / 2 - var(--days-pad));
   font-variant-numeric: tabular-nums;
   color: var(--typography-color-secondary);
 }

@@ -45,7 +45,15 @@ function Histogram({ weeks, idOf }: { weeks: Week[]; idOf: (week: Week) => strin
   const max = Math.max(1, ...weeks.map((week) => week.milestones.length));
   // Every k-th week carries a date, so labels never crowd at six months; narrow screens drop every other one.
   const every = Math.ceil(weeks.length / 7);
-  const jump = (week: Week) => document.getElementById(idOf(week))?.focus();
+  // Set the agenda's scrollTop to the section (not the sticky heading) so the heading lands at the top; focus then scrolls the page if the heading is off screen.
+  const jump = (week: Week) => {
+    const head = document.getElementById(idOf(week));
+    const section = head?.parentElement;
+    const agenda = section?.parentElement;
+    if (!head || !section || !agenda) return;
+    agenda.scrollTop = section.offsetTop;
+    head.focus();
+  };
   const titleId = useId();
   return (
     <div className="la-hist">

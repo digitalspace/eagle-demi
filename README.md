@@ -2083,9 +2083,9 @@ yarn preview --host 127.0.0.1 &
 node scripts/e2e-smoke.mjs   # every screen and old URL against the build, Keycloak off
 ```
 
-The smoke script needs Playwright where Node can find it, or `PLAYWRIGHT_MODULE` set to its
-`index.mjs`. It is not a dependency of the app. It swaps in a Keycloak-off `env.js` and serves every
-API call from `parity/fixtures/`, so nothing on disk changes and no API is called.
+The smoke script needs Playwright 1.45 or newer where Node can find it, or `PLAYWRIGHT_MODULE` set
+to its `index.mjs`. It is not a dependency of the app. It swaps in a Keycloak-off `env.js` and serves
+every API call from `parity/fixtures/`, so nothing on disk changes and no API is called.
 
 - **Interactive map explorer** over project coordinates and administrative overlays.
 - **Static boundary GeoJSON** — `regional_districts.geojson`, `municipalities.geojson`,
