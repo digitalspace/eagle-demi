@@ -1,7 +1,7 @@
 import type { MilestoneKind, WorkplanMilestone } from '../api/sheet-works';
 import { dayMonthYear } from '../dates';
 import { rowKey, type WorkRow } from './derive';
-import { dayOf, endOf, plusDays } from './phase-bounds';
+import { dayOf, endOf, plusDays, startBound } from './phase-bounds';
 
 export type PointKind = 'decision' | 'transition-in' | 'transition-out' | 'section-13';
 export type RangeKind = 'comment-period' | 'extension' | 'interregnum' | 'suspension';
@@ -77,9 +77,17 @@ function interruptionRanges(row: WorkRow): Draft[] {
     });
 }
 
-/** A suspension with no resumption runs to the end of the phase it began in, else to today while the work is open. */
+/**
+ * A suspension with no resumption runs to the end of the phase it began in, else to today while the work is open.
+ * A phase holds the day only when its start, or the latest day its undated start can be, is on or before it.
+ */
 function unresumed(row: WorkRow, start: string): Draft[] {
-  const holding = row.phases.filter((phase) => (dayOf(phase.startDate) ?? '') <= start).at(-1);
+  const holding = row.phases
+    .filter((phase) => {
+      const from = startBound(phase.startDate, phase.undated);
+      return from !== null && from <= start;
+    })
+    .at(-1);
   const end = holding ? endOf(holding) : null;
   if (end && end >= start) return [{ kind: 'suspension', start, end, label: 'Suspension' }];
   return row.closed ? [] : [{ kind: 'suspension', start, end: null, label: 'Suspension' }];
@@ -123,15 +131,16 @@ export function markersOf(row: WorkRow, today: string): Markers {
   return { points: pointsOf(row), ranges };
 }
 
-/** The markers as plain sentences in date order, for screen readers; empty when there are none. */
-export function markerSummaryOf(row: WorkRow): string {
+/** The drawn markers as plain sentences in date order, for screen readers; empty when there are none. */
+export function markerSummaryOf(row: WorkRow, today: string): string {
+  const { points, ranges } = markersOf(row, today);
   const items = [
-    ...pointsOf(row).map((p) => ({ day: p.day, text: `${p.label} ${dayMonthYear(p.day)}.` })),
-    ...draftsOf(row).map((r) => ({
+    ...points.map((p) => ({ day: p.day, text: `${p.label} ${dayMonthYear(p.day)}.` })),
+    ...ranges.map((r) => ({
       day: r.start,
-      text: r.end
-        ? `${r.label} ${dayMonthYear(r.start)} to ${dayMonthYear(r.end)}.`
-        : `${r.label} since ${dayMonthYear(r.start)}.`,
+      text: r.open
+        ? `${r.label} since ${dayMonthYear(r.start)}.`
+        : `${r.label} ${dayMonthYear(r.start)} to ${dayMonthYear(r.end)}.`,
     })),
   ];
   return items

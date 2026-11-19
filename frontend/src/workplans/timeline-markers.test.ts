@@ -124,17 +124,58 @@ describe('markersOf', () => {
     ]);
   });
 
-  it('ends a suspension Track never resumed at the end of the phase it began in', () => {
+  it('ends a suspension never resumed at the end of the phase it began in, not a later undated one', () => {
     const [row] = rowsFor([
-      trackWork({
+      work({
         phases: [
-          phase({ order: 1, startDate: '2024-01-01', endDate: '2024-12-31', isCompleted: true }),
-          phase({ order: 2, startDate: '2025-01-01', isCurrent: true }),
+          phase({ order: 1, startDate: '2004-01-01', endDate: '2004-12-31', isCompleted: true }),
+          phase({ order: 2, undated: { startDate: { notAfter: '2005-06-01' } } }),
         ],
-        milestones: [milestone('suspension', { actualDate: '2024-06-01' })],
+        milestones: [milestone('suspension', { actualDate: '2004-06-01' })],
       }),
     ]);
-    expect(markersOf(row, TODAY).ranges).toMatchObject([{ kind: 'suspension', start: '2024-06-01', end: '2024-12-31' }]);
+    expect(markersOf(row, TODAY).ranges).toMatchObject([{ kind: 'suspension', start: '2004-06-01', end: '2004-12-31' }]);
+  });
+
+  it('counts a phase whose undated start falls before a suspension as the phase it began in', () => {
+    const [row] = rowsFor([
+      work({
+        phases: [phase({ undated: { startDate: { notAfter: '2004-01-01' } }, endDate: '2004-12-31', isCompleted: true })],
+        milestones: [milestone('suspension', { actualDate: '2004-06-01' })],
+      }),
+    ]);
+    expect(markersOf(row, TODAY).ranges).toMatchObject([{ kind: 'suspension', start: '2004-06-01', end: '2004-12-31' }]);
+  });
+
+  it('leaves a sheet suspension interruption to the phase spans', () => {
+    const stop = { kind: 'suspension', legalSection: 's.24(2)', startDate: '2026-01-01', endDate: null, days: null };
+    const [row] = rowsFor([work({ actYear: 2002, phases: [phase({ startDate: '2025-01-01', interruptions: [stop] })] })]);
+    expect(markersOf(row, TODAY).ranges).toEqual([]);
+  });
+
+  it('draws no comment period that ends before it starts', () => {
+    const pcp = milestone('comment-period', { name: 'PCP', actualDate: '2004-03-01', endDate: '2004-02-01' });
+    const [row] = rowsFor([work({ actYear: 2002, milestones: [pcp] })]);
+    expect(markersOf(row, TODAY).ranges).toEqual([]);
+    expect(markerSummaryOf(row, TODAY)).toBe('');
+  });
+
+  it('marks the Act switches and section 13 orders of a work', () => {
+    const [row] = rowsFor([
+      work({
+        actYear: 2002,
+        transitionIn: { fromActYear: 1996, date: '2002-12-30' },
+        transitionOut: { toActYear: 2018, date: '2019-12-16' },
+        milestones: [milestone('section-13', { actualDate: '2010-05-01' })],
+      }),
+    ]);
+    expect(markersOf(row, TODAY).points).toEqual(
+      expect.arrayContaining([
+        { kind: 'section-13', day: '2010-05-01', label: 'Section 13 order' },
+        { kind: 'transition-out', day: '2019-12-16', label: 'To 2018 Act' },
+        { kind: 'transition-in', day: '2002-12-30', label: 'From 1996 Act' },
+      ]),
+    );
   });
 
   it('gives a sheet extension interruption a range named by its legal section', () => {
@@ -158,6 +199,13 @@ describe('markerSummaryOf', () => {
   it('reads the markers in date order', () => {
     const pcp = milestone('comment-period', { name: 'Application PCP', actualDate: '1998-01-12', endDate: '1998-03-27' });
     const [row] = rowsFor([work({ decisionDate: '1998-04-27', milestones: [pcp] })]);
-    expect(markerSummaryOf(row)).toBe('Application PCP 12 Jan 1998 to 27 Mar 1998. Decision 27 Apr 1998.');
+    expect(markerSummaryOf(row, TODAY)).toBe('Application PCP 12 Jan 1998 to 27 Mar 1998. Decision 27 Apr 1998.');
+  });
+
+  it('reads a range still running as since its start', () => {
+    const [row] = rowsFor([
+      trackWork({ phases: [phase({ startDate: '2026-01-01', isCurrent: true, isSuspended: true, suspendedDate: '2026-09-01' })] }),
+    ]);
+    expect(markerSummaryOf(row, TODAY)).toBe('Suspension since 1 Sep 2026.');
   });
 });
