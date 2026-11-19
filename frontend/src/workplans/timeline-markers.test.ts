@@ -124,17 +124,22 @@ describe('markersOf', () => {
     ]);
   });
 
-  it('ends a suspension never resumed at the end of the phase it began in, not a later undated one', () => {
+  it.each([
+    ['a later undated one', { undated: { startDate: { notAfter: '2005-06-01' } } }],
+    ['a later one with no start at all', {}],
+  ])('ends a suspension never resumed at the end of the phase it began in, not %s', (_, next) => {
     const [row] = rowsFor([
       work({
         phases: [
           phase({ order: 1, startDate: '2004-01-01', endDate: '2004-12-31', isCompleted: true }),
-          phase({ order: 2, undated: { startDate: { notAfter: '2005-06-01' } } }),
+          phase({ order: 2, ...next }),
         ],
         milestones: [milestone('suspension', { actualDate: '2004-06-01' })],
       }),
     ]);
-    expect(markersOf(row, TODAY).ranges).toMatchObject([{ kind: 'suspension', start: '2004-06-01', end: '2004-12-31' }]);
+    expect(markersOf(row, TODAY).ranges).toMatchObject([
+      { kind: 'suspension', start: '2004-06-01', end: '2004-12-31', open: false },
+    ]);
   });
 
   it('counts a phase whose undated start falls before a suspension as the phase it began in', () => {

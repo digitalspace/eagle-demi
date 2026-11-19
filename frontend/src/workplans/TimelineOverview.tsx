@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import type { WorkRow } from './derive';
 import { activeByQuarter } from './timeline-activity';
-import { dayNumber, xOf, type Scale } from './timeline-scale';
+import { dayNumber, holdsDay, xOf, type Scale } from './timeline-scale';
 
 const DAY_MS = 86_400_000;
 const QUARTER_DAYS = 365.25 / 4;
@@ -82,6 +82,7 @@ export function TimelineOverview({ rows, scale, lanePx, today, scroller, onPan }
     pan(to());
   };
 
+  const now = dayNumber(today);
   const from = scale.start + x / scale.pxPerDay;
   const to = scale.start + (x + lanePx) / scale.pxPerDay;
   return (
@@ -113,11 +114,9 @@ export function TimelineOverview({ rows, scale, lanePx, today, scroller, onPan }
             }}
           />
         ))}
-        <span
-          className="timeline__overview-today"
-          aria-hidden="true"
-          style={{ left: pct(xOf(scale, dayNumber(today))) }}
-        />
+        {holdsDay(scale, now) && (
+          <span className="timeline__overview-today" aria-hidden="true" style={{ left: pct(xOf(scale, now)) }} />
+        )}
         <div
           className="timeline__overview-window"
           role="slider"

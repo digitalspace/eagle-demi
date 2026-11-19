@@ -3,7 +3,18 @@ import type { WorkplanRow } from '../api/sheet-works';
 import fixture from '../../parity/fixtures/workplans.json';
 import { byAttention, rowsOf } from './derive';
 import { daysOf, groupsOf, summaryOf } from './timeline-rows';
-import { dayNumber, drawnKinds, extentOf, scaleFor, scrollFor, spansOf, tagDayOf, ticksFor, xOf } from './timeline-scale';
+import {
+  dayNumber,
+  drawnKinds,
+  extentOf,
+  holdsDay,
+  scaleFor,
+  scrollFor,
+  spansOf,
+  tagDayOf,
+  ticksFor,
+  xOf,
+} from './timeline-scale';
 
 const TODAY = '2026-11-17';
 const VIEWPORT = 1000;
@@ -34,6 +45,18 @@ describe('timeline scale', () => {
     expect(scale.end).toBeGreaterThanOrEqual(dayNumber('2028-02-01'));
   });
 
+  const closed = extentOf(rows.filter((row) => row.work.actYear === 1996), TODAY);
+
+  it('Fixed zoom stretches to today by default', () => {
+    expect(holdsDay(scaleFor(closed, 'quarter', TODAY, VIEWPORT), dayNumber(TODAY))).toBe(true);
+  });
+
+  it('Fixed zoom leaves today off a group of closed works', () => {
+    const scale = scaleFor(closed, 'quarter', TODAY, VIEWPORT, { includeToday: false });
+
+    expect(holdsDay(scale, dayNumber(TODAY))).toBe(false);
+  });
+
   it('a cell cut short at the axis edge drops its label, a full cell keeps it', () => {
     const { bottom } = ticksFor(scaleFor(extent, 'fit', TODAY, 240));
 
@@ -57,13 +80,38 @@ describe('suspension', () => {
     expect(tagDayOf(spans, TODAY)).toBe(dayNumber(current.end));
   });
 
-  it('an extension draws no suspended span', () => {
+  it('an extension draws an extension band', () => {
     const work = structuredClone(suspended.work);
     work.phases[1].interruptions = [
       { kind: 'extension', startDate: '2026-03-01', endDate: '2026-04-01', days: 31, legalSection: null },
     ];
 
-    expect(drawnKinds(rowsOf([work], [], TODAY), TODAY).has('suspended')).toBe(false);
+    const spans = spansOf(rowsOf([work], [], TODAY)[0], TODAY, { layers: 'all' });
+
+    expect(spans.filter((span) => span.start === '2026-03-01')).toEqual([
+      expect.objectContaining({ kind: 'extension', layer: 'overlay', end: '2026-04-01' }),
+    ]);
+  });
+});
+
+describe('span layers', () => {
+  const sheet1996 = (title: string) =>
+    rows.find((row) => row.work.source === 'sheet' && row.work.actYear === 1996 && row.work.title?.startsWith(title))!;
+
+  it('a phase with an undated start spans from its notAfter day and is marked approximate', () => {
+    const [preApplication] = spansOf(sheet1996('Sample Alpha'), TODAY);
+
+    expect(preApplication).toMatchObject({
+      name: 'Pre-Application',
+      start: '2001-03-01',
+      approx: { start: true, end: false },
+    });
+  });
+
+  it('extentOf covers a decision marker past the last phase', () => {
+    const work = { ...sheet1996('Sample Delta').work, decisionDate: '2000-03-01' };
+
+    expect(extentOf(rowsOf([work], [], TODAY), TODAY, { layers: 'all' })?.end).toBe(dayNumber('2000-03-01'));
   });
 });
 
