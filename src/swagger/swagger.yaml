@@ -1829,8 +1829,8 @@ paths:
         `test`; unset reads as `dev`. Elsewhere every caller gets the router's 404. The edge read
         allowlist does not include this path, so it also answers 404 on the public host. Needs the
         same roles as `works-staff`: a call with no token gets 401, and IDIR-only and other
-        non-staff callers get 403 before any works are read. Contacts, notes, investments and
-        milestones never appear.
+        non-staff callers get 403 before any works are read. Contacts, notes and investments never
+        appear.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -2002,8 +2002,9 @@ paths:
                                 type: integer
                                 nullable: true
                                 description: >-
-                                  Track: days of the phase's type 10 and 11 extension events that have an actual
-                                  date. Sheet: days of its `extension` interruptions, null when one has no day count.
+                                  Track: days of the phase's type 10 (time limit extension) and 11 (interregnum)
+                                  events that have an actual date. Sheet: days of its `extension` interruptions, null
+                                  when one has no day count.
                               suspendedDays:
                                 type: integer
                                 nullable: true
@@ -2020,6 +2021,10 @@ paths:
                                     kind:
                                       type: string
                                       enum: [extension, suspension, interregnum]
+                                    typeCode:
+                                      type: string
+                                      nullable: true
+                                      description: The sheet's interruption code, such as `suspension-s24-2`.
                                     legalSection:
                                       type: string
                                       nullable: true
@@ -2033,6 +2038,55 @@ paths:
                                       type: integer
                                       nullable: true
                                       description: End minus start.
+                        milestones:
+                          type: array
+                          description: >-
+                            The work's milestones in public order, each with a `kind` the API sets. Track
+                            kinds come from the event type: 10 `extension`, 11 `interregnum`, 12 `suspension`, 38
+                            `resumption`, 22 `comment-period`, 13 to 21 `decision`. Sheet kinds come from
+                            `code`: `comment-period`, `order-variation` as `section-13`, `decision` and
+                            `act-transition`. Anything else is `other`.
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                                nullable: true
+                              code:
+                                type: string
+                                nullable: true
+                                description: Sheet milestone code. Null on Track milestones.
+                              eventType:
+                                type: integer
+                                nullable: true
+                                description: Track event type id. Null on sheet milestones.
+                              position:
+                                type: string
+                                nullable: true
+                                enum: [START, INTERMEDIATE, INTERIOR, END, null]
+                              actualDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                              anticipatedDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                              endDate:
+                                type: string
+                                format: date-time
+                                nullable: true
+                                description: Last day of a comment period.
+                              numberOfDays:
+                                type: integer
+                                nullable: true
+                              outcome:
+                                type: string
+                                nullable: true
+                              kind:
+                                type: string
+                                enum: [extension, interregnum, suspension, resumption, comment-period, section-13,
+                                  decision, act-transition, other]
         '401':
           description: No token, or the credential is rejected.
         '403':

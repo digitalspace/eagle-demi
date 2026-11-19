@@ -300,7 +300,7 @@ test('workplans gives every work of the projects the caller may read, Track rows
   assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'workId', 'source', 'title', 'workTypeCode',
     'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome',
     'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'decisionEventDate', 'certificateKind', 'complexityCode',
-    'transitionIn', 'phases']);
+    'transitionIn', 'phases', 'milestones']);
   assert.deepStrictEqual([track.decisionEventDate, sheet.decisionEventDate], ['2025-06-01', null]);
   const sheetInfo = (work) => [work.certificateKind, work.complexityCode, work.transitionIn];
   assert.deepStrictEqual([sheetInfo(track), sheetInfo(sheet)], [[null, null, null], Object.values(SHEET_INFO)]);
@@ -312,10 +312,31 @@ test('workplans gives every work of the projects the caller may read, Track rows
     name: 'Process Planning', stage: null, order: 3, startDate: '2024-09-01', endDate: '2025-01-01', numberOfDays: 122,
     isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', undated: null,
     isCurrent: true, extensionDays: 0, suspendedDays: 14,
-    interruptions: [{ kind: 'suspension', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
+    interruptions: [{ kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
   }]);
   assert.deepStrictEqual(sheet.phases.map(p => [p.isCurrent, p.suspendedDate, p.extensionDays, p.suspendedDays]),
     [[null, null, 30, null]]);
+});
+
+test('workplans rows carry each work\'s milestones with a kind', async (t) => {
+  const trackEvents = [10, 11, 12, 38, 22, 14, 5].map(eventType => ({ ...milestone(eventType, '2024-04-01', 7), name: `Event ${eventType}` }));
+  const sheetMilestone = (code, extra = {}) => ({ name: code, code, position: 'INTERIOR', actualDate: '1998-01-12', ...extra });
+  const sheetMilestones = [sheetMilestone('comment-period', { endDate: '1998-03-27', links: { commentPeriodId: 'cp-1' } }),
+    sheetMilestone('order-variation'), sheetMilestone('decision', { outcome: 'Approved' }), sheetMilestone('act-transition'),
+    sheetMilestone('intake')];
+  const phaseWith = milestones => ({ trackPhaseId: 55, startDate: '2024-03-01', interruptions: [], milestones });
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans,
+    track: { ...TRACK_WORK, phases: [phaseWith(trackEvents)] }, sheet: { ...SHEET_WORK, phases: [phaseWith(sheetMilestones)] } });
+  assert.deepStrictEqual(res.body.works.map(work => work.milestones?.length), [trackEvents.length, sheetMilestones.length]);
+  const [track, sheet] = res.body.works;
+  assert.deepStrictEqual(track.milestones.map(m => [m.eventType, m.kind]), [[10, 'extension'], [11, 'interregnum'],
+    [12, 'suspension'], [38, 'resumption'], [22, 'comment-period'], [14, 'decision'], [5, 'other']]);
+  assert.deepStrictEqual(sheet.milestones.map(m => [m.code, m.kind]), [['comment-period', 'comment-period'],
+    ['order-variation', 'section-13'], ['decision', 'decision'], ['act-transition', 'act-transition'], ['intake', 'other']]);
+  assert.deepStrictEqual(sheet.milestones[0], {
+    name: 'comment-period', code: 'comment-period', eventType: null, position: 'INTERIOR', actualDate: '1998-01-12',
+    anticipatedDate: null, endDate: '1998-03-27', numberOfDays: null, outcome: null, kind: 'comment-period'
+  });
 });
 
 test('workplans reads every project past the first id batch', async (t) => {
