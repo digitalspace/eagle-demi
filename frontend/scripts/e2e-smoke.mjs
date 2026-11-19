@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Smoke test for a served build: every screen and redirect, FITS, and the lookahead week bar jump.
+// Smoke test for a served build: every screen and redirect, FITS, the lookahead week bar jump, and two-line timeline Days cells.
 // Serve it first with `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
@@ -193,6 +193,8 @@ async function checkFit(context, base, entry, width, timeout) {
   return reasons;
 }
 
+const FIXTURE_TODAY = new Date('2026-11-17T12:00:00Z');
+
 /**
  * Reasons a click on a lookahead week bar fails to start that week's section at the top of the agenda (wide),
  * or fails to bring its heading on screen (narrow, where the page scrolls too).
@@ -202,7 +204,7 @@ async function checkJump(context, base, timeout) {
   const page = await context.newPage();
   try {
     // The fixture's milestones sit in the 90 days after this date; twelve copies of each work make the agenda scroll.
-    await page.clock.setFixedTime(new Date('2026-11-17T12:00:00Z'));
+    await page.clock.setFixedTime(FIXTURE_TODAY);
     const { works } = JSON.parse(readFileSync(path.join(FIXTURE_DIR, 'workplans.json'), 'utf-8'));
     const copies = works.flatMap((work) => Array.from({ length: 12 }, (_, i) => ({ ...work, workId: `${work.workId}-${i}` })));
     await page.route((url) => new URL(url).pathname === '/api/workplans', (route) => route.fulfill({ json: { works: copies } }));
@@ -242,6 +244,53 @@ async function checkJump(context, base, timeout) {
       await bar.dispatchEvent('click');
       const after = await onScreen();
       if (!after.fits) reasons.push(`narrow: heading spans y ${after.top} to ${after.bottom}, outside the 500px window`);
+    }
+  } catch (e) {
+    reasons.push(String(e.message ?? e));
+  } finally {
+    await page.close();
+  }
+  return reasons;
+}
+
+/** Reasons a timeline Days cell that wraps to two lines ("311 d, suspended") spills out of its row. */
+async function checkDays(context, base, timeout) {
+  const reasons = [];
+  const page = await context.newPage();
+  try {
+    await page.clock.setFixedTime(FIXTURE_TODAY);
+    await page.goto(new URL('/workplans?view=timeline', base).toString(), { waitUntil: 'domcontentloaded' });
+    await page.locator('li.timeline__row .timeline__days').first().waitFor({ timeout });
+    // The spill comes from BC Sans metrics, so measure only once the real font is in.
+    const cells = await page.evaluate(async () => {
+      await document.fonts.ready;
+      const font = [...document.fonts].some((face) => face.family.replace(/"/g, '') === 'BC Sans' && face.status === 'loaded');
+      return [...document.querySelectorAll('li.timeline__row .timeline__days')].map((cell) => {
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        const row = cell.closest('li.timeline__row');
+        const pad = getComputedStyle(row);
+        return {
+          font,
+          text: cell.textContent.trim(),
+          lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+          scroll: cell.scrollHeight,
+          client: cell.clientHeight,
+          height: cell.getBoundingClientRect().height,
+          row: row.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom)
+        };
+      });
+    });
+    if (cells.length && !cells[0].font) reasons.push('BC Sans never loaded, so the cells were measured in a fallback font');
+    const wrapped = cells.filter((cell) => cell.lines === 2);
+    if (!wrapped.length) {
+      reasons.push(
+        `no Days cell wraps to two lines (${cells.map((cell) => `"${cell.text}"`).join(', ')}): frontend/parity/fixtures/workplans.json must keep an open suspended work`
+      );
+    }
+    for (const cell of wrapped) {
+      if (cell.scroll > cell.client) reasons.push(`"${cell.text}" content is ${cell.scroll}px in a ${cell.client}px cell`);
+      if (cell.height > cell.row) reasons.push(`"${cell.text}" cell is ${cell.height}px in a ${cell.row}px row`);
     }
   } catch (e) {
     reasons.push(String(e.message ?? e));
@@ -315,10 +364,19 @@ async function main() {
     console.log(`FAIL /workplans?view=lookahead week bar jumps to its week: ${jumpReasons.join('; ')}`);
   }
 
+  const daysReasons = await checkDays(context, args.base, args.timeout);
+  if (daysReasons.length === 0) {
+    ok++;
+    console.log('OK   /workplans?view=timeline two-line Days cells fit their row');
+  } else {
+    fail++;
+    console.log(`FAIL /workplans?view=timeline two-line Days cells fit their row: ${daysReasons.join('; ')}`);
+  }
+
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 days=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }
