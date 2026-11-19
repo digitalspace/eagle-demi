@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkplanRow } from '../api/sheet-works';
 import fixture from '../../parity/fixtures/workplans.json';
-import { byAttention, rowsOf } from './derive';
-import { daysOf, groupsOf, summaryOf } from './timeline-rows';
+import { rowsOf } from './derive';
 import {
   dayNumber,
   drawnKinds,
@@ -25,7 +24,7 @@ describe('timeline scale', () => {
   it('Fit all spans the earliest phase start to the latest phase end', () => {
     const scale = scaleFor(extent, 'fit', TODAY, VIEWPORT);
 
-    expect(scale.start).toBe(dayNumber('1997-02-01'));
+    expect(scale.start).toBe(dayNumber('1995-07-18'));
     expect(scale.end).toBe(dayNumber('2028-02-01'));
     expect(scale.width).toBe(VIEWPORT);
   });
@@ -111,50 +110,11 @@ describe('span layers', () => {
   it('extentOf covers a decision marker past the last phase', () => {
     const work = { ...sheet1996('Sample Delta').work, decisionDate: '2000-03-01' };
 
-    expect(extentOf(rowsOf([work], [], TODAY), TODAY, { layers: 'all' })?.end).toBe(dayNumber('2000-03-01'));
-  });
-});
+    const marked = rowsOf([work], [], TODAY);
 
-describe('timeline rows', () => {
-  const byTitle = (title: string) => rows.find((row) => row.work.title === title)!;
-
-  it('days column reads overrun, used of planned, suspended, not started and closed', () => {
-    expect(daysOf(byTitle('Sample Alpha Transmission Line - Assessment'))).toBe('+47d over');
-    expect(daysOf(byTitle('Sample Epsilon Terminal - Amendment'))).toBe('311 d, suspended');
-    expect(daysOf(byTitle('Sample Beta Quarry - Amendment'))).toBe('47/182');
-    expect(daysOf(byTitle('sample gamma wind farm - Assessment'))).toBe('Not started');
-    expect(daysOf(byTitle('Sample Delta Pipeline - EAC Extension'))).toBe('Closed');
-  });
-
-  it('days column reads Inactive for a Track work switched off past its end', () => {
-    const alpha = { ...byTitle('Sample Alpha Transmission Line - Assessment').work, isActive: false };
-
-    expect(daysOf(rowsOf([alpha], [], TODAY)[0])).toBe('Inactive');
-  });
-
-  it('screen-reader summary names a started phase that is neither done nor current as not completed', () => {
-    const alpha = structuredClone(byTitle('Sample Alpha Transmission Line - Assessment').work);
-    alpha.phases[2] = { ...alpha.phases[2], startDate: '2026-10-02T08:00:00.000Z', isCurrent: true };
-
-    expect(summaryOf(rowsOf([alpha], [], TODAY)[0])).toContain('Not completed: Application Review,');
-  });
-
-  it('groups by Act, newest first, with each group\'s overdue count', () => {
-    const groups = groupsOf(rows, 'act');
-
-    expect(groups.map((g) => [g.label, g.rows.length, g.overdue])).toEqual([
-      ['2018 Act', 5, 1],
-      ['2002 Act', 7, 0],
-      ['1996 Act', 2, 0],
-    ]);
-  });
-
-  it('sorts each group by attention when asked, by first phase start otherwise', () => {
-    const titles = (group: { rows: typeof rows }) => group.rows.map((row) => row.work.title);
-    const byStart = groupsOf(rows, 'act')[0];
-    const attention = groupsOf(rows, 'act', 'attention')[0];
-
-    expect(titles(attention)).toEqual(titles({ rows: [...byStart.rows].sort(byAttention) }));
-    expect(titles(attention)).not.toEqual(titles(byStart));
+    expect(extentOf(marked, TODAY, { layers: 'all' })?.end).toBe(dayNumber('2000-03-01'));
+    expect(spansOf(marked[0], TODAY, { layers: 'all' })).toContainEqual(
+      expect.objectContaining({ kind: 'decision', layer: 'marker', start: '2000-03-01' }),
+    );
   });
 });

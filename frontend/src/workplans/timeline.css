@@ -1,4 +1,4 @@
-/* Workplans Timeline view. The panel fills its flex parent; only .timeline__scroll scrolls. */
+/* Workplans Timeline view. The panel fills its flex parent; .timeline__acts scrolls down, each group's .timeline__scroll across. */
 
 .timeline {
   --timeline-left: 330px;
@@ -18,7 +18,7 @@
   border-radius: var(--layout-border-radius-large);
 }
 
-/* Toolbar: zoom, Today, group by, sort, legend */
+/* Toolbar: sort, legend */
 
 .timeline__toolbar {
   flex: none;
@@ -32,6 +32,9 @@
 
 .timeline__overview-window:focus-visible,
 .timeline__group-head:focus-visible,
+.timeline__act-head:focus-visible,
+.timeline__jumps a:focus-visible,
+.timeline__tag:focus-visible,
 .timeline__name:focus-visible,
 .timeline__toggle:focus-visible {
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
@@ -67,10 +70,9 @@
 
 /* A size container, so an open Details panel can be as wide as the visible part (100cqi). */
 .timeline__scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   container-type: inline-size;
 }
 
@@ -88,8 +90,7 @@
 }
 
 .timeline__head {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 3;
   height: var(--timeline-head);
   background: var(--surface-color-background-light-gray);
@@ -228,99 +229,6 @@
   border-left-color: var(--theme-gray-30);
 }
 
-/* Groups */
-
-.timeline__group-head {
-  display: grid;
-  grid-template-columns: var(--timeline-left) var(--timeline-lane);
-  list-style: none;
-  cursor: pointer;
-  background: var(--theme-gray-20);
-  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
-}
-
-.timeline__group-head::-webkit-details-marker {
-  display: none;
-}
-
-.timeline__group-label {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  box-sizing: border-box;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 var(--layout-margin-small);
-  width: var(--timeline-left);
-  min-height: 30px;
-  padding: var(--layout-padding-xsmall) var(--layout-padding-small) var(--layout-padding-xsmall) 1.75rem;
-  background: var(--theme-gray-20);
-  border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
-}
-
-/* Chevron drawn in CSS: right when folded, down when open; centred on the first line. */
-.timeline__group-label::before {
-  content: '';
-  position: absolute;
-  top: 11px;
-  left: 0.75rem;
-  width: 6px;
-  height: 6px;
-  border-right: 2px solid var(--icons-color-secondary);
-  border-bottom: 2px solid var(--icons-color-secondary);
-  transform: rotate(-45deg);
-}
-
-.timeline__group[open] > .timeline__group-head .timeline__group-label::before {
-  transform: rotate(45deg);
-}
-
-.timeline__group-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font: var(--typography-bold-label);
-}
-
-/* Count and overdue pill wrap below the name as one unit when the column is narrow. */
-.timeline__group-meta {
-  display: flex;
-  flex: 1 0 auto;
-  align-items: center;
-  gap: var(--layout-margin-small);
-}
-
-.timeline__group-count {
-  color: var(--typography-color-secondary);
-}
-
-.timeline__pill {
-  margin-left: auto;
-  border-radius: var(--layout-border-radius-circular);
-  background: var(--support-surface-color-danger);
-  color: var(--wp-overdue);
-}
-
-/* Quarter cells: one hue, deeper as more of the group's works are active. */
-.timeline__activity {
-  position: relative;
-}
-
-.timeline__heat {
-  position: absolute;
-  top: calc(50% - 5px);
-  box-sizing: border-box;
-  height: 10px;
-  border: 0 solid var(--theme-gray-20);
-  border-width: 0 1px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--wp-today) var(--heat), transparent);
-  background-clip: padding-box;
-}
-
 /* Rows */
 
 .timeline__rows {
@@ -331,7 +239,7 @@
 
 .timeline__row {
   position: relative;
-  height: var(--timeline-row);
+  min-height: var(--timeline-row);
   border-bottom: var(--layout-border-width-small) solid var(--theme-gray-20);
 }
 
@@ -578,10 +486,9 @@
     gap: 0 var(--layout-margin-small);
   }
 
-  .timeline__scroll {
+  .timeline__acts {
     flex: none;
-    min-height: min(18rem, 60dvh);
-    max-height: 80dvh;
+    overflow: visible;
   }
 
   /* Days drop out; the overdue hatching and each row's summary still carry them. */

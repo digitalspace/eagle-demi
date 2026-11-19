@@ -1,5 +1,5 @@
 import type { WorkRow } from './derive';
-import { dayNumber, type Extent } from './timeline-scale';
+import { dayNumber, spansOf, type Extent } from './timeline-scale';
 
 const DAY_MS = 86_400_000;
 
@@ -12,15 +12,13 @@ export interface QuarterCell {
   count: number;
 }
 
-/** Days each dated phase and the overdue overrun cover; a gap between phases stays empty. */
-const spansOf = (row: WorkRow): Extent[] => [
-  ...row.segments.map((segment) => ({ start: dayNumber(segment.start), end: dayNumber(segment.end) })),
-  ...(row.overrun ? [{ start: dayNumber(row.overrun.start), end: dayNumber(row.overrun.end) }] : []),
-];
+/** Days each drawn phase bar covers, approximate ones and the overdue overrun included; a gap between phases stays empty. */
+const daysOf = (row: WorkRow, today: string): Extent[] =>
+  spansOf(row, today).map((span) => ({ start: dayNumber(span.start), end: dayNumber(span.end) }));
 
 /** Calendar quarters across `range`, each with the number of works active in it. */
-export function activeByQuarter(rows: WorkRow[], range: Extent): QuarterCell[] {
-  const spans = rows.map(spansOf);
+export function activeByQuarter(rows: WorkRow[], range: Extent, today: string): QuarterCell[] {
+  const spans = rows.map((row) => daysOf(row, today));
   const first = new Date(range.start * DAY_MS);
   let year = first.getUTCFullYear();
   let quarter = Math.floor(first.getUTCMonth() / 3);

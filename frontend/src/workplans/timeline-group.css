@@ -1,0 +1,417 @@
+/* Timeline Act panels, their groups, and the marks drawn on a row. Variables come from .timeline in timeline.css. */
+
+.timeline__acts {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Jump strip: one link per Act */
+
+.timeline__jumps ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  list-style: none;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__jumps a {
+  display: inline-block;
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+  text-decoration: none;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+}
+
+.timeline__jumps a:hover {
+  border-color: var(--surface-color-border-active);
+}
+
+.timeline__jumps b {
+  color: var(--typography-color-link);
+}
+
+/* Act panels */
+
+.timeline__act {
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+/* Sticky, so the Act stays named while its groups scroll past. */
+.timeline__act-head {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  padding: var(--layout-padding-small) var(--layout-padding-medium) var(--layout-padding-small) 1.75rem;
+  list-style: none;
+  cursor: pointer;
+  background: var(--surface-color-background-light-gray);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__act-head::-webkit-details-marker,
+.timeline__group-head::-webkit-details-marker {
+  display: none;
+}
+
+.timeline__act-name {
+  font: var(--typography-bold-body);
+}
+
+.timeline__act-meta {
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__act-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+}
+
+.timeline__act-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+  padding: var(--layout-padding-medium);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.timeline__act-empty p {
+  margin: 0;
+}
+
+/* Chevron drawn in CSS: right when folded, down when open; centred on the first line. */
+.timeline__act-head::before,
+.timeline__group-label::before {
+  content: '';
+  position: absolute;
+  top: 11px;
+  left: 0.75rem;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--icons-color-secondary);
+  border-bottom: 2px solid var(--icons-color-secondary);
+  transform: rotate(-45deg);
+}
+
+.timeline__act-head::before {
+  top: calc(50% - 5px);
+}
+
+.timeline__act[open] > .timeline__act-head::before,
+.timeline__group[open] > .timeline__group-head .timeline__group-label::before {
+  transform: rotate(45deg);
+}
+
+/* Groups: a head with a one-line strip, then the group's own scroller */
+
+.timeline__group + .timeline__group {
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__group-head {
+  display: grid;
+  grid-template-columns: var(--timeline-left) minmax(0, 1fr);
+  align-items: center;
+  list-style: none;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+  cursor: pointer;
+  background: var(--theme-gray-20);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__group-label {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--layout-margin-small);
+  min-height: 30px;
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small) var(--layout-padding-xsmall) 1.75rem;
+  border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.timeline__group-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--typography-bold-label);
+}
+
+/* Years, count and overdue pill wrap below the name, and onto a further line, when the column is narrow. */
+.timeline__group-meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--layout-margin-small);
+  min-width: 0;
+}
+
+.timeline__group-count {
+  color: var(--typography-color-secondary);
+}
+
+.timeline__pill {
+  margin-left: auto;
+  border-radius: var(--layout-border-radius-circular);
+  background: var(--support-surface-color-danger);
+  color: var(--wp-overdue);
+}
+
+.timeline__strip {
+  position: relative;
+  height: 10px;
+  margin: 0 10px;
+}
+
+/* Quarter cells while open: one hue, deeper as more of the group's works are active. */
+.timeline__heat {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  height: 10px;
+  border: 0 solid var(--theme-gray-20);
+  border-width: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--wp-today) var(--heat), transparent);
+  background-clip: padding-box;
+}
+
+/* Each work's span while folded; works still running in the today colour. */
+.timeline__strip-work {
+  position: absolute;
+  top: 2px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--theme-gray-60);
+}
+
+.timeline__strip-work--open {
+  background: var(--wp-today);
+}
+
+.timeline__strip-today {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--wp-today);
+}
+
+/* Row drawing: marks under the left columns' layer, tags over the bars */
+
+.timeline__draw {
+  position: absolute;
+  inset: 0;
+}
+
+.timeline__row--hidden .timeline__draw {
+  opacity: 0.6;
+}
+
+/* The work's whole span, under its bars, so a work with few dated phases still shows where it sits. */
+.timeline__rail {
+  position: absolute;
+  top: 13px;
+  height: 2px;
+  background: var(--theme-gray-50);
+}
+
+/* A bound that is not a real date: dashed edge, fading towards the unknown side. */
+.timeline__bar--approx-start,
+.timeline__bar--approx-end {
+  border-style: dashed;
+  border-color: var(--theme-gray-80);
+}
+
+.timeline__bar--approx-start {
+  mask-image: linear-gradient(to right, rgb(0 0 0 / 40%), #000 1.5rem);
+}
+
+.timeline__bar--approx-end {
+  mask-image: linear-gradient(to left, rgb(0 0 0 / 40%), #000 1.5rem);
+}
+
+.timeline__bar--approx-start.timeline__bar--approx-end {
+  mask-image: linear-gradient(
+    to right,
+    rgb(0 0 0 / 40%),
+    #000 1.5rem,
+    #000 calc(100% - 1.5rem),
+    rgb(0 0 0 / 40%)
+  );
+}
+
+.timeline__mark {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* Decision: a diamond on the day. */
+.timeline__mark--decision {
+  background: var(--wp-phase-decision-edge);
+  border: var(--layout-border-width-small) solid var(--surface-color-background-white);
+}
+
+.timeline__mark.timeline__mark--decision {
+  top: 8px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  transform: rotate(45deg);
+}
+
+/* Section 13 order: a tall tick with a cap above the bar. */
+.timeline__mark--section-13 {
+  background: var(--theme-primary-blue);
+}
+
+.timeline__mark.timeline__mark--section-13 {
+  top: 1px;
+  width: 2px;
+  height: 26px;
+  margin-left: -1px;
+}
+
+.timeline__mark.timeline__mark--section-13::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 8px;
+  height: 3px;
+  background: inherit;
+}
+
+/* Act switch: a full-height line in the active colour; the tag beside it names the other Act. */
+.timeline__mark--transition-in,
+.timeline__mark--transition-out {
+  background: var(--surface-color-border-active);
+}
+
+.timeline__mark.timeline__mark--transition-in,
+.timeline__mark.timeline__mark--transition-out {
+  top: 0;
+  width: 3px;
+  height: 100%;
+  margin-left: -1px;
+}
+
+/* Comment period: a bracket over the bar. */
+.timeline__mark--comment-period {
+  border: 2px solid var(--support-border-color-success);
+  border-bottom: 0;
+}
+
+.timeline__mark.timeline__mark--comment-period {
+  top: 1px;
+  height: 5px;
+}
+
+/* Extension and interregnum: a band under the bar. */
+.timeline__mark--extension {
+  background: var(--wp-phase-decision-edge);
+}
+
+.timeline__mark--interregnum {
+  background: repeating-linear-gradient(90deg, var(--theme-gray-80) 0 3px, transparent 3px 5px);
+}
+
+.timeline__mark.timeline__mark--extension,
+.timeline__mark.timeline__mark--interregnum {
+  top: 23px;
+  height: 3px;
+}
+
+/* Legend swatches in the same shapes, sized for the key. */
+.timeline__swatch.timeline__mark--decision {
+  width: 9px;
+  height: 9px;
+  margin: 0 2px;
+  transform: rotate(45deg);
+}
+
+.timeline__swatch.timeline__mark--section-13,
+.timeline__swatch.timeline__mark--transition-in,
+.timeline__swatch.timeline__mark--transition-out {
+  width: 3px;
+  height: 12px;
+  margin: 0 5px;
+  border: 0;
+}
+
+.timeline__swatch.timeline__mark--comment-period {
+  height: 6px;
+  border-radius: 0;
+}
+
+.timeline__swatch.timeline__mark--extension,
+.timeline__swatch.timeline__mark--interregnum {
+  height: 4px;
+  border: 0;
+  border-radius: 0;
+}
+
+.timeline__tag {
+  position: absolute;
+  top: 5px;
+  z-index: 2;
+  padding: 0 var(--layout-padding-xsmall);
+  line-height: 16px;
+  white-space: nowrap;
+  font: var(--typography-bold-label);
+  color: var(--surface-color-border-active);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-active);
+  border-radius: var(--layout-border-radius-small);
+  cursor: pointer;
+}
+
+.timeline__tag:hover {
+  background: var(--theme-blue-10);
+}
+
+.timeline__tag--plain {
+  color: var(--typography-color-secondary);
+  border-color: var(--theme-gray-50);
+  cursor: default;
+}
+
+@media (forced-colors: active) {
+  .timeline__mark,
+  .timeline__rail,
+  .timeline__strip-work {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .timeline__mark--comment-period {
+    background: none;
+    border-color: CanvasText;
+  }
+
+  .timeline__strip-today {
+    background: Highlight;
+  }
+}
