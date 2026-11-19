@@ -65,6 +65,24 @@ describe('TimelineView', () => {
     expect(links.map((link) => link.textContent)).toEqual(['2018 Act 5 works', '2002 Act 8 works', '1996 Act 3 works']);
   });
 
+  it('shows only the one Act a narrowed list holds, with no empty panels and no jump strip', () => {
+    renderView(WORKS.filter((work) => work.actYear === 2018));
+
+    const heads = [...document.querySelectorAll('.timeline__act-name')].map((head) => head.textContent);
+    expect(heads).toEqual(['2018 Act']);
+    expect(screen.queryByRole('navigation', { name: 'Acts' })).toBeNull();
+  });
+
+  it('switches a panel at Fit all to Quarter when Today is pressed', async () => {
+    renderView();
+    const user = userEvent.setup();
+    await user.click(within(panel(2018)).getByRole('button', { name: 'Fit all' }));
+
+    await user.click(within(panel(2018)).getByRole('button', { name: 'Today' }));
+
+    expect(within(panel(2018)).getByRole('button', { name: 'Quarter' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('keeps today a quarter of the way into the lane after a zoom change', async () => {
     renderView();
     const user = userEvent.setup();

@@ -26,9 +26,9 @@ const VIEWS: { value: View; label: string }[] = [
 
 const VIEW_BODY = { timeline: TimelineView, list: StatusListView, pipeline: PipelineView, lookahead: LookaheadView };
 
-const DEFAULT_FILTERS: WorkFilters = {
+const NO_FILTERS: WorkFilters = {
   query: '',
-  state: 'open',
+  state: null,
   act: null,
   type: null,
   status: null,
@@ -36,23 +36,30 @@ const DEFAULT_FILTERS: WorkFilters = {
   showHidden: false,
 };
 
-/** Which filters each view applies. */
-const VIEW_FILTERS: Record<View, { states: readonly WorkState[]; status: boolean; phase: boolean; placeholder: boolean }> = {
-  timeline: { states: ['open', 'inactive', 'closed'], status: true, phase: false, placeholder: true },
-  list: { states: ['open', 'inactive', 'closed'], status: false, phase: true, placeholder: true },
-  pipeline: { states: ['open', 'inactive'], status: false, phase: false, placeholder: true },
+/** `state` undefined until the reader picks one, so each view applies its own default. */
+type Draft = Omit<WorkFilters, 'state'> & { state?: WorkState | null };
+
+/** Which filters each view applies. `defaultState` holds until the reader picks a Work state; the Timeline shows all, so no Act panel opens empty. */
+const VIEW_FILTERS: Record<
+  View,
+  { states: readonly WorkState[]; defaultState: WorkState | null; status: boolean; phase: boolean; placeholder: boolean }
+> = {
+  timeline: { states: ['open', 'inactive', 'closed'], defaultState: null, status: true, phase: false, placeholder: true },
+  list: { states: ['open', 'inactive', 'closed'], defaultState: 'open', status: false, phase: true, placeholder: true },
+  pipeline: { states: ['open', 'inactive'], defaultState: 'open', status: false, phase: false, placeholder: true },
   // The Window toggle and Milestone type take the room "+ Filter" would need to stay on one row.
-  lookahead: { states: [], status: false, phase: false, placeholder: false },
+  lookahead: { states: [], defaultState: null, status: false, phase: false, placeholder: false },
 };
 
 const viewOf = (param: string | null): View => VIEWS.find((view) => view.value === param)?.value ?? 'timeline';
 
 /** The filters `view` applies; the others stay in state, so they come back with their view. */
-function appliedFilters(filters: WorkFilters, view: View): WorkFilters {
+function appliedFilters(filters: Draft, view: View): WorkFilters {
   const rules = VIEW_FILTERS[view];
+  const state = filters.state === undefined ? rules.defaultState : filters.state;
   return {
     ...filters,
-    state: filters.state !== null && rules.states.includes(filters.state) ? filters.state : null,
+    state: state !== null && rules.states.includes(state) ? state : null,
     status: rules.status ? filters.status : null,
     phase: rules.phase ? filters.phase : null,
   };
@@ -117,7 +124,7 @@ export function Workplans() {
   const workplans = useWorkplans();
   const projects = useProjects('');
   const [params, setParams] = useSearchParams();
-  const [filters, setFilters] = useState<WorkFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<Draft>({ ...NO_FILTERS, state: undefined });
   const view = viewOf(params.get('view'));
   const today = useMemo(() => isoDay(new Date().toISOString()), []);
 
@@ -128,15 +135,25 @@ export function Workplans() {
   );
   // Typing stays responsive: the views re-filter on the deferred copy.
   const deferred = useDeferredValue(filters);
-  const shown = useMemo(() => {
-    const applied = appliedFilters(deferred, view);
-    const query = applied.query.trim().toLowerCase();
-    return rows.filter((row) => matches(row, { ...applied, query }, VIEW_FILTERS[view].states));
-  }, [rows, deferred, view]);
+  const applied = useMemo(() => {
+    const current = appliedFilters(deferred, view);
+    return { ...current, query: current.query.trim().toLowerCase() };
+  }, [deferred, view]);
+  const shown = useMemo(() => rows.filter((row) => matches(row, applied, VIEW_FILTERS[view].states)), [rows, applied, view]);
+  // Counts only what clearing Work state brings back: an Act emptied by search or Work type gets no button that shows nothing.
+  const actHidden = useMemo(() => {
+    if (applied.state === null) return undefined;
+    const counts: Partial<Record<number, number>> = {};
+    for (const row of rows) {
+      const year = row.work.actYear;
+      if (year != null && matches(row, { ...applied, state: null }, VIEW_FILTERS[view].states)) counts[year] = (counts[year] ?? 0) + 1;
+    }
+    return counts;
+  }, [rows, applied, view]);
   // Work type and Phase offer only what Work state and the hidden switch let through.
   const { state, showHidden } = appliedFilters(filters, view);
   const optionRows = useMemo(() => {
-    const only = { ...DEFAULT_FILTERS, state, showHidden };
+    const only = { ...NO_FILTERS, state, showHidden };
     return rows.filter((row) => matches(row, only, VIEW_FILTERS[view].states));
   }, [rows, state, showHidden, view]);
 
@@ -166,7 +183,15 @@ export function Workplans() {
         count={shown.length}
       />
     );
-    body = <ViewBody rows={shown} today={today} bar={bar} />;
+    body = (
+      <ViewBody
+        rows={shown}
+        today={today}
+        bar={bar}
+        actTotals={actHidden}
+        onShowAllStates={state === null ? undefined : () => setFilters((current) => ({ ...current, state: null }))}
+      />
+    );
   }
 
   return (
