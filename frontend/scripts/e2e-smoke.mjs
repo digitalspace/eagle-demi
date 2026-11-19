@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Smoke test for a served build: every screen and redirect, FITS, the lookahead week bar jump, two-line timeline Days cells,
-// and the timeline's Act panels.
+// Smoke test for a served build: every screen and redirect, then the per-view checks main() lists.
 // Serve it first with `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
@@ -303,7 +302,7 @@ async function checkDays(context, base, timeout) {
 
 const ACT_NAMES = ['2018 Act', '2002 Act', '1996 Act'];
 
-/** Reasons the timeline fails to open one panel per Act, newest first, or to regroup a panel without widening the page. */
+/** Reasons the timeline fails to open one panel per Act, newest first, dash approximate dates, or regroup a panel without widening the page. */
 async function checkActs(context, base, timeout) {
   const reasons = [];
   const page = await context.newPage();
@@ -317,6 +316,9 @@ async function checkActs(context, base, timeout) {
     for (const name of ACT_NAMES) {
       if (!(await page.getByRole('region', { name: `${name} timeline` }).isVisible())) reasons.push(`${name} panel is not open`);
     }
+    const edges = await page.locator('[class*="__bar--approx-"]').evaluateAll((els) => els.map((el) => `${el.classList[0]} ${getComputedStyle(el).borderLeftStyle}`));
+    const kinds = [...new Set(edges)].sort().join(', ');
+    if (kinds !== 'timeline__bar dashed, timeline__swatch dashed') reasons.push(`approximate-date edges are ${kinds || 'missing'}, want dashed bars and legend key`);
     // The fixture's 1996 works are all assessments, so Work type folds their project blocks into one group.
     const panel = page.getByRole('region', { name: '1996 Act timeline' });
     const groups = () => panel.locator('.timeline__group-name').allTextContents();
