@@ -6,10 +6,17 @@ const ALWAYS: [SpanKind, string][] = [
   ['upcoming', 'Upcoming'],
   ['overrun', 'Overdue'],
 ];
-/** Bar states the design has no key for, shown only while some row draws them. */
+/** Kinds the design has no key for, shown only while some row draws them. */
 const WHEN_DRAWN: [SpanKind, string][] = [
   ['incomplete', 'Not completed'],
   ['suspended', 'Suspended'],
+  ['extension', 'Extension'],
+  ['interregnum', 'Interregnum'],
+  ['comment-period', 'Comment period'],
+  ['decision', 'Decision'],
+  ['section-13', 'Section 13 order'],
+  ['transition-in', 'From earlier Act'],
+  ['transition-out', 'To next Act'],
 ];
 
 export function Legend({ drawn }: { drawn: ReadonlySet<SpanKind> }) {

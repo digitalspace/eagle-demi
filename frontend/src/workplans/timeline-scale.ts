@@ -1,4 +1,6 @@
 import type { WorkRow } from './derive';
+import { dayOf, drawnPhasesOf, type PhaseState } from './phase-bounds';
+import { markersOf } from './timeline-markers';
 
 export type Zoom = 'month' | 'quarter' | 'year' | 'fit';
 
@@ -27,35 +29,94 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /** UTC day count of an ISO day or timestamp. */
 export const dayNumber = (iso: string) => Math.floor(Date.parse(iso.slice(0, 10)) / DAY_MS);
 
-export type SpanKind = 'past' | 'current' | 'incomplete' | 'upcoming' | 'overrun' | 'suspended';
+export type SpanKind =
+  | PhaseState
+  | 'overrun'
+  | 'suspended'
+  | 'extension'
+  | 'interregnum'
+  | 'comment-period'
+  | 'decision'
+  | 'section-13'
+  | 'transition-in'
+  | 'transition-out';
+
+/** `phase`: phase bars, overrun and sheet suspensions; `overlay`: periods from `markersOf`; `marker`: one-day events. */
+export type SpanLayer = 'phase' | 'overlay' | 'marker';
+
 export interface Span {
   kind: SpanKind;
+  layer: SpanLayer;
   start: string;
+  /** Same day as `start` on a marker. */
   end: string;
   name: string | null;
+  /** A bound that is a latest-possible day or a neighbour phase's bound, not a real date. */
+  approx: { start: boolean; end: boolean };
 }
 
-/** Every bar a row draws: its dated phases, the overdue overrun, and suspensions (an open one runs to today). */
-export function spansOf(row: WorkRow, today: string): Span[] {
-  const spans: Span[] = row.segments.map((segment) => ({
-    kind: segment.state,
-    start: segment.start,
-    end: segment.end,
-    name: segment.name,
+/** Which layers to build; `phase` unless asked for `all`. */
+export interface SpanOptions {
+  layers?: 'phase' | 'all';
+}
+
+const EXACT = { start: false, end: false };
+
+function phaseSpansOf(row: WorkRow, today: string): Span[] {
+  const spans: Span[] = drawnPhasesOf(row, today).map((drawn) => ({
+    kind: drawn.state,
+    layer: 'phase',
+    start: drawn.start,
+    end: drawn.end,
+    name: drawn.phase.name,
+    approx: { start: drawn.approxStart, end: drawn.approxEnd },
   }));
-  if (row.overrun) spans.push({ kind: 'overrun', ...row.overrun, name: null });
+  if (row.overrun) spans.push({ kind: 'overrun', layer: 'phase', ...row.overrun, name: null, approx: EXACT });
   const stops = row.phases.flatMap((phase) => phase.interruptions).filter((stop) => stop.kind === 'suspension');
   for (const stop of stops) {
-    const start = stop.startDate?.slice(0, 10);
-    const end = stop.endDate?.slice(0, 10) ?? (row.closed ? null : today);
-    if (start && end && end >= start) spans.push({ kind: 'suspended', start, end, name: stop.legalSection });
+    const start = dayOf(stop.startDate);
+    const end = dayOf(stop.endDate) ?? (row.closed ? null : today);
+    if (start && end && end >= start) {
+      spans.push({ kind: 'suspended', layer: 'phase', start, end, name: stop.legalSection, approx: EXACT });
+    }
   }
   return spans;
 }
 
+function markerSpansOf(row: WorkRow, today: string): Span[] {
+  const { points, ranges } = markersOf(row, today);
+  return [
+    ...ranges.map((range): Span => ({
+      kind: range.kind === 'suspension' ? 'suspended' : range.kind,
+      layer: 'overlay',
+      start: range.start,
+      end: range.end,
+      name: range.label,
+      approx: EXACT,
+    })),
+    ...points.map((point): Span => ({
+      kind: point.kind,
+      layer: 'marker',
+      start: point.day,
+      end: point.day,
+      name: point.label,
+      approx: EXACT,
+    })),
+  ];
+}
+
+/**
+ * A row's bars. Phase layer: drawn phases (approximate bounds flagged), the overdue overrun, and sheet suspensions
+ * (an open one runs to today). `{ layers: 'all' }` adds overlay periods and markers from `markersOf`.
+ */
+export function spansOf(row: WorkRow, today: string, options: SpanOptions = {}): Span[] {
+  const phases = phaseSpansOf(row, today);
+  return options.layers === 'all' ? [...phases, ...markerSpansOf(row, today)] : phases;
+}
+
 /** Every bar kind some row draws; a suspended flag with no interruption dates draws only its tag. */
-export const drawnKinds = (rows: WorkRow[], today: string): Set<SpanKind> =>
-  new Set(rows.flatMap((row) => spansOf(row, today).map((span) => span.kind)));
+export const drawnKinds = (rows: WorkRow[], today: string, options?: SpanOptions): Set<SpanKind> =>
+  new Set(rows.flatMap((row) => spansOf(row, today, options).map((span) => span.kind)));
 
 const TAG_AFTER = new Set<SpanKind>(['current', 'overrun', 'suspended']);
 
@@ -71,9 +132,9 @@ export interface Extent {
 }
 
 /** Earliest start to latest end over every row's bars, as day numbers; null when no row has a dated bar. */
-export function extentOf(rows: WorkRow[], today: string): Extent | null {
+export function extentOf(rows: WorkRow[], today: string, options?: SpanOptions): Extent | null {
   let extent: Extent | null = null;
-  for (const span of rows.flatMap((row) => spansOf(row, today))) {
+  for (const span of rows.flatMap((row) => spansOf(row, today, options))) {
     const start = dayNumber(span.start);
     const end = dayNumber(span.end);
     extent = extent ? { start: Math.min(extent.start, start), end: Math.max(extent.end, end) } : { start, end };
@@ -95,12 +156,19 @@ const yearOf = (day: number) => new Date(day * DAY_MS).getUTCFullYear();
 
 /**
  * The axis for a zoom. Fit all spans the extent exactly, in one viewport. Fixed zooms span whole years
- * from the extent (and today) at a fixed density, and scroll.
+ * from the extent, and today unless `includeToday` is false, at a fixed density, and scroll.
  */
-export function scaleFor(extent: Extent | null, zoom: Zoom, today: string, viewportPx: number): Scale {
+export function scaleFor(
+  extent: Extent | null,
+  zoom: Zoom,
+  today: string,
+  viewportPx: number,
+  { includeToday = true }: { includeToday?: boolean } = {},
+): Scale {
   const now = dayNumber(today);
-  const first = Math.min(extent?.start ?? now, now);
-  const last = Math.max(extent?.end ?? now, now);
+  const dated = extent ?? { start: now, end: now };
+  const first = includeToday ? Math.min(dated.start, now) : dated.start;
+  const last = includeToday ? Math.max(dated.end, now) : dated.end;
   if (zoom === 'fit') {
     const start = extent?.start ?? now - 183;
     const end = Math.max(extent?.end ?? now + 183, start + 30);
@@ -114,6 +182,9 @@ export function scaleFor(extent: Extent | null, zoom: Zoom, today: string, viewp
 }
 
 export const xOf = (scale: Scale, day: number) => (day - scale.start) * scale.pxPerDay;
+
+/** Whether the axis reaches `day`; a closed group's axis can end before today. */
+export const holdsDay = (scale: Scale, day: number) => day >= scale.start && day <= scale.end;
 
 /** Scroll offset that puts `day` at fraction `at` of the viewport, clamped to the lane. */
 export function scrollFor(scale: Scale, day: number, viewportPx: number, at = 0.25): number {
