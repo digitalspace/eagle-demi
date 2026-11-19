@@ -6,6 +6,8 @@ export type Undated = Record<string, { notAfter: string | null }> | null;
 
 export interface SheetInterruption {
   kind: string | null;
+  /** Kind and legal section as one code, such as "suspension-s24-2". Optional so hand-built rows in tests may leave it out. */
+  typeCode?: string | null;
   startDate: string | null;
   endDate: string | null;
   days: number | null;
@@ -49,7 +51,7 @@ export interface SheetWork {
   shownAfterFlip: boolean;
   /** Shown only while Track has no work of its own for this one. */
   untilTrack: boolean;
-  replaces: { title: string | null }[];
+  replaces: { workId: string; title: string | null }[];
 }
 
 /** Never undefined: a `{}` body, which the e2e smoke sends for any path without a fixture, reads as no works. */
@@ -120,6 +122,26 @@ export interface WorkplanPhase extends SheetPhase {
   suspendedDays: number | null;
 }
 
+/** What a Workplans milestone marks; the API sets it, so the front end never reads Track event type ids. */
+export type MilestoneKind =
+  | 'extension'
+  | 'suspension'
+  | 'resumption'
+  | 'comment-period'
+  | 'section-13'
+  | 'decision'
+  | 'interregnum'
+  | 'act-transition'
+  | 'other';
+
+export interface WorkplanMilestone extends Omit<SheetMilestone, 'undated'> {
+  code: string | null;
+  /** Track event type id; null on a sheet milestone. */
+  eventType: number | null;
+  position: string | null;
+  kind: MilestoneKind;
+}
+
 /** One live work, Track or sheet, as `GET /workplans` sends it. */
 export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   projectId: string;
@@ -135,6 +157,8 @@ export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   complexityCode?: 'pre-2014' | 'simple' | 'typical' | 'complex' | null;
   transitionIn?: { fromActYear: number | null; date: string | null } | null;
   phases: WorkplanPhase[];
+  /** Every phase's milestones in one list. Missing reads as none: an older API leaves it out, and so may hand-built rows. */
+  milestones?: WorkplanMilestone[];
 }
 
 // Every live work in one body, so it gets most of APIM's 30 s cap rather than the 5 s read budget.

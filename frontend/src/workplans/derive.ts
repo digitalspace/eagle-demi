@@ -1,5 +1,16 @@
-import type { Undated, WorkplanPhase, WorkplanRow } from '../api/sheet-works';
+import type { WorkplanPhase, WorkplanRow } from '../api/sheet-works';
 import type { Project } from '../api/types';
+import {
+  dayOf,
+  daysBetween,
+  endOf,
+  endsBeforeStart,
+  hasStarted,
+  plusDays,
+  startBound,
+  stateOf,
+  type PhaseState,
+} from './phase-bounds';
 import { phaseToneOf, type PhaseTone } from './phase-tone';
 
 export type WorkStatus = 'overdue' | 'next-30' | 'on-track' | 'not-started' | 'unknown' | 'inactive' | 'closed';
@@ -23,8 +34,7 @@ export type PipelineColumn = (typeof PIPELINE_COLUMNS)[number];
 /** One phase on the lifecycle strip. `offset` and `share` are fractions of the strip, phases packed end to end. */
 export interface Segment {
   name: string | null;
-  /** `incomplete`: started, not completed, and not the current phase. */
-  state: 'past' | 'current' | 'incomplete' | 'upcoming';
+  state: PhaseState;
   start: string;
   end: string;
   offset: number;
@@ -77,18 +87,8 @@ export interface WorkRow {
 /** Unique per work across both sources; React keys and open-row state use it. */
 export const rowKey = (row: WorkRow) => `${row.work.source}-${row.work.workId}`;
 
-const DAY_MS = 86_400_000;
 const NEAR_LIMIT_PERCENT = 80;
 const SOON_DAYS = 30;
-
-/** The calendar day of a date-only or ISO timestamp string. */
-const dayOf = (iso: string | null | undefined): string | null => (iso ? iso.slice(0, 10) : null);
-const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
-const plusDays = (day: string, days: number) => new Date(Date.parse(day) + days * DAY_MS).toISOString().slice(0, 10);
-
-/** The start, or the latest day an undated start can be. */
-const startBound = (startDate: string | null, undated: Undated): string | null =>
-  dayOf(startDate) ?? dayOf(undated?.['startDate']?.notAfter);
 
 /** A copy sorted by `order`; a phase with none goes last. */
 export function phasesInOrder<T extends { order: number | null }>(phases: T[]): T[] {
@@ -169,20 +169,6 @@ function closureOf(work: WorkplanRow, today: string) {
   return { closed: !inactive && (ended || work.isActive === false), inactive };
 }
 
-const hasStarted = (phase: WorkplanPhase, today: string) => {
-  const start = startBound(phase.startDate, phase.undated);
-  return start !== null && start <= today;
-};
-
-const endsBeforeStart = (phase: WorkplanPhase) => {
-  const start = dayOf(phase.startDate);
-  const end = dayOf(phase.endDate);
-  return start !== null && end !== null && end < start;
-};
-
-/** The end day, or null when it falls before the start. */
-const endOf = (phase: WorkplanPhase) => (endsBeforeStart(phase) ? null : dayOf(phase.endDate));
-
 /** Track's flag on the current phase (from `suspendedDate`), or a `suspension` interruption on it covering today. */
 function suspensionOf(current: WorkplanPhase | null, today: string) {
   const covering = current?.interruptions.find((stop) => {
@@ -259,12 +245,6 @@ function statusOf(
   if (row.overdue) return 'overdue';
   if (row.notStarted) return 'not-started';
   return row.next && row.next.inDays <= SOON_DAYS ? 'next-30' : 'on-track';
-}
-
-function stateOf(phase: WorkplanPhase, current: WorkplanPhase | null, today: string): Segment['state'] {
-  if (phase === current) return 'current';
-  if (phase.isCompleted) return 'past';
-  return hasStarted(phase, today) ? 'incomplete' : 'upcoming';
 }
 
 /** Where today falls: inside the current phase, else in the phase holding it, else at the start of the next one. */
