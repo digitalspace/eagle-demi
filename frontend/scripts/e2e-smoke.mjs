@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Smoke test for a served build: every screen and redirect, FITS, the lookahead week bar jump, and two-line timeline Days cells.
+// Smoke test for a served build: every screen and redirect, FITS, the lookahead week bar jump, two-line timeline Days cells,
+// and the timeline's Act panels.
 // Serve it first with `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
@@ -300,6 +301,41 @@ async function checkDays(context, base, timeout) {
   return reasons;
 }
 
+const ACT_NAMES = ['2018 Act', '2002 Act', '1996 Act'];
+
+/** Reasons the timeline fails to open one panel per Act, newest first, or to regroup a panel without widening the page. */
+async function checkActs(context, base, timeout) {
+  const reasons = [];
+  const page = await context.newPage();
+  try {
+    await page.clock.setFixedTime(FIXTURE_TODAY);
+    await page.goto(new URL('/workplans', base).toString(), { waitUntil: 'domcontentloaded' });
+    await page.locator('.timeline__act-name').first().waitFor({ timeout });
+    const names = await page.locator('.timeline__act-name').allTextContents();
+    if (names.join() !== ACT_NAMES.join()) reasons.push(`Act panels are ${names.join(', ')}, want ${ACT_NAMES.join(', ')}`);
+    if (!(await page.getByRole('navigation', { name: 'Acts' }).isVisible())) reasons.push('no Acts jump strip');
+    for (const name of ACT_NAMES) {
+      if (!(await page.getByRole('region', { name: `${name} timeline` }).isVisible())) reasons.push(`${name} panel is not open`);
+    }
+    // The fixture's 1996 works are all assessments, so Work type folds their project blocks into one group.
+    const panel = page.getByRole('region', { name: '1996 Act timeline' });
+    const groups = () => panel.locator('.timeline__group-name').allTextContents();
+    const before = await groups();
+    await panel.getByRole('button', { name: 'Work type' }).click({ timeout });
+    const after = await groups();
+    if (after.join() !== 'Assessment' || before.includes('Assessment')) {
+      reasons.push(`1996 groups went from ${before.join(', ')} to ${after.join(', ')} on Group by Work type, want projects then Assessment`);
+    }
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    if (wide > 0) reasons.push(`page scrolls ${wide}px sideways after the switch`);
+  } catch (e) {
+    reasons.push(String(e.message ?? e));
+  } finally {
+    await page.close();
+  }
+  return reasons;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -329,54 +365,28 @@ async function main() {
 
   let ok = 0;
   let fail = 0;
+  const report = (label, reasons) => {
+    if (reasons.length) fail++;
+    else ok++;
+    console.log(reasons.length ? `FAIL ${label}: ${reasons.join('; ')}` : `OK   ${label}`);
+  };
   for (const entry of [...SCREENS, ...REDIRECTS]) {
     const reasons = [...(await check(context, args.base, entry, args.timeout)), ...setupFailures.splice(0)];
-    const label = entry.to ? `${entry.path} -> ${entry.to}` : entry.path;
-    if (reasons.length === 0) {
-      ok++;
-      console.log(`OK   ${label}`);
-    } else {
-      fail++;
-      console.log(`FAIL ${label}: ${reasons.join('; ')}`);
-    }
+    report(entry.to ? `${entry.path} -> ${entry.to}` : entry.path, reasons);
   }
-
   for (const entry of FITS) {
     for (const width of FIT_WIDTHS) {
-      const reasons = await checkFit(context, args.base, entry, width, args.timeout);
-      const label = `${entry.path} fits ${width}px`;
-      if (reasons.length === 0) {
-        ok++;
-        console.log(`OK   ${label}`);
-      } else {
-        fail++;
-        console.log(`FAIL ${label}: ${reasons.join('; ')}`);
-      }
+      report(`${entry.path} fits ${width}px`, await checkFit(context, args.base, entry, width, args.timeout));
     }
   }
-
-  const jumpReasons = await checkJump(context, args.base, args.timeout);
-  if (jumpReasons.length === 0) {
-    ok++;
-    console.log('OK   /workplans?view=lookahead week bar jumps to its week');
-  } else {
-    fail++;
-    console.log(`FAIL /workplans?view=lookahead week bar jumps to its week: ${jumpReasons.join('; ')}`);
-  }
-
-  const daysReasons = await checkDays(context, args.base, args.timeout);
-  if (daysReasons.length === 0) {
-    ok++;
-    console.log('OK   /workplans?view=timeline two-line Days cells fit their row');
-  } else {
-    fail++;
-    console.log(`FAIL /workplans?view=timeline two-line Days cells fit their row: ${daysReasons.join('; ')}`);
-  }
+  report('/workplans?view=lookahead week bar jumps to its week', await checkJump(context, args.base, args.timeout));
+  report('/workplans?view=timeline two-line Days cells fit their row', await checkDays(context, args.base, args.timeout));
+  report('/workplans?view=timeline one timeline per Act', await checkActs(context, args.base, args.timeout));
 
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 days=1 ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 days=1 acts=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }

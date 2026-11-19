@@ -41,25 +41,56 @@ describe('Workplans', () => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('region', { name: 'Timeline' });
-    // The hidden work is completed, so Work state has to let closed works through first.
-    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(screen.queryByRole('link', { name: HIDDEN_TRACK_WORK })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Show replaced and hidden' }));
     expect(screen.getByRole('link', { name: HIDDEN_TRACK_WORK })).toBeInTheDocument();
   });
 
-  it('shows works in progress by default, and every state once Work state is cleared', async () => {
+  it('opens the timeline with every work state, and the list with works in progress', async () => {
     const user = renderAt('/workplans');
 
-    await screen.findByRole('link', { name: OPEN_WORK });
+    await screen.findByRole('link', { name: CLOSED_1996_WORK });
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
+
+    await user.click(screen.getByRole('button', { name: 'List' }));
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('In progress');
     expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
+  });
 
+  it('shows every state on the list once Work state is cleared', async () => {
+    const user = renderAt('/workplans?view=list');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
     await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveFocus();
+  });
+
+  it('keeps a picked Work state when the view changes', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
+    await user.click(screen.getByRole('button', { name: 'List' }));
+
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('Closed');
+    expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
+  });
+
+  it('the empty-Act note shows every work state', async () => {
+    const user = renderAt('/workplans');
+
+    await screen.findByRole('link', { name: CLOSED_1996_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
+    await user.click(screen.getByText('1996 Act', { selector: '.timeline__act-name' }));
+    const panel = screen.getByRole('region', { name: '1996 Act timeline' });
+    expect(panel).toHaveTextContent('3 works in this Act are hidden by the filters.');
+
+    await user.click(within(panel).getByRole('button', { name: 'Show every work state' }));
+    expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
   });
 
   it('ignores Work state Closed on the pipeline, which never shows closed works', async () => {
@@ -80,16 +111,15 @@ describe('Workplans', () => {
     const user = renderAt('/workplans');
     await screen.findByRole('link', { name: OPEN_WORK });
     const types = () => within(screen.getByRole('combobox', { name: 'Work type' })).queryByRole('option', { name: 'EAC extension' });
-    expect(types()).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     expect(types()).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
+    expect(types()).toBeNull();
   });
 
   it('keeps a picked work type that Work state then rules out, so it can still be cleared', async () => {
     const user = renderAt('/workplans');
     await screen.findByRole('link', { name: OPEN_WORK });
-    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work type' }), 'EAC extension');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
     expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
@@ -102,7 +132,6 @@ describe('Workplans', () => {
     const user = renderAt('/workplans');
 
     await screen.findByRole('link', { name: OPEN_WORK });
-    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Act' }), '1996');
 
     expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
