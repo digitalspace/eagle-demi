@@ -149,12 +149,32 @@ const WORKPLAN_KEYS = ['workId', 'source', 'title', 'workTypeCode', 'workType', 
   'shownAfterFlip', 'untilTrack', 'replaces'];
 const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'isCompleted', 'isSuspended',
   'suspendedDate', 'undated'];
-const INTERRUPTION_KEYS = ['kind', 'legalSection', 'startDate', 'endDate', 'days'];
+const INTERRUPTION_KEYS = ['kind', 'typeCode', 'legalSection', 'startDate', 'endDate', 'days'];
+const MILESTONE_KEYS = ['name', 'code', 'eventType', 'position', 'actualDate', 'anticipatedDate', 'endDate',
+  'numberOfDays', 'outcome'];
 
-// Track event type ids (EventTypeEnum): 10 and 11 extension, 38 time limit resumption, 13-21 the Decision category.
+// Track event type ids: 10 time limit extension, 11 interregnum (Special Extension category), 12 time limit
+// suspension, 38 time limit resumption, 22 comment period, 13-21 the Decision category.
 const EXTENSION_EVENT_TYPES = [10, 11];
+const SUSPENSION_EVENT_TYPES = [12];
 const RESUMPTION_EVENT_TYPES = [38];
+const COMMENT_PERIOD_EVENT_TYPES = [22];
+const INTERREGNUM_EVENT_TYPE = 11;
 const isDecisionEvent = (milestone) => milestone.eventType >= 13 && milestone.eventType <= 21;
+
+// Interregnum counts in the extension totals but draws as its own kind, so it overrides the extension entry.
+const TRACK_MILESTONE_KINDS = new Map([[EXTENSION_EVENT_TYPES, 'extension'], [SUSPENSION_EVENT_TYPES, 'suspension'],
+  [RESUMPTION_EVENT_TYPES, 'resumption'], [COMMENT_PERIOD_EVENT_TYPES, 'comment-period'],
+  [[INTERREGNUM_EVENT_TYPE], 'interregnum']]
+  .flatMap(([types, kind]) => types.map(type => [type, kind])));
+const SHEET_MILESTONE_KINDS = new Map([['comment-period', 'comment-period'], ['order-variation', 'section-13'],
+  ['decision', 'decision'], ['act-transition', 'act-transition']]);
+
+function milestoneKindOf(milestone, track) {
+  if (!track) return SHEET_MILESTONE_KINDS.get(milestone.code) ?? 'other';
+  if (isDecisionEvent(milestone)) return 'decision';
+  return TRACK_MILESTONE_KINDS.get(milestone.eventType) ?? 'other';
+}
 
 const pick = (value, keys) => Object.fromEntries(keys.map(key => [key, value[key]]));
 
@@ -214,7 +234,8 @@ function workplanOf(projectId, projectName, work, doc) {
       ...pick(phase, PHASE_KEYS),
       ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
       interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
-    }))
+    })),
+    milestones: work.milestones.map(milestone => ({ ...pick(milestone, MILESTONE_KEYS), kind: milestoneKindOf(milestone, track) }))
   };
 }
 
