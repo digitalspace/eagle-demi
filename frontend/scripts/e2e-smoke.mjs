@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Smoke test for a served build: every screen and redirect, plus FITS. Serve it first with
-// `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
+// Smoke test for a served build: every screen and redirect, FITS, and the lookahead week bar jump.
+// Serve it first with `yarn build && yarn preview --host 127.0.0.1`; /api/** comes from parity/fixtures/, no disk writes.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -108,7 +108,7 @@ function usage() {
   --timeout <ms>   Wait per page for its h1 (default 15000)
   --help           Show this help
 
-Needs Playwright where Node can resolve it, or PLAYWRIGHT_MODULE set to its index.mjs.
+Needs Playwright 1.45 or newer where Node can resolve it, or PLAYWRIGHT_MODULE set to its index.mjs.
 Exits non-zero if any screen or redirect fails.`);
 }
 
@@ -193,6 +193,64 @@ async function checkFit(context, base, entry, width, timeout) {
   return reasons;
 }
 
+/**
+ * Reasons a click on a lookahead week bar fails to start that week's section at the top of the agenda (wide),
+ * or fails to bring its heading on screen (narrow, where the page scrolls too).
+ */
+async function checkJump(context, base, timeout) {
+  const reasons = [];
+  const page = await context.newPage();
+  try {
+    // The fixture's milestones sit in the 90 days after this date; twelve copies of each work make the agenda scroll.
+    await page.clock.setFixedTime(new Date('2026-11-17T12:00:00Z'));
+    const { works } = JSON.parse(readFileSync(path.join(FIXTURE_DIR, 'workplans.json'), 'utf-8'));
+    const copies = works.flatMap((work) => Array.from({ length: 12 }, (_, i) => ({ ...work, workId: `${work.workId}-${i}` })));
+    await page.route((url) => new URL(url).pathname === '/api/workplans', (route) => route.fulfill({ json: { works: copies } }));
+    const url = new URL('/workplans?view=lookahead', base).toString();
+    const bar = page.getByRole('button', { name: /^Week of Dec 14:/ });
+    const head = page.getByRole('heading', { name: /^Week of Dec 14/ });
+    const load = async () => {
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await page.locator('.la-week').first().waitFor({ timeout });
+      if ((await bar.count()) === 0) {
+        throw new Error('no "Week of Dec 14" bar: frontend/parity/fixtures/workplans.json must keep a milestone in the week of 2026-12-14');
+      }
+    };
+
+    await load();
+    await bar.click({ timeout });
+    // The heading is sticky, so measure its section: an overshoot inside the week still moves the section.
+    const gap = await head.evaluate(
+      (h) => h.parentElement.getBoundingClientRect().top - h.closest('.la-agenda').getBoundingClientRect().top
+    );
+    if (Math.abs(gap) > 1) {
+      reasons.push(`wide: week section starts ${Math.round(Math.abs(gap))}px ${gap > 0 ? 'below' : 'above'} the agenda top`);
+    }
+
+    // At 390x500 the agenda starts at the fold and main.app__main scrolls, so only focus can bring the heading into view.
+    await page.setViewportSize({ width: 390, height: 500 });
+    await load();
+    const onScreen = () =>
+      head.evaluate((h) => {
+        const { top, bottom } = h.getBoundingClientRect();
+        return { top: Math.round(top), bottom: Math.round(bottom), fits: top >= 0 && bottom <= innerHeight };
+      });
+    if ((await onScreen()).fits) {
+      reasons.push('narrow: heading is already on screen before the click, so the check proves nothing; shorten the viewport');
+    } else {
+      // click() would scroll the bar into view, which lifts the agenda on screen and hides a focus bug.
+      await bar.dispatchEvent('click');
+      const after = await onScreen();
+      if (!after.fits) reasons.push(`narrow: heading spans y ${after.top} to ${after.bottom}, outside the 500px window`);
+    }
+  } catch (e) {
+    reasons.push(String(e.message ?? e));
+  } finally {
+    await page.close();
+  }
+  return reasons;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -248,10 +306,19 @@ async function main() {
     }
   }
 
+  const jumpReasons = await checkJump(context, args.base, args.timeout);
+  if (jumpReasons.length === 0) {
+    ok++;
+    console.log('OK   /workplans?view=lookahead week bar jumps to its week');
+  } else {
+    fail++;
+    console.log(`FAIL /workplans?view=lookahead week bar jumps to its week: ${jumpReasons.join('; ')}`);
+  }
+
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }
