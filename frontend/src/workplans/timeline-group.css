@@ -238,27 +238,28 @@
   background: var(--theme-gray-50);
 }
 
-/* A bound that is not a real date: dashed edge, fading towards the unknown side. */
-.timeline__bar--approx-start,
-.timeline__bar--approx-end {
+/* A bound that is not a real date: dashed edge, fading towards the unknown side; short fade on narrow bars.
+   Two classes, so it beats the bar, swatch and state rules in timeline.css, which load after this file. */
+:is(.timeline__bar, .timeline__swatch):is(.timeline__bar--approx-start, .timeline__bar--approx-end) {
+  --approx-fade: min(1.5rem, 30%);
   border-style: dashed;
   border-color: var(--theme-gray-80);
 }
 
 .timeline__bar--approx-start {
-  mask-image: linear-gradient(to right, rgb(0 0 0 / 40%), #000 1.5rem);
+  mask-image: linear-gradient(to right, rgb(0 0 0 / 40%), #000 var(--approx-fade));
 }
 
 .timeline__bar--approx-end {
-  mask-image: linear-gradient(to left, rgb(0 0 0 / 40%), #000 1.5rem);
+  mask-image: linear-gradient(to left, rgb(0 0 0 / 40%), #000 var(--approx-fade));
 }
 
 .timeline__bar--approx-start.timeline__bar--approx-end {
   mask-image: linear-gradient(
     to right,
     rgb(0 0 0 / 40%),
-    #000 1.5rem,
-    #000 calc(100% - 1.5rem),
+    #000 var(--approx-fade),
+    #000 calc(100% - var(--approx-fade)),
     rgb(0 0 0 / 40%)
   );
 }
