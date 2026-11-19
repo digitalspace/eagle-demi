@@ -34,7 +34,7 @@ export interface ViewProps {
   rows: WorkRow[];
   today: string;
   bar?: BarSlot;
-  /** Works per Act year before the filters; the Timeline says how many an empty Act panel hides. */
+  /** Works per Act year that clearing Work state would show; the Timeline says how many an empty Act panel hides. */
   actTotals?: Partial<Record<number, number>>;
   /** Clears Work state, offered where filters hide a whole Act. */
   onShowAllStates?: () => void;

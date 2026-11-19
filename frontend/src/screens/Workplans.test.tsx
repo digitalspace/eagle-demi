@@ -93,6 +93,19 @@ describe('Workplans', () => {
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
   });
 
+  it('offers no Show every work state where another filter hides the Act', async () => {
+    const works = FIXTURE.works.map((work) => (work.actYear === 1996 ? { ...work, shownAfterFlip: false } : work));
+    const user = renderAt('/workplans', () => json({ works }));
+
+    await screen.findByRole('link', { name: OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
+    await user.click(screen.getByText('1996 Act', { selector: '.timeline__act-name' }));
+    const panel = screen.getByRole('region', { name: '1996 Act timeline' });
+
+    expect(panel).toHaveTextContent('No works match these filters.');
+    expect(within(panel).queryByRole('button', { name: 'Show every work state' })).toBeNull();
+  });
+
   it('ignores Work state Closed on the pipeline, which never shows closed works', async () => {
     const user = renderAt('/workplans');
 

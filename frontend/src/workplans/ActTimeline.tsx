@@ -22,7 +22,7 @@ export interface ActProps extends Pick<GroupProps, 'today' | 'opened' | 'onDetai
   /** A reader's fold or unfold of a group, by group key; wins over the default. */
   folds: ReadonlyMap<string, boolean>;
   onFold: (key: string, open: boolean) => void;
-  /** Works in this Act before the filters, when the screen counts them. */
+  /** Works in this Act that clearing Work state would show, when the screen counts them. */
   total?: number;
   onShowAllStates?: () => void;
 }

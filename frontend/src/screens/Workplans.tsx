@@ -133,18 +133,23 @@ export function Workplans() {
     () => (workplans.data ? rowsOf(workplans.data, projectRows ?? [], today) : []),
     [workplans.data, projectRows, today],
   );
-  const actTotals = useMemo(() => {
-    const totals: Partial<Record<number, number>> = {};
-    for (const row of rows) if (row.work.actYear != null) totals[row.work.actYear] = (totals[row.work.actYear] ?? 0) + 1;
-    return totals;
-  }, [rows]);
   // Typing stays responsive: the views re-filter on the deferred copy.
   const deferred = useDeferredValue(filters);
-  const shown = useMemo(() => {
-    const applied = appliedFilters(deferred, view);
-    const query = applied.query.trim().toLowerCase();
-    return rows.filter((row) => matches(row, { ...applied, query }, VIEW_FILTERS[view].states));
-  }, [rows, deferred, view]);
+  const applied = useMemo(() => {
+    const current = appliedFilters(deferred, view);
+    return { ...current, query: current.query.trim().toLowerCase() };
+  }, [deferred, view]);
+  const shown = useMemo(() => rows.filter((row) => matches(row, applied, VIEW_FILTERS[view].states)), [rows, applied, view]);
+  // Counts only what clearing Work state brings back: an Act emptied by search or Work type gets no button that shows nothing.
+  const actHidden = useMemo(() => {
+    if (applied.state === null) return undefined;
+    const counts: Partial<Record<number, number>> = {};
+    for (const row of rows) {
+      const year = row.work.actYear;
+      if (year != null && matches(row, { ...applied, state: null }, VIEW_FILTERS[view].states)) counts[year] = (counts[year] ?? 0) + 1;
+    }
+    return counts;
+  }, [rows, applied, view]);
   // Work type and Phase offer only what Work state and the hidden switch let through.
   const { state, showHidden } = appliedFilters(filters, view);
   const optionRows = useMemo(() => {
@@ -183,7 +188,7 @@ export function Workplans() {
         rows={shown}
         today={today}
         bar={bar}
-        actTotals={actTotals}
+        actTotals={actHidden}
         onShowAllStates={state === null ? undefined : () => setFilters((current) => ({ ...current, state: null }))}
       />
     );
