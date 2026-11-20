@@ -41,7 +41,8 @@ test('the 2018 Act decision in Track sets the boundary: an amendment closed befo
   assert.strictEqual(marker(result).boundaryAtLoad, '2023-10-10');
   assert.ok(work(result, '101:amendment:1'));
   assert.strictEqual(work(result, '101:amendment:2'), undefined);
-  assert.deepStrictEqual(reasons(result, 'afterBoundary').map(entry => [entry.sourceKey, entry.closed]), [['101:amendment:2', 'closedAfter']]);
+  assert.deepStrictEqual(reasons(result, 'afterBoundary').map(entry => [entry.sourceKey, entry.closed, entry.actYear, entry.workTypeCode]),
+    [['101:amendment:2', 'closedAfter', 2002, 'amendment']]);
 });
 
 test('a project with no 1996 or 2002 certificate gets no marker', () => {
@@ -200,7 +201,7 @@ test('rows of a number the crosswalk skips are listed crosswalkSkipped; an unusa
     amendments: [amendment(1, '2010-01-01', '2010-03-01', { id: 0 }), amendment(2, '2010-01-01', '2010-03-01', { id: -1 })],
     transitions: [{ ref: ref('EA Process Data'), id: 102, date: '2022-08-23' }],
     timeline2002: [{ ref: ref('2002'), name: 'Other Mine', start180: '2004-03-01' }, { ref: ref('2002'), name: 'No Such Mine', start180: '2004-03-01' }]
-  }, { skipped: new Map([[102, { state: 'unfolded', targetId: 'project-two' }]]), transitionIdsAreRegisterIds: true });
+  }, { skipped: new Map([[102, { state: 'unfolded', targetId: 'project-two' }]]) });
   assert.deepStrictEqual(reasons(result, 'crosswalkSkipped').map(entry => `${entry.source}:${entry.state}`).sort(),
     ['amendments:badId', 'projects:badId', 'projects:unfolded', 'timeline2002:unfolded', 'transitions:unfolded']);
   assert.deepStrictEqual(reasons(result, 'timelineUnmatched').length, 1);
@@ -209,9 +210,8 @@ test('rows of a number the crosswalk skips are listed crosswalkSkipped; an unusa
   assert.deepStrictEqual([...new Set(result.works.map(one => one.projectId))], [PROJECT]);
 });
 
-test('a Transition Order before 2025 ends the 2002 work on its date and lists later milestones', () => {
-  const result = run({ projects: [register({ decision: 'Incomplete/Inactive', decisionDate: null, start180: '2023-01-01' })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] },
-    { transitionIdsAreRegisterIds: true });
+test('transition before 2025 cuts the 2002 work', () => {
+  const result = run({ projects: [register({ decision: 'Incomplete/Inactive', decisionDate: null, start180: '2023-01-01' })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] });
   const [only] = assessments(result);
   assert.deepStrictEqual([only.workState, only.transitionOut], ['transitioned', { toActYear: 2018, date: '2022-08-23', dateSource: 'sheet' }]);
   assert.deepStrictEqual(milestones(only).filter(one => one.code === 'act-transition').map(one => [one.position, one.actualDate]), [['END', '2022-08-23']]);
@@ -219,36 +219,27 @@ test('a Transition Order before 2025 ends the 2002 work on its date and lists la
 });
 
 test('a milestone after a Transition Order inside a phase that started before it is listed afterTransition', () => {
-  const result = run({ projects: [register({ s11Order: '2023-01-01', decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] },
-    { transitionIdsAreRegisterIds: true });
+  const result = run({ projects: [register({ s11Order: '2023-01-01', decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] });
   assert.deepStrictEqual(reasons(result, 'afterTransition').map(entry => entry.milestone), ['s11-order']);
 });
 
 test('a row split at 2002 that also has a Transition Order gives its 2002 work two distinct act-transition ids', () => {
   const result = run({ projects: [register({ intakeDate: '2001-02-01', determinationType: 'Pre-2002 Act', determinationDate: '2002-12-30', decision: null, decisionDate: null })],
-    transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] }, { transitionIdsAreRegisterIds: true });
+    transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] });
   const late = assessments(result).find(one => one.actYear === 2002);
   assert.deepStrictEqual(transitionIds(late), [['act-transition:1', 'START', '2002-12-30'], ['act-transition:2', 'END', '2022-08-23']]);
 });
 
 test('a Transition Order dated in 2025 keeps the sheet date with dateSource track', () => {
-  const result = run({ projects: [register({ decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2025-05-21' }] },
-    { transitionIdsAreRegisterIds: true });
+  const result = run({ projects: [register({ decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2025-05-21' }] });
   assert.deepStrictEqual(assessments(result)[0].transitionOut, { toActYear: 2018, date: '2025-05-21', dateSource: 'track' });
 });
 
 test('a Transition Order with no date gives dateSource none and no cut', () => {
-  const result = run({ projects: [register({ decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: null }] },
-    { transitionIdsAreRegisterIds: true });
+  const result = run({ projects: [register({ decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: null }] });
   const [only] = assessments(result);
   assert.deepStrictEqual(only.transitionOut, { toActYear: 2018, date: null, dateSource: 'none' });
   assert.ok(!milestones(only).some(one => one.code === 'act-transition'));
-});
-
-test('transitions are not joined until the caller says what column A holds', () => {
-  const result = run({ projects: [register({ decision: null, decisionDate: null })], transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }] });
-  assert.strictEqual(assessments(result)[0].transitionOut, undefined);
-  assert.strictEqual(reasons(result, 'transitionJoinUndecided').length, 1);
 });
 
 test('a Pre-2002 Act determination on the 2002 in-force day after an earlier intake splits the row in two', () => {
@@ -260,13 +251,34 @@ test('a Pre-2002 Act determination on the 2002 in-force day after an earlier int
   assert.deepStrictEqual([transitionIds(early), transitionIds(late)], [[['act-transition', 'END', '2002-12-30']], [['act-transition:1', 'START', '2002-12-30']]]);
 });
 
-test('Timelines 2002 milestones of a row open across 2002 land on its 1996 work and are listed', () => {
-  const result = run({ projects: [register({ intakeType: 'Pre-EAO', determinationType: 'Pre-EAO', intakeDate: '2001-02-01', determinationDate: '2001-06-01', decision: null, decisionDate: null })],
-    timeline2002: [{ ref: ref('2002'), name: 'SAMPLE  mine', start180: '2004-03-01' }] });
+const open1996 = { intakeDate: '2001-02-01', determinationDate: '2001-06-01', decision: null, decisionDate: null };
+const reviewStarts = (result) => assessments(result).map(one => [one.actYear, milestones(one).some(m => m.code === 'review-start')]);
+
+test('a joined 1996 row gets timeline2002 but no field overlay unless it splits', () => {
+  const timeline2002 = [{ ref: ref('2002'), name: 'SAMPLE  mine', start180: '2004-03-01' }];
+  const kept = run({ projects: [register({ ...open1996, intakeType: 'Pre-EAO', determinationType: 'Pre-EAO' })], timeline2002 });
+  assert.deepStrictEqual(reviewStarts(kept), [[1996, false]]);
+  assert.deepStrictEqual(['open-across-2002', 'sheet-2002-on-1996-work', 'timelineDiffers'].map(reason => reasons(kept, reason).length), [1, 1, 0]);
+  const split = run({ projects: [register({ ...open1996, intakeType: null, determinationType: 'Pre-2002 Act' })], timeline2002 });
+  assert.deepStrictEqual(reviewStarts(split), [[1996, false], [2002, true]]);
+  assert.deepStrictEqual(reasons(split, 'timelineDiffers').map(entry => [entry.field, entry.kept]), [['start180', 'timeline']]);
+});
+
+test('a Timelines overlay that would undo the split is not applied', () => {
+  const result = run({ projects: [register({ ...open1996, intakeType: null, determinationType: 'Pre-2002 Act' })],
+    timeline2002: [{ ref: ref('2002'), name: 'Sample Mine', start180: '2002-03-01', decisionDate: '2002-06-01' }] });
+  assert.deepStrictEqual(reviewStarts(result), [[1996, false], [2002, false]]);
+  assert.deepStrictEqual(['timelineFlipsSplit', 'timelineDiffers'].map(reason => reasons(result, reason).length), [1, 0]);
+});
+
+test('filled register decision survives Timelines', () => {
+  const timeline2002 = [{ ref: ref('2002'), name: 'Sample Mine', decision: 'EA Certificate Granted', decisionDate: '2008-06-01' }];
+  const result = run({ projects: [register({ decision: 'Withdrawn' })], timeline2002 });
   const [only] = assessments(result);
-  assert.strictEqual(only.actYear, 1996);
-  assert.ok(milestones(only).some(one => one.code === 'review-start' && one.actualDate === '2004-03-01'));
-  assert.deepStrictEqual(['open-across-2002', 'sheet-2002-on-1996-work'].map(reason => reasons(result, reason).length), [1, 1]);
+  assert.deepStrictEqual([only.outcomeCode, only.certificateKind, only.decisionDate], ['withdrawn', null, '2008-06-01']);
+  assert.deepStrictEqual(reasons(result, 'timelineDiffers').map(entry => [entry.field, entry.kept]), [['decisionDate', 'timeline'], ['decision', 'register']]);
+  const [filled] = assessments(run({ projects: [register({ decision: null })], timeline2002 }));
+  assert.deepStrictEqual([filled.outcomeCode, filled.certificateKind], ['certificate-issued', 'EAC']);
 });
 
 test('2018 rows are skipped with a reason', () => {
@@ -370,6 +382,18 @@ test('a suspension lands on the phase its Applied-To label names', () => {
   assert.deepStrictEqual([holder.name, holder.interruptions[0].days, holder.interruptions[0].legalSection], ['Application Review', 28, 's.24(2)']);
 });
 
+test('suspension outside its phase lands by date', () => {
+  const row = (slot, appliedTo, startDate, endDate) => ({ ref: ref('Suspensions', slot), id: 101, type: 'Suspension s.24(2)', appliedTo, startDate, endDate });
+  const result = run({ projects: [register({ start180: '2006-01-01', start45: '2007-01-01' })],
+    suspensions: [row(1, 'Review', '2007-03-01', '2007-04-01'), row(2, 'Evaluation', '2006-02-01', '2006-03-01')] });
+  const holders = assessments(result)[0].phases.filter(phase => phase.interruptions.length);
+  assert.deepStrictEqual(holders.map(phase => [phase.name, phase.interruptions.map(one => one.startDate)]),
+    [['Application Review', ['2006-02-01']], ['Referral', ['2007-03-01']]]);
+  assert.deepStrictEqual(reasons(result, 'placedByDate').map(entry => [entry.ref.slot, entry.phase, entry.named]),
+    [[1, 'Referral', 'Application Review'], [2, 'Application Review', undefined]]);
+  assert.deepStrictEqual(reasons(result, 'noPhase'), []);
+});
+
 test('an Other interruption takes its kind from the tab it was read on', () => {
   const result = run({ projects: [register({ start180: '2006-01-01' })],
     extensions: [{ ref: ref('Extensions', 1), id: 101, type: 'Other', appliedTo: 'Review', startDate: '2006-02-01', endDate: '2006-03-01' }] });
@@ -421,8 +445,7 @@ test('a certificate on a refused work gives a post-decision work nothing to act 
 test('register rows that collide on one id in Timelines 2002 or transitions are each refused', () => {
   const result = run({ projects: [register({ decision: null, decisionDate: null })],
     timeline2002: [{ ref: ref('2002'), name: 'Sample Mine', start180: '2006-01-01' }, { ref: ref('2002'), name: 'Sample Mine', start180: '2007-01-01' }],
-    transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }, { ref: ref('EA Process Data'), id: 101, date: '2022-09-01' }] },
-  { transitionIdsAreRegisterIds: true });
+    transitions: [{ ref: ref('EA Process Data'), id: 101, date: '2022-08-23' }, { ref: ref('EA Process Data'), id: 101, date: '2022-09-01' }] });
   assert.deepStrictEqual(['timelineRepeated', 'transitionRepeated'].map(reason => reasons(result, reason).length), [2, 2]);
   const [only] = assessments(result);
   assert.deepStrictEqual([only.transitionOut, milestones(only).some(one => one.code === 'review-start')], [undefined, false]);

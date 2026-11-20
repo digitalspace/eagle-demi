@@ -4,24 +4,24 @@
 // project entries and sheet override markers, for the 1996 and 2002 Acts. Pure; the loader does I/O.
 
 const { randomUUID } = require('node:crypto');
-const { appliedToPhaseOf, entryFor, skips2018 } = require('./works-catalog');
+const { entryFor } = require('./works-catalog');
 const {
-  OVERRIDE_MARKER_ID, OVERRIDE_TYPES, childIdOf, dayOf, daysBetween, matchEvents, overrideBoundaryOf, settledBefore,
-  validateWork, workRangeOf
+  OVERRIDE_MARKER_ID, OVERRIDE_TYPES, dayOf, matchEvents, overrideBoundaryOf, settledBefore, validateWork
 } = require('./work-model');
 const { SERVER_KEYS, newEntryError, observeInvestment } = require('./project-staff-fields');
 const {
-  LAST_SHEET_DAY, UNKNOWN_DAY, UNKNOWN_FIELDS, actOf, assessmentWorks, datedOf, isLater, keyOf,
-  milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
+  UNKNOWN_DAY, UNKNOWN_FIELDS, actOf, assessmentWorks, datedOf, keyOf, oneLine, postDecisionWork, refOf, registerPostDecision,
+  splitsOn2002
 } = require('./business-works-assessment');
-const { commentPeriodIdFor, compareRegister, eagleItemIdFor } = require('./business-works-compare');
+const { attachCommentPeriod, attachInterruption, attachVariation, isAssessment } = require('./business-works-children');
+const { compareRegister } = require('./business-works-compare');
 const { REGISTER_SYSTEM, sheetIdOf } = require('./business-works-inputs');
 
 /** Sheet ID 8 shows Track's investment, never a sheet figure (A19); a surrogate id cannot be checked against it. */
 const INVESTMENT_USE_TRACK = Object.freeze([8]);
 const MARKER_SCHEMA_VERSION = 1;
-const TIMELINE_FIELDS = Object.freeze(['intakeDate', 'determinationDate', 's11Order', 'airAccepted', 'start30',
-  'start180', 'start45', 'decisionDate', 'decision']);
+const TIMELINE_DATES = Object.freeze(['intakeDate', 'determinationDate', 's11Order', 'airAccepted', 'start30',
+  'start180', 'start45', 'decisionDate']);
 const STAFF_LISTS = Object.freeze(['externalIds', 'staffAssignments', 'capitalInvestments', 'staffNotes']);
 
 function contextOf(extract, options = {}) {
@@ -33,7 +33,6 @@ function contextOf(extract, options = {}) {
     catalog, phaseCatalog, crosswalk, skipped: new Map(options.skipped), batchId, batchAt, batchDate: dayOf(batchAt),
     numbersReal: Boolean(extract) && extract.numbersReal === true,
     trackWorks: options.trackWorks || new Map(), markers: options.markers || new Map(),
-    transitionIdsAreRegisterIds: options.transitionIdsAreRegisterIds === true,
     eagleItems: options.eagleItems || new Map(), storedProjects: options.storedProjects || new Map(),
     substantialStart: options.substantialStart || null, report: [], projects: new Map(), bases: new Map(), noWork: new Map()
   };
@@ -73,19 +72,31 @@ function joinTimelines(ctx, rows, registers) {
   return onePerId(ctx, 'timeline2002', Map.groupBy(matched, row => hitsOf(row)[0].id), 'timelineRepeated');
 }
 
-/** Whether column A of the transitions tab holds the register id is undecided, so the caller says. */
-function transitionsOf(ctx, rows) {
-  if (!ctx.transitionIdsAreRegisterIds) {
-    rows.forEach(row => listFor(ctx, 'transitions', null, row.ref)('transitionJoinUndecided'));
-    return new Map();
-  }
-  return onePerId(ctx, 'transitions', Map.groupBy(rows, row => row.id), 'transitionRepeated');
+/** Column A of the transitions tab holds the register id. */
+const transitionsOf = (ctx, rows) => onePerId(ctx, 'transitions', Map.groupBy(rows, row => row.id), 'transitionRepeated');
+
+/** `{row, differs}`: the Timelines tab's dates win, its decision fills only a blank one; `differs` holds each field that disagrees. */
+function overlaid(raw, timeline) {
+  const dates = TIMELINE_DATES.filter(field => dayOf(timeline[field]) && dayOf(timeline[field]) !== dayOf(raw[field]));
+  const differs = dates.map(field => ({ field, kept: 'timeline' }));
+  const labelled = oneLine(raw.decision);
+  if (labelled && oneLine(timeline.decision) && keyOf(raw.decision) !== keyOf(timeline.decision)) differs.push({ field: 'decision', kept: 'register' });
+  const decision = labelled || !oneLine(timeline.decision) ? raw.decision : timeline.decision;
+  return { row: { ...raw, ...Object.fromEntries(dates.map(field => [field, timeline[field]])), decision }, differs };
 }
 
-function withTimeline(row, timeline) {
-  if (!timeline) return row;
-  const over = TIMELINE_FIELDS.filter(field => timeline[field] !== null && timeline[field] !== undefined);
-  return { ...row, ...Object.fromEntries(over.map(field => [field, timeline[field]])), timeline2002: true };
+/** A joined row carries `timeline2002`; the tab's fields overlay only a 2002 row or one that splits on 2002. */
+function withTimeline(ctx, raw, timeline, list) {
+  if (!timeline) return raw;
+  const flagged = { ...raw, timeline2002: true };
+  const splits = splitsOn2002(ctx, flagged);
+  if (!splits && actOf(ctx, raw)?.actYear !== 2002) return flagged;
+  const { row, differs } = overlaid(flagged, timeline);
+  // partsOf decides the split again on the row it gets, so an overlay that would flip it is not applied.
+  const applied = splitsOn2002(ctx, row) === splits;
+  if (applied) differs.forEach(one => list('timelineDiffers', one));
+  else list('timelineFlipsSplit');
+  return applied ? row : flagged;
 }
 
 const withoutServerKeys = (entry) => Object.fromEntries(Object.entries(entry).filter(([key]) => !SERVER_KEYS.includes(key)));
@@ -146,14 +157,14 @@ function readRegister(ctx, records) {
       list('registerRepeated');
       continue;
     }
-    const row = withTimeline(raw, timelines.get(raw.id));
+    const row = withTimeline(ctx, raw, timelines.get(raw.id), list);
     UNKNOWN_FIELDS.filter(field => row[field] === UNKNOWN_DAY).forEach(field => list('unknownDate', { field }));
     compareRegister(ctx.storedProjects.get(projectId), row, ctx.substantialStart, list);
     const project = projectOf(ctx, projectId);
     const entries = staffEntries(ctx, row, list);
     STAFF_LISTS.forEach(key => project.entries[key].push(...entries[key]));
     rows.push({ row, base, list, project });
-    const act = actOf(ctx, row);
+    const act = actOf(ctx, row, list);
     if (!act || act.actYear === 2018) ctx.noWork.set(row.id, act ? 'act2018' : 'noAct');
     if (!act) list('noAct');
     else if (act.actYear !== 2018) project.works.push(...assessmentWorks(ctx, row, base, act, list));
@@ -187,93 +198,6 @@ function sheetRow(ctx, source, row) {
   return base ? { base, list, project: ctx.projects.get(base.projectId), noWork: ctx.noWork.get(row.id) || 'noWork' } : null;
 }
 
-const isAssessment = (work) => work.workTypeCode === 'assessment';
-const startOf = (work) => workRangeOf(work).start ?? '';
-
-/** The latest-starting work whose range holds `day`. */
-function holderOf(works, day) {
-  const holds = works.filter((work) => {
-    const { start, end } = workRangeOf(work);
-    return (!start || start <= day) && (!end || day <= end);
-  });
-  return holds.sort((a, b) => startOf(a).localeCompare(startOf(b))).at(-1) || null;
-}
-
-/** The last phase holding `day`; a phase with no start date starts at the latest date before it. */
-function phaseHolding(work, day) {
-  let floor = null;
-  let found = null;
-  for (const phase of work.phases) {
-    const start = dayOf(phase.startDate) || floor;
-    const end = dayOf(phase.endDate);
-    if (!isLater(start, day) && !(end && end < day)) found = phase;
-    floor = [floor, start, end].filter(Boolean).sort().at(-1) || null;
-  }
-  return found || work.phases.at(-1) || null;
-}
-
-const nextN = (work, code) => work.phases.flatMap(phase => [...phase.milestones, ...phase.interruptions])
-  .filter(child => child.id.startsWith(`${code}:`)).length + 1;
-
-/** `{start, end}` of a dated child row before 2025, else null with the reason listed. */
-function childDays(row, [startKey, endKey], list) {
-  const start = dayOf(row[startKey]);
-  const end = endKey ? dayOf(row[endKey]) : null;
-  if (!start) list('noDate');
-  else if (isLater(start, LAST_SHEET_DAY)) list('afterTrackFrom');
-  else if (end && end < start) list('endBeforeStart');
-  else return { start, end };
-  return null;
-}
-
-function attachInterruption(ctx, { project, list, noWork }, row, tabKind) {
-  if (skips2018(ctx.catalog, 'appliedTo', row.appliedTo)) return list('act2018');
-  const days = childDays(row, ['startDate', 'endDate'], list);
-  const type = days && entryFor(ctx.catalog, 'interruptionTypes', row.type);
-  if (days && !type) list('unknownInterruptionType');
-  const work = type && holderOf(project.works.filter(isAssessment), days.start);
-  if (type && !work) list(noWork);
-  const catalogId = work && appliedToPhaseOf(ctx.catalog, row.appliedTo, work.actYear);
-  const phase = catalogId && work.phases.find(one => one.catalogId === catalogId);
-  if (work && !phase) list('noPhase', { sourceKey: work.sourceKey });
-  if (!phase) return undefined;
-  const interruption = {
-    id: childIdOf(type.code, nextN(work, type.code)), kind: type.kind || tabKind, typeCode: type.code,
-    legalSection: type.legalSection ?? null, startDate: days.start, endDate: days.end,
-    days: days.end ? Math.max(0, daysBetween(days.start, days.end)) : null, links: { eagleItemId: null },
-    sourceRef: { sheet: refOf(row.ref) }
-  };
-  interruption.links.eagleItemId = eagleItemIdFor(ctx.eagleItems.get(project.projectId), interruption, list);
-  return phase.interruptions.push(interruption);
-}
-
-function attachVariation(ctx, { project, list, noWork }, row) {
-  const days = childDays(row, ['date'], list);
-  const work = days && holderOf(project.works.filter(isAssessment), days.start);
-  if (days && !work) list(noWork);
-  const phase = work && work.phases.find(one => one.name === 'Pre-Application');
-  if (work && !phase) list('noPhase', { sourceKey: work.sourceKey });
-  if (!phase) return undefined;
-  const n = nextN(work, 'order-variation');
-  return phase.milestones.push({ ...milestoneOf(ctx, 'order-variation', 'INTERIOR', { day: days.start }, { n }), sourceRef: { sheet: refOf(row.ref) } });
-}
-
-function attachCommentPeriod(ctx, { project, list, noWork }, row) {
-  if (skips2018(ctx.catalog, 'commentPeriodTypes', row.type)) return list('act2018');
-  const days = childDays(row, ['startDate', 'endDate'], list);
-  const type = days && entryFor(ctx.catalog, 'commentPeriodTypes', row.type);
-  if (days && !type) list('unknownCommentPeriodType');
-  const work = type && holderOf(project.works, days.start);
-  if (type && !work) list(noWork);
-  const phase = work && phaseHolding(work, days.start);
-  if (work && !phase) list('noPhase', { sourceKey: work.sourceKey });
-  if (!phase) return undefined;
-  const options = { n: nextN(work, 'comment-period'), endDate: days.end, name: type.name };
-  const milestone = { ...milestoneOf(ctx, 'comment-period', 'INTERIOR', { day: days.start }, options), sourceRef: { sheet: refOf(row.ref) } };
-  milestone.links.commentPeriodId = commentPeriodIdFor(ctx.eagleItems.get(project.projectId), days.start, list);
-  return phase.milestones.push(milestone);
-}
-
 /** `kept` when closed before `boundary`, else `open` (no close date) or `closedAfter`. */
 function sideOf(work, boundary) {
   const closed = dayOf(work.decisionDate);
@@ -297,7 +221,8 @@ function buildOverride(ctx, project, skipped) {
   const boundary = overrideBoundaryOf(trackWorks);
   const certificates = certificatesBefore(works, boundary);
   const covered = works.filter(work => OVERRIDE_TYPES.includes(work.workTypeCode));
-  const list = (reason, work, extra) => listFor(ctx, 'override', projectId, work && work.sourceRef.sheet)(reason, { ...(work && { sourceKey: work.sourceKey }), ...extra });
+  const named = (work) => work && { sourceKey: work.sourceKey, actYear: work.actYear, workTypeCode: work.workTypeCode };
+  const list = (reason, work, extra) => listFor(ctx, 'override', projectId, work && work.sourceRef.sheet)(reason, { ...named(work), ...extra });
   if (!certificates.length) {
     if (existing) list('markerWithoutCertificate');
     covered.forEach(work => list('sheetWithoutMarker', work));

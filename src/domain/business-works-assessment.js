@@ -18,6 +18,7 @@ const PHASE_START = Object.freeze({
   'Pre-EA': 'intakeDate', 'Pre-Application': 'determinationDate', Evaluation: 'start30',
   'Application Review': 'start180', Referral: 'start45'
 });
+const LEGISLATED_DAYS_2002 = Object.freeze({ Evaluation: 30, 'Application Review': 180, Referral: 45 });
 // [milestone code, register field, phase, position, project block field it stands for]
 const MILESTONES = Object.freeze([
   ['intake', 'intakeDate', 'Pre-EA', 'START'], ['determination', 'determinationDate', 'Pre-EA', 'END'],
@@ -62,15 +63,21 @@ function milestoneOf(ctx, code, position, when, { n, blockField = null, endDate 
 }
 
 /** The Act of a register row and how it was set, by the plan's evidence order; null when nothing tells. */
-function actOf(ctx, row) {
+function actOf(ctx, row, list = () => {}) {
   const determination = keyOf(row.determinationType);
   if (['pre eao', 'pre 2002 act'].includes(determination)) return { actYear: 1996, actBasis: 'determination-type' };
   if (/^s 10 1 [abc]\b/.test(determination)) return { actYear: 2002, actBasis: 'determination-type' };
   if (determination === 'ipd accepted') return { actYear: 2018, actBasis: 'determination-type' };
+  const day = datedOf(row, 'determinationDate').day || datedOf(row, 'intakeDate').day;
   const intake = entryFor(ctx.catalog, 'intakeTypes', row.intakeType);
   if (intake && intake.acts.length === 1) return { actYear: intake.acts[0], actBasis: 'intake-type' };
+  if (intake && intake.acts.length > 1) {
+    // The office kept the s.6/s.11 forms after the 2018 Act, so the row's date picks among the label's Acts.
+    const inForce = intake.acts.filter(year => day && LEGISLATIONS[year].inForce <= day);
+    if (day && !inForce.length) list('intakeBeforeAct', { field: 'intakeType' });
+    return { actYear: inForce.length ? Math.max(...inForce) : Math.min(...intake.acts), actBasis: 'intake-type' };
+  }
   if (certificateKindOf(ctx.catalog, row.decision) === 'PAC') return { actYear: 1996, actBasis: 'decision-type' };
-  const day = datedOf(row, 'determinationDate').day || datedOf(row, 'intakeDate').day;
   if (!day) return null;
   const actYear = day < SPLIT_DAY ? 1996 : day < LEGISLATIONS[2018].inForce ? 2002 : 2018;
   return { actYear, actBasis: 'in-force-date' };
@@ -88,18 +95,47 @@ function decisionOf(ctx, label) {
   return state ? { workState: state.code } : { unknown: true };
 }
 
-function assessmentPhases(ctx, row, actYear) {
-  const phases = new Map();
-  const phase = (name) => phases.get(name) || phases.set(name, phaseOf(ctx, actYear, name)).get(name);
+/** The start columns that make a phase; one before an earlier start or after the decision is dropped and listed. */
+function phaseStarts(row, list) {
+  const decided = datedOf(row, 'decisionDate').day;
+  const starts = new Map();
+  let latest = null;
   for (const [name, field] of Object.entries(PHASE_START)) {
     const when = datedOf(row, field);
-    if (when.day || when.unknown) setDay(phase(name), 'startDate', when);
+    if (!when.day && !when.unknown) continue;
+    if (when.day && ((latest && when.day < latest) || (decided && when.day > decided))) {
+      list('outOfOrderDate', { field });
+      continue;
+    }
+    latest = when.day || latest;
+    starts.set(name, when);
   }
+  return starts;
+}
+
+/** The decision ends the last phase; any other milestone goes to the last phase started on or before it. */
+function holderOf(ordered, code, day) {
+  if (code === 'decision') return ordered.at(-1);
+  return ordered.filter(one => !one.startDate || (day && one.startDate <= day)).at(-1) || ordered[0];
+}
+
+function assessmentPhases(ctx, row, actYear, list = () => {}) {
+  const starts = phaseStarts(row, list);
+  const ordered = [...starts].map(([name, when]) => {
+    const phase = setDay(phaseOf(ctx, actYear, name), 'startDate', when);
+    const days = actYear === 2002 && LEGISLATED_DAYS_2002[name];
+    return days ? Object.assign(phase, { numberOfDays: days, legislated: true }) : phase;
+  });
+  const byName = new Map(ordered.map(one => [one.name, one]));
+  const kept = new Set([...starts.keys()].map(name => PHASE_START[name]));
+  const startFields = Object.values(PHASE_START);
   for (const [code, field, name, position, blockField] of MILESTONES) {
     const when = datedOf(row, field);
-    if (when.day || when.unknown) phase(name).milestones.push(milestoneOf(ctx, code, position, when, { blockField }));
+    if ((!when.day && !when.unknown) || (startFields.includes(field) && !kept.has(field))) continue;
+    const holder = byName.get(name) || holderOf(ordered, code, when.day);
+    if (holder) holder.milestones.push(milestoneOf(ctx, code, position, when, { blockField }));
+    else list('milestoneNoPhase', { milestone: code });
   }
-  const ordered = Object.keys(PHASE_START).filter(name => phases.has(name)).map(name => phases.get(name));
   ordered.forEach((one, i) => {
     one.sortOrder = i;
     one.endDate = i + 1 < ordered.length ? ordered[i + 1].startDate : datedOf(row, 'decisionDate').day;
@@ -152,31 +188,84 @@ function baseWork(ctx, { projectId, number, kind, slot, type, actYear, actBasis,
   };
 }
 
+const intakeBefore2002 = (row) => {
+  const intake = datedOf(row, 'intakeDate');
+  return intake.unknown || Boolean(intake.day && intake.day < SPLIT_DAY);
+};
+
+/** A "Pre-2002 Act" row taken in before the 2002 Act, determined on its in-force day or open past it on the Timelines tab. */
+function movesOn2002(row) {
+  if (keyOf(row.determinationType) !== 'pre 2002 act' || !intakeBefore2002(row)) return false;
+  if (dayOf(row.determinationDate) === SPLIT_DAY) return true;
+  const decided = datedOf(row, 'decisionDate');
+  return Boolean(row.timeline2002) && !decided.unknown && !(decided.day && decided.day <= SPLIT_DAY);
+}
+
+/** Whether the row becomes a 1996 work and a 2002 work; reads register fields and `timeline2002` only, never the Timelines overlay. */
+const splitsOn2002 = (ctx, row) => movesOn2002(row) && certificateKindOf(ctx.catalog, row.decision) !== 'PAC';
+
+/** 1996 phases up to the 2002 Act's in-force day and 2002 phases after it; the phase holding that day goes in both. */
+function splitPhases(ctx, row, list) {
+  const old = assessmentPhases(ctx, row, 1996, list);
+  const fresh = assessmentPhases(ctx, row, 2002);
+  const before = [];
+  const after = [];
+  old.forEach((phase, i) => {
+    const start = dayOf(phase.startDate) || (phase.undated ? UNKNOWN_DAY : null);
+    const end = dayOf(phase.endDate);
+    if (!start && after.length) after.push(fresh[i]);
+    else if (!start) before.push(phase);
+    else if (start >= SPLIT_DAY) after.push(fresh[i]);
+    else if (end && end <= SPLIT_DAY) before.push(phase);
+    else {
+      before.push(Object.assign(phase, { milestones: phase.milestones.filter(one => !isLater(dayOf(one.actualDate), SPLIT_DAY)) }));
+      const { undated: _undated, ...copy } = fresh[i];
+      after.push({ ...copy, startDate: SPLIT_DAY, milestones: copy.milestones.filter(one => isLater(dayOf(one.actualDate), SPLIT_DAY)) });
+    }
+  });
+  const last = before.at(-1);
+  if (last) {
+    Object.assign(last, { endDate: SPLIT_DAY, isCompleted: true });
+    last.milestones.push(milestoneOf(ctx, 'act-transition', 'END', { day: SPLIT_DAY }));
+  }
+  if (after[0]) after[0].milestones.unshift(milestoneOf(ctx, 'act-transition', 'START', { day: SPLIT_DAY }, { n: 1 }));
+  return { before, after };
+}
+
+/** Phases up to the sheet's last day; a later decision stays on the last phase unless a transition took the work. */
+function capPhases(ctx, row, phases, list) {
+  const { kept, later, dropped } = cutPhases(phases, TRACK_FROM, LAST_SHEET_DAY);
+  const lost = [...dropped, ...milestonesOf(later)];
+  const decision = kept.length && !ctx.transitions.get(row.id) && lost.find(one => one.code === 'decision');
+  lost.filter(one => one !== decision).forEach(one => list('afterTrackFrom', { milestone: one.code }));
+  if (decision) {
+    list('decisionAfterTrackFrom', { milestone: decision.code });
+    kept.at(-1).milestones.push(decision);
+    Object.assign(kept.at(-1), { endDate: decision.actualDate, isCompleted: true });
+  }
+  return kept;
+}
+
 /** One part per Act the row spans: two when it moved to the 2002 Act on its in-force day, else one. */
 function partsOf(ctx, row, act, list) {
-  const capped = cutPhases(assessmentPhases(ctx, row, act.actYear), TRACK_FROM, LAST_SHEET_DAY);
-  [...capped.dropped, ...milestonesOf(capped.later)].forEach(one => list('afterTrackFrom', { milestone: one.code }));
   const intake = datedOf(row, 'intakeDate');
-  const intakeBefore = intake.unknown || (intake.day && intake.day < SPLIT_DAY);
-  const splitRule = act.actYear === 1996 && intakeBefore && keyOf(row.determinationType) === 'pre 2002 act' &&
-    row.determinationDate === SPLIT_DAY;
-  const pac = certificateKindOf(ctx.catalog, row.decision) === 'PAC';
-  if (splitRule && !pac) {
-    const { kept, later } = endOnTransition(ctx, capped.kept, SPLIT_DAY, list);
-    later.forEach(phase => Object.assign(phase, { catalogId: phaseOf(ctx, 2002, phase.name).catalogId }));
-    if (later[0]) later[0].milestones.unshift(milestoneOf(ctx, 'act-transition', 'START', { day: SPLIT_DAY }, { n: 1 }));
+  if (act.actYear === 1996 && splitsOn2002(ctx, row)) {
+    const { before, after } = splitPhases(ctx, row, list);
     return [
-      { ...act, phases: kept, start: intake, out: { toActYear: 2002, date: SPLIT_DAY, dateSource: 'sheet' } },
-      { actYear: 2002, actBasis: 'transition', phases: later, start: { day: SPLIT_DAY }, in: { fromActYear: 1996, date: SPLIT_DAY } }
+      { ...act, phases: before, start: intake, out: { toActYear: 2002, date: SPLIT_DAY, dateSource: 'sheet' }, simpleTitle: '1996 Act' },
+      {
+        actYear: 2002, actBasis: 'transition', phases: capPhases(ctx, row, after, list), start: { day: SPLIT_DAY },
+        in: { fromActYear: 1996, date: SPLIT_DAY }, simpleTitle: '2002 Act'
+      }
     ];
   }
   const decided = datedOf(row, 'decisionDate');
-  if (splitRule) list('pac-1996');
-  else if (act.actYear === 1996 && intakeBefore && !decided.unknown && !(decided.day && decided.day < SPLIT_DAY)) {
+  if (act.actYear === 1996 && movesOn2002(row)) list('pac-1996');
+  else if (act.actYear === 1996 && intakeBefore2002(row) && !decided.unknown && !(decided.day && decided.day < SPLIT_DAY)) {
     list('open-across-2002');
     if (row.timeline2002) list('sheet-2002-on-1996-work');
   }
-  return [{ ...act, phases: capped.kept, start: intake }];
+  return [{ ...act, phases: capPhases(ctx, row, assessmentPhases(ctx, row, act.actYear, list), list), start: intake }];
 }
 
 /** Applies a 2002-to-2018 Transition Order to the 2002 part; a dated order before 2025 cuts it. */
@@ -222,15 +311,26 @@ function assessmentWorks(ctx, row, base, act, list) {
     }
     if (part.out) Object.assign(work, { transitionOut: part.out, workState: 'transitioned', isActive: false });
     if (part.in) work.transitionIn = part.in;
+    if (part.simpleTitle) work.simpleTitle = part.simpleTitle;
     work.phases = part.phases;
     return work;
   });
 }
 
-/** The latest certificate issued before `day`; an unknown decision date counts as before any day. */
+/** The latest certificate issued on or before `day`; an unknown decision date counts as before any day. */
 function certificateFor(certificates, day) {
-  const before = certificates.filter(one => one.unknown || (day && one.day && one.day < day));
+  const before = certificates.filter(one => one.unknown || (day && one.day && one.day <= day));
   return before.sort((a, b) => String(a.day ?? '').localeCompare(String(b.day ?? ''))).at(-1) || null;
+}
+
+/** The sheet status, except that an end date closes an open status; with no status, the end date decides. */
+function postDecisionStateOf(ctx, spec, list) {
+  const state = oneLine(spec.status) ? entryFor(ctx.catalog, 'workStates', spec.status) : null;
+  if (oneLine(spec.status) && !state) list('unknownAmendmentStatus', { field: 'status' });
+  const stillOpen = Boolean(spec.decisionDay && state && OPEN_STATES.includes(state.code));
+  if (stillOpen) list('statusDisagrees', { field: 'status', code: state.code });
+  if (state && !stillOpen) return state.code;
+  return spec.decisionDay ? 'completed' : 'in-progress';
 }
 
 function postDecisionWork(ctx, project, spec, list) {
@@ -247,9 +347,8 @@ function postDecisionWork(ctx, project, spec, list) {
   });
   const phase = { ...phaseOf(ctx, certificate.actYear, POST_DECISION_PHASE[spec.code]), startDate: startDay || null };
   Object.assign(phase, { endDate: spec.decisionDay || null, isCompleted: Boolean(spec.decisionDay) });
-  const state = oneLine(spec.status) ? entryFor(ctx.catalog, 'workStates', spec.status) : null;
-  if (oneLine(spec.status) && !state) list('unknownAmendmentStatus', { field: 'status' });
-  const workState = state ? state.code : spec.decisionDay ? 'completed' : 'in-progress';
+  const workState = postDecisionStateOf(ctx, spec, list);
+  if (spec.kind !== 'register') work.simpleTitle = `#${String(spec.slot).padStart(2, '0')}`;
   Object.assign(work, {
     startDate: startDay || null, decisionDate: spec.decisionDay || null, isActive: OPEN_STATES.includes(workState),
     workState, phases: [phase], ...spec.extra
@@ -274,5 +373,5 @@ function registerPostDecision(ctx, project, row, list) {
 
 module.exports = {
   LAST_SHEET_DAY, SHEET_ACT_YEARS, UNKNOWN_DAY, UNKNOWN_FIELDS,
-  actOf, assessmentWorks, datedOf, isLater, keyOf, milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision
+  actOf, assessmentWorks, datedOf, isLater, keyOf, milestoneOf, oneLine, postDecisionWork, refOf, registerPostDecision, splitsOn2002
 };
