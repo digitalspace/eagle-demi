@@ -147,8 +147,8 @@ async function sheetWorksSummaryOf(rows) {
 const WORKPLAN_KEYS = ['workId', 'source', 'title', 'workTypeCode', 'workType', 'actYear', 'workState', 'isActive',
   'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome', 'transitionOut', 'undated',
   'shownAfterFlip', 'untilTrack', 'replaces'];
-const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'isCompleted', 'isSuspended',
-  'suspendedDate', 'undated'];
+const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'legislated', 'isCompleted',
+  'isSuspended', 'suspendedDate', 'undated'];
 const INTERRUPTION_KEYS = ['kind', 'typeCode', 'legalSection', 'startDate', 'endDate', 'days'];
 const MILESTONE_KEYS = ['name', 'code', 'eventType', 'position', 'actualDate', 'anticipatedDate', 'endDate',
   'numberOfDays', 'outcome'];
@@ -232,6 +232,8 @@ function workplanOf(projectId, projectName, work, doc) {
     ...sheetDocFieldsOf(track ? null : doc),
     phases: work.phases.map(phase => ({
       ...pick(phase, PHASE_KEYS),
+      // Track stores the flag as 1.
+      legislated: phase.legislated == null ? null : Boolean(phase.legislated),
       ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
       interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
     })),
