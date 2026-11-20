@@ -4,35 +4,92 @@ on: pull_request
 
 permissions:
   contents: read
-  pull-requests: read
+
+# Not pr-<number>: PR Validation uses that group, and sharing it would cancel the checks we wait on.
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   automerge:
     name: Dependabot auto-merge
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # PR Validation takes 2 to 9 minutes; the rest is room for a runner queue.
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
+      statuses: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Read Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
-      # A merge made with GITHUB_TOKEN starts no push workflows, so main would never deploy.
-      # An App token makes the merge count as a normal push.
-      - name: Create App token
-        id: app-token
+      - name: List changed files
+        id: files
         if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AUTOMERGE_APP_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-workflows: write # the actions group edits workflow files
+        run: |
+          gh pr diff "$PR_URL" --name-only > "$RUNNER_TEMP/changed-files"
+          # GITHUB_TOKEN has no workflows permission, so GitHub refuses its merge of a workflow edit.
+          if grep -q '^\.github/workflows/' "$RUNNER_TEMP/changed-files"; then
+            echo "::notice::Not merging: this PR edits .github/workflows/, which needs a person to merge it."
+            exit 0
+          fi
+          echo "merge=true" >> "$GITHUB_OUTPUT"
 
-      - name: Enable auto-merge
-        if: steps.app-token.outcome == 'success'
-        run: gh pr merge --auto --squash "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      - name: Wait for required checks
+        if: steps.files.outputs.merge == 'true'
+        run: |
+          # gh exits at once when no required check exists yet, so wait for PR Validation to register.
+          for _ in $(seq 1 20); do
+            gh pr checks "$PR_URL" --required --json name > /dev/null 2>&1 && break
+            sleep 15
+          done
+          gh pr checks "$PR_URL" --required --watch --fail-fast --interval 30
+
+      - name: Merge
+        if: steps.files.outputs.merge == 'true'
+        run: gh pr merge --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
+
+      # A GITHUB_TOKEN merge starts no push workflows, but it can still start workflow_dispatch runs.
+      - name: Start staging deploys and draft release
+        if: steps.files.outputs.merge == 'true'
+        run: |
+          declare -A workflows=([draft-release.yaml]=1)
+          # Mirrors on.push.paths of each staging deploy. Workflow-file paths are left out: those PRs stop above.
+          while IFS= read -r f; do
+            case "$f" in
+              src/*|api/*|index.js|host.json|package.json|yarn.lock|frontend/public/assets/geojson/*|azure/search/data-checks.json|azure/search/indexes/*|azure/search/indexers/*|azure/search/datasources/*)
+                workflows[azure-deploy-staging-api.yaml]=1 ;;
+            esac
+            case "$f" in
+              frontend/*) workflows[azure-deploy-staging-frontend.yaml]=1 ;;
+            esac
+            case "$f" in
+              pdf-title/test_*.py) ;;
+              pdf-title/*|scripts/package-pdf-title.sh) workflows[azure-deploy-staging-pdf-title.yaml]=1 ;;
+            esac
+            case "$f" in
+              src/secret-rotator/*|src/secret-sync/logger.js|src/utils/azure-credential.js|scripts/package-secret-sync.sh)
+                workflows[azure-deploy-staging-secret-rotator.yaml]=1 ;;
+            esac
+            case "$f" in
+              src/secret-sync/*|src/utils/*|src/config.js|scripts/package-secret-sync.sh)
+                workflows[azure-deploy-staging-secret-sync.yaml]=1 ;;
+            esac
+          done < "$RUNNER_TEMP/changed-files"
+          for wf in "${!workflows[@]}"; do
+            echo "Starting $wf on main"
+            gh workflow run "$wf" --ref main
+          done
