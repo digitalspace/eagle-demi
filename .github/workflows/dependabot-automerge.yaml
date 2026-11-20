@@ -36,10 +36,18 @@ jobs:
         id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
-      - name: List changed files
+      - name: Check versions and changed files
         id: files
         if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          DEPS: ${{ steps.meta.outputs.updated-dependencies-json }}
         run: |
+          # Under semver a 0.x minor may break (eslint-plugin-react-refresh 0.5 to 0.6).
+          # previous-version names only a group PR's first dependency, so check each one.
+          if ! jq -e 'all(.[]; .updateType == "version-update:semver-patch" or (.updateType == "version-update:semver-minor" and ((.prevVersion // "") | test("^v?[1-9]"))))' <<< "$DEPS" > /dev/null; then
+            echo "::notice::Not merging: a minor bump from a 0.x or unknown version needs a person to merge it."
+            exit 0
+          fi
           gh pr diff "$PR_URL" --name-only > "$RUNNER_TEMP/changed-files"
           # GITHUB_TOKEN has no workflows permission, so GitHub refuses its merge of a workflow edit.
           if grep -q '^\.github/workflows/' "$RUNNER_TEMP/changed-files"; then
