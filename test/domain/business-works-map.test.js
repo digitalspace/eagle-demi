@@ -400,6 +400,12 @@ test('an Other interruption takes its kind from the tab it was read on', () => {
   assert.strictEqual(assessments(result)[0].phases.flatMap(phase => phase.interruptions)[0].kind, 'extension');
 });
 
+test('an interruption type only the 2018 Act uses is skipped as act2018', () => {
+  const result = run({ projects: [register({ start180: '2006-01-01' })],
+    extensions: [{ ref: ref('Extensions', 1), id: 101, type: 'Extension s.38(1)', appliedTo: 'Review', startDate: '2006-02-01', endDate: '2006-03-01' }] });
+  assert.deepStrictEqual(result.report.filter(entry => entry.source === 'extensions').map(entry => entry.reason), ['act2018']);
+});
+
 test('an order variation becomes a numbered INTERIOR milestone in Pre-Application', () => {
   const result = run({ projects: [register({ start30: '2006-01-01' })], orderVariations: [{ ref: ref('Section 13', 1), id: 101, date: '2005-06-01' }] });
   const holder = assessments(result)[0].phases.find(phase => phase.milestones.some(one => one.code === 'order-variation'));

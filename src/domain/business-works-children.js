@@ -59,7 +59,7 @@ function childDays(row, [startKey, endKey], list) {
 }
 
 function attachInterruption(ctx, { project, list, noWork }, row, tabKind) {
-  if (skips2018(ctx.catalog, 'appliedTo', row.appliedTo)) return list('act2018');
+  if (skips2018(ctx.catalog, 'appliedTo', row.appliedTo) || skips2018(ctx.catalog, 'interruptionTypes', row.type)) return list('act2018');
   const days = childDays(row, ['startDate', 'endDate'], list);
   const type = days && entryFor(ctx.catalog, 'interruptionTypes', row.type);
   if (days && !type) list('unknownInterruptionType');
