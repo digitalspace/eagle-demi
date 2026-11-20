@@ -208,7 +208,7 @@ function overrideShown(sheetWorks, trackWorks, marker) {
   // listForRead drops sourceKey, so ties break by id order; dropping it here keeps every caller on that rule.
   const sorted = [...sheetWorks].sort((a, b) => compareText(a.id, b.id));
   const boundary = overrideBoundaryOf(trackWorks);
-  const replaced = untilTrackHidden(sorted.map(({ sourceKey, ...work }) => work), trackWorks, marker);
+  const replaced = untilTrackHidden(sorted.map(({ sourceKey: _sourceKey, ...work }) => work), trackWorks, marker);
   const shownSheetIds = new Set(sorted
     .filter(work => !replaced.has(work.id) && !hiddenByOverride(work, marker, boundary, []))
     .map(work => work.id));

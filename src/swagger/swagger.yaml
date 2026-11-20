@@ -1982,6 +1982,10 @@ paths:
                                 type: integer
                                 nullable: true
                                 description: The day budget for the phase, not the days it took.
+                              legislated:
+                                type: boolean
+                                nullable: true
+                                description: True when the day budget is set in law. Null when the source gives no flag.
                               isCompleted:
                                 type: boolean
                               isSuspended:

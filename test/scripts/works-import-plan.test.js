@@ -93,8 +93,29 @@ test('oversize work becomes a report entry', () => {
 
 test('dry run reports trackTransitionMissing for 477 with 2025-05-21', () => {
   const records = { projects: [{ ...register, id: 477, decision: null, decisionDate: null }], transitions: [{ ref: ref('EA Process Data'), id: 477, date: '2025-05-21' }] };
-  const result = plan(records, { options: { transitionIdsAreRegisterIds: true } });
+  const result = plan(records);
   assert.deepEqual(result.lists.trackTransitionMissing.map(item => [item.projectId, item.fallbackDate]), [[PROJECT, '2025-05-21']]);
+});
+
+test('project 45 shape: the 2024 amendment lists no-certificate', () => {
+  const projects = [{ ...register, intakeType: '2018 Act', intakeDate: '2019-06-07', determinationDate: '2019-10-29', decisionDate: '2023-10-10' }];
+  const records = { projects, transitions: [{ ref: ref('EA Process Data'), id: NUMBER, date: '2020-02-21' }], amendments: [amendment(1, '2024-03-06', null)] };
+  const track = [trackWork(205, { workTypeId: 6, startDate: '2020-05-14', decisionDate: '2023-10-10' })];
+  const active = { id: 'sheet-override', projectId: PROJECT, kind: 'override', source: 'sheet', owner: 'sheet', active: true, hidden: [], untilTrack: [] };
+  const result = plan(records, { track, markers: new Map([[PROJECT, active]]) });
+  const [assessment] = result.entries.filter(entry => entry.doc && entry.doc.workTypeCode === 'assessment').map(entry => entry.doc);
+  assert.deepEqual([assessment.workState, assessment.transitionOut, assessment.certificateKind, assessment.decisionDate],
+    ['transitioned', { toActYear: 2018, date: '2020-02-21', dateSource: 'sheet' }, undefined, null]);
+  assert.deepEqual(result.entries.filter(entry => entry.sourceKey === KEY), []);
+  const listed = reason => result.report.filter(entry => entry.reason === reason).map(entry => entry.source);
+  assert.deepEqual([listed('no-certificate'), listed('markerWithoutCertificate'), listed('markerDeactivated')], [['amendments'], ['override'], ['load']]);
+  assert.deepEqual(result.entries.filter(entry => entry.action === 'marker').map(entry => entry.doc.active), [false]);
+});
+
+test('AG Yes builds a substantial-start work', () => {
+  const started = flag => plan({ projects: [{ ...register, substantialStartDate: '2012-01-01', substantialStartFlag: flag }] }).entries
+    .filter(entry => entry.sourceKey === `${NUMBER}:register:substantial-start`).map(entry => entry.doc.decisionDate);
+  assert.deepEqual([started('Yes'), started('No')], [['2012-01-01'], []]);
 });
 
 test('refuses staff columns without a keepStaff sign-off ref', () => {

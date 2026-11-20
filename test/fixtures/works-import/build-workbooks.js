@@ -1,7 +1,7 @@
 'use strict';
 
-// Synthetic business workbooks in the real layout: title rows, merged band row over the header row,
-// ids and slot numbers pre-filled below the data, '---' filler. Made-up projects and people only.
+// Synthetic business workbooks in the real layout and label vocabulary: title rows, merged band row over the
+// header row, ids and slot numbers pre-filled below the data, '---' filler, '=====' footer. Made-up projects and people.
 const path = require('path');
 const ExcelJS = require('exceljs');
 
@@ -12,8 +12,8 @@ const PREFILLED_TO = 30;
 
 const STAFF_VALUES = ['Test Officer One', 'Test Lead One', 'fixture note one', 12000000];
 const NEVER_READ_VALUES = ['BI-NOTE-NEVER-READ', 'BI-EPD-NEVER-READ', 'TEAM-NEVER-READ'];
-const PROJECT_NAMES = ['Alder Creek Mine', 'Birch Point Terminal', 'Cedar Ridge Wind'];
-const REAL_IDS = [45, 7, 120];
+const PROJECT_NAMES = ['Alder Creek Mine', 'Birch Point Terminal', 'Cedar Ridge Wind', 'Dogwood Bay Quarry'];
+const REAL_IDS = [45, 7, 120, 233];
 
 /** Writes [band, headers[]] groups left to right from column A; a band over several columns is merged. */
 function layout(ws, bandRow, groups) {
@@ -51,6 +51,8 @@ function prefill(ws, fromRow, idCol = 'A') {
   }
 }
 
+const footer = ws => put(ws, PREFILLED_TO + 1, { A: '=====', B: '=====' });
+
 function mainSheet(workbook, tab, title, groups) {
   const ws = workbook.addWorksheet(tab);
   ws.getCell('A1').value = title;
@@ -82,19 +84,25 @@ function projects(workbook) {
   // The formula's own text differs from its cached result, so evaluating it would show.
   put(ws, 5, { A: '045', B: { formula: '"evaluated"', result: PROJECT_NAMES[0] }, D: 'Active', F: 'n/a', H: FILL,
     J: investment, K: notes, L: epd, M: lead, N: NEVER_READ_VALUES[2], Q: 'Pre-EAO', R: day('1995-06-30'),
-    U: FILL, AA: 'EA Certificate Granted', AB: day('1999-03-01'), AC: 'No', AD: { formula: 'AB5-R5', result: 1340 } });
+    S: 'Pre-2002 Act', T: day('1995-06-30'), U: FILL, AA: 'EA Certificate Granted', AB: day('1999-03-01'), AC: 'No',
+    AD: { formula: 'AB5-R5', result: 1340 }, AE: 'Not Started', AF: day('2001-06-01'), AG: 'No' });
   put(ws, 6, { A: 7, B: { richText: [{ text: 'Birch Point ' }, { font: { bold: true }, text: 'Terminal' }] },
-    R: day('2001-01-10'), AB: day('2000-05-05'), AE: 'Substantially Started', AF: day('2004-02-02'), AG: 'Yes',
+    Q: 's.6/s.11', R: day('2001-01-10'), AA: 'Withdrawn', AB: day('2000-05-05'),
     AH: { formula: 'TODAY()+30', result: day('2026-12-01') }, AI: day('2009-01-01'), AL: day('2030-01-01') });
   put(ws, 7, { A: 120, B: PROJECT_NAMES[2], C: { error: '#N/A' }, G: { formula: '1/0', result: { error: '#DIV/0!' } },
-    R: day('2003-04-04'), U: FILL, V: '1850-01-01', W: '2001-02-30', AB: 1e10 });
+    Q: 's.7/s.12', R: day('2003-04-04'), S: 's.10(1)(c)', T: day('2003-05-05'), U: FILL, V: '1850-01-01', W: '2001-02-30',
+    X: day('2005-01-10'), Y: day('2005-02-14'), AB: 1e10 });
   ws.getCell('AB7').numFmt = 'yyyy-mm-dd';
-  put(ws, 8, { A: 'x12', B: 'Unnumbered Project' });
+  put(ws, 8, { A: 233, B: PROJECT_NAMES[3], D: 'Active', Q: 's.6/s.11', R: day('2004-01-15'), S: 's.10(1)(a)',
+    T: day('2004-03-01'), U: day('2004-06-01'), W: day('2005-02-01'), X: day('2005-03-01'), Y: day('2005-04-01'),
+    Z: day('2005-10-01'), AA: 'EA Certificate Granted', AB: day('2005-11-15'), AE: 'Official Decision',
+    AF: day('2010-06-01'), AG: 'Yes', AH: day('2010-11-15') });
   put(ws, 9, { A: 46, D: 'Active' });
   put(ws, 10, { A: 7, B: 'Birch Point Terminal' });
   put(ws, 11, { A: 44000, B: 'Date Formatted Id Project' });
   ws.getCell('A11').numFmt = 'yyyy-mm-dd';
   prefill(ws, 12);
+  footer(ws);
   junk(workbook, 'Lookups', 'For BI');
 }
 
@@ -104,23 +112,26 @@ function amendments(workbook) {
     ['ID', ['ID']], ['Project Information', ['Name']], [null, ['Decision']], ...slots(15, 'Amendment', band),
     [null, [null]], ['Latest', ['Amenment Date']]
   ]);
-  put(ws, 5, { A: 45, B: PROJECT_NAMES[0], E: 'Moderate', F: 'Complete', G: day('2003-01-01'), H: day('2002-06-01'),
-    J: 'Low', K: 'Open', L: day('2010-05-05') });
-  put(ws, 6, { A: 7, B: PROJECT_NAMES[1], E: 'Low', F: 'Complete', G: day('2005-01-01'), H: day('2005-03-01') });
+  put(ws, 5, { A: 45, B: PROJECT_NAMES[0], C: 'EA Certificate Granted', E: 'Pre-2014', F: 'Complete', G: day('2003-01-01'),
+    H: day('2002-06-01'), J: 'Typical', K: 'Active', L: day('2010-05-05') });
+  put(ws, 6, { A: 233, B: PROJECT_NAMES[3], C: 'EA Certificate Granted', E: 'Simple', F: 'Complete', G: day('2008-01-01'),
+    H: day('2008-03-01') });
   prefill(ws, 7);
-  put(ws, 7, { A: null, E: 'Low' });
+  put(ws, 7, { A: null, E: 'Complex' });
   fillBlocks(ws, 4, 5, 15, Array.from({ length: PREFILLED_TO - 4 }, (_, i) => i + 5));
+  footer(ws);
   junk(workbook, 'Lookups', 'For BI');
 }
 
-function interruptions(workbook, tab, band, cells) {
+function interruptions(workbook, tab, band, rows) {
   const ws = mainSheet(workbook, tab, `EAO Project ${band} Information`, [
     ['ID', ['ID']], ['Project Information', ['Name', 'Status']], ['Total Days', [null]],
     ...slots(10, band, ['No.', 'Type', 'Applied To', 'Start Date', 'End Date', 'Days'])
   ]);
-  put(ws, 5, cells);
-  prefill(ws, 6);
+  rows.forEach((cells, i) => put(ws, 5 + i, cells));
+  prefill(ws, 5 + rows.length);
   fillBlocks(ws, 5, 6, 10, Array.from({ length: PREFILLED_TO - 4 }, (_, i) => i + 5));
+  footer(ws);
   junk(workbook, 'Lookups', 'For BI');
 }
 
@@ -131,6 +142,7 @@ function sectionThirteen(workbook) {
   put(ws, 5, { A: 45, B: PROJECT_NAMES[0], E: day('1997-01-01'), G: day('1997-06-01') });
   prefill(ws, 6);
   fillBlocks(ws, 4, 2, 10, Array.from({ length: PREFILLED_TO - 4 }, (_, i) => i + 5));
+  footer(ws);
 }
 
 function commentPeriods(workbook) {
@@ -138,10 +150,11 @@ function commentPeriods(workbook) {
     ['ID', ['ID']], ['Project Information', ['Name', 'Status']],
     ...slots(10, 'Public Comment Period', ['Type', 'Start Date', 'End Date'])
   ]);
-  put(ws, 5, { A: 45, B: PROJECT_NAMES[0], D: 'Application', E: day('1998-03-01'), F: day('1998-04-01') });
-  put(ws, 6, { A: 120, B: PROJECT_NAMES[2], D: 'Draft AIR', E: day('2004-01-01'), F: day('2004-02-01') });
+  put(ws, 5, { A: 45, B: PROJECT_NAMES[0], D: 'Application PCP', E: day('1998-03-01'), F: day('1998-04-01') });
+  put(ws, 6, { A: 120, B: PROJECT_NAMES[2], D: 'Project Desc. PCP', E: day('2004-01-01'), F: day('2004-02-01') });
   prefill(ws, 7);
   fillBlocks(ws, 4, 3, 10, Array.from({ length: PREFILLED_TO - 4 }, (_, i) => i + 5), false);
+  footer(ws);
 }
 
 function timelines(workbook) {
@@ -169,10 +182,10 @@ function assessmentBi(workbook) {
     ['Intake', ['Type', 'Date']]
   ]);
   const [biNote, biEpd] = NEVER_READ_VALUES;
-  const row = (rowNo, id, name, type, date) => put(ws, rowNo, { A: id, B: name, E: biNote, F: biEpd, G: type, H: date });
+  const row = (rowNo, id, name, type, date) => put(ws, rowNo, { A: id, B: name, D: 'EA Act (2018)', E: biNote, F: biEpd, G: type, H: date });
   row(5, 120, PROJECT_NAMES[2], 'Transition Order (2018)', day('2021-04-01'));
-  row(6, 45, PROJECT_NAMES[0], 'Transition Order (2018)', FILL);
-  row(7, 7, PROJECT_NAMES[1], 'IPD Accepted', day('2020-01-01'));
+  row(6, 7, PROJECT_NAMES[1], 'Transition Order (2018)', FILL);
+  row(7, 310, 'Elm Valley Pipeline', 'IPD Accepted', day('2020-01-01'));
   prefill(ws, 8);
   junk(workbook, 'Graphics', 'Lookups');
 }
@@ -186,14 +199,16 @@ async function buildWorkbooks(dir) {
   for (const decoy of ['Copy of 02 - Project Amendment Data 1.xlsx', '02 - Project Amendment Data 1 old.xlsx']) {
     await save(dir, decoy, wb => junk(wb, 'Amendments'));
   }
-  await save(dir, '03 - Project Suspension Data.xlsx', wb => interruptions(wb, 'Suspensions', 'Suspension', {
-    A: 45, B: PROJECT_NAMES[0], F: 'Suspension', G: 'Application Review', H: day('1998-01-01'),
-    I: { formula: 'NOW()', result: day('2026-11-01') }, L: 'Suspension', M: 'Pre-Application',
+  await save(dir, '03 - Project Suspension Data.xlsx', wb => interruptions(wb, 'Suspensions', 'Suspension', [{
+    A: 45, B: PROJECT_NAMES[0], F: 'Suspension s.24(2)', G: 'Review', H: day('1998-01-01'),
+    I: { formula: 'NOW()', result: day('2026-11-01') }, L: 'Suspension s.30(1)', M: 'Evaluation',
     N: day('1998-03-01'), O: day('1998-04-01')
-  }));
-  await save(dir, '04 - Project Extension Data.xlsx', wb => interruptions(wb, 'Extensions', 'Extension', {
-    A: 7, B: PROJECT_NAMES[1], F: 'Extension', G: 'Pre-Application', H: day('2001-02-01'), I: day('2001-03-01')
-  }));
+  }, {
+    A: 233, B: PROJECT_NAMES[3], F: 'Suspension s.24(2)', G: 'Evaluation', H: day('2005-06-01'), I: day('2005-07-01')
+  }]));
+  await save(dir, '04 - Project Extension Data.xlsx', wb => interruptions(wb, 'Extensions', 'Extension', [{
+    A: 7, B: PROJECT_NAMES[1], F: 'Extension s.24(4)', G: 'Decision', H: day('2001-02-01'), I: day('2001-03-01')
+  }]));
   await save(dir, '05 - Project Section 13 Data.xlsx', sectionThirteen);
   await save(dir, '06 - Project PCP Data 1.xlsx', commentPeriods);
   await save(dir, '06 - Dispute Resolution BI Sheet.xlsx', wb => junk(wb, 'EA Process Data'));

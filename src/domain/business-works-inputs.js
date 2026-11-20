@@ -4,12 +4,14 @@
 // the two cannot map one extract differently.
 
 const { listOf, sourceOf } = require('./work-model');
-const { SHEET_ACT_YEARS } = require('./business-works-assessment');
+const { SHEET_ACT_YEARS, keyOf } = require('./business-works-assessment');
 
 /** A register number: a positive safe integer, else null; the crosswalk skips any other id as `badId`. */
 const sheetIdOf = v => (Number.isSafeInteger(v) && v > 0 ? v : null);
 const REGISTER_SYSTEM = 'eao-register';
 const STAFF_HISTORY = ['staffAssignments', 'staffNotes', 'capitalInvestments'];
+/** Register column AG "SS?" says the project substantially started. */
+const substantialStart = row => keyOf(row.substantialStartFlag) === 'yes';
 
 /** Whether a stored project row holds what the sheet load writes: register number `number`'s external id or an open staff entry. */
 function holdsSheetEntries(row, number) {
@@ -33,7 +35,7 @@ function mapperInputs({ crosswalk, skipped, catalog, phaseCatalog, rows, works, 
   const trackOf = id => listOf(works.get(id)).filter(work => sourceOf(work) === 'track' && work.deleted !== true);
   return {
     base: {
-      catalog, phaseCatalog, crosswalk, skipped, batchId, batchAt, storedProjects: rows,
+      catalog, phaseCatalog, crosswalk, skipped, batchId, batchAt, storedProjects: rows, substantialStart,
       eagleItems: new Map(projectIds.map(id => [id, { ...(rows.get(id) || {}), commentPeriods: listOf(commentPeriods.get(id)) }]))
     },
     trackWorks: new Map(projectIds.map(id => [id, trackOf(id)])),

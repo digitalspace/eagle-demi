@@ -274,7 +274,7 @@ const milestone = (eventType, actualDate, numberOfDays, anticipatedDate = null) 
 test('workplans gives every work of the projects the caller may read, Track rows never replacing', async (t) => {
   const done = {
     trackName: 'Early Engagement', startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184, sortOrder: 2,
-    isCompleted: true, isSuspended: false, suspendedDate: null, trackPhaseId: 55, interruptions: [],
+    legislated: 1, isCompleted: true, isSuspended: false, suspendedDate: null, trackPhaseId: 55, interruptions: [],
     milestones: [milestone(10, '2024-04-01', 30), milestone(10, null, 99), milestone(14, '2024-08-01', null, '2024-08-01')]
   };
   const open = {
@@ -306,11 +306,11 @@ test('workplans gives every work of the projects the caller may read, Track rows
   assert.deepStrictEqual([sheetInfo(track), sheetInfo(sheet)], [[null, null, null], Object.values(SHEET_INFO)]);
   assert.deepStrictEqual(track.phases, [{
     name: 'Early Engagement', stage: null, order: 2, startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184,
-    isCompleted: true, isSuspended: false, suspendedDate: null, undated: null,
+    legislated: true, isCompleted: true, isSuspended: false, suspendedDate: null, undated: null,
     isCurrent: false, extensionDays: 30, suspendedDays: 0, interruptions: []
   }, {
     name: 'Process Planning', stage: null, order: 3, startDate: '2024-09-01', endDate: '2025-01-01', numberOfDays: 122,
-    isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', undated: null,
+    legislated: null, isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', undated: null,
     isCurrent: true, extensionDays: 0, suspendedDays: 14,
     interruptions: [{ kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
   }]);

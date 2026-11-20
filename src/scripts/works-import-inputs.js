@@ -41,8 +41,8 @@ const HELP = [
   '  For a run that stopped midway and the other modes, see yarn works:rollback --help.',
   '--signoff-ref must be one of the sign-off refs the extract carries, when it carries any. The batch records it to show',
   '  the load matched the extract; it is not proof that anyone signed off.',
-  'The transitions tab joins as the sheet-to-master map defaults: refused (transitionJoinUndecided) until the business decides',
-  'that column A holds the register id, so no sheet work takes a transition date from it.'
+  'Each Transition Order on the EA Process Data tab joins its register row by the id in column A and moves that 2002 work',
+  '  to the 2018 Act: an order dated before 2025 ends the work on its date; a later or undated one leaves the date to Track.'
 ];
 
 const refuse = (message) => { throw new Error(message); };
