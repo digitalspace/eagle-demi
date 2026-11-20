@@ -21,6 +21,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Minor and patch PRs merge on their own, so give a bad release a week to be pulled first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       # minor+patch ONLY. A group is for things you merge on green CI without
@@ -44,6 +47,8 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       # Same rule as the API group: React, Vite and TypeScript majors arrive one
@@ -62,6 +67,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns:
