@@ -1,16 +1,5 @@
-# =============================================================================
-# Dependabot
-# =============================================================================
-# This file is NOT what fixes security alerts — Dependabot security updates work
-# without any config, and opened PR #27 for brace-expansion before this existed.
-# What it buys is grouping: 40 of the 47 open alerts have a fix, and ungrouped
-# that is 40 pull requests. It also adds routine version updates, so the backlog
-# stops rebuilding between security advisories.
-#
-# Two npm entries because the API and the frontend are separate Yarn 4 projects
-# with their own lockfiles. `npm` is the correct ecosystem for Yarn — there is no
-# `yarn` value.
-# =============================================================================
+# Two npm entries: the API and the frontend are separate Yarn 4 projects with
+# their own lockfiles. `npm` is the Dependabot ecosystem for Yarn.
 
 version: 2
 
@@ -21,15 +10,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Minor and patch PRs merge on their own, so give a bad release a week to be pulled first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
-      # minor+patch ONLY. A group is for things you merge on green CI without
-      # reading them, and a major is never that.
-      #
-      # Without this, the first run produced PR #35: express, helmet, jwks-rsa,
-      # minio and serverless-http majors in one green PR. Green proved nothing —
-      # no test mounts the Express app, and nothing in CI touches MinIO, the live
-      # object store behind every document download. Majors now arrive one per PR.
+      # Minor and patch only: no test mounts the Express app or touches MinIO,
+      # so green CI says little about a major. Majors arrive one per PR.
       api-dependencies:
         patterns:
           - '*'
@@ -37,13 +24,14 @@ updates:
           - minor
           - patch
 
-  # The React frontend. Only `frontend/dist` is deployed, never node_modules,
-  # so build-tooling advisories here are a CI supply-chain concern rather than a
-  # production one. The bundled runtime packages are the exception.
+  # Only `frontend/dist` is deployed, so most advisories here are a CI
+  # supply-chain concern. The bundled runtime packages are the exception.
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       # Same rule as the API group: React, Vite and TypeScript majors arrive one
@@ -55,13 +43,13 @@ updates:
           - minor
           - patch
 
-  # Keeps the action versions bumped in PR #26 (checkout v7, setup-node v7,
-  # azure/login v3, azure/cli v3, arm-deploy v2) from going stale again — that
-  # drift is what produced a Node 20 deprecation warning on every job.
+  # Keeps action versions current so jobs stay off deprecated Node runtimes.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns:
