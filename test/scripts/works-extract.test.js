@@ -35,22 +35,29 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   assert.deepEqual(first.ref, { file: '01 - Project Business Intelligence Data 4.xlsx', sheet: 'Projects', row: 5 });
   const second = records.projects.find(r => r.id === 7);
   assert.equal(second.name, PROJECT_NAMES[1], 'rich text joined');
-  assert.equal(second.substantialStartDate, '2004-02-02');
   assert.equal(second.expiryDate, '2026-12-01', 'a longer volatile formula keeps its cached value');
   const third = records.projects.find(r => r.id === 120);
   assert.deepEqual([third.proponent, third.subsector, third.decisionDate], [null, null, null]);
+  const fourth = records.projects.find(r => r.id === 233);
+  assert.deepEqual([fourth.substantialStartStatus, fourth.substantialStartDate, fourth.substantialStartFlag],
+    ['Official Decision', '2010-06-01', 'Yes']);
   assert.equal(records.amendments.find(r => r.id === 45 && r.ref.slot === 2).endDate, null);
   assert.deepEqual(records.suspensions.map(r => [r.ref.slot, r.appliedTo, r.endDate]),
-    [[1, 'Application Review', null], [2, 'Pre-Application', '1998-04-01']]);
+    [[1, 'Review', null], [2, 'Evaluation', '1998-04-01'], [1, 'Evaluation', '2005-07-01']]);
   assert.deepEqual(records.timeline2002.map(r => [r.name, r.decision, r.decisionDate]),
     [[PROJECT_NAMES[2], 'Incomplete/Inactive', null]]);
 
   const kinds = flags.map(f => `${f.sheet}:${f.row}:${f.slot || 0}:${f.field}:${f.kind}`).sort();
   assert.deepEqual(kinds, [
+    'Amendments:31:0:id:badId',
     'Amendments:5:1:endDate:endBeforeStart',
     'Amendments:7:0:name:unnamedRow',
+    'Extensions:31:0:id:badId',
+    'PCPs:31:0:id:badId',
     'Projects:10:0:id:duplicateId',
     'Projects:11:0:id:badId',
+    'Projects:31:0:id:badId',
+    'Projects:5:0:determinationDate:sentinel',
     'Projects:5:0:intakeDate:sentinel',
     'Projects:6:0:decisionDate:endBeforeStart',
     'Projects:6:0:expiryDate:volatileFormula',
@@ -59,12 +66,13 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
     'Projects:7:0:draftAir:badDate',
     'Projects:7:0:proponent:errorCell',
     'Projects:7:0:subsector:errorCell',
-    'Projects:8:0:id:badId',
     'Projects:9:0:name:unnamedRow',
+    'Section 13:31:0:id:badId',
+    'Suspensions:31:0:id:badId',
     'Suspensions:5:1:endDate:nowFormula'
   ]);
   assert.deepEqual(counts, {
-    projects: 3, amendments: 3, suspensions: 2, extensions: 1, orderVariations: 2,
+    projects: 4, amendments: 3, suspensions: 3, extensions: 1, orderVariations: 2,
     commentPeriods: 2, timeline2002: 1, transitions: 2, transitionsDated: 1
   });
 });
@@ -164,7 +172,7 @@ test('surrogates are stable across two operator keys', async () => {
   const second = await extractTo(['--env', 'test', ...surrogateArgs(map)], devboxKeys());
   const idsByName = ({ extract }) => Object.fromEntries(extract.records.projects.map(r => [r.name, r.id]));
   assert.deepEqual(idsByName(second), idsByName(first));
-  assert.equal(new Set(Object.values(idsByName(first))).size, 3);
+  assert.equal(new Set(Object.values(idsByName(first))).size, 4);
 });
 
 test('a missing surrogate map needs --new-surrogates, which refuses an existing map', async () => {
