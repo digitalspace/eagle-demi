@@ -46,6 +46,11 @@ test('s.6/s.11 dated 2022 is 2018; dated 1999 is 2002 and listed', () => {
   assert.deepStrictEqual(listed, [{ reason: 'intakeBeforeAct', field: 'intakeType' }]);
 });
 
+test('s.6/s.11 on the 2018 Act in-force day is 2018; the day before is 2002', () => {
+  const actYearOn = (intakeDate) => actOf(CTX, { determinationType: null, determinationDate: null, intakeType: 's.6/s.11', intakeDate }).actYear;
+  assert.deepStrictEqual([actYearOn('2019-12-16'), actYearOn('2019-12-15')], [2018, 2002]);
+});
+
 test('milestone-only phase does not exist', () => {
   const phases = phasesOf({ s11Order: '2005-06-01', start30: '2006-01-01' });
   assert.deepStrictEqual(phases.map(phase => phase.name), ['Pre-EA', 'Evaluation']);
