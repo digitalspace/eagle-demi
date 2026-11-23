@@ -301,9 +301,8 @@ param devboxEntraSshPrincipalId = ''
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
 
-// Raised from 400 on 2026-10-01. The run rate is about 520 CAD a month (about 16.7 a day) since
-// Defender for Cloud and a full month of the search service were added.
-param budgetAmount = 550
+// Monthly anomaly guard, CAD. Run rate about 20 CAD a day (about 600 a month, measured 2026-11-23). The 80% alert sits above the run rate.
+param budgetAmount = 800
 
 // Same probe as prod, test-shaped: monitors the real user path and its executions keep one
 // Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
