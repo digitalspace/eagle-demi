@@ -248,8 +248,8 @@ param eagleProtectedApiBase = 'https://projects.eao.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api'
 
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
-// Monthly anomaly guard, CAD. Run rate about 17.5 CAD a day (about 530 a month, measured 2026-11-23).
-param budgetAmount = 600
+// Monthly anomaly guard, CAD. Run rate about 17.5 CAD a day (about 530 a month, measured 2026-11-23). The 80% alert sits above the run rate.
+param budgetAmount = 700
 
 param contactEmails = [
   'Daniel.T.Truong@gov.bc.ca'
