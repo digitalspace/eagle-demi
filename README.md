@@ -6,7 +6,7 @@ This repository houses:
 
 1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
    chunks and administrative boundaries, running on Azure Functions Flex Consumption
-   (`@azure/functions` v4 on Node.js 22).
+   (`@azure/functions` v4 on Node.js 24).
 2. **demi-frontend** — the React search frontend, published to the `$web`
    container of a Storage static website and served through the Front Door profile that lives in
    `eagle-search`.
@@ -28,7 +28,7 @@ The API runs on your machine without a database. You need these tools:
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Node.js | 22.12 or later | [nodejs.org](https://nodejs.org) or nvm |
+| Node.js | 24, from 24.15 | [nodejs.org](https://nodejs.org) or nvm |
 | Yarn | 4.12.0, from `packageManager` | `corepack enable` |
 | Azure Functions Core Tools | 4 | `npm install -g azure-functions-core-tools@4` |
 | Azurite | 3 | `npm install -g azurite` |

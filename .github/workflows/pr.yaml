@@ -30,12 +30,12 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      # 22, the Flex host's runtime (azure/modules/api-function-flex.bicep) and what both API deploy
+      # 24, the Flex host's runtime (azure/modules/api-function-flex.bicep) and what both API deploy
       # jobs run. Testing on a version prod does not serve proves the wrong thing.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'yarn'
 
       - name: Install dependencies

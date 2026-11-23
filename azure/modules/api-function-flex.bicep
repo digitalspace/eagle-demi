@@ -657,7 +657,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
       }
       runtime: {
         name: 'node'
-        version: '22'
+        version: '24'
       }
     }
     siteConfig: {

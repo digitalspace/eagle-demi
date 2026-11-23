@@ -193,7 +193,7 @@ resource rotatorApp 'Microsoft.Web/sites@2024-11-01' = {
       }
       runtime: {
         name: 'node'
-        version: '22'
+        version: '24'
       }
     }
     siteConfig: {
