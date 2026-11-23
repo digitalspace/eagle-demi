@@ -45,7 +45,7 @@ param minioKeyPrefix string = ''
 @description('Pinned first day of the live budget period — an existing budget rejects startDate changes, so this must match what is deployed. Empty = first of the current month (new budgets only).')
 param budgetStartDate string = ''
 
-@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Sized above the measured run rate of ~350 CAD/month (Cost Management, 2026-08-17); the old 150 came from a 12-day average taken before the resource group had finished billing. The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
+@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Each environment sets it in main.<env>.bicepparam, above its measured run rate. The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
 param budgetAmount int = 400
 
 
