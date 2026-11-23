@@ -5,7 +5,7 @@
   "_comment_main": "This file is the PACKAGE MANIFEST OF THE ZIP, not of this directory: the deploy step copies it to the zip root, where the repo's own layout (src/secret-sync, src/utils) is preserved so the relative requires still resolve. Hence the path-from-repo-root main.",
   "main": "src/secret-sync/index.js",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "dependencies": {
     "@azure/functions": "^4.5.0",
