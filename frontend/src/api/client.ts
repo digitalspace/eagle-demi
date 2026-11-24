@@ -112,6 +112,30 @@ export interface ApiInit extends RequestInit {
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const res = await request(path, init);
+  // A 204 carries no body, and JSON.parse('') throws.
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+/** A list page and the total DEMI sends in `x-total-count`, which it does only for `count=true`. */
+export interface ApiList<T> {
+  rows: T[];
+  total: number | null;
+}
+
+export async function apiList<T>(path: string, init: ApiInit = {}): Promise<ApiList<T>> {
+  const res = await request(path, init);
+  return { rows: (await res.json()) as T[], total: totalCount(res.headers.get('x-total-count')) };
+}
+
+/** Anything but a whole number reads as no total, so a bad header never shows as NaN or 0. */
+function totalCount(header: string | null): number | null {
+  return header !== null && /^\d+$/.test(header) ? Number(header) : null;
+}
+
+/** Sends with the bearer and one refresh-and-replay; a non-2xx answer throws `ApiError`. */
+async function request(path: string, init: ApiInit): Promise<Response> {
   const { timeoutMs, bearerFor, ...rest } = init;
   const url = new URL(path.startsWith('/') ? apiPath() + path : path, window.location.origin);
   const allowed = isAllowedUrl(url);
@@ -140,9 +164,7 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ''));
   }
-  // A 204 carries no body, and JSON.parse('') throws.
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return res;
 }
 
 /** A signal per attempt: one `AbortSignal.timeout` reused across a replay is already spent. */
