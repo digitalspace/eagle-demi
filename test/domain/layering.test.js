@@ -14,19 +14,30 @@ const { code } = require('../helpers/router-source');
 
 const SRC = path.join(__dirname, '..', '..', 'src');
 
-/** Layer violations that predate the rules. Each names the one violation it excuses. */
+/** Layer violations that predate the rules. Each lists the violations it excuses. */
 const EXEMPT = Object.freeze({
   'repositories/links.js': {
-    violation: 'imports vis/redact',
+    violations: ['imports vis/redact'],
     reason: 'a short-code lookup answers only the codes this caller may see, so the project field dials apply inside it'
   },
   'repositories/_sql.js': {
-    violation: 'imports vis/redact',
+    violations: ['imports vis/redact'],
     reason: 'a filter or sort on a field the caller cannot see is refused where the SQL is built, or row matches would leak its value'
   },
   'repositories/credentials.js': {
-    violation: 'imports utils/audit',
+    violations: ['imports utils/audit'],
     reason: 'a project delete narrows and revokes credentials with no request in hand, and each changed row is audited there'
+  },
+  'scripts/seed-public-reads.js': {
+    violations: [
+      'imports controllers/nosql/organization', 'imports controllers/nosql/notification', 'imports controllers/nosql/update',
+      'imports controllers/nosql/comment-period', 'imports controllers/nosql/comment'
+    ],
+    reason: 'Eagle mirror lines, deleted by R3'
+  },
+  'scripts/parity-map.js': {
+    violations: ['imports controllers/nosql/comment', 'imports controllers/nosql/comment-period', 'imports controllers/nosql/organization'],
+    reason: 'Eagle mirror lines, deleted by R3'
   }
 });
 
@@ -75,24 +86,30 @@ function violations(file, source) {
   }
   if (WRITE_CONTROLLERS.includes(file)) ban('db');
   if (file.startsWith('repositories/')) ban('domain', 'controllers', 'utils/audit', 'vis/redact');
+  // Only the route table and controllers wire a controller. A repository's ban above already names it.
+  else if (!file.startsWith('controllers/') && !file.startsWith('http/')) ban('controllers');
   return found;
 }
 
-/** Exempt entries whose file does not break the rule they excuse. */
+/** Exempt entries whose file does not break every rule they excuse. */
 function staleExemptions(exempt, sourceOf) {
   return Object.entries(exempt)
-    .filter(([file, { violation }]) => !violations(file, sourceOf(file)).includes(violation))
+    .filter(([file, entry]) => {
+      const found = violations(file, sourceOf(file));
+      return entry.violations.some(violation => !found.includes(violation));
+    })
     .map(([file]) => file);
 }
 
 const readSrc = (file) => (fs.existsSync(path.join(SRC, file)) ? fs.readFileSync(path.join(SRC, file), 'utf8') : '');
 
-function layerFiles() {
-  return ['controllers/native', 'domain', 'repositories'].flatMap(dir =>
-    fs.readdirSync(path.join(SRC, dir), { recursive: true })
-      .filter(name => name.endsWith('.js'))
-      .map(name => path.posix.join(dir, name.split(path.sep).join('/'))))
-    .concat(WRITE_CONTROLLERS);
+/** Every .js file under src/ (or `dir` in it), as a posix path. A local `node_modules` install is skipped. */
+function layerFiles(dir = '') {
+  return fs.readdirSync(path.join(SRC, dir), { withFileTypes: true }).flatMap(entry => {
+    const file = dir ? `${dir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : layerFiles(file);
+    return entry.name.endsWith('.js') ? [file] : [];
+  });
 }
 
 test('every file in a layer keeps to the import direction', () => {
@@ -101,7 +118,7 @@ test('every file in a layer keeps to the import direction', () => {
     'the scan must find files in each layer, or it passes by reading nothing');
 
   const broken = files.flatMap(file => violations(file, readSrc(file))
-    .filter(found => !(EXEMPT[file] && EXEMPT[file].violation === found))
+    .filter(found => !(EXEMPT[file] && EXEMPT[file].violations.includes(found)))
     .map(found => `${file} ${found}`));
   assert.deepStrictEqual(broken, []);
 });
@@ -118,6 +135,30 @@ test('every exempt entry still excuses a real violation', () => {
 
 test('an exempt entry whose violation is gone is reported stale', () => {
   assert.deepStrictEqual(staleExemptions(EXEMPT, () => "'use strict';\n"), Object.keys(EXEMPT));
+});
+
+test('an exempt entry with one of its listed violations gone is reported stale', () => {
+  const exempt = { 'scripts/thing.js': { violations: ['imports controllers/nosql/update', 'imports controllers/nosql/user'] } };
+  assert.deepStrictEqual(staleExemptions(exempt, () => "require('../controllers/nosql/update');"), ['scripts/thing.js']);
+});
+
+test('the scan reads every file under src/, scripts included', () => {
+  assert.ok(layerFiles().includes('scripts/announce-updates.js'));
+});
+
+test('a file outside controllers/ and http/ may not import a controller', () => {
+  assert.deepStrictEqual(violations('scripts/thing.js', "require('../controllers/nosql/update');"),
+    ['imports controllers/nosql/update']);
+});
+
+test('the route table and controllers may import a controller', () => {
+  assert.deepStrictEqual(violations('http/routes.js', "require('../controllers/nosql/update');"), []);
+  assert.deepStrictEqual(violations('controllers/native/thing.js', "require('../nosql/update');"), []);
+});
+
+test('a repository importing a controller is reported once', () => {
+  assert.deepStrictEqual(violations('repositories/thing.js', "require('../controllers/nosql/update');"),
+    ['imports controllers/nosql/update']);
 });
 
 test('a domain module may not reach http or db, or touch res', () => {
