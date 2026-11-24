@@ -313,6 +313,18 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
     assert.strictEqual(body[0].searchResults[0].projectName, PROJECT_ROW.name);
   });
 
+  await t.test('a parent name or Eagle id dialled below the caller never labels its period', async () => {
+    const dialled = { ...PROJECT_ROW, vis: { name: 2, eagleId: 2 } };
+    stubCosmos(t, { projects: [dialled], commentPeriods: [OPEN_NOW] });
+
+    const { body } = await get(LIST);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row._id, PERIOD_EAGLE_ID, 'the period itself is still answered');
+    assert.strictEqual(row.project, null);
+    assert.ok(!('projectName' in row), 'a staff-only name must not reach an anonymous caller');
+  });
+
   await t.test('the anonymous ACL reaches the list and the count, and staff widens it', async () => {
     const anon = stubPeriods(t, ROWS);
     await get(LIST);
