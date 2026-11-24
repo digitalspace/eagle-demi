@@ -2,9 +2,8 @@ import { config } from '../config';
 import { getToken, refreshToken } from './keycloak';
 
 /**
- * The server's own `error` when it sent one, else the status alone — as api-request.ts does.
- * Neither the URL nor the raw body goes in `message`, because a message reaches telemetry and an
- * error body can carry the query that produced it. Callers that need either read the fields.
+ * `message` is the server's `error` or the status, never the URL or raw body: it reaches
+ * telemetry, and those can carry the query. Callers that need them read the fields.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -46,10 +45,8 @@ function apiPath(): string {
 }
 
 /**
- * The eagle-notify base, or null when the configured location is not one this app will send a
- * bearer token to: an absolute https origin, or a relative path in a dev build, where it is the
- * Vite proxy. Anything else — unset, http, another scheme, unparseable — is refused rather than
- * resolved against this origin, which is the DEMI API and not eagle-notify.
+ * The eagle-notify base: https, or a relative path in dev only (the Vite proxy). Anything else is
+ * null, never resolved against this origin, which is the DEMI API and would get the bearer.
  */
 export function notifyBase(): string | null {
   const location = config().NOTIFY_API_LOCATION?.trim();
@@ -66,11 +63,8 @@ export function notifyBase(): string | null {
 }
 
 /**
- * Is this URL one of ours?
- *
- * Origin equality plus a path-prefix test, never `url.includes(base)`: that substring test is a
- * credential-leak primitive, because the base falls back to '/api' and any third-party host
- * containing those characters would then be handed the user's bearer token.
+ * Origin equality plus a path prefix, never `url.includes(base)`: the base can fall back to '/api',
+ * and a substring test would hand the bearer to any host containing it.
  */
 function matchesBase(url: URL, base: string | null): boolean {
   if (!base) return false;
@@ -84,10 +78,7 @@ function matchesBase(url: URL, base: string | null): boolean {
   }
 }
 
-/**
- * Only the DEMI API, as `isApiUrl` in the Angular app (0038d3e). eagle-notify is a different host
- * and opts in.
- */
+/** Only the DEMI API; eagle-notify is a different host and opts in through `bearerFor`. */
 function isAllowedUrl(url: URL): boolean {
   return matchesBase(url, apiPath());
 }
@@ -104,14 +95,37 @@ export interface ApiInit extends RequestInit {
   /** Budget in ms. A fresh signal is made per attempt, so a replay is never born already aborted. */
   timeoutMs?: number;
   /**
-   * Base of a host outside the DEMI API that may have the bearer, as eagle-notify does. The token
-   * is attached only when the request URL is inside this base, so a caller that opts in for one
-   * service cannot hand the token to a URL that came from somewhere else.
+   * Base outside the DEMI API that may get the bearer (eagle-notify). Only URLs inside it get the
+   * token, so an opt-in cannot carry it to a URL that came from elsewhere.
    */
   bearerFor?: string;
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const res = await request(path, init);
+  // A 204 carries no body, and JSON.parse('') throws.
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+/** A list page and the total DEMI sends in `x-total-count`, which it does only for `count=true`. */
+export interface ApiList<T> {
+  rows: T[];
+  total: number | null;
+}
+
+export async function apiList<T>(path: string, init: ApiInit = {}): Promise<ApiList<T>> {
+  const res = await request(path, init);
+  return { rows: (await res.json()) as T[], total: totalCount(res.headers.get('x-total-count')) };
+}
+
+/** Anything but a whole number reads as no total, so a bad header never shows as NaN or 0. */
+function totalCount(header: string | null): number | null {
+  return header !== null && /^\d+$/.test(header) ? Number(header) : null;
+}
+
+/** Sends with the bearer and one refresh-and-replay; a non-2xx answer throws `ApiError`. */
+async function request(path: string, init: ApiInit): Promise<Response> {
   const { timeoutMs, bearerFor, ...rest } = init;
   const url = new URL(path.startsWith('/') ? apiPath() + path : path, window.location.origin);
   const allowed = isAllowedUrl(url);
@@ -140,9 +154,7 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ''));
   }
-  // A 204 carries no body, and JSON.parse('') throws.
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return res;
 }
 
 /** A signal per attempt: one `AbortSignal.timeout` reused across a replay is already spent. */

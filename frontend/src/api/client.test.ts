@@ -253,6 +253,39 @@ describe('401 handling', () => {
   });
 });
 
+describe('apiList', () => {
+  const page = (total?: string) =>
+    new Response(JSON.stringify([{ id: 'a' }, { id: 'b' }]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...(total === undefined ? {} : { 'x-total-count': total }) },
+    });
+
+  it('returns the rows and the total from x-total-count', async () => {
+    const { apiList } = await loadClient({ API_PATH: '/api', API_LOCATION: '' });
+    respond(page('42'));
+
+    await expect(apiList('/projects?count=true')).resolves.toEqual({
+      rows: [{ id: 'a' }, { id: 'b' }],
+      total: 42,
+    });
+  });
+
+  it('has no total when the header is absent', async () => {
+    const { apiList } = await loadClient({ API_PATH: '/api', API_LOCATION: '' });
+    respond(page());
+
+    await expect(apiList('/projects')).resolves.toMatchObject({ total: null });
+  });
+
+  // Number() would turn these into NaN and 0, which a pager would show as a real count.
+  it.each(['many', '', '-1', '1.5'])('has no total when the header is %j', async (header) => {
+    const { apiList } = await loadClient({ API_PATH: '/api', API_LOCATION: '' });
+    respond(page(header));
+
+    await expect(apiList('/projects?count=true')).resolves.toMatchObject({ total: null });
+  });
+});
+
 describe('ApiError', () => {
   it('reports the error the server sent', async () => {
     const { api } = await loadClient({ API_PATH: '/api', API_LOCATION: '' });
