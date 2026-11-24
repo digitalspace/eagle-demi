@@ -67,6 +67,7 @@ const INDEX_MAPS = Object.freeze({
       region: 'region',
       projectState: 'status',
       proponentName: 'proponent',
+      proponentId: 'proponentId',
       'eacDecision._id': 'eacDecisionId',
       'currentPhaseName._id': 'currentPhaseNameId',
       'CEAAInvolvement._id': 'ceaaInvolvementId',

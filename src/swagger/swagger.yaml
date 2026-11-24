@@ -925,6 +925,17 @@ paths:
               type: string
           style: form
           explode: true
+        - name: proponentId
+          in: query
+          required: false
+          description: Proponent Organization id, as each row's `proponentId` holds it. Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - $ref: '#/components/parameters/ProjectRegionalDistrict'
         - $ref: '#/components/parameters/ProjectMunicipality'
         - $ref: '#/components/parameters/ProjectElectoralDistrict'
@@ -1028,7 +1039,7 @@ paths:
         One page of the projects and the project notifications this caller may read, as separate
         rows in one list. Each row carries `recordKind`, `project` or `notification`; a
         notification is never folded into a project. A filter on a field only projects have
-        (phase, EAC decision, CEAA involvement, state, district, municipality, or a
+        (phase, EAC decision, CEAA involvement, state, district, municipality, proponent id, or a
         `decisionDate` or `dateUpdated` range) leaves out every notification row. `decision`,
         which only notifications have, leaves out every project row. Unknown and repeated
         parameters are refused with 400, except the filters that say they repeat. A rejected
@@ -1151,6 +1162,19 @@ paths:
           in: query
           required: false
           description: Proponent, a notification's `proponent`. Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: proponentId
+          in: query
+          required: false
+          description: >-
+            Proponent Organization id. Projects only: set, it leaves out every notification row.
+            Repeat it to match any of several.
           schema:
             type: array
             maxItems: 100

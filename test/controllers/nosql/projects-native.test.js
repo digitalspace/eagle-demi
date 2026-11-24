@@ -64,12 +64,13 @@ function assertNarrowed(sql) {
   assert.strictEqual(param(sql, '@nr1'), '2020-12-31T23:59:59.999Z');
 }
 
-// Every filter eagle-admin's project list multi-selects: query name, stored field, index column.
+// Every repeatable filter: query name, stored field, index column.
 const REPEATABLE = [
   { name: 'projectType', field: 'projectType', column: 'type', values: ['Mines', 'Industrial'] },
   { name: 'region', field: 'region', column: 'region', values: ['Peace', 'Cariboo'] },
   { name: 'projectState', field: 'projectState', column: 'status', values: ['Active', 'Closed'] },
   { name: 'proponentName', field: 'proponentName', column: 'proponent', values: ['BC Hydro', 'Teck'] },
+  { name: 'proponentId', field: 'proponentId', column: 'proponentId', values: ['5886a1f2', '5886a1f3'] },
   { name: 'eacDecision', field: 'eacDecision._id', column: 'eacDecisionId', values: ['E1', 'E2'] },
   { name: 'currentPhaseName', field: 'currentPhaseName._id', column: 'currentPhaseNameId', values: ['P1', 'P2'] },
   { name: 'CEAAInvolvement', field: 'CEAAInvolvement._id', column: 'ceaaInvolvementId', values: ['C1', 'C2'] }

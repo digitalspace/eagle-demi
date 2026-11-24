@@ -390,7 +390,7 @@ const projectsKind = {
   sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds', 'proponentId'
   ],
   // These three are stored as `{_id, name}` List refs; the query names the field, the filter matches its id.
   aliases: {
@@ -399,7 +399,7 @@ const projectsKind = {
   // eagle-admin's project list multi-selects these (project-list.component.html); eagle-public sends several sectors.
   multiValueFilters: [
     'projectType', 'region', 'projectState', 'proponentName',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds', 'proponentId'
   ],
   // Every phase the project held under any Act, where `currentPhaseName` is the current block's only.
   anyOf: ['phaseIds'],
