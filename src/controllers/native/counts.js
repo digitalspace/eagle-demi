@@ -28,8 +28,8 @@ const KINDS = {
 // Every other kind is counted only when named, so a no-`kind` call costs no extra reads.
 const DEFAULT_KINDS = Object.freeze(['projects', 'documents']);
 
-// These shape a page, and a count has none: refused, not ignored.
-const PAGE_PARAMS = Object.freeze(['page', 'pageSize', 'sort', 'count']);
+// These shape a page or its rows, and a count has none: refused, not ignored.
+const PAGE_PARAMS = Object.freeze(['page', 'pageSize', 'sort', 'count', 'highlight']);
 
 function requestedKinds(raw) {
   if (raw === undefined) return { kinds: DEFAULT_KINDS };

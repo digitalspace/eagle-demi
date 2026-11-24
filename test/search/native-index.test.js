@@ -15,6 +15,7 @@ const { indexedKind, indexFilter, andOData, INDEX_MAPS, ID_PAGE } = require('../
 const aiSearch = require('../../src/search/ai-search');
 const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');
 const cosmos = require('../../src/db/cosmos-nosql');
+const projectsRepo = require('../../src/repositories/projects');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess, TIER, SEALED_TOKEN } = require('../../src/helpers/access-sql');
 const { makeRes } = require('../../src/http/router');
@@ -205,6 +206,7 @@ test('keyword list over the index', async (t) => {
     assert.strictEqual(searches.length, 1, 'list and count share one index read');
     assert.strictEqual(searches[0].keywords, 'mine');
     assert.strictEqual(searches[0].top, ID_PAGE);
+    assert.strictEqual(searches[0].orderby, 'search.score() desc, id', 'score ties must break by id as on the envelope route');
     assert.match(searches[0].filter, /\(status eq 'Active'\)$/);
 
     assert.strictEqual(queries.length, 1, 'list and count share one Cosmos read');
@@ -313,6 +315,29 @@ test('keyword list over the index', async (t) => {
     assert.strictEqual((await call('q=asessment&fuzzy=true')).status, 200);
     await call('q=asessment');
     assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
+  });
+
+  await t.test('highlight=true carries the hit marks in the /search shape; a part the row withholds is dropped', async (t) => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 2,
+      items: [
+        { id: 'p1', highlighted: { name: '', displayName: '<mark>Mine</mark> A', description: 'a <mark>mine</mark>' } },
+        { id: 'p2', highlighted: { name: '<mark>Mine</mark> B', description: 'b <mark>mine</mark>' } }
+      ]
+    }));
+    t.mock.method(cosmos, 'query', async () => ({
+      items: [
+        { id: 'p1', name: 'Mine A', description: 'a mine', read: ['public'] },
+        { id: 'p2', name: 'Mine B', description: 'b mine', read: ['public'], vis: { description: 2 } }
+      ]
+    }));
+    const marked = await call('q=mine&highlight=true');
+    assert.strictEqual(marked.status, 200);
+    assert.deepStrictEqual(marked.body.map(row => row.highlighted), [
+      { name: '<mark>Mine</mark> A', description: 'a <mark>mine</mark>' },
+      { name: '<mark>Mine</mark> B' }
+    ]);
+    assert.ok((await call('q=mine')).body.every(row => !Object.hasOwn(row, 'highlighted')));
   });
 
   await t.test('a list with no q stays on Cosmos', async (t) => {
@@ -431,6 +456,37 @@ test('documents list over the paged index', async (t) => {
     assert.strictEqual((await callDocs('q=asessment&fuzzy=true')).status, 200);
     await callDocs('q=asessment');
     assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
+  });
+
+  await t.test('highlight=true reads whole hits and carries their marks; projectNames adds the project-name leg', async (t) => {
+    const asked = [];
+    fakeDocStores(t, { ids: ['d1'], count: 1 });
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      asked.push(opts);
+      return { count: 851, items: [{ id: 'd2', highlighted: { displayName: '<mark>Ajax</mark> plan', description: '' } }, { id: 'd1' }] };
+    });
+    const marked = await callDocs('q=ajax&highlight=true&count=true');
+    assert.strictEqual(marked.status, 200);
+    assert.strictEqual(marked.headers['x-total-count'], '851');
+    assert.deepStrictEqual(marked.body.map(row => [row.id, row.highlighted]), [
+      ['d2', { displayName: '<mark>Ajax</mark> plan' }],
+      ['d1', {}]
+    ]);
+    assert.strictEqual(asked[0].projectFilter, undefined, 'no project-name leg without projectNames');
+
+    // p9 dials a leg-two column (proponent or tags) below public, so its documents must not join.
+    t.mock.method(projectsRepo, 'listDialHiddenIds', async () => ['p9']);
+    const both = await callDocs('q=ajax&projectNames=true');
+    assert.strictEqual(both.status, 200);
+    assert.ok(both.body.every(row => !Object.hasOwn(row, 'highlighted')));
+    assert.strictEqual(asked[1].projectFilter, andOData(filterFor(ANON, 'id').filter, "not search.in(id, 'p9', ',')"));
+    assert.strictEqual(asked[1].filter, asked[0].filter);
+
+    // No keyword: nothing to mark and no leg two, so the id-only search answers as without the options.
+    const plain = await callDocs('highlight=true&projectNames=true');
+    assert.strictEqual(plain.status, 200);
+    assert.strictEqual(asked.length, 2);
+    assert.ok(plain.body.every(row => !Object.hasOwn(row, 'highlighted')));
   });
 
   await t.test('searchVis clause only with q', async (t) => {

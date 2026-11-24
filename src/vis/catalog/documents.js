@@ -45,6 +45,9 @@ module.exports = {
   legislation: { defaultVis: 4, maxVis: 4 },
   // SHA-256 of the file as uploaded to eagle-api. Not rendered anywhere, but not sensitive either.
   uploadSha256: { defaultVis: 4, maxVis: 4 },
+  // Not stored: a keyword list's marked-up `displayName` and `description` (`highlight=true`), kept
+  // by the redactor only for the parts whose field the row still holds.
+  highlighted: { defaultVis: 4, maxVis: 4 },
 
   // Records-management identifiers; public by EAO policy (docs/rbac-architecture.md §3 question 2).
   orcsClassification: { defaultVis: 4, maxVis: 4 },

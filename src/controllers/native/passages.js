@@ -7,17 +7,22 @@
 
 const aiSearch = require('../../search/ai-search');
 const chunkQuery = require('../../search/chunk-query');
-const { indexFilter } = require('../../search/native-index');
+const { andOData, indexFilter } = require('../../search/native-index');
+const { DOCUMENT_FACETS } = require('../../search/eagle-query');
 const { CHUNK_PARENT_LIST_REFS } = require('../../repositories/chunks');
-const { filterFor } = require('../../helpers/access-odata');
+const { filterFor, inClause } = require('../../helpers/access-odata');
 const { MAX_IDS, projectParentJoin } = require('../../helpers/native-query');
 const { listHandler } = require('../nosql/mirror-reads');
+const { recoverChunkFilters } = require('../search/index-filters');
 const summary = require('../search/summary');
 const { logger } = require('../../utils/logger');
 
 // Native field -> chunks index column; the index keeps the stored names.
 const FILTERS = ['projectId', 'documentId', ...CHUNK_PARENT_LIST_REFS];
 const INDEX_MAP = Object.freeze({ columns: Object.fromEntries(FILTERS.map(field => [field, field])) });
+// Chunk column -> the wire key `recoverChunkFilters` reads.
+const WIRE_KEYS = Object.freeze(Object.fromEntries(
+  Object.entries(DOCUMENT_FACETS).map(([key, column]) => [column, key])));
 
 function failure(status, message) {
   return Object.assign(new Error(message), { status });
@@ -43,30 +48,25 @@ async function readPassages(access, parsed) {
   }
 
   const acl = filterFor(access, 'projectId', 'documentId');
-  const { filter, empty } = indexFilter(INDEX_MAP, parsed, access, acl);
-  if (empty) return { rows: [], count: 0 };
+  if (acl.empty) return { rows: [], count: 0 };
 
-  // A facet over chunks the backfill has not stamped answers 0 rows; refuse rather than say "none".
   const facets = CHUNK_PARENT_LIST_REFS.filter(column => parsed.filters[column]);
   const live = await chunkQuery.liveFacetColumns(facets, acl, parsed.filters.projectId || []);
-  if (live.unavailable.length) {
-    const reasons = chunkQuery.facetReasons(live);
-    logger.warn('[passages] facet filter refused: chunk index cannot answer it for this scope', {
-      columns: live.unavailable, reasons
-    });
-    throw failure(503, `cannot filter passages on ${live.unavailable.join(', ')} yet: ${reasons.join(', ')}`);
-  }
+  const recovery = await recoverFacets(access, parsed, live);
+  const { filter } = indexFilter(INDEX_MAP, recovery.parsed, access, acl);
 
   const { items, count } = await aiSearch.searchChunks({
-    filter,
+    filter: recovery.clauses.length ? andOData(filter, ...recovery.clauses) : filter,
     keywords: parsed.q,
+    fuzzy: parsed.fuzzy,
     skip: parsed.pageNum * parsed.pageSize,
     top: parsed.pageSize
   });
   if (items.length === 0) return { rows: [], count };
 
   const gated = await chunkQuery.gateChunksByParent(access, items, count);
-  const rows = gated.visible.map(chunk => ({
+  const checked = checkParents(gated, recovery.checks);
+  const rows = checked.visible.map(chunk => ({
     id: String(chunk.chunkId),
     documentId: String(chunk.documentId),
     projectId: String(chunk.projectId),
@@ -75,7 +75,52 @@ async function readPassages(access, parsed) {
     snippet: chunk.snippet || '',
     ...parentFields(gated.docById.get(String(chunk.documentId)))
   }));
-  return { rows, count: gated.count };
+  return { rows, count: checked.count };
+}
+
+/**
+ * Facets the chunks index cannot answer go to a documentId scope, or past its cap to a parent-row
+ * check. Returns a copy of `parsed`: `passagesFor` keys on the original.
+ */
+async function recoverFacets(access, parsed, live) {
+  if (!live.unavailable.length) return { parsed, clauses: [], checks: [] };
+
+  const filters = { ...parsed.filters };
+  live.unavailable.forEach(column => delete filters[column]);
+  // The wire form splits a value on commas, where a native filter keeps one literal: such a column
+  // skips the documents index and goes to the row check.
+  const scopable = live.unavailable.filter(column => !parsed.filters[column].some(value => value.includes(',')));
+  const query = parsed.filters.projectId ? { project: parsed.filters.projectId } : {};
+  for (const column of scopable) query[`and[${WIRE_KEYS[column]}]`] = parsed.filters[column];
+  const { scope, recovered, capped } =
+    await recoverChunkFilters(query, scopable.map(column => WIRE_KEYS[column]), access);
+
+  const checks = live.unavailable.filter(column => !recovered.includes(WIRE_KEYS[column]))
+    .map(column => [column, parsed.filters[column]]);
+  const clauses = scope ? [scope] : [];
+  // Only the backlog blocks these columns, and a never-stamped chunk carries null in all of them, so
+  // the clause keeps every chunk the row check may admit. A column the index lacks fails the request.
+  if (live.unstampedScope && !live.missingColumn && !live.unknownScope) {
+    clauses.push(...checks.map(([column, values]) => `${inClause(column, values)} or ${column} eq null`));
+  }
+  if (checks.length) {
+    logger.warn('[passages] facet filter checked on parent documents: the documents index could not scope it', {
+      columns: checks.map(([column]) => column), reasons: chunkQuery.facetReasons(live), capped
+    });
+  }
+  return { parsed: { ...parsed, filters }, clauses, checks };
+}
+
+/** Keeps a gated chunk only if its parent, as this caller may read it, holds an asked value of each checked column. */
+function checkParents(gated, checks) {
+  if (!checks.length) return gated;
+  const visible = gated.visible.filter((chunk) => {
+    const parent = gated.docById.get(String(chunk.documentId));
+    return checks.every(([column, values]) => parent[column] != null && values.includes(String(parent[column])));
+  });
+  // An upper bound, as the gate's own count is for withheld parents.
+  const removed = gated.visible.length - visible.length;
+  return { visible, count: Math.max(gated.count - removed, visible.length) };
 }
 
 // list and count of one request get the same `parsed`, so they share one index read.
@@ -101,6 +146,7 @@ const SPEC = Object.freeze({
   filters: FILTERS,
   aliases: { project: 'projectId' },
   multiValueFilters: FILTERS,
+  searchOptions: ['fuzzy'],
   // The index matches chunk text; `snippet` is the only part of it a row shows.
   qFields: ['snippet'],
   parentJoin: projectParentJoin

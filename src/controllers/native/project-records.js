@@ -112,7 +112,9 @@ async function readNotifications(access, parsed) {
 /** The union query as one query per side, or `{ error }`; `null` for a side that does not run. */
 function splitQuery(query, access) {
   const { recordKind, decision, pcp, ...rest } = query;
-  if (rest.ids !== undefined) return { error: 'unknown parameter: ids' };
+  // A notification row has no marks, so `highlight` is refused rather than kept for one side.
+  const refused = ['ids', 'highlight'].find(name => rest[name] !== undefined);
+  if (refused) return { error: `unknown parameter: ${refused}` };
 
   const kinds = recordKind === undefined ? RECORD_KINDS : [...new Set([].concat(recordKind))];
   if (kinds.some(kind => !RECORD_KINDS.includes(kind))) return { error: `recordKind takes ${RECORD_KINDS.join(', ')}` };

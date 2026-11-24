@@ -61,7 +61,9 @@ async function updatesIndexAcl(access) {
 const INDEX_MAPS = Object.freeze({
   projects: {
     search: opts => aiSearch.searchProjects(opts),
-    options: ['fuzzy'],
+    options: ['fuzzy', 'highlight'],
+    // The `/search` row's shape: `name` falls back to the `displayName` marks, as its value does.
+    highlighted: ({ name, displayName, description } = {}) => ({ name: name || displayName || '', description: description || '' }),
     partitionField: 'id',
     columns: {
       projectType: 'type',
@@ -105,7 +107,14 @@ const INDEX_MAPS = Object.freeze({
   documents: {
     paged: true,
     search: opts => aiSearch.searchDocumentIds(opts),
-    options: ['fuzzy'],
+    // Whole hits from the two-leg search, for their marks and, with `projectNames`, the documents of matching projects.
+    hits: async (access, opts, projectNames) => {
+      const projectFilter = projectNames && opts.keywords ? await projectNameScope(access, opts.keywords) : undefined;
+      const { items, count } = await aiSearch.searchDocuments({ ...opts, projectFilter, matchAll: !opts.keywords });
+      return { ids: items.map(hit => String(hit.id)), count, hits: items };
+    },
+    options: ['fuzzy', 'highlight', 'projectNames'],
+    highlighted: (marks = {}) => marks,
     partitionField: 'projectId',
     acl: documentsAcl,
     always: [NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT],
@@ -147,6 +156,21 @@ const INDEX_MAPS = Object.freeze({
     searched: searchedOf(aiSearch.DOCUMENT_SEARCH_FIELDS)
   }
 });
+
+/** Leg two's project filter, as `/search/counts` builds it; undefined when the caller sees no project. */
+async function projectNameScope(access, keywords) {
+  const scope = filterFor(access, 'id');
+  if (scope.empty) return undefined;
+  // Lazy: project-fields imports this module.
+  const { withoutDialHidden } = require('../controllers/search/project-fields');
+  return withoutDialHidden(access, scope.filter, [], keywords, aiSearch.LEG_TWO_SEARCH_FIELDS);
+}
+
+/** Each hit's marks onto its re-read row, before redaction drops the parts whose field the row withholds. */
+function withHighlights(map, rows, hits) {
+  const marks = new Map(hits.map(hit => [String(hit.id), hit.highlighted]));
+  for (const row of rows) row.highlighted = map.highlighted(marks.get(String(row.id)));
+}
 
 /** A filter or range on a column whose index type is not a string. */
 function typedFilter(map, parsed) {
@@ -244,8 +268,8 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
 }
 
 /**
- * `$orderby` for paged mode: the sort column and its `tiebreaks` entry, else relevance with `q`,
- * else the map's default; then `id` so pages never overlap.
+ * `$orderby`: the sort column and its `tiebreaks` entry, else relevance with `q`, else the map's
+ * default; then `id` so pages never overlap and score ties order as on the envelope route.
  */
 function indexOrderby(map, parsed) {
   if (!parsed.sort) return `${parsed.q ? 'search.score() desc' : map.defaultOrderby}, id`;
@@ -280,7 +304,8 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const top = Number.isInteger(parsed.idPage) && parsed.idPage > 0
       ? Math.min(parsed.idPage, ID_PAGE)
       : ID_PAGE;
-    const { items } = await map.search({ keywords: parsed.q, fuzzy: parsed.fuzzy, filter, top });
+    const orderby = parsed.sort ? undefined : indexOrderby(map, parsed);
+    const { items } = await map.search({ keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top });
     const ranked = [...new Set(items.map(hit => String(hit.id)))];
     if (ranked.length === 0) return [];
 
@@ -290,6 +315,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
       criteria: [...baseCriteria, ...criteria, inList('id', ranked, '@xid'), searchedVisible(map, access)],
       orderBy
     });
+    if (parsed.highlight) withHighlights(map, rows, items);
     if (orderBy) return rows;
     const rank = new Map(ranked.map((id, i) => [id, i]));
     return rows.sort((a, b) => rank.get(String(a.id)) - rank.get(String(b.id)));
@@ -307,9 +333,10 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const { filter, empty } = indexFilter(map, parsed, access, map.acl ? await map.acl(access) : undefined);
     if (empty) return { rows: [], count: 0 };
 
-    const { ids, count } = await map.search({
-      keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top: parsed.pageSize, skip: parsed.pageNum * parsed.pageSize
-    });
+    const asked = { keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top: parsed.pageSize, skip: parsed.pageNum * parsed.pageSize };
+    const { ids, count, hits } = map.hits && parsed.q && (parsed.highlight || parsed.projectNames)
+      ? await map.hits(access, asked, parsed.projectNames)
+      : await map.search(asked);
     if (ids.length === 0) return { rows: [], count };
 
     const types = map.types || {};
@@ -337,6 +364,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
         index, ids: ids.length, rows: rows.length
       });
     }
+    if (parsed.highlight && hits) withHighlights(map, rows, hits);
     const rank = new Map(ids.map((id, i) => [id, i]));
     return { rows: rows.sort((a, b) => rank.get(String(a.id)) - rank.get(String(b.id))), count };
   }

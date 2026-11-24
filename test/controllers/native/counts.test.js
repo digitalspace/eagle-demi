@@ -108,6 +108,15 @@ test('GET /counts', async (t) => {
     assert.strictEqual(asked.keywords, 'mine');
   });
 
+  await t.test('projectNames=true counts both document legs, as /search/counts does', async (t) => {
+    fakeCosmos(t);
+    let asked;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { asked = opts; return { count: 851, items: [] }; });
+    const res = await call('kind=documents&q=ajax&projectNames=true');
+    assert.deepStrictEqual(res.body, { documents: 851 });
+    assert.strictEqual(asked.projectFilter, filterFor(ANON, 'id').filter);
+  });
+
   await t.test('a search-service 400 on a keyword count answers a fixed message', async (t) => {
     fakeCosmos(t);
     t.mock.method(aiSearch, 'searchProjects', async () => {
@@ -149,11 +158,12 @@ test('GET /counts', async (t) => {
     assert.strictEqual(specs.length, 0);
   });
 
-  await t.test('an unknown kind, a repeated kind and a paging parameter are each refused', async (t) => {
+  await t.test('an unknown kind, a repeated kind, a paging parameter and highlight are each refused', async (t) => {
     const specs = fakeCosmos(t);
     assert.strictEqual((await call('kind=nope')).status, 400);
     assert.strictEqual((await call('kind=projects&kind=projects')).status, 400);
     assert.strictEqual((await call('kind=projects&page=2')).status, 400);
+    assert.strictEqual((await call('kind=projects&q=x&highlight=true')).status, 400);
     assert.strictEqual(specs.length, 0);
   });
 });
