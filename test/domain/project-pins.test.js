@@ -15,7 +15,7 @@ const { storedContainers } = require('../helpers/stored-documents');
 
 const DIALLED_ORG = Object.freeze({
   id: '5c1f7a3e9b1d2c0012340005', kind: 'Organization', name: 'Dialled Co', province: 'BC',
-  read: ['public', 'staff', 'sysadmin'], vis: { name: 2, province: 2 }
+  read: ['public', 'staff', 'sysadmin'], vis: { id: 2, name: 2, province: 2 }
 });
 
 const ctxFor = (roles) => ({ access: resolveAccess({ user: { sub: 'kc-1', realm_access: { roles } }, headers: {} }) });
@@ -164,7 +164,7 @@ test('labelPins', async (t) => {
     assert.strictEqual(calls.length, 2);
   });
 
-  await t.test('an organization dial withholds its label from a caller below it', async (t) => {
+  await t.test('an organization dial withholds its label, never the pin, from a caller below it', async (t) => {
     storedContainers(t, { lists: [DIALLED_ORG] });
     const [publicRow] = await labelPins(resolveAccess({}), [{ pins: [DIALLED_ORG.id] }]);
     assert.deepStrictEqual(publicRow.pins, [{ _id: DIALLED_ORG.id, name: null, province: null }]);
