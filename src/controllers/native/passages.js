@@ -86,13 +86,14 @@ async function recoverFacets(access, parsed, live) {
   if (!live.unavailable.length) return { parsed, clauses: [], checks: [] };
 
   const filters = { ...parsed.filters };
+  live.unavailable.forEach(column => delete filters[column]);
+  // The wire form splits a value on commas, where a native filter keeps one literal: such a column
+  // skips the documents index and goes to the row check.
+  const scopable = live.unavailable.filter(column => !parsed.filters[column].some(value => value.includes(',')));
   const query = parsed.filters.projectId ? { project: parsed.filters.projectId } : {};
-  for (const column of live.unavailable) {
-    delete filters[column];
-    query[`and[${WIRE_KEYS[column]}]`] = parsed.filters[column];
-  }
+  for (const column of scopable) query[`and[${WIRE_KEYS[column]}]`] = parsed.filters[column];
   const { scope, recovered, capped } =
-    await recoverChunkFilters(query, live.unavailable.map(column => WIRE_KEYS[column]), access);
+    await recoverChunkFilters(query, scopable.map(column => WIRE_KEYS[column]), access);
 
   const checks = live.unavailable.filter(column => !recovered.includes(WIRE_KEYS[column]))
     .map(column => [column, parsed.filters[column]]);

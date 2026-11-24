@@ -252,22 +252,42 @@ test('passages', async (t) => {
       { columns: ['typeId'], reasons: ['chunk-parent-fields-unstamped'], capped: true });
   });
 
-  await t.test('a capped recovery over a missing column sends no facet clause and still checks rows', async (t) => {
-    // Unstamped chunks in scope too, so only the missing column keeps the null clause off.
-    chunkQuery.resetStaleChunkScopeCache();
-    t.mock.method(aiSearch, 'chunkParentFieldStatus', async () => (
-      { available: ['typeId', 'projectPhaseId', 'documentAuthorTypeId'], missing: ['milestoneId'], unstamped: 12 }
-    ));
-    t.mock.method(aiSearch, 'staleChunkCount', async () => 3);
-    const search = stubFacetParents(t);
+  await t.test('a capped recovery over a missing or undecided column sends no facet clause and still checks rows', async (t) => {
+    // Unstamped chunks in scope too, so only the missing or undecided column keeps the null clause off.
+    for (const missing of [['milestoneId'], []]) {
+      chunkQuery.resetStaleChunkScopeCache();
+      t.mock.method(aiSearch, 'chunkParentFieldStatus', async () => (
+        { available: ['typeId', 'projectPhaseId', 'documentAuthorTypeId'], missing, unstamped: 12 }
+      ));
+      t.mock.method(aiSearch, 'staleChunkCount', async () => 3);
+      const search = stubFacetParents(t);
+      t.mock.method(logger, 'warn', () => {});
+
+      const res = await call(get, 'q=water&project=p1&typeId=t1&milestoneId=m1&count=true');
+
+      assert.strictEqual(res.status, 200, `missing ${missing}`);
+      assert.deepStrictEqual(res.body.map(row => row.documentId), ['d1']);
+      assert.strictEqual(res.headers['x-total-count'], '38');
+      assert.doesNotMatch(search.mock.calls[0].arguments[0].filter, /typeId|milestoneId/, `missing ${missing}`);
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('a facet value holding a comma is checked as one literal, never split', async (t) => {
+    stubStaleFacets(t);
+    const scoped = t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: ['d1', 'd3'], total: 2, withinCap: true }));
+    const hit = documentId => ({ ...HITS[0], chunkId: `${documentId}::p1::c0`, documentId });
+    stubIndex(t, {
+      hits: [hit('d1'), hit('d3')],
+      documents: [{ ...D1, typeId: 't1,t2' }, { ...D1, id: 'd3', typeId: 't1' }]
+    });
     t.mock.method(logger, 'warn', () => {});
 
-    const res = await call(get, 'q=water&project=p1&typeId=t1&milestoneId=m1&count=true');
+    const res = await call(get, 'q=water&project=p1&typeId=t1,t2');
 
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body.map(row => row.documentId), ['d1']);
-    assert.strictEqual(res.headers['x-total-count'], '38');
-    assert.doesNotMatch(search.mock.calls[0].arguments[0].filter, /typeId|milestoneId/);
+    assert.strictEqual(scoped.mock.callCount(), 0, 'the documents index would read t1 or t2');
   });
 
   await t.test('a fully stamped facet scope is sent to the index', async (t) => {
