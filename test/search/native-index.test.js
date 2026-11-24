@@ -205,6 +205,7 @@ test('keyword list over the index', async (t) => {
     assert.strictEqual(searches.length, 1, 'list and count share one index read');
     assert.strictEqual(searches[0].keywords, 'mine');
     assert.strictEqual(searches[0].top, ID_PAGE);
+    assert.strictEqual(searches[0].orderby, 'search.score() desc, id', 'score ties must break by id as on the envelope route');
     assert.match(searches[0].filter, /\(status eq 'Active'\)$/);
 
     assert.strictEqual(queries.length, 1, 'list and count share one Cosmos read');
