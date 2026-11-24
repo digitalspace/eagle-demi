@@ -74,7 +74,7 @@ Deployed state (measured 2026-11-05): eagle-admin v2.5.42 (PRs 1000 to 1013) run
 
 ## Layering
 
-Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind>.js` -> `repositories/<kind>.js` -> `db/cosmos-nosql` and `_sql`.
+Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind>.js` -> `repositories/<kind>.js` -> `db/cosmos-nosql` and `_sql`. `test/domain/layering.test.js` checks the rules below by a text scan of `src/`.
 
 ### The four layers
 
@@ -85,18 +85,22 @@ Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind
 
    `writeHandler` calls `resolveAccess` and the domain function, then runs `redactForAccess` and `serverError`. It maps `ok`, `invalid`, `forbidden`, `not-found` and `conflict` to 200 or 201, 400, 403, 404 and 409. It maps `busy`, meaning the etag retries of `writeGuarded` ran out, to 503 with the body the project writes answer: `{ error: 'The record is being written by another request. Try again.' }`.
 
-   Every refusal logs a warning through `src/utils/logger.js`, and an invalid body logs field names, never values. A controller that imports `domain/` never writes `res.status` or `res.json` and never imports `db/*`. It imports a repository only for the read `SPEC`.
+   Every refusal logs a warning through `src/utils/logger.js`, and an invalid body logs field names, never values. A native controller that imports `domain/` never writes `res.status` or `res.json` and never imports `db/*`. It imports a repository only for the read `SPEC`.
 3. Domain, `src/domain/<kind>.js`. It is not `src/services/`, which holds outbound clients. It exports plain functions: `create(ctx, input)`, `update(ctx, id, changes)`, `remove(ctx, id)` and named actions such as `publish` and `setStatus`.
 
    `ctx` is `{ access, req }`; `req` is used only for the audit identity. Each function runs these steps in order: check the `SCHEMA` allowlist (unknown key gives 400); load the row through the repository with `access` (an unreadable row is not-found). Then it calls `refusedWriteKeys`, applies the named rules and writes through `_write.js`.
 
-   It may import repositories, `helpers/access-sql`, `helpers/etag-write`, `helpers/eagle-acl`, `vis/redact.refusedWriteKeys`, `domain/_schema`, `domain/_write` and the field leaf modules `src/domain/<kind>-fields.js`. It never imports `http/*` or `db/*`, and never touches `res`.
+   It reads and writes rows through repositories. It never imports `http/*` or `db/*`, and never touches `res`.
 
    A `SCHEMA` or defaults that a sync-out consumer reads lives in a leaf module with no requires. The module sits beside the domain file and is named with the singular kind plus `-fields.js`, as in `src/domain/notification-fields.js` and `src/domain/organization-fields.js`. The domain module and the consumer both import it from there, so sync-out never loads `domain/_write`.
 
 4. Repository. Storage only. Reads go through `cosmosKind` (`helpers/native-query.js`) or `nativeKind` (`repositories/lists.js`).
 
    Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
+
+The Eagle-shaped controllers `controllers/nosql/project.js` and `controllers/nosql/document.js` keep their handlers and their own `res` answers. Their write rules live in the domain: `project-compose.js`, `project-rows.js`, `project-cascade.js` and `project-push.js` for projects, `documents.js` and `document-ingest.js` for documents. Neither controller imports `db/*`, and the layering test fails if a moved rule is defined in either one again.
+
+Push stamping that every mirror controller shares lives in `domain/eagle-push.js`.
 
 ### Where authorization lives
 

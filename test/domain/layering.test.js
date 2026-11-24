@@ -1,7 +1,7 @@
 'use strict';
 
 // The import direction in docs/eagle-api-port.md "Layering", checked by a text scan of src/.
-// routes.js -> controllers/native -> domain -> repositories -> db.
+// routes.js -> controllers/native -> domain -> repositories -> db. The nosql project and document controllers import no db/.
 
 process.env.NODE_ENV = 'test';
 
@@ -30,6 +30,23 @@ const EXEMPT = Object.freeze({
   }
 });
 
+const WRITE_CONTROLLERS = Object.freeze(['controllers/nosql/project.js', 'controllers/nosql/document.js']);
+
+/** Write rules moved from WRITE_CONTROLLERS to domain/. One defined there again sits beside `res` once more. */
+const MOVED_RULES = Object.freeze([
+  'runCascade', 'cascadeProjectVisibility', 'cascadeOnce', 'markCascadePending', 'clearCascadePending',
+  'visibilityMoved', 'mergeEaglePush', 'keepNativeIdentity', 'resolveDocumentAcl', 'propagateParentFields',
+  'patchParentFieldsInline', 'reStampParentFieldDrift', 'stampParentFieldsPending', 'recordIngested',
+  'removeOverCapChunks', 'tryRecordIngestFailure'
+]);
+
+/** The MOVED_RULES `source` defines, as a function declaration or a function bound to a name. */
+function movedRulesIn(source) {
+  const text = code(source);
+  return MOVED_RULES.filter(name => new RegExp(
+    `\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=\\s*(?:async\\b|\\(|function\\b)`).test(text));
+}
+
 /** Every relative `require` in `source`, as a path under src/ with no extension. */
 function importsOf(file, source) {
   const dir = path.posix.dirname(file);
@@ -56,6 +73,7 @@ function violations(file, source) {
     ban('http', 'db');
     if (/\bres\./.test(text)) found.push('touches res');
   }
+  if (WRITE_CONTROLLERS.includes(file)) ban('db');
   if (file.startsWith('repositories/')) ban('domain', 'controllers', 'utils/audit', 'vis/redact');
   return found;
 }
@@ -73,7 +91,8 @@ function layerFiles() {
   return ['controllers/native', 'domain', 'repositories'].flatMap(dir =>
     fs.readdirSync(path.join(SRC, dir), { recursive: true })
       .filter(name => name.endsWith('.js'))
-      .map(name => path.posix.join(dir, name.split(path.sep).join('/'))));
+      .map(name => path.posix.join(dir, name.split(path.sep).join('/'))))
+    .concat(WRITE_CONTROLLERS);
 }
 
 test('every file in a layer keeps to the import direction', () => {
@@ -85,6 +104,12 @@ test('every file in a layer keeps to the import direction', () => {
     .filter(found => !(EXEMPT[file] && EXEMPT[file].violation === found))
     .map(found => `${file} ${found}`));
   assert.deepStrictEqual(broken, []);
+});
+
+test('moved write rules stay in the domain', () => {
+  const defined = WRITE_CONTROLLERS.flatMap(file =>
+    movedRulesIn(fs.readFileSync(path.join(SRC, file), 'utf8')).map(name => `${file} defines ${name}`));
+  assert.deepStrictEqual(defined, []);
 });
 
 test('every exempt entry still excuses a real violation', () => {
@@ -123,6 +148,19 @@ test('a native controller that imports domain answers only through writeHandler'
   const source = "const d = require('../../domain/thing');\nconst c = require('../../db/cosmos-nosql');\nres.status(200).json({});";
   assert.deepStrictEqual(violations('controllers/native/thing.js', source),
     ['imports db/cosmos-nosql', 'writes res.status or res.json']);
+});
+
+test('a nosql write controller may not reach db, but keeps its own responses', () => {
+  const source = "require('../../domain/project-cascade');\nrequire('../../db/cosmos-nosql');\nres.status(200).json({});";
+  assert.deepStrictEqual(violations('controllers/nosql/project.js', source), ['imports db/cosmos-nosql']);
+});
+
+test('a moved write rule defined in a controller is reported, an imported one is not', () => {
+  const source = [
+    'function runCascade() {}', 'const recordIngested = async () => {};',
+    "const { mergeEaglePush } = require('../../domain/project-push');"
+  ].join('\n');
+  assert.deepStrictEqual(movedRulesIn(source), ['runCascade', 'recordIngested']);
 });
 
 test('a native controller without a domain import keeps its own responses', () => {
