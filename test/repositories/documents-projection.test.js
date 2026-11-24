@@ -7,11 +7,12 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const documentsRepo = require('../../src/repositories/documents');
+const { CHUNK_PARENT_LIST_REFS } = require('../../src/repositories/chunks');
 
 // Chunk-search controller tests mock `listByIds`, so only this file sees its projection; a
 // narrowed SELECT blanks the milestone and date chips on every chunk card.
 test('listByIds projects the columns the chunk card renders', async (t) => {
-  await t.test('the SELECT names milestone, milestoneId and datePosted', async () => {
+  await t.test('the SELECT names the chunk card columns and the facet ids', async () => {
     let spec = null;
     t.mock.method(cosmos, 'query', async (_container, querySpec) => {
       spec = querySpec;
@@ -33,6 +34,10 @@ test('listByIds projects the columns the chunk card renders', async (t) => {
     assert.ok(columns.includes('c.milestone'), `the label the chip renders; got ${columns}`);
     assert.ok(columns.includes('c.milestoneId'), 'the id, for a consumer that resolves lists');
     assert.ok(columns.includes('c.datePosted'), 'the date chip');
+    // Passages check each chunk's parent on these when the documents index cannot scope a facet.
+    for (const column of CHUNK_PARENT_LIST_REFS) {
+      assert.ok(columns.includes(`c.${column}`), `the facet column ${column}`);
+    }
 
     // Still narrow. A caller who may read a chunk has no business receiving the whole parent, and
     // these are the two a widening would most plausibly sweep in.

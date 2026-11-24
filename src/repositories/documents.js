@@ -292,7 +292,7 @@ async function listByIds(access, ids, projectIds) {
       // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
       ...listedRows()
     ],
-    select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted, c.vis'
+    select: 'c.id, c.displayName, c.documentFileName, c.type, c.typeId, c.milestone, c.milestoneId, c.projectPhaseId, c.documentAuthorTypeId, c.datePosted, c.vis'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});
