@@ -18,7 +18,7 @@ const ORG_B = '5c1f7a3e9b1d2c0012340002';
 test('lists.listOrganizationLabels', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('selects id, name and province of the named organizations, once each, under the caller\'s read', async (t) => {
+  await t.test('selects id, name, province and dials of the named organizations, once each, under the caller\'s read', async (t) => {
     const calls = [];
     const stored = [{ id: ORG_A, name: 'Acme', province: 'BC' }];
     t.mock.method(cosmos, 'query', async (container, spec, options) => {
@@ -32,7 +32,7 @@ test('lists.listOrganizationLabels', async (t) => {
     const { container, spec, options } = calls[0];
     assert.strictEqual(container, 'lists');
     assert.deepStrictEqual(options, { partitionKey: 'Organization' });
-    assert.match(spec.query, /^SELECT c\.id, c\.name, c\.province FROM c/);
+    assert.match(spec.query, /^SELECT c\.id, c\.name, c\.province, c\.vis FROM c/);
     assert.match(spec.query, /c\.read/, 'the caller\'s visibility predicate is composed');
     const ids = spec.parameters.filter(p => p.name.startsWith('@lid')).map(p => p.value);
     assert.deepStrictEqual(ids, [ORG_A, ORG_B]);

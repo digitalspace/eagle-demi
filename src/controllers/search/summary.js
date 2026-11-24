@@ -10,6 +10,7 @@ const projectsRepo = require('../../repositories/projects');
 const chunksRepo = require('../../repositories/chunks');
 const summarizer = require('../../ai/summarize');
 const config = require('../../config');
+const { byStoredId } = require('./cosmos-rows');
 
 /**
  * `GET /api/search/summary`, PRIVILEGED ONLY (behind `authMiddleware`). See wiki ADR-006 and
@@ -87,8 +88,7 @@ exports.summarize = async (req, res) => {
     const citedProjects = cited.length > 0
       ? await projectsRepo.listByIds(access, cited.map(c => c.projectId))
       : [];
-    const projById = new Map(redactAllForAccess('projects', citedProjects, access)
-      .map(p => [String(p.id), p]));
+    const projById = byStoredId('projects', citedProjects, access);
 
     return res.json({
       summary,

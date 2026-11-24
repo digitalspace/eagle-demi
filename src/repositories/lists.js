@@ -86,12 +86,12 @@ async function listSyncPending(kind) {
  * to, like `notifications.proponent`, which stores an Organization id and renders as its name.
  */
 async function listByIds(access, ids, kind) {
-  return selectByIds(access, ids, kind, 'c.id, c.name');
+  return selectByIds(access, ids, kind, 'c.id, c.name, c.vis');
 }
 
 /** Id, name and province of each organization in `ids`: the label a project pin renders. */
 async function listOrganizationLabels(access, ids) {
-  return selectByIds(access, ids, KINDS.ORGANIZATION, 'c.id, c.name, c.province');
+  return selectByIds(access, ids, KINDS.ORGANIZATION, 'c.id, c.name, c.province, c.vis');
 }
 
 async function selectByIds(access, ids, kind, select) {

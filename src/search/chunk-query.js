@@ -9,7 +9,7 @@ const aiSearch = require('./ai-search');
 const chunksRepo = require('../repositories/chunks');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
-const { redactAllForAccess } = require('../vis/redact');
+const { redactForAccess, redactAllForAccess } = require('../vis/redact');
 const { logger } = require('../utils/logger');
 
 // What clears each: the backfill finishing, the service answering, the index definition applied.
@@ -151,8 +151,8 @@ async function gateChunksByParent(access, items, count) {
   ]);
   const docById = new Map(redactAllForAccess('documents', parentDocs, access)
     .map(d => [String(d.id), d]));
-  const projById = new Map(redactAllForAccess('projects', parentProjects, access)
-    .map(p => [String(p.id), p]));
+  // Keyed on the stored id, so a project that dials its `id` keeps its label.
+  const projById = new Map(parentProjects.map(p => [String(p.id), redactForAccess('projects', p, access)]));
 
   const visible = items.filter(chunk => docById.has(String(chunk.documentId)));
   const withheld = items.length - visible.length;

@@ -1,6 +1,6 @@
 'use strict';
 
-const { redactAllForAccess } = require('../../vis/redact');
+const { redactForAccess, redactAllForAccess } = require('../../vis/redact');
 const documentsRepo = require('../../repositories/documents');
 const projectsRepo = require('../../repositories/projects');
 const { EAGLE_OBJECT_ID } = projectsRepo;
@@ -40,6 +40,11 @@ function imageOut(entry, document) {
   return { document, alt: entry.alt || '', caption: entry.caption || null, credit: entry.credit || null };
 }
 
+/** Redacted rows keyed on their STORED id, so a dialled `id` still joins. */
+function byStoredId(entity, rows, access) {
+  return new Map(rows.map(row => [String(row.id), redactForAccess(entity, row, access)]));
+}
+
 /**
  * Resolve update rows' projects and documents under the CALLER's access, one query per kind for the
  * page. `updates.projectId` holds the EAGLE id. Unreadable: project gives null, document drops out.
@@ -57,21 +62,19 @@ async function updateProjects(access, rows) {
   ]).filter(Boolean).map(String)));
 
   // Redacted before anything reads a field off them, like every other repository row on this route.
-  const [projectRows, periodRefs, notificationRefs, documentRefs] = await Promise.all([
+  const [projectRows, byPeriodId, byNotificationId, documentRefs] = await Promise.all([
     eagleIds.length ? projectsRepo.listByEagleIds(access, eagleIds) : [],
     periodIds.length ? commentPeriodsRepo.listByIds(access, periodIds) : [],
     notificationIds.length ? notificationsRepo.listByIds(access, notificationIds) : [],
     updateDocuments(access, documentIds)
   ]).then(([p, cp, n, d]) => [
     redactAllForAccess('projects', p, access),
-    redactAllForAccess('commentPeriods', cp, access),
-    redactAllForAccess('notifications', n, access),
+    byStoredId('commentPeriods', cp, access),
+    byStoredId('notifications', n, access),
     redactAllForAccess('documents', d, access)
   ]);
 
   const byEagleId = new Map(projectRows.map(p => [String(p.eagleId), p]));
-  const byPeriodId = new Map(periodRefs.map(p => [String(p.id), p]));
-  const byNotificationId = new Map(notificationRefs.map(n => [String(n.id), n]));
   const byDocumentId = new Map(documentRefs.map(d => [String(d.id), d]));
   // `_id` beside `id`: eagle-public reads a document reference by `_id`, like every Eagle row.
   const documentRef = (id) => {
@@ -115,12 +118,12 @@ async function updateProjects(access, rows) {
       // Dates as stored, ISO string or null, so a reader can tell an open period from a closed one.
       pcp: period
         ? {
-          _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '',
+          _id: period.id, isMet: period.isMet === true, metURL: period.metURL || '',
           dateStarted: period.dateStarted ?? null, dateCompleted: period.dateCompleted ?? null
         }
         : undefined,
       projectNotification: notification
-        ? { _id: String(notification.id), name: notification.name }
+        ? { _id: notification.id, name: notification.name }
         : undefined
     };
   };
@@ -137,11 +140,11 @@ async function updateResults(access, rows) {
  */
 async function parentProjects(access, rows) {
   const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
-  const parents = demiIds.length
-    ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
-    : [];
-  const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
-  return { demiIds, parents, eagleIdByDemiId };
+  const parentById = byStoredId('projects',
+    demiIds.length ? await projectsRepo.listByIds(access, demiIds) : [], access);
+  const eagleIdByDemiId = new Map(Array.from(parentById,
+    ([id, p]) => [id, p.eagleId ? String(p.eagleId) : null]));
+  return { demiIds, parentById, eagleIdByDemiId };
 }
 
 /**
@@ -153,14 +156,12 @@ async function notificationRows(access, rows) {
     .map(r => r.proponent)
     .filter(value => value && EAGLE_OBJECT_ID.test(String(value)))
     .map(String)));
-  const orgs = orgIds.length
-    ? redactAllForAccess('lists',
-      await listsRepo.listByIds(access, orgIds, listsRepo.KINDS.ORGANIZATION), access)
-    : [];
-  const nameById = new Map(orgs.map(o => [String(o.id), o.name]));
+  const orgById = byStoredId('lists', orgIds.length
+    ? await listsRepo.listByIds(access, orgIds, listsRepo.KINDS.ORGANIZATION)
+    : [], access);
 
   return cosmosRows('notifications', rows, access, 'ProjectNotification',
-    (row) => ({ proponent: nameById.get(String(row.proponent)) || row.proponent }));
+    (row) => ({ proponent: orgById.get(String(row.proponent))?.name || row.proponent }));
 }
 
 /** A comment row carries `period` — eagle-public's Comment model reads it. */
@@ -171,6 +172,7 @@ function commentRows(access, rows) {
 
 module.exports = {
   cosmosRows,
+  byStoredId,
   updateProjects,
   updateResults,
   parentProjects,
