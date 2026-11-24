@@ -698,7 +698,7 @@ async function runSeed(args, deps, summary) {
         // chunks yet, and the ingest that creates them stamps the fields itself.
         let row = transformed;
         if (existing && repos.chunks.parentFieldsChanged(existing, transformed)) {
-          // Flag rides the same upsert as the change (`document.js stampParentFieldsPending`), so a killed
+          // Flag rides the same upsert as the change (`domain/documents.js stampParentFieldsPending`), so a killed
           // run stays visible to the reconcile. No etag: offline, nothing else writes this corpus.
           row = { ...transformed, ...repos.documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
           if (!stampedAt || row.parentFieldsPendingAt > stampedAt) {
