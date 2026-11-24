@@ -7,67 +7,15 @@ const commentsRepo = require('../../repositories/comments');
 const notificationsRepo = require('../../repositories/notifications');
 const listsRepo = require('../../repositories/lists');
 const updatesRepo = require('../../repositories/updates');
-const usersRepo = require('../../repositories/users');
-const groupsRepo = require('../../repositories/groups');
-const inspectionsRepo = require('../../repositories/inspections');
 const {
   filterValue,
   filterValues,
   activityWindow,
   documentFilter,
-  stripLimit,
-  sortKeysDropped,
-  keywordsRefused,
-  oneProject
+  stripLimit
 } = require('./params');
-const { cosmosRows, updateResults, eagleProjectOf, notificationRows, commentRows } = require('./cosmos-rows');
+const { cosmosRows, updateResults, notificationRows, commentRows } = require('./cosmos-rows');
 const { openPeriods, periodKeywords, periodList, periodSortDropped, periodRows } = require('./periods');
-const { homeFeed } = require('./home-feed');
-
-/** The three `inspections` kinds as datasets: the stored kind and the parent filters each one reads. */
-const INSPECTION_DATASETS = Object.freeze({
-  Inspection: { kind: inspectionsRepo.KINDS.INSPECTION, filters: [] },
-  InspectionElement: { kind: inspectionsRepo.KINDS.ELEMENT, filters: ['inspection'] },
-  InspectionItem: { kind: inspectionsRepo.KINDS.ITEM, filters: ['inspection', 'element'] }
-});
-
-/** One `inspections` kind as a `/search` dataset. `and[inspection]` and `and[element]` are Eagle ids. */
-async function inspectionRows(dataset, { access, query, filterQuery, pageNum, pageSize, sortBy }) {
-  const refused = keywordsRefused(dataset, query);
-  if (refused) return refused;
-  const { kind, filters } = INSPECTION_DATASETS[dataset];
-  const entity = inspectionsRepo.ENTITY[kind];
-  const decorateFor = (rows) => (kind === inspectionsRepo.KINDS.INSPECTION ? eagleProjectOf(access, rows) : null);
-
-  const id = filterValue(query, '_id');
-  if (id) {
-    const row = await inspectionsRepo.getById(access, kind, id);
-    const rows = row ? [row] : [];
-    return { searchResults: cosmosRows(entity, rows, access, dataset, await decorateFor(rows)), count: rows.length, applied: ['_id'] };
-  }
-
-  const scoped = oneProject(filterQuery);
-  if (scoped.error) return scoped;
-  const applied = scoped.projectId ? ['project'] : [];
-  const criteria = { projectId: scoped.projectId };
-  for (const key of filters) {
-    const value = filterValue(query, key);
-    if (value === null) continue;
-    criteria[key === 'inspection' ? 'inspectionId' : 'elementId'] = value;
-    applied.push(key);
-  }
-
-  const [rows, count] = await Promise.all([
-    inspectionsRepo.listPage(access, kind, { ...criteria, pageNum, pageSize }),
-    inspectionsRepo.countVisible(access, kind, criteria)
-  ]);
-  return {
-    searchResults: cosmosRows(entity, rows, access, dataset, await decorateFor(rows)),
-    count,
-    applied,
-    sortDropped: sortKeysDropped(sortBy)
-  };
-}
 
 /**
  * The Cosmos-backed `/search` datasets, each answering `{searchResults, count}`. `applied` names the
@@ -209,9 +157,6 @@ const COSMOS_DATASETS = {
     };
   },
 
-  /** Pinned updates, then News updates and decisions by date. See homeFeed. */
-  HomeFeed: homeFeed,
-
   async ProjectNotification({ access, query, pageNum, pageSize, sortBy }) {
     const id = filterValue(query, '_id');
     if (id) {
@@ -242,64 +187,10 @@ const COSMOS_DATASETS = {
       count,
       applied
     };
-  },
-
-  /** Eagle `User`. No project axis: a project filter answers nothing (`canScopeToProject`). */
-  async User({ access, query, pageNum, pageSize, sortBy }) {
-    const refused = keywordsRefused('User', query);
-    if (refused) return refused;
-    const id = filterValue(query, '_id');
-    if (id) {
-      const row = await usersRepo.getById(access, id);
-      return { searchResults: cosmosRows('users', row ? [row] : [], access, 'User'), count: row ? 1 : 0, applied: ['_id'] };
-    }
-    const [rows, count] = await Promise.all([
-      usersRepo.listPage(access, { pageNum, pageSize }),
-      usersRepo.countVisible(access)
-    ]);
-    return { searchResults: cosmosRows('users', rows, access, 'User'), count, applied: [], sortDropped: sortKeysDropped(sortBy) };
-  },
-
-  /** Eagle `Group`, a project's contact group. `project` on the row is the Eagle id, as Eagle has it. */
-  async Group({ access, query, filterQuery, pageNum, pageSize, sortBy }) {
-    const refused = keywordsRefused('Group', query);
-    if (refused) return refused;
-    const id = filterValue(query, '_id');
-    if (id) {
-      const row = await groupsRepo.getById(access, id);
-      const rows = row ? [row] : [];
-      return { searchResults: cosmosRows('groups', rows, access, 'Group', await eagleProjectOf(access, rows)), count: rows.length, applied: ['_id'] };
-    }
-    const scoped = oneProject(filterQuery);
-    if (scoped.error) return scoped;
-    const { projectId } = scoped;
-    const [rows, count] = await Promise.all([
-      groupsRepo.listPage(access, { projectId, pageNum, pageSize }),
-      groupsRepo.countVisible(access, { projectId })
-    ]);
-    return {
-      searchResults: cosmosRows('groups', rows, access, 'Group', await eagleProjectOf(access, rows)),
-      count,
-      applied: projectId ? ['project'] : [],
-      sortDropped: sortKeysDropped(sortBy)
-    };
-  },
-
-  Inspection: (ctx) => inspectionRows('Inspection', ctx),
-  InspectionElement: (ctx) => inspectionRows('InspectionElement', ctx),
-  InspectionItem: (ctx) => inspectionRows('InspectionItem', ctx)
+  }
 };
 /** Test seam: the `_id` suite walks every dataset, so a new one cannot skip the point read. */
 exports.COSMOS_DATASET_NAMES = Object.freeze(Object.keys(COSMOS_DATASETS));
-
-/**
- * eagle-api's `dataset=Item&_id=&_schemaName=`: one record by id from any model it names. DEMI
- * answers the models whose dataset above takes `_id`, through that dataset's own point read.
- */
-const ITEM_SCHEMAS = Object.freeze([
-  'User', 'Group', 'Inspection', 'InspectionElement', 'InspectionItem',
-  'Comment', 'CommentPeriod', 'ProjectNotification', 'RecentActivity'
-]);
 
 /** `List` and `Organization`: one container, one handler, told apart by `kind`. */
 async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
@@ -339,4 +230,3 @@ function listRow(row) {
 }
 
 exports.COSMOS_DATASETS = COSMOS_DATASETS;
-exports.ITEM_SCHEMAS = ITEM_SCHEMAS;

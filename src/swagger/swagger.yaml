@@ -48,13 +48,6 @@ paths:
               - Comment
               - RecentActivity
               - ProjectNotification
-              - HomeFeed
-              - User
-              - Group
-              - Inspection
-              - InspectionElement
-              - InspectionItem
-              - Item
         - name: q
           in: query
           required: false
@@ -126,19 +119,8 @@ paths:
           in: query
           required: false
           description: >-
-            Rows per page, 10 when absent. On `top=true` and on dataset=HomeFeed it is the whole
-            row count instead: an integer from 1 to 20, four when absent. Any other value is a 400
-            there, never clamped.
-
-
-            dataset=HomeFeed answers the home-page feed: pinned updates first, as on `top=true`,
-            then the newest News updates and decisions (a project's EA decision, or a project
-            notification's decision) merged by date, newest first. A decision dated after today is
-            left out. Every row has one shape: `{kind, id, projectId, projectName, date, headline,
-            shortHeadline, summary, category, publishDate, content, documentUrl}`, where `kind` is
-            `update` or `decision` and any absent value is null. An update's `date` is its
-            `publishDate`, or `dateAdded` when it has none. HomeFeed takes no keywords and no
-            filters.
+            Rows per page, 10 when absent. On `top=true` it is the whole row count instead: an
+            integer from 1 to 20, four when absent. Any other value is a 400 there, never clamped.
           schema:
             type: integer
             minimum: 1
@@ -147,24 +129,11 @@ paths:
           required: false
           description: >-
             Fetch one record by Eagle id, on List, Organization, CommentPeriod, Comment,
-            ProjectNotification, RecentActivity, User, Group, Inspection, InspectionElement and
-            InspectionItem. Also accepted as `and[_id]`. Answers `count: 0` and no rows when the id
-            matches nothing this caller may read, never a page of other records. Required on
-            dataset=Item.
+            ProjectNotification and RecentActivity. Also accepted as `and[_id]`. Answers `count: 0`
+            and no rows when the id matches nothing this caller may read, never a page of other
+            records.
           schema:
             type: string
-        - name: _schemaName
-          in: query
-          required: false
-          description: >-
-            dataset=Item only, and required there; any other dataset answers 400. Names the model
-            `_id` belongs to, as eagle-api's `dataset=Item` does. Item takes `_id` and
-            `_schemaName` and nothing else, and answers a BARE array of zero or one record rather
-            than the search envelope.
-          schema:
-            type: string
-            enum: [User, Group, Inspection, InspectionElement, InspectionItem, Comment, CommentPeriod,
-              ProjectNotification, RecentActivity]
         - name: and[eaoStatus]
           in: query
           required: false
@@ -174,19 +143,6 @@ paths:
           schema:
             type: string
             enum: [Pending, Published, Rejected, Deferred]
-        - name: and[inspection]
-          in: query
-          required: false
-          description: >-
-            dataset=InspectionElement and InspectionItem. Eagle id of the parent inspection.
-          schema:
-            type: string
-        - name: and[element]
-          in: query
-          required: false
-          description: dataset=InspectionItem only. Eagle id of the parent element.
-          schema:
-            type: string
         - name: and[status]
           in: query
           required: false
@@ -341,17 +297,12 @@ paths:
           headers:
             x-total-count:
               description: >-
-                The measured total, the same number as `meta[0].searchResultsTotal`; on
-                dataset=Item, the number of rows in the array. Exposed to CORS. A HEAD request gets
-                it with no body.
+                The measured total, the same number as `meta[0].searchResultsTotal`. Exposed to
+                CORS. A HEAD request gets it with no body.
               schema:
                 type: integer
           description: >-
-            One-element array of search results, the measured total and metadata. dataset=Item
-            is the exception: a bare array of zero or one record.
-            User, Group, Inspection, InspectionElement and InspectionItem are Cosmos list reads of
-            the Eagle mirrors under the caller's access. User has no project axis, so a `project`
-            filter answers no rows. A field the live
+            One-element array of search results, the measured total and metadata. A field the live
             index could not answer is dropped from the query and named under
             `meta[0].degraded.missing`, so the page is served with that column missing rather than
             failed — except for the visibility fields, which stay a 502. On DocumentChunk,
@@ -412,11 +363,8 @@ paths:
             added to `milestones`.
         '400':
           description: >-
-            Unknown dataset, unsupported query parameter, dataset=Comment with no period, an
-            unknown `and[eaoStatus]`, keywords (`q`) on User, Group, Inspection, InspectionElement
-            or InspectionItem, `_schemaName` on any dataset but Item, dataset=Item with a missing
-            or unknown `_schemaName` or any other parameter, or a
-            page past the deepest one a Cosmos list serves: for dataset=RecentActivity, Comment,
+            Unknown dataset (also when a `project` filter is sent), unsupported query parameter,
+            dataset=Comment with no period, an unknown `and[eaoStatus]`, or a page past the deepest one a Cosmos list serves: for dataset=RecentActivity, Comment,
             ProjectNotification, List, Organization, CommentPeriod with a `project`, and Project
             with no keywords, filter or sort, `pageNum * pageSize + pageSize` (pageSize clamped to 1000) must stay within 20000 rows.
         '502':

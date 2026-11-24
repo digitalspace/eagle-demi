@@ -145,15 +145,6 @@ async function parentProjects(access, rows) {
 }
 
 /**
- * Eagle's `project` (its ObjectId) beside the stored DEMI `projectId`, looked up under the caller's
- * access. A project the caller cannot read gives `project: null`.
- */
-async function eagleProjectOf(access, rows) {
-  const { eagleIdByDemiId } = await parentProjects(access, rows);
-  return (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null });
-}
-
-/**
  * A notification row carries `proponent` as a NAME: Eagle stores a name or an Organization id there,
  * and the page renders it as sent. An id that matches nothing stays as sent.
  */
@@ -183,7 +174,6 @@ module.exports = {
   updateProjects,
   updateResults,
   parentProjects,
-  eagleProjectOf,
   notificationRows,
   commentRows
 };

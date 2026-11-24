@@ -1304,33 +1304,7 @@ test('Search Controller Tests', async (t) => {
     assert.deepStrictEqual(jsonResponse[0].searchResults, []);
   });
 
-  await t.test('search returns 400 for unsupported dataset', async () => {
-    const req = {
-      query: { dataset: 'UnsupportedDataset' },
-      header: () => null
-    };
-
-    let statusCode;
-    let jsonResponse;
-    const res = {
-      status: (code) => {
-        statusCode = code;
-        return res;
-      },
-      json: (data) => {
-        jsonResponse = data;
-        return res;
-      }
-    };
-
-    await searchController.search(req, res);
-
-    assert.strictEqual(statusCode, 400);
-    assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
-  });
-
-  // The name filter is the one `and[...]` value that carries typed text. Both refusals are answered
-  // before any search request is issued, so a bad URL costs nothing and says what is wrong.
+  /** One `/search` call over a stub response; answers the status and body sent. */
   const refusal = async (query) => {
     const out = { body: undefined, status: 200 };
     const res = {
@@ -1340,6 +1314,29 @@ test('Search Controller Tests', async (t) => {
     await searchController.search({ query, header: () => null }, res);
     return out;
   };
+
+  // The last seven are eagle-api datasets no caller used; they answer as any unknown name does.
+  const UNSUPPORTED = ['UnsupportedDataset', 'Item', 'HomeFeed', 'User', 'Group', 'Inspection',
+    'InspectionElement', 'InspectionItem'];
+  for (const dataset of UNSUPPORTED) {
+    await t.test(`dataset=${dataset} is a 400`, async () => {
+      assert.deepStrictEqual(await refusal({ dataset }),
+        { status: 400, body: { error: `Invalid or unsupported dataset: ${dataset}` } });
+    });
+  }
+
+  await t.test('an unsupported dataset with a project filter is the same 400, not an empty page', async () => {
+    assert.deepStrictEqual(await refusal({ dataset: 'Group', 'and[project]': '207' }),
+      { status: 400, body: { error: 'Invalid or unsupported dataset: Group' } });
+  });
+
+  await t.test('_schemaName is an unknown parameter', async () => {
+    assert.deepStrictEqual(await refusal({ dataset: 'Item', _schemaName: 'User', _id: 'x' }),
+      { status: 400, body: { error: 'Unsupported query parameter: _schemaName' } });
+  });
+
+  // The name filter is the one `and[...]` value that carries typed text. Both refusals are answered
+  // before any search request is issued, so a bad URL costs nothing and says what is wrong.
 
   await t.test('and[nameContains] is refused on a dataset with no name cell', async () => {
     const out = await refusal({ dataset: 'DocumentChunk', 'and[nameContains]': 'sediment' });

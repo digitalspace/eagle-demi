@@ -13,12 +13,8 @@ const {
   PROJECT_ROW, stubCosmos, getAsStaff,
   listRow, orgRow, periodRow, commentRow, updateRow, notificationRow
 } = require('../helpers/search-reads');
-const {
-  USER_EAGLE_ID, GROUP_EAGLE_ID, storedInspection, storedElement, ITEM_EAGLE_ID, INSPECTION_EAGLE_ID
-} = require('../helpers/eagle-mirror-fixtures');
 
 const OTHER = '5c0e4a0c3f4b1a0021a1b2ff';
-const STAFF = ['sysadmin', 'staff'];
 
 /** A target row and a sibling of the same shape, keyed by container. */
 const pair = (container, target, extra = {}) => ({
@@ -26,31 +22,17 @@ const pair = (container, target, extra = {}) => ({
   [container]: [target, { ...target, id: OTHER, eagleId: OTHER }]
 });
 
-const inspectionItem = {
-  id: ITEM_EAGLE_ID, kind: 'InspectionItem', inspection: INSPECTION_EAGLE_ID, projectId: '207', read: STAFF
-};
-
 const CASES = {
   List: pair('lists', listRow()),
   Organization: pair('lists', orgRow()),
   CommentPeriod: pair('commentPeriods', periodRow(), { projects: [PROJECT_ROW] }),
   Comment: pair('comments', commentRow(), { projects: [PROJECT_ROW] }),
   RecentActivity: pair('updates', updateRow(), { projects: [PROJECT_ROW] }),
-  ProjectNotification: pair('notifications', notificationRow()),
-  User: pair('users', { id: USER_EAGLE_ID, eagleId: USER_EAGLE_ID, firstName: 'Pat', read: STAFF }),
-  Group: pair('groups', { id: GROUP_EAGLE_ID, eagleId: GROUP_EAGLE_ID, projectId: '207', name: 'WG', read: STAFF },
-    { projects: [PROJECT_ROW] }),
-  Inspection: pair('inspections', storedInspection(STAFF), { projects: [PROJECT_ROW] }),
-  InspectionElement: pair('inspections', storedElement(STAFF)),
-  InspectionItem: pair('inspections', inspectionItem)
+  ProjectNotification: pair('notifications', notificationRow())
 };
 
-/** A feed of pinned and dated rows, not a record list: no `_id` to fetch by. */
-const NO_ID = new Set(['HomeFeed']);
-
-test('every Cosmos dataset is in the and[_id] table or named as taking none', () => {
-  const covered = [...Object.keys(CASES), ...NO_ID].sort();
-  assert.deepStrictEqual(covered, [...searchController.COSMOS_DATASET_NAMES].sort());
+test('every Cosmos dataset is in the and[_id] table', () => {
+  assert.deepStrictEqual(Object.keys(CASES).sort(), [...searchController.COSMOS_DATASET_NAMES].sort());
 });
 
 test('GET /search?dataset=<each>&and[_id]= answers that one row', async (t) => {
