@@ -7,18 +7,18 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const config = require('../../../src/config');
-const projects = require('../../../src/repositories/projects');
-const documents = require('../../../src/repositories/documents');
-const commentPeriods = require('../../../src/repositories/comment-periods');
-const aiSearch = require('../../../src/search/ai-search');
-const projectController = require('../../../src/controllers/nosql/project');
-const { composedRow } = require('../../../src/controllers/nosql/project-compose');
-const { ASSESSMENT_WORK_TYPE } = require('../../../src/merge/assessment-work');
-const { withoutAdded } = require('../../../src/scripts/check-works-parity');
-const { logger } = require('../../../src/utils/logger');
-const { mockRes, STAFF, PROJECT_EAGLE_ID } = require('../../helpers/eagle-mirror-fixtures');
-const { trackWorks, eagleDoc, storedRow, workDocs, worksContainer } = require('../../helpers/track-works-fixtures');
+const config = require('../../src/config');
+const projects = require('../../src/repositories/projects');
+const documents = require('../../src/repositories/documents');
+const commentPeriods = require('../../src/repositories/comment-periods');
+const aiSearch = require('../../src/search/ai-search');
+const projectController = require('../../src/controllers/nosql/project');
+const { composedRow } = require('../../src/domain/project-compose');
+const { ASSESSMENT_WORK_TYPE } = require('../../src/merge/assessment-work');
+const { withoutAdded } = require('../../src/scripts/check-works-parity');
+const { logger } = require('../../src/utils/logger');
+const { mockRes, STAFF, PROJECT_EAGLE_ID } = require('../helpers/eagle-mirror-fixtures');
+const { trackWorks, eagleDoc, storedRow, workDocs, worksContainer } = require('../helpers/track-works-fixtures');
 
 function quietCascade(t) {
   t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);

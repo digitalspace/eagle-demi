@@ -2,9 +2,9 @@
 
 // A project's `works` and `phases` from the works container, read after the row passed canRead.
 
-const worksDerive = require('../../domain/works-derive');
-const { deriveAssessments } = require('../../merge/assessments');
-const { isTrackWork, pickAssessmentWork } = require('../../merge/assessment-work');
+const worksDerive = require('./works-derive');
+const { deriveAssessments } = require('../merge/assessments');
+const { isTrackWork, pickAssessmentWork } = require('../merge/assessment-work');
 
 /** Derive inputs per try, so a retry after a lost race reads the works again; a push creating its row has none. */
 const deriveInputs = async (row) => (row ? worksDerive.deriveInputs(row) : {});

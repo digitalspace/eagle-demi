@@ -31,8 +31,8 @@ const {
   STAFF_EDITED_AT, STAFF_HELD_FIELDS, STAFF_ROLE_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS } = require('../../merge/assessments');
-const { composeWorks, derivedFor, deriveInputs } = require('./project-compose');
-const { shortCodeBody, restoreTwin, carryRowMarkers } = require('./project-rows');
+const { composeWorks, derivedFor, deriveInputs } = require('../../domain/project-compose');
+const { shortCodeBody, restoreTwin, carryRowMarkers } = require('../../domain/project-rows');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {

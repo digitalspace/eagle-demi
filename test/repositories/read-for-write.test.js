@@ -203,14 +203,14 @@ test('readForWrite is reached only from the mirror write paths', () => {
     // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
     'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
-    // The twin restore: it must find the `eagle-<id>` copy a DEMI delete narrowed, whatever its level.
-    'controllers/nosql/project-rows.js',
     // A Track delete must find a row hidden from the machine principal, as the Eagle push does.
     'controllers/nosql/track-push.js',
     'controllers/nosql/update.js',
     'controllers/nosql/user.js',
     // A taken-over group's parent, read to derive the group's read: a filtered read would miss a sealed one.
     'domain/groups.js',
+    // The twin restore: it must find the `eagle-<id>` copy a DEMI delete narrowed, whatever its level.
+    'domain/project-rows.js',
     'helpers/parent-admit.js',
     'helpers/project-twin.js',
     // An Update's parent, read to narrow the Update's own read: a filtered read would miss a sealed one.
