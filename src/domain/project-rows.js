@@ -2,12 +2,12 @@
 
 // Project row helpers the controller's routes share; none of them answers a request.
 
-const projects = require('../../repositories/projects');
-const { clearDeleted, deletedBy, hasValue, eagleOnlyProjectId } = require('../../merge/project');
-const { TRACK_PUSHED_AT } = require('../../ownership/project');
-const { shortUrlFor, projectTarget } = require('../../helpers/short-links');
-const { writeGuarded } = require('../../helpers/etag-write');
-const { logger } = require('../../utils/logger');
+const projects = require('../repositories/projects');
+const { clearDeleted, deletedBy, hasValue, eagleOnlyProjectId } = require('../merge/project');
+const { TRACK_PUSHED_AT } = require('../ownership/project');
+const { shortUrlFor, projectTarget } = require('../helpers/short-links');
+const { writeGuarded } = require('../helpers/etag-write');
+const { logger } = require('../utils/logger');
 
 /** `row` is the stored project the redacted one came from; the target is derived, not a field. */
 function shortCodeBody(project, row) {

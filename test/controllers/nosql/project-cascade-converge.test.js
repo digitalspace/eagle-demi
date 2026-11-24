@@ -21,6 +21,7 @@ const commentPeriods = require('../../../src/repositories/comment-periods');
 const aiSearch = require('../../../src/search/ai-search');
 const updateAcl = require('../../../src/helpers/update-acl');
 const projectController = require('../../../src/controllers/nosql/project');
+const projectCascade = require('../../../src/domain/project-cascade');
 const { logger } = require('../../../src/utils/logger');
 const { readForLevel } = require('../../../src/helpers/access-sql');
 const {
@@ -105,7 +106,7 @@ test('a cascade whose project closed under it runs again with the stored read', 
   const pending = [];
   t.mock.method(projects, 'patchCascadePending', async (...args) => { pending.push(args); });
 
-  const failure = await projectController.runCascade(atLevel4(ETAG_READ), PROJECT_EAGLE_ID);
+  const failure = await projectCascade.runCascade(atLevel4(ETAG_READ), PROJECT_EAGLE_ID);
 
   assert.deepStrictEqual(cascaded, [PUBLIC_ACL, PRIVATE_ACL]);
   assert.strictEqual(failure, null, 'the second pass re-derives every row, so its result is the answer');
@@ -122,7 +123,7 @@ test('the owed-cascade marker lands on a row that moved since the write', async 
     if (etags.length === 1) throw lostRace();
   });
 
-  const failure = await projectController.runCascade(atLevel4(ETAG_READ), PROJECT_EAGLE_ID);
+  const failure = await projectCascade.runCascade(atLevel4(ETAG_READ), PROJECT_EAGLE_ID);
 
   assert.ok(failure);
   assert.deepStrictEqual(etags, [ETAG_READ, ETAG_LANDED], 'owing a cascade is never wrong, so the 412 is retried once');

@@ -7,32 +7,29 @@ const { isDeepStrictEqual } = require('node:util');
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
 const commentPeriods = require('../../repositories/comment-periods');
-const comments = require('../../repositories/comments');
-const groups = require('../../repositories/groups');
-const inspections = require('../../repositories/inspections');
-const { unlessUnprovisioned } = require('../../helpers/unprovisioned');
 const {
   resolveAccess, systemAccess, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
 const { catalogFor } = require('../../vis/catalog');
 const { serverError } = require('../../helpers/response');
 const { inList } = require('../../repositories/_sql');
-const aiSearch = require('../../search/ai-search');
-const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, clearDeleted,
-  deleteStands, deletedBy, TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject,
-  isEagleOnlyProjectId, validCoordinates
+  carryDemiOnlyFields, resolveProjectAcl, markDeleted, clearDeleted, deleteStands, deletedBy, TRIMMED_FIELDS,
+  hasValue, isNativeProject, isDemiOwnedProject, isEagleOnlyProjectId, validCoordinates
 } = require('../../merge/project');
 const {
-  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
+  LEGISLATION_KEY, PUT_IGNORED_FIELDS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT, DEMI_ONLY_FIELDS, TRACK_PRECEDENCE,
   STAFF_EDITED_AT, STAFF_HELD_FIELDS, STAFF_ROLE_FIELDS
 } = require('../../ownership/project');
 const { DERIVED_FIELDS } = require('../../merge/assessments');
-const { composeWorks, derivedFor, deriveInputs } = require('./project-compose');
-const { shortCodeBody, restoreTwin, carryRowMarkers } = require('./project-rows');
+const { composeWorks, derivedFor, deriveInputs } = require('../../domain/project-compose');
+const { shortCodeBody, restoreTwin } = require('../../domain/project-rows');
+const {
+  cascadeProjectVisibility, cascadeUpdateVisibility, visibilityMoved, runCascade, markCascadePending, clearCascadePending
+} = require('../../domain/project-cascade');
+const { eagleLevel, mergeEaglePush } = require('../../domain/project-push');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {
@@ -145,9 +142,6 @@ async function takeOver(current, now) {
   return { [DEMI_OWNED_AT]: now };
 }
 
-/** Eagle's level for its stored copy of a project, read as live. */
-const eagleLevel = (eagle) => levelOfRead(resolveProjectAcl(eagle, false));
-
 /** Log the write that first set `demiOwnedAt`, the one that took the row from Eagle. */
 function noteTakeover(before, saved, route) {
   if (isDemiOwnedProject(before) || !isDemiOwnedProject(saved)) return;
@@ -234,145 +228,6 @@ function cleanChanges(changes, existing, id) {
   // A list appended to an older copy is no body error: the guarded write answers it 409.
   const staff = staffFieldChanges(existing, changes, new Date().toISOString(), { id });
   return staff.stale ? null : staff.error || null;
-}
-
-/**
- * Carry a project's visibility to its index row and its child rows (`ownRead ∩ projectRead`); an error message, or null.
- * ponytail: documents only, not chunks — a chunk gates on its parent document at query time.
- */
-async function cascadeProjectVisibility(projectId, acl, eagleId, options) {
-  const failure = await cascadeOnce(projectId, acl, eagleId, options);
-  const stored = await projects.readForWrite(projectId).catch(err => err);
-  if (!stored || stored instanceof Error) {
-    logger.warn('[Project Controller] project not re-read after its cascade', { projectId, error: stored && stored.message });
-    return failure;
-  }
-  const now = { read: stored.read, isPublished: stored.isPublished };
-  if (!visibilityMoved(acl, now)) return failure;
-  // One more pass only: whoever moves the row after this read runs its own cascade.
-  logger.warn('[Project Controller] project moved during cascade, re-running', { projectId });
-  return cascadeOnce(projectId, now, eagleId, options);
-}
-
-async function cascadeOnce(projectId, acl, eagleId, { updates = true } = {}) {
-  // Index row first and outside the try: lists read the index, and the Cosmos write has already
-  // landed, so the row must narrow even if the cascade below fails.
-  await aiSearch.writeAcls(aiSearch.indexes().projects, [
-    { id: projectId, read: acl.read, isPublished: acl.isPublished }
-  ]);
-
-  // Both, whatever either says: documents and engagement are independent containers, and stopping
-  // at the first failure would leave the other carrying the old ACL with nothing recorded.
-  const failures = [
-    await cascadeDocumentVisibility(projectId, acl),
-    await cascadeEngagementVisibility(projectId, acl.read),
-    await cascadeMirrorVisibility('groups', groups, projectId, acl.read),
-    await cascadeMirrorVisibility('inspections', inspections, projectId, acl.read),
-    updates ? await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
-  ].filter(Boolean);
-  return failures.length ? failures.join(' ') : null;
-}
-
-/** Re-derive the comment periods' and comments' ACLs, which the mirror caps only at push time; an error message, or null. */
-async function cascadeEngagementVisibility(projectId, read) {
-  try {
-    const periods = await commentPeriods.setAclForProject(systemAccess(), projectId, read);
-    let commentsWritten = 0;
-    let commentsFailed = 0;
-    // Per period, because `comments` partitions on it — one bulk request each, and a project
-    // carries a handful.
-    for (const period of periods.rows) {
-      const cascade = await comments.setAclForPeriod(systemAccess(), period.id, period.read);
-      commentsWritten += cascade.succeeded;
-      commentsFailed += cascade.failed;
-    }
-
-    const counts = {
-      projectId, periods: periods.succeeded, periodsFailed: periods.failed,
-      comments: commentsWritten, commentsFailed
-    };
-    if (periods.failed > 0 || commentsFailed > 0) {
-      logger.error('[Project Controller] engagement ACL cascade partially failed', counts);
-      return 'Project visibility changed, but its comment periods were not fully updated.';
-    }
-    logger.info('[Project Controller] engagement ACL cascade', counts);
-    return null;
-  } catch (cascadeErr) {
-    logger.error('[Project Controller] engagement ACL cascade failed', {
-      projectId, error: cascadeErr.message, stack: cascadeErr.stack
-    });
-    return 'Project visibility changed, but its comment periods were not updated.';
-  }
-}
-
-/** The project's Updates, keyed by the EAGLE id (`updates.projectId`); an error message the caller must 500 with, or null. */
-async function cascadeUpdateVisibility(projectId, eagleId, read) {
-  try {
-    const cascade = await updateAcl.setAclForProject(eagleId, read);
-    if (cascade.failed > 0) {
-      logger.error('[Project Controller] update ACL cascade partially failed', {
-        projectId, eagleId, succeeded: cascade.succeeded, failed: cascade.failed
-      });
-      return 'Project visibility changed, but its updates were not fully updated.';
-    }
-    return null;
-  } catch (cascadeErr) {
-    logger.error('[Project Controller] update ACL cascade failed', {
-      projectId, eagleId, error: cascadeErr.message, stack: cascadeErr.stack
-    });
-    return 'Project visibility changed, but its updates were not updated.';
-  }
-}
-
-/**
- * The project's groups, or its inspections with their elements and items, each capped by the project at push time
- * and gated by its own `read[]`. An error message the caller must 500 with, or null.
- */
-async function cascadeMirrorVisibility(label, repo, projectId, read) {
-  try {
-    const cascade = await unlessUnprovisioned(repo.CONTAINER, () => repo.setAclForProject(projectId, read));
-    if (!cascade) return null;
-    if (cascade.failed > 0) {
-      logger.error(`[Project Controller] ${label} ACL cascade partially failed`, {
-        projectId, succeeded: cascade.succeeded, failed: cascade.failed
-      });
-      return `Project visibility changed, but its ${label} were not fully updated.`;
-    }
-    return null;
-  } catch (cascadeErr) {
-    logger.error(`[Project Controller] ${label} ACL cascade failed`, {
-      projectId, error: cascadeErr.message, stack: cascadeErr.stack
-    });
-    return `Project visibility changed, but its ${label} were not updated.`;
-  }
-}
-
-/** @returns {Promise<string|null>} an error message the caller must 500 with, or null */
-async function cascadeDocumentVisibility(projectId, acl) {
-  try {
-    const cascade = await documents.setAclForProject(systemAccess(), projectId, acl.read);
-    if (cascade.failed > 0) {
-      // Rows that landed still go to the index, else they list under the old ACL until the next
-      // indexer pass. With no per-row verdicts nothing is written.
-      const failedIds = new Set(cascade.failedIds || (cascade.rows || []).map(r => r.id));
-      const landed = (cascade.rows || []).filter(row => !failedIds.has(row.id));
-      if (landed.length) await aiSearch.writeAcls(aiSearch.indexes().documents, landed);
-      logger.error('[Project Controller] document ACL cascade partially failed', {
-        projectId, ...cascade, ids: undefined, rows: undefined
-      });
-      return 'Project visibility changed, but its documents were not fully updated.';
-    }
-
-    // The same derived ACLs the cascade just wrote to Cosmos, into the documents index. One
-    // request per 1,000 documents, and it cannot throw.
-    await aiSearch.writeAcls(aiSearch.indexes().documents, cascade.rows);
-    return null;
-  } catch (cascadeErr) {
-    logger.error('[Project Controller] document ACL cascade failed', {
-      projectId, error: cascadeErr.message, stack: cascadeErr.stack
-    });
-    return 'Project visibility changed, but its documents were not updated.';
-  }
 }
 
 /**
@@ -956,129 +811,6 @@ exports.upsertFromEagle = async (req, res) => {
   // guard and the `pushedAt` order keep that safe across instances.
   return applyEaglePush(req, res, push);
 };
-
-/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands; on a DEMI-owned row, the stored flag. */
-function pushDeleted(doc, existing) {
-  if (isDemiOwnedProject(existing)) return existing.isDeleted === true;
-  if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
-  return deleteStands(existing);
-}
-
-/**
- * On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle
- * fill would stick. `proponentName` follows Eagle's `proponentId`, `isActive` its `activeStatus`.
- */
-const EAGLE_FED = new Set(['proponentName', 'isActive']);
-const NATIVE_KEPT_FIELDS = ['id', 'trackProjectId', 'sourceSystem', 'centroid', 'createdAt',
-  ...OWNERS.track.filter(field => !EAGLE_FED.has(field))];
-
-/**
- * Put a native row's own fields back over the Eagle merge, so the push lands on that row, not an
- * `eagle-<id>` one.
- */
-function keepNativeIdentity(merged, existing) {
-  for (const field of NATIVE_KEPT_FIELDS) {
-    if (existing[field] === undefined) delete merged[field];
-    else merged[field] = existing[field];
-  }
-  merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
-  // Sync-out drives the level of a project it created from DEMI; Eagle's stays in `sources.eagle.read`.
-  if (isMintedNative(existing)) {
-    merged.read = existing.read;
-    merged.isPublished = existing.isPublished;
-  }
-}
-
-/**
- * The row a push writes, built from whatever revision is stored at the moment of the write.
- * `switchTo` names the `legislation_<year>` block an owned row makes current.
- */
-function mergeEaglePush(doc, existing, { switchTo, ...inputs } = {}) {
-  const deleted = pushDeleted(doc, existing);
-  // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
-  // rebuilds them).
-  const merged = existing && existing.sources && existing.sources.track
-    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works, deleted, ...inputs })
-    : mergeEagleOnlyProject(doc, { deleted });
-
-  // The merge rebuilds only `track`/`eagle`, and the upsert replaces the item, so other source
-  // blocks such as `sources.wildfire` are carried here.
-  merged.sources = { ...(existing && existing.sources), ...merged.sources };
-  if (isNativeProject(existing)) keepNativeIdentity(merged, existing);
-  carryRowMarkers(merged, existing);
-  // Same replace-the-whole-item trap as sources: dropping the code would leave a printed link
-  // pointing at nothing once the nightly sync minted a second one.
-  carryShortLink(merged, existing);
-  carryDemiOnlyFields(merged, existing, undefined, { switchTo, ...inputs });
-  // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
-  if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
-  // Restore lifts an unheld DEMI delete to Eagle's level; once Eagle deletes or raises its copy, that level is unsafe.
-  if (deleteStands(existing) && !merged.levelHeldAt && (doc.isDeleted === true ||
-      eagleLevel(merged.sources.eagle) > eagleLevel(existing.sources && existing.sources.eagle))) {
-    merged.levelHeldAt = new Date().toISOString();
-    logger.info('[Project Controller] Eagle push held a deleted project', { id: merged.id, eagleId: merged.eagleId });
-  }
-  // Eagle deleting a project DEMI already deleted must not hand the delete to Eagle to undo.
-  if (merged.isDeleted === true) markDeleted(merged, deleteStands(existing) ? 'demi' : 'eagle');
-  return merged;
-}
-
-/** Whether a write moved what the documents, periods and the index row are gated on. */
-function visibilityMoved(before, after) {
-  if (before.isPublished !== after.isPublished) return true;
-  const was = [...(before.read || [])].sort();
-  const now = [...(after.read || [])].sort();
-  return was.length !== now.length || was.some((role, i) => role !== now[i]);
-}
-
-/**
- * Cascade the project's visibility; on failure mark the row so the next push cascades again, since
- * a retried push leaves visibility unmoved. Returns an error message to 500 with, or null.
- */
-async function runCascade(saved, eagleId, options) {
-  let failure;
-  try {
-    failure = await cascadeProjectVisibility(saved.id,
-      { read: saved.read, isPublished: saved.isPublished }, saved.eagleId, options);
-  } catch (cascadeErr) {
-    logger.error('[Project Controller] project visibility cascade threw', {
-      projectId: saved.id, eagleId, error: cascadeErr.message, stack: cascadeErr.stack
-    });
-    failure = 'Project visibility changed, but its documents, engagement and updates were not updated.';
-  }
-  if (failure) await markCascadePending(saved, eagleId);
-  return failure;
-}
-exports.runCascade = runCascade;
-exports.visibilityMoved = visibilityMoved;
-
-/** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
-async function markCascadePending(saved, eagleId) {
-  const at = new Date().toISOString();
-  try {
-    // Owing a cascade is never wrong, so a row that moved since `saved` still takes the marker.
-    await projects.patchCascadePending(saved.id, at, saved._etag).catch(async (err) => {
-      if (!raced(err)) throw err;
-      const fresh = await projects.readForWrite(saved.id);
-      if (fresh) await projects.patchCascadePending(saved.id, at, fresh._etag);
-    });
-  } catch (patchErr) {
-    logger.error('[Project Controller] could not record the owed visibility cascade', {
-      projectId: saved.id, eagleId, error: patchErr.message, stack: patchErr.stack
-    });
-  }
-}
-
-/** Also best effort: a marker left behind only costs the next push one redundant cascade. */
-async function clearCascadePending(saved, eagleId) {
-  try {
-    await projects.patchCascadePending(saved.id, null, saved._etag);
-  } catch (patchErr) {
-    logger.error('[Project Controller] could not clear the owed visibility cascade', {
-      projectId: saved.id, eagleId, error: patchErr.message, stack: patchErr.stack
-    });
-  }
-}
 
 async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
   try {

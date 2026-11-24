@@ -25,7 +25,7 @@ const { redactForAccess } = require('../../src/vis/redact');
 const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 const { trackWorks: pulledWorks, storedWorks, workDocs } = require('../helpers/track-works-fixtures');
 const { publicWorksOf, withoutAdded } = require('../../src/seed/track-mappers');
-const { composedRow } = require('../../src/controllers/nosql/project-compose');
+const { composedRow } = require('../../src/domain/project-compose');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
