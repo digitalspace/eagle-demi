@@ -190,10 +190,10 @@ test('the gate route is deliberately unguarded', () => {
 });
 
 test('the curtain password is read from config, never from the public payload', () => {
-  const configController = require('../../src/controllers/config');
+  const { PUBLIC_KEYS } = require('../../src/domain/public-config');
   // Serving it would put the password in a bundle: eagle-public boots on this payload.
-  assert.ok(!configController.PUBLIC_KEYS.includes('ACCESS_GATE_PASSWORD'),
+  assert.ok(!PUBLIC_KEYS.includes('ACCESS_GATE_PASSWORD'),
     'the password must never be in PUBLIC_KEYS — GET /config/public is unauthenticated');
-  assert.ok(configController.PUBLIC_KEYS.includes('ACCESS_GATE'),
+  assert.ok(PUBLIC_KEYS.includes('ACCESS_GATE'),
     'the boolean is the only part of the curtain a browser is told about');
 });

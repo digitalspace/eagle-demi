@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const {
   DEFAULT_CONFIG_URLS, parseArgs, eagleConfigUrl, buildDocument, seed
 } = require('../../src/scripts/seed-public-config');
-const { PUBLIC_KEYS } = require('../../src/controllers/config');
+const { PUBLIC_KEYS } = require('../../src/domain/public-config');
 
 /** eagle-api's live /api/config, shortened: allowlisted keys plus the ones DEMI must not store. */
 const EAGLE_PAYLOAD = {

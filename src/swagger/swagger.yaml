@@ -9887,7 +9887,7 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        The `PUBLIC_KEYS` allowlist in `src/controllers/config.js`, and nothing else. Every property
+        The `PUBLIC_KEYS` allowlist in `src/domain/public-config.js`, and nothing else. Every property
         is optional: what the `public` document does not carry is absent rather than defaulted, so
         a consumer that needs a key must treat its absence as "ask eagle-api instead". A field added
         to the document is not published until it is added to the allowlist too.

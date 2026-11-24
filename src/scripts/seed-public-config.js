@@ -5,7 +5,7 @@
  * override only, since eagle-api pushes later writes. Dry run unless `--live`; `--force` overwrites.
  */
 
-const { pickPublicKeys } = require('../controllers/config');
+const { pickPublicKeys } = require('../domain/public-config');
 const configRepository = require('../repositories/config');
 const sources = require('../seed/sources');
 const config = require('../config');
