@@ -7,7 +7,6 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-
 const cosmos = require('../../../src/db/cosmos-nosql');
 const updates = require('../../../src/repositories/updates');
 const notify = require('../../../src/services/notify');
@@ -15,6 +14,7 @@ const documents = require('../../../src/repositories/documents');
 const config = require('../../../src/config');
 const { logger } = require('../../../src/utils/logger');
 const controller = require('../../../src/controllers/nosql/update');
+const { announce } = require('../../../src/domain/update-announce');
 const { routeChains } = require('../../helpers/router-source');
 const { parentProject, parentNotification } = require('../../helpers/update-parents');
 
@@ -443,7 +443,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       const seen = wiredNotify(t);
 
       // Pushed as if stored before the cap: `public` in its own read.
-      await controller.announce({ ...eagleUpdate(), id: UPDATE_EAGLE_ID, projectId: PROJECT_EAGLE_ID,
+      await announce({ ...eagleUpdate(), id: UPDATE_EAGLE_ID, projectId: PROJECT_EAGLE_ID,
         isPublished: true, read: PUBLIC, publishDate: '2026-08-01T00:00:00.000Z' }, null);
 
       assert.deepStrictEqual(seen.claims, []);

@@ -7,7 +7,7 @@
 
 const updates = require('../repositories/updates');
 const notify = require('../services/notify');
-const { announce } = require('../controllers/nosql/update');
+const { announce } = require('../domain/update-announce');
 const { logger } = require('../utils/logger');
 
 // Rows per tick, sent together: each send waits up to 20 s, and a tick must end inside its 5 minutes.
