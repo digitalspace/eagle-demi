@@ -9,9 +9,21 @@ const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
 
+// Taken before any test stubs it: a stub stacked on the harness stub can outlive its test.
+const { listByIds } = projects;
+
 const worker = require('../../src/jobs/bulk-download');
 
 const { PROJECT, doc, job, harness, readyPatch } = require('./bulk-download-harness');
+const { storedContainers } = require('../helpers/stored-documents');
+
+const STAFF_ACCESS = Object.freeze({ authenticated: true, roles: ['staff'], level: 2 });
+
+/** The project read answered from a stored row whose name is dialled to staff, not the harness stub. */
+function storedProject(t) {
+  t.mock.method(projects, 'listByIds', listByIds);
+  storedContainers(t, { projects: [{ id: PROJECT.id, name: 'Hidden Mine', read: ['public'], vis: { name: 2 } }] });
+}
 
 test('the bulk download worker', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -67,6 +79,28 @@ test('the bulk download worker', async (t) => {
     await worker.run('job-1');
 
     assert.match(zipText([...uploads.keys()][0]), /port \(2\)\.pdf/);
+  });
+
+  await t.test('a project name dialled above an anonymous caller names neither folder nor zip', async (tt) => {
+    const docs = [doc('d1')];
+    const { uploads, zipText, patches } = harness(tt, { row: job(docs), docs });
+    storedProject(tt);
+
+    await worker.run('job-1');
+
+    assert.match(zipText([...uploads.keys()][0]), /unknown-project\/d1\.pdf/);
+    assert.strictEqual(readyPatch(patches).label, '');
+  });
+
+  await t.test('a staff job keeps a project name dialled to staff', async (tt) => {
+    const docs = [doc('d1')];
+    const { uploads, zipText, patches } = harness(tt, { row: job(docs, { access: STAFF_ACCESS }), docs });
+    storedProject(tt);
+
+    await worker.run('job-1');
+
+    assert.match(zipText([...uploads.keys()][0]), /Hidden Mine\/d1\.pdf/);
+    assert.strictEqual(readyPatch(patches).label, 'Hidden Mine');
   });
 
   await t.test('a long project label cut short does not end in a dot or space', async (tt) => {

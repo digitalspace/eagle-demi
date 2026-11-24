@@ -15,7 +15,7 @@ const bulkDownloads = require('../repositories/bulk-downloads');
 const credentials = require('../repositories/credentials');
 const projects = require('../repositories/projects');
 const { liveCredentials } = require('../helpers/credentials');
-const { clean, fileNameFor, fitName } = require('../helpers/file-name');
+const { clean, fileNameFor, fitName, projectNameFor } = require('../helpers/file-name');
 const { logger } = require('../utils/logger');
 
 // Ids per lookup. Both reads are cross-partition — a bulk job carries no project context — so the
@@ -336,7 +336,7 @@ async function projectNamesFor(access, docs) {
   const names = new Map();
   for (let i = 0; i < ids.length; i += ID_BATCH) {
     const rows = await projects.listByIds(access, ids.slice(i, i + ID_BATCH));
-    for (const row of rows) names.set(String(row.id), row.name);
+    for (const row of rows) names.set(String(row.id), projectNameFor(row, access));
   }
   return names;
 }

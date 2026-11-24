@@ -87,6 +87,9 @@ function fileNameFor(doc, access, fallback = '') {
   return fitName(base, Math.max(1, MAX_NAME_LENGTH - ext.length)) + ext;
 }
 
+/** A project's name as THIS caller may see it, so a dialled name cannot return as a zip folder or label. */
+const projectNameFor = (project, access) => redactForAccess('projects', project, access).name;
+
 /**
  * The title written into a PDF: the display name an anonymous visitor sees, on one line, or null
  * when they see none (a `vis` dial can withhold it). A title is no path, so slashes stay.
@@ -101,4 +104,4 @@ function pdfTitleFor(doc) {
     .trim() || null;
 }
 
-module.exports = { clean, fileNameFor, fitName, pdfTitleFor };
+module.exports = { clean, fileNameFor, fitName, pdfTitleFor, projectNameFor };

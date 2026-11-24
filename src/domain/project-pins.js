@@ -7,6 +7,7 @@ const { resolveAccess, systemAccess } = require('../helpers/access-sql');
 const { check } = require('./_schema');
 const { readWith } = require('./_write');
 const { pinsPublished } = require('../vis/predicates');
+const { redactForAccess } = require('../vis/redact');
 const { logger } = require('../utils/logger');
 
 /** eagle-api lets these roles add and remove pins (swagger.yaml `/project/{projId}/pin`). */
@@ -34,13 +35,16 @@ function storedIds(project) {
 
 const sameList = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
 
-/** Organization id -> label row for the ids `access` can read, read in slices of MAX_PINS ids. */
+/**
+ * Stored organization id -> label row as `access` may see it, for the ids it can read, read in
+ * slices of MAX_PINS ids. Keyed on the stored id, so a dialled `id` still finds its label.
+ */
 async function labelsById(access, ids) {
   const unique = dedupe(ids);
   const byId = new Map();
   for (let i = 0; i < unique.length; i += MAX_PINS) {
     for (const row of await lists.listOrganizationLabels(access, unique.slice(i, i + MAX_PINS))) {
-      byId.set(String(row.id), row);
+      byId.set(String(row.id), redactForAccess('lists', row, access));
     }
   }
   return byId;

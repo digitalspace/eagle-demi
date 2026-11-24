@@ -11,6 +11,12 @@ const { pinChanges, labelPins, MAX_PINS } = require('../../src/domain/project-pi
 const {
   PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels: fakeOrgs
 } = require('../helpers/org-labels');
+const { storedContainers } = require('../helpers/stored-documents');
+
+const DIALLED_ORG = Object.freeze({
+  id: '5c1f7a3e9b1d2c0012340005', kind: 'Organization', name: 'Dialled Co', province: 'BC',
+  read: ['public', 'staff', 'sysadmin'], vis: { name: 2, province: 2 }
+});
 
 const ctxFor = (roles) => ({ access: resolveAccess({ user: { sub: 'kc-1', realm_access: { roles } }, headers: {} }) });
 const STAFF = ctxFor(['staff']);
@@ -156,6 +162,14 @@ test('labelPins', async (t) => {
     const [publicRow] = await labelPins(resolveAccess({}), [{ pins }]);
     assert.deepStrictEqual(publicRow.pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
     assert.strictEqual(calls.length, 2);
+  });
+
+  await t.test('an organization dial withholds its label from a caller below it', async (t) => {
+    storedContainers(t, { lists: [DIALLED_ORG] });
+    const [publicRow] = await labelPins(resolveAccess({}), [{ pins: [DIALLED_ORG.id] }]);
+    assert.deepStrictEqual(publicRow.pins, [{ _id: DIALLED_ORG.id, name: null, province: null }]);
+    const [staffRow] = await labelPins(STAFF.access, [{ pins: [DIALLED_ORG.id] }]);
+    assert.deepStrictEqual(staffRow.pins, [{ _id: DIALLED_ORG.id, name: 'Dialled Co', province: 'BC' }]);
   });
 
   await t.test('one label read for every row of a page', async (t) => {
