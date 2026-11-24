@@ -10,8 +10,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind } = require('../helpers/native-query');
 const {
-  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll,
-  NOT_DELETED, withCriteria
+  eq, selectWhere, selectFor, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
 } = require('./_sql');
 
 const CONTAINER = 'groups';
@@ -29,36 +28,6 @@ async function getById(access, id, select) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, projectId) {
   return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
-}
-
-function criteriaFor(projectId) {
-  return [NOT_DELETED, ...(projectId ? [eq(PARTITION_FIELD, String(projectId), '@projectId')] : [])];
-}
-
-function visibleSpec(access, projectId) {
-  return selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: criteriaFor(projectId),
-    select: selectFor(ENTITY, access, PARTITION_FIELD),
-    orderBy: 'c.id ASC'
-  });
-}
-
-const partitionOf = (projectId) => (projectId ? String(projectId) : undefined);
-
-/** One offset page (`pageNum`, `pageSize`) of the groups this caller may read, as `/search` pages. */
-async function listPage(access, { projectId, pageNum, pageSize } = {}) {
-  return readPage(CONTAINER, visibleSpec(access, projectId), {
-    pageNum, pageSize, partitionKey: partitionOf(projectId)
-  });
-}
-
-/** The same predicate as the read. */
-async function countVisible(access, { projectId } = {}) {
-  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: criteriaFor(projectId) });
-  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ partitionKey: partitionOf(projectId) }));
-  return items[0] || 0;
 }
 
 /** Whole-item write. A group moved to another project changes partition — see `upsertItem`. */
@@ -109,6 +78,6 @@ const native = {
 };
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, deleteById,
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, upsert, deleteById,
   setAclForProject, listAclRows, native
 };
