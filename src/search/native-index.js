@@ -333,7 +333,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     if (empty) return { rows: [], count: 0 };
 
     const asked = { keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top: parsed.pageSize, skip: parsed.pageNum * parsed.pageSize };
-    const { ids, count, hits } = map.hits && (parsed.highlight || parsed.projectNames)
+    const { ids, count, hits } = map.hits && parsed.q && (parsed.highlight || parsed.projectNames)
       ? await map.hits(access, asked, parsed.projectNames)
       : await map.search(asked);
     if (ids.length === 0) return { rows: [], count };
@@ -363,7 +363,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
         index, ids: ids.length, rows: rows.length
       });
     }
-    if (parsed.highlight) withHighlights(map, rows, hits);
+    if (parsed.highlight && hits) withHighlights(map, rows, hits);
     const rank = new Map(ids.map((id, i) => [id, i]));
     return { rows: rows.sort((a, b) => rank.get(String(a.id)) - rank.get(String(b.id))), count };
   }

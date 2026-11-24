@@ -15,6 +15,7 @@ const { indexedKind, indexFilter, andOData, INDEX_MAPS, ID_PAGE } = require('../
 const aiSearch = require('../../src/search/ai-search');
 const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');
 const cosmos = require('../../src/db/cosmos-nosql');
+const projectsRepo = require('../../src/repositories/projects');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess, TIER, SEALED_TOKEN } = require('../../src/helpers/access-sql');
 const { makeRes } = require('../../src/http/router');
@@ -458,12 +459,11 @@ test('documents list over the paged index', async (t) => {
 
   await t.test('highlight=true reads whole hits and carries their marks; projectNames adds the project-name leg', async (t) => {
     const asked = [];
-    t.mock.method(aiSearch, 'searchDocumentIds', async () => assert.fail('the id search has no marks'));
+    fakeDocStores(t, { ids: ['d1'], count: 1 });
     t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
       asked.push(opts);
       return { count: 851, items: [{ id: 'd2', highlighted: { displayName: '<mark>Ajax</mark> plan', description: '' } }, { id: 'd1' }] };
     });
-    fakeDocStores(t);
     const marked = await callDocs('q=ajax&highlight=true&count=true');
     assert.strictEqual(marked.status, 200);
     assert.strictEqual(marked.headers['x-total-count'], '851');
@@ -473,11 +473,19 @@ test('documents list over the paged index', async (t) => {
     ]);
     assert.strictEqual(asked[0].projectFilter, undefined, 'no project-name leg without projectNames');
 
+    // p9 dials a leg-two column (proponent or tags) below public, so its documents must not join.
+    t.mock.method(projectsRepo, 'listDialHiddenIds', async () => ['p9']);
     const both = await callDocs('q=ajax&projectNames=true');
     assert.strictEqual(both.status, 200);
     assert.ok(both.body.every(row => !Object.hasOwn(row, 'highlighted')));
-    assert.strictEqual(asked[1].projectFilter, filterFor(ANON, 'id').filter);
+    assert.strictEqual(asked[1].projectFilter, andOData(filterFor(ANON, 'id').filter, "not search.in(id, 'p9', ',')"));
     assert.strictEqual(asked[1].filter, asked[0].filter);
+
+    // No keyword: nothing to mark and no leg two, so the id-only search answers as without the options.
+    const plain = await callDocs('highlight=true&projectNames=true');
+    assert.strictEqual(plain.status, 200);
+    assert.strictEqual(asked.length, 2);
+    assert.ok(plain.body.every(row => !Object.hasOwn(row, 'highlighted')));
   });
 
   await t.test('searchVis clause only with q', async (t) => {
