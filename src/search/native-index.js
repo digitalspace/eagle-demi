@@ -244,8 +244,8 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
 }
 
 /**
- * `$orderby` for paged mode: the sort column and its `tiebreaks` entry, else relevance with `q`,
- * else the map's default; then `id` so pages never overlap.
+ * `$orderby`: the sort column and its `tiebreaks` entry, else relevance with `q`, else the map's
+ * default; then `id` so pages never overlap and score ties order as on the envelope route.
  */
 function indexOrderby(map, parsed) {
   if (!parsed.sort) return `${parsed.q ? 'search.score() desc' : map.defaultOrderby}, id`;
