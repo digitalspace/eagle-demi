@@ -266,7 +266,7 @@ const projectsKind = {
     dateUpdatedEnd: { field: 'dateUpdated', op: 'le' }
   },
   contains: { nameContains: 'name' },
-  qFields: INDEX_MAPS.projects.searched,
+  qFields: INDEX_MAPS.projects.searched, searchOptions: INDEX_MAPS.projects.options,
   // Taken out by `getProjects` only; `/counts?kind=projects` refuses it as unknown.
   wrapperParams: ['pcp']
 };

@@ -138,22 +138,31 @@ function booleansOf(spec, kind, q, access) {
   return { values };
 }
 
+/** `spec`'s control parameters, `CONTROL_PARAMS` then its `searchOptions`, and each option sent as `true`; else `{ error }`. */
+function searchOptionsOf(spec, q) {
+  const names = spec.searchOptions || [];
+  const bad = names.find(name => q[name] !== undefined && q[name] !== 'true');
+  if (bad) return { error: Array.isArray(q[bad]) ? `parameter given more than once: ${bad}` : `${bad} takes only true` };
+  return { controls: [...CONTROL_PARAMS, ...names], values: Object.fromEntries(names.filter(name => q[name]).map(name => [name, true])) };
+}
+
 /**
- * Paging, one allow-listed `sort`, `count=true`, `ids=`, `q=` and `spec`'s filters; any other or repeated name is `{ error }`.
- * Each filter kind in the answer is keyed by row field, whatever name the query used, so `nativeCriteria` needs `parsed` only.
+ * Paging, one allow-listed `sort`, `count=true`, `ids=`, `q=`, `spec`'s filters and its search options (each `true` on the answer
+ * when sent); any other or repeated name is `{ error }`. Each filter kind in the answer is keyed by row field, so `nativeCriteria` needs `parsed` only.
  */
 function parseNativeQuery(spec, query, access) {
   const names = filterNames(spec);
   const multi = spec.multiValueFilters || [];
-
-  for (const [key, value] of Object.entries(query || {})) {
-    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !Object.hasOwn(spec.ranges || {}, key) &&
+  const q = query || {};
+  const options = searchOptionsOf(spec, q);
+  if (options.error) return options;
+  for (const [key, value] of Object.entries(q)) {
+    if (!options.controls.includes(key) && !names.has(key) && !Object.hasOwn(spec.ranges || {}, key) &&
         !Object.hasOwn(spec.contains || {}, key) && !Object.hasOwn(spec.presence || {}, key) && !Object.hasOwn(spec.flags || {}, key)) {
       return { error: `unknown parameter: ${key}` };
     }
     if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
   }
-  const q = query || {};
 
   let pageNum = 0;
   if (q.page !== undefined) {
@@ -168,8 +177,7 @@ function parseNativeQuery(spec, query, access) {
   const anonymous = !access || !access.authenticated;
   const depth = anonymous ? ANON_MAX_PAGE_DEPTH : MAX_PAGE_DEPTH;
   if ((pageNum + 1) * pageSize > depth) {
-    return { error: `page * pageSize must stay within ${depth} rows` +
-      (anonymous ? ' for a request with no credential' : '') };
+    return { error: `page * pageSize must stay within ${depth} rows${anonymous ? ' for a request with no credential' : ''}` };
   }
 
   if (q.count !== undefined && q.count !== 'true') return { error: 'count takes only true' };
@@ -245,7 +253,7 @@ function parseNativeQuery(spec, query, access) {
 
   return {
     pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, anyOf, ranges, contains,
-    presence: presence.values, flags: flags.values
+    presence: presence.values, flags: flags.values, ...options.values
   };
 }
 
@@ -300,15 +308,11 @@ function nativeCriteria(spec, parsed, access) {
     criteria.push({ clause: `(${dialAllows(field, level)} AND CONTAINS(c.${field}, ${bound.name}, true))`, params: [bound] });
   });
 
-  Object.entries(parsed.presence || {}).forEach(([field, present]) => {
-    const has = presenceClause(field, present);
-    criteria.push({ clause: `(${dialAllows(field, level)} AND ${has.clause})`, params: has.params });
-  });
-
-  Object.entries(parsed.flags || {}).forEach(([field, on]) => {
-    const flag = flagClause(field, on);
-    criteria.push({ clause: `(${dialAllows(field, level)} AND ${flag.clause})`, params: flag.params });
-  });
+  for (const [chosen, clauseOf] of [[parsed.presence, presenceClause], [parsed.flags, flagClause]]) {
+    for (const [field, on] of Object.entries(chosen || {})) {
+      criteria.push({ clause: `(${dialAllows(field, level)} AND ${clauseOf(field, on).clause})`, params: [] });
+    }
+  }
 
   if (parsed.q) {
     const any = spec.qFields.map(field => `(${dialAllows(field, level)} AND CONTAINS(c.${field}, @nq, true))`);

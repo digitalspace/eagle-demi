@@ -684,6 +684,32 @@ test('a flag filter', async (t) => {
   });
 });
 
+test('a search option', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const spec = { ...SPEC, searchOptions: ['fuzzy'] };
+  const list = listHandler(spec);
+
+  await t.test('false or any other value is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const refused = await Promise.all(['fuzzy=false', 'fuzzy=x'].map(qs => call(list, qs)));
+    assert.deepStrictEqual(refused.map(res => [res.status, res.body.error]),
+      [[400, 'fuzzy takes only true'], [400, 'fuzzy takes only true']]);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('given twice is refused', async (t) => {
+    fakeCosmos(t);
+    const res = await call(list, 'fuzzy=true&fuzzy=true');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: fuzzy');
+  });
+
+  await t.test('on a list whose spec does not name it, it is an unknown parameter', async (t) => {
+    fakeCosmos(t);
+    assert.strictEqual((await call(listHandler(SPEC), 'fuzzy=true')).body.error, 'unknown parameter: fuzzy');
+  });
+});
+
 test('a flag renders from the parsed query alone, as the index re-reads call it', () => {
   const parsed = parseNativeQuery({ ...SPEC, flags: { anonymous: 'isAnonymous' } }, { anonymous: 'true' }, null);
   assert.deepStrictEqual(parsed.flags, { isAnonymous: true });
