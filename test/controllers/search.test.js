@@ -1329,6 +1329,21 @@ test('Search Controller Tests', async (t) => {
     assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
   });
 
+  await t.test('an unsupported dataset with a project filter is the same 400, not an empty page', async () => {
+    const out = {};
+    const res = {
+      status: (code) => { out.status = code; return res; },
+      json: (data) => { out.body = data; return res; }
+    };
+
+    await searchController.search({
+      query: { dataset: 'UnsupportedDataset', 'and[project]': '207' }, header: () => null
+    }, res);
+
+    assert.strictEqual(out.status, 400);
+    assert.deepStrictEqual(out.body, { error: 'Invalid or unsupported dataset: UnsupportedDataset' });
+  });
+
   // The name filter is the one `and[...]` value that carries typed text. Both refusals are answered
   // before any search request is issued, so a bad URL costs nothing and says what is wrong.
   const refusal = async (query) => {

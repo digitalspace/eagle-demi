@@ -60,6 +60,9 @@ exports.COSMOS_DATASET_NAMES = COSMOS_DATASET_NAMES;
 exports.resetKeywordFallbackWarnings = resetKeywordFallbackWarnings;
 exports.warnKeywordFallback = warnKeywordFallback;
 
+/** Every `dataset=` this route answers; any other name is a 400. */
+const KNOWN_DATASETS = new Set(['Project', 'Document', 'DocumentChunk', 'Item', ...COSMOS_DATASET_NAMES]);
+
 exports.search = async (req, res) => {
   try {
     const dataset = req.query.dataset;
@@ -179,6 +182,11 @@ exports.search = async (req, res) => {
       }
       return sendJson(payload);
     };
+
+    // Before the project filter: an unknown dataset with one must not answer an empty 200.
+    if (!KNOWN_DATASETS.has(dataset)) {
+      return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
+    }
 
     // Project filters arrive as Eagle ObjectIds and the indexes hold DEMI project ids. Resolved
     // once for every dataset, before any filter is built, because the translation is a read.
@@ -611,7 +619,7 @@ exports.search = async (req, res) => {
         logger.error(`[search] Item ${schemaName} read failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, 'Item lookup is unavailable'));
       }
-    } else if (COSMOS_DATASETS[dataset]) {
+    } else {
       // A KEYWORD search over one of the two indexed datasets is ranked by the index; everything
       // else here is a Cosmos list read. See KEYWORD_INDEX_DATASETS for why only the ranking moves.
       const indexed = keywords ? KEYWORD_INDEX_DATASETS[dataset] : null;
@@ -695,8 +703,6 @@ exports.search = async (req, res) => {
         logger.error(`[search] ${dataset} read failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, `${dataset} search is unavailable`));
       }
-    } else {
-      return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
     }
   } catch (err) {
     // Nothing below reached an answer, so there is no result set — empty or otherwise — to report.
