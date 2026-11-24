@@ -21,7 +21,7 @@ const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
   require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, heldSealed, isAnonymous
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, heldSealed, isAnonymous
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -44,6 +44,7 @@ const config = require('../../config');
 const syncOut = require('../../sync-out');
 const { DOCUMENT } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
+const { resolveDocumentAcl } = require('../../domain/documents');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -66,17 +67,6 @@ const LEGACY_PUBLISH = Symbol('legacy publish alias');
 
 // One line per worker, not per push — see propagateParentFields.
 let warnedNoRestampTarget = false;
-
-/**
- * A new document's ACL: level 1 (docs/rbac-architecture.md §1), capped at the parent's level.
- * EVERY document write path must go through this.
- */
-function resolveDocumentAcl(parentProject) {
-  const read = capRead(readForLevel(1), parentProject.read);
-
-  // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
-  return { published: read.includes('public'), read };
-}
 
 /**
  * The flagged row for a write that moves a chunk parent field, or null when nothing moved. The flag
@@ -2108,6 +2098,5 @@ exports.ingestChunks = async (req, res) => {
   }
 };
 
-exports.resolveDocumentAcl = resolveDocumentAcl;
 // Shared with controllers/nosql/sealed.js's own download route, so both quote the same TTL.
 exports.DOWNLOAD_URL_TTL_SECONDS = DOWNLOAD_URL_TTL_SECONDS;
