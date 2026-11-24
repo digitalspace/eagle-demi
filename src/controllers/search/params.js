@@ -130,6 +130,7 @@ module.exports = {
   filterValues,
   firstValue,
   activityWindow,
+  DAY_MS,
   documentFilter,
   keywordText,
   stripLimit,

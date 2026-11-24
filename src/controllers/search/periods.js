@@ -7,7 +7,7 @@ const { sortEntries } = require('../../search/sort-entries');
 const projectsRepo = require('../../repositories/projects');
 const commentPeriodsRepo = require('../../repositories/comment-periods');
 const notificationsRepo = require('../../repositories/notifications');
-const { firstValue } = require('./params');
+const { firstValue, DAY_MS } = require('./params');
 const { cosmosRows } = require('./cosmos-rows');
 
 /** How far back "closed recently" reaches, for the count that rides along with the open rail. */
@@ -21,7 +21,7 @@ async function openPeriods({ access, pageSize }) {
   // ONE capture for both reads: two `new Date()` calls could fall either side of a period's
   // boundary and break the complement the reads form.
   const now = new Date();
-  const since = new Date(now.getTime() - CLOSED_WINDOW_DAYS * 86400000);
+  const since = new Date(now.getTime() - CLOSED_WINDOW_DAYS * DAY_MS);
   const [rows, closedCount] = await Promise.all([
     commentPeriodsRepo.listOpen(access, { limit: pageSize, now }),
     commentPeriodsRepo.countClosedSince(access, since, now)
