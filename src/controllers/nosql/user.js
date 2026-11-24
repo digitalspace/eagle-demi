@@ -6,8 +6,9 @@
  */
 
 const users = require('../../repositories/users');
-const { eagleBaseAcl } = require('../../seed/transform');
-const { upsertKeepingDemiRows, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
+const { eagleBaseAcl, refId } = require('../../seed/transform');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows, underDeleteCeiling } = require('../../domain/eagle-push');
 const { listHandler, getHandler } = require('./mirror-reads');
 
 const LABEL = 'User Controller';

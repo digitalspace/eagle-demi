@@ -6,9 +6,10 @@
  */
 
 const groups = require('../../repositories/groups');
-const { eagleReadUnder } = require('../../seed/transform');
+const { eagleReadUnder, refId } = require('../../seed/transform');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const { upsertKeepingDemiRows, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows, underDeleteCeiling } = require('../../domain/eagle-push');
 const { listHandler, getHandler } = require('./mirror-reads');
 const { projectParentJoin } = require('../../helpers/native-query');
 

@@ -8,7 +8,8 @@
 const notifications = require('../../repositories/notifications');
 const updates = require('../../repositories/updates');
 const { eagleBaseAcl } = require('../../seed/transform');
-const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows } = require('../../domain/eagle-push');
 
 const { createdAtOf } = notifications;
 

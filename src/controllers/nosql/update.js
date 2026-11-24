@@ -13,9 +13,10 @@ const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
 const { logger } = require('../../utils/logger');
 const notify = require('../../services/notify');
 const documents = require('../../repositories/documents');
-const { toIsoOrNull } = require('../../seed/transform');
+const { toIsoOrNull, refId } = require('../../seed/transform');
 const { plainTextOf, withoutControlsOrNull } = require('../../helpers/html-entities');
-const { refId, upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows } = require('../../domain/eagle-push');
 
 const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
 const EMAIL_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif']);

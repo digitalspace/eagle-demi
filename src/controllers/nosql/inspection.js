@@ -6,11 +6,12 @@
  */
 
 const inspections = require('../../repositories/inspections');
-const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
+const { eagleBaseAcl, eagleReadUnder, refId } = require('../../seed/transform');
 const { sameAccess } = require('../../helpers/access-sql');
 const { logger } = require('../../utils/logger');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const { upsertWithRetry, pushHandler, underDeleteCeiling, refId } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertWithRetry, underDeleteCeiling } = require('../../domain/eagle-push');
 const { listHandler, getHandler } = require('./mirror-reads');
 
 const { KINDS, ENTITY } = inspections;

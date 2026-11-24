@@ -14,7 +14,8 @@ const { logger } = require('../../utils/logger');
 const {
   eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode
 } = require('../../helpers/parent-admit');
-const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows } = require('../../domain/eagle-push');
 
 /** Eagle's staff-side review fields. */
 function staffFields(doc) {

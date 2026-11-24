@@ -6,7 +6,8 @@
 const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
 const { DEMI_OWNED_FIELDS } = require('../../ownership/organization');
-const { upsertKeepingDemiRows, pushHandler } = require('./eagle-mirror');
+const { pushHandler } = require('./eagle-mirror');
+const { upsertKeepingDemiRows } = require('../../domain/eagle-push');
 
 /** Eagle's staff-side organization fields. */
 function staffFields(doc) {

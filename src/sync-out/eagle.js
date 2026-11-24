@@ -9,7 +9,7 @@ const commentPeriods = require('../repositories/comment-periods');
 const projects = require('../repositories/projects');
 const { COMMENT_PERIOD } = require('./kinds');
 const { clientCredentialsToken } = require('../services/keycloak-client-token');
-const { refId } = require('../controllers/nosql/eagle-mirror');
+const { refId } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 

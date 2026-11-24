@@ -37,6 +37,12 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
+/** The Mongo `ObjectId | { _id }` a populated Eagle reference arrives as, as a string or null. */
+function refId(value) {
+  if (!value) return null;
+  return String((typeof value === 'object' && value._id) || value) || null;
+}
+
 const { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, holdLevel } = require('../repositories/documents');
 
 function carriedDemiState(existing) {
@@ -194,6 +200,7 @@ module.exports = {
   toIsoOrNull,
   resolveListLabel,
   listRefId,
+  refId,
   transformDocument,
   transformBoundary
 };
