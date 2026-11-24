@@ -1447,10 +1447,10 @@ test('the search failure alert matches every search failure and nothing else', (
       `the rule pages on ${JSON.stringify(tag)} from ${file}: ${JSON.stringify(line)}`);
   }
 
-  // GET /search/summary answers 200 on failure — see the catch in search.js — so no 5xx ratio can
+  // GET /search/summary answers 200 on failure — see the catch in search/summary.js — so no 5xx ratio can
   // ever see a summary outage and this rule is the only thing that covers it.
   const summary = logged.filter(({ line }) => line.startsWith('[search/summary]'));
-  assert.ok(summary.length, 'search.js logs no [search/summary] error line any more');
+  assert.ok(summary.length, 'search/summary.js logs no [search/summary] error line any more');
   for (const { line } of summary) {
     assert.ok(matches(line), `the rule misses ${JSON.stringify(line)}, which nothing else can see`);
   }

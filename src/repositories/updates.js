@@ -695,7 +695,7 @@ module.exports = {
   isLive,
   isInNotifyWindow,
   publishedAt,
-  // The keyword index holds Eagle project ids, so controllers/search.js builds its OData ACL from this.
+  // The keyword index holds Eagle project ids, so `updatesIndexAcl` (search/native-index.js) builds its OData ACL from this.
   inEagleIdSpace,
   hiddenParentIds,
   forgetParents,

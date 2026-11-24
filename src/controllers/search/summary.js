@@ -23,7 +23,7 @@ exports.summarize = async (req, res) => {
 
   try {
     const access = resolveAccess(req);
-    // Chunks again, so the same document field as the chunk search above.
+    // Chunks again, so the same document field as the chunk search in `exports.search` (search.js).
     const { filter, empty } = filterFor(access, 'projectId', 'documentId');
 
     // Same fail-closed branch as the chunk search, for the same reason: a caller who may see
@@ -115,8 +115,8 @@ exports.summarize = async (req, res) => {
       ...(reason ? { reason } : {})
     });
   } catch (err) {
-    // Additive: the panel disappears, the results columns do not. 200 rather than 5xx for the same
-    // reason the chunk search does it — the frontend retries 5xx and lands here again regardless.
+    // Additive: the panel disappears, the results columns do not. 200 rather than 5xx because the
+    // frontend retries 5xx and lands here again regardless.
     logger.error(`[search/summary] failed: ${err.message}`);
     return res.json({ summary: null, citations: [], reason: 'error' });
   }

@@ -18,7 +18,7 @@ const { serverError } = require('../../helpers/response');
 const { toIsoOrNull } = require('../../seed/transform');
 const { logger } = require('../../utils/logger');
 
-/** Most rows the feed answers; the compat strip refuses past the same 20 (`controllers/search.js`). */
+/** Most rows the feed answers; the compat strip refuses past the same 20 (`TOP_MAX_ROWS` in `controllers/search/params.js`). */
 const FEED_MAX_ROWS = 20;
 
 /**
