@@ -161,8 +161,8 @@ const INDEX_MAPS = Object.freeze({
 async function projectNameScope(access, keywords) {
   const scope = filterFor(access, 'id');
   if (scope.empty) return undefined;
-  // Lazy: project-fields imports this module.
-  const { withoutDialHidden } = require('../controllers/search/project-fields');
+  // Lazy: project-dials imports this module.
+  const { withoutDialHidden } = require('./project-dials');
   return withoutDialHidden(access, scope.filter, [], keywords, aiSearch.LEG_TWO_SEARCH_FIELDS);
 }
 
