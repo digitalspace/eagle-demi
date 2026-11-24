@@ -87,14 +87,15 @@ function assertRaised(row, label) {
     'the timestamp is how long the drift has stood, so the reconcile can age it');
 }
 
-// Resets the module-level warn-once flag. Only the controller leaves the cache, so the mocks
-// above still point at the objects it requires.
+// Resets the module-level warn-once flag. Only the controller and the module holding the flag
+// leave the cache, so the mocks above still point at the objects they require.
 function freshController(t) {
-  const MODULE = require.resolve('../../../src/controllers/nosql/document');
-  const cached = require.cache[MODULE];
-  delete require.cache[MODULE];
-  t.after(() => { require.cache[MODULE] = cached; });
-  return require(MODULE);
+  const MODULES = ['../../../src/domain/documents', '../../../src/controllers/nosql/document']
+    .map(m => require.resolve(m));
+  const cached = MODULES.map(m => require.cache[m]);
+  for (const m of MODULES) delete require.cache[m];
+  t.after(() => { MODULES.forEach((m, i) => { require.cache[m] = cached[i]; }); });
+  return require(MODULES[1]);
 }
 
 test('a queue name sends the work to the queue, on a row already flagged', async (t) => {
