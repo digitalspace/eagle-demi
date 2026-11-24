@@ -5,15 +5,16 @@ const { CATALOGS } = require('../vis/catalog');
 // Catalog entries and per-record dials are keyed by the top-level field: `eacDecision._id` is `eacDecision`.
 const topField = field => field.split('.')[0];
 
-// A top-level key with `dialOf` is a stored copy of that field, so its dial reaches the copy too.
-// Keyed by field name across kinds, so one name may copy only one source.
+// A top-level key with `dialOf` (a stored copy) or `queryDialOf` (a query-only link, redaction ignores
+// it) answers to that field's dial too. Keyed by field name across kinds, so one name has one source.
 const SOURCE_OF = new Map();
 for (const [field, entry] of Object.values(CATALOGS).flatMap(Object.entries)) {
-  if (field.includes('.') || !entry || !entry.dialOf) continue;
-  if (SOURCE_OF.has(field) && SOURCE_OF.get(field) !== entry.dialOf) {
-    throw new Error(`[vis] ${field} copies both ${SOURCE_OF.get(field)} and ${entry.dialOf}`);
+  const source = entry && (entry.dialOf || entry.queryDialOf);
+  if (field.includes('.') || !source) continue;
+  if (SOURCE_OF.has(field) && SOURCE_OF.get(field) !== source) {
+    throw new Error(`[vis] ${field} copies both ${SOURCE_OF.get(field)} and ${source}`);
   }
-  SOURCE_OF.set(field, entry.dialOf);
+  SOURCE_OF.set(field, source);
 }
 
 function ownDial(top, level) {

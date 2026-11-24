@@ -70,16 +70,19 @@ const REPEATABLE = [
   { name: 'region', field: 'region', column: 'region', values: ['Peace', 'Cariboo'] },
   { name: 'projectState', field: 'projectState', column: 'status', values: ['Active', 'Closed'] },
   { name: 'proponentName', field: 'proponentName', column: 'proponent', values: ['BC Hydro', 'Teck'] },
-  { name: 'proponentId', field: 'proponentId', column: 'proponentId', values: ['5886a1f2', '5886a1f3'] },
+  // A match on the id names the proponent, so the name's dial gates it too, as `/search` does.
+  { name: 'proponentId', field: 'proponentId', column: 'proponentId', values: ['5886a1f2', '5886a1f3'], alsoDial: 'proponentName' },
   { name: 'eacDecision', field: 'eacDecision._id', column: 'eacDecisionId', values: ['E1', 'E2'] },
   { name: 'currentPhaseName', field: 'currentPhaseName._id', column: 'currentPhaseNameId', values: ['P1', 'P2'] },
   { name: 'CEAAInvolvement', field: 'CEAAInvolvement._id', column: 'ceaaInvolvementId', values: ['C1', 'C2'] }
 ];
 
-/** `field` matches either value, inside the anonymous dial on its top-level field. */
-function assertEither(sql, field, values) {
+/** `field` matches either value, inside the anonymous dial on its top-level field and on `alsoDial`. */
+function assertEither(sql, field, values, alsoDial) {
+  const own = top => `(NOT IS_DEFINED(c.vis["${top}"]) OR c.vis["${top}"] >= 4)`;
   const top = field.split('.')[0];
-  const clause = `((NOT IS_DEFINED(c.vis["${top}"]) OR c.vis["${top}"] >= 4) AND c.${field} IN (@nf0_0, @nf0_1))`;
+  const dial = alsoDial ? `(${own(top)} AND ${own(alsoDial)})` : own(top);
+  const clause = `(${dial} AND c.${field} IN (@nf0_0, @nf0_1))`;
   assert.ok(sql.query.includes(clause), `no ${clause} in ${sql.query}`);
   assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], values);
 }
@@ -162,7 +165,7 @@ test('GET /projects native list', async (t) => {
     assert.deepStrictEqual(res.body, { error: 'The search service is unavailable.' });
   });
 
-  for (const { name, field, column, values } of REPEATABLE) {
+  for (const { name, field, column, values, alsoDial } of REPEATABLE) {
     const qs = values.map(value => `${name}=${encodeURIComponent(value)}`).join('&');
 
     await t.test(`${name} given twice matches either value in Cosmos`, async (t) => {
@@ -171,8 +174,8 @@ test('GET /projects native list', async (t) => {
       assert.strictEqual(res.status, 200);
       assert.strictEqual(searches.length, 0);
       assert.strictEqual(queries.length, 2);
-      assertEither(queries[0], field, values);
-      assertEither(queries[1], field, values);
+      assertEither(queries[0], field, values, alsoDial);
+      assertEither(queries[1], field, values, alsoDial);
     });
 
     await t.test(`${name} given twice with q matches either value in the index, and Cosmos re-checks`, async (t) => {
@@ -180,7 +183,7 @@ test('GET /projects native list', async (t) => {
       const res = await call(`q=mine&${qs}`);
       assert.strictEqual(res.status, 200);
       assert.ok(searches[0].filter.includes(`search.in(${column}, '${values.join(',')}', ',')`), searches[0].filter);
-      assertEither(queries[0], field, values);
+      assertEither(queries[0], field, values, alsoDial);
     });
   }
 
