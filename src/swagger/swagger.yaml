@@ -3106,6 +3106,76 @@ paths:
             A type, milestone, phase or author type filter over passages the index cannot yet
             filter on that field for this scope. Body `{ error }` names the field and the reason.
 
+  /api/documents/passages/summary:
+    get:
+      summary: Summarise the passages that match a query
+      description: >-
+        A short generated summary of the passages that best match `q`, with citations back to the
+        passages it used. Signed-in callers with a staff or admin role only. Only passages whose
+        parent document the caller may read reach the model. A missing `q` answers 200 with
+        `reason: no_query`; no match answers `reason: no_results` and calls no model. A failure
+        answers 200 with `reason: error`, so the caller can hide the panel.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Keywords, matched over the passage text.
+          schema:
+            type: string
+        - name: fuzzy
+          in: query
+          required: false
+          description: '`true` also matches near spellings of each keyword.'
+          schema:
+            type: string
+            enum: ['true']
+      responses:
+        '200':
+          description: The summary, or `summary` null with a `reason`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    nullable: true
+                  citations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        n:
+                          type: integer
+                          description: 1-based number the summary text cites.
+                        chunkId:
+                          type: string
+                        documentId:
+                          type: string
+                        projectId:
+                          type: string
+                        pageNumber:
+                          type: integer
+                        documentName:
+                          type: string
+                        projectName:
+                          type: string
+                  usage:
+                    type: object
+                    nullable: true
+                  estimatedCostCad:
+                    type: number
+                    nullable: true
+                  reason:
+                    type: string
+                    description: >-
+                      Why `summary` is null, e.g. `no_query`, `no_results`, `disabled`,
+                      `not_configured`, `timeout`, `upstream_error` or `error`.
+        '401':
+          description: No credential, or the credential was rejected.
+        '403':
+          description: The caller has no staff or admin role.
+
   /api/documents/recent-uploads:
     get:
       summary: Projects with the most recent uploads
