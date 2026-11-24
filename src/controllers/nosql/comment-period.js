@@ -30,9 +30,8 @@ const { mirrorError } = require('../../helpers/duplicate-id');
 const { nextSyncVersion } = require('../../sync-out/kinds');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const {
-  eaglePush, mismatchedPush, upsertWithRetry, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { eaglePush, mismatchedPush, ignoreStalePush, pushConflict } = require('./eagle-mirror');
+const { upsertWithRetry } = require('../../domain/eagle-push');
 
 /** Staff fields an Eagle echo leaves alone, by the `sourceSystem` that writes them. */
 const KEPT_FROM_ECHO = Object.freeze({

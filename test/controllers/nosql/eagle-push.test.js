@@ -1293,7 +1293,7 @@ test('an Eagle push onto a row DEMI took down or narrowed', async (t) => {
 });
 
 test('keepSeal on an Eagle push', async (t) => {
-  const { keepSeal } = require('../../../src/controllers/nosql/eagle-mirror');
+  const { keepSeal } = require('../../../src/domain/eagle-push');
   const { SEALED_TOKEN } = require('../../../src/helpers/access-sql');
   const pushed = { id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true };
 

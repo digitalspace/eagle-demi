@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const comments = require('../../../src/repositories/comments');
 const { logger } = require('../../../src/utils/logger');
 const { MIRRORS, captureMirror, storedStamped } = require('../../helpers/eagle-mirror-fixtures');
-const { upsertWithRetry } = require('../../../src/controllers/nosql/eagle-mirror');
+const { upsertWithRetry } = require('../../../src/domain/eagle-push');
 
 /** Two stamps eagle-api could have sent, oldest first, a clear gap apart. */
 const OLDER = 1757980000000;

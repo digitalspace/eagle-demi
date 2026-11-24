@@ -15,7 +15,7 @@ const {
   TRACK_PRECEDENCE, mergeTrackProject, carryDemiOnlyFields, carryDelete, holdStaffEdits, isDemiOwnedProject,
   isNativeProject, eagleOnlyProjectId, hasValue
 } = require('../merge/project');
-const { isStalePush, stampPush } = require('../controllers/nosql/eagle-mirror');
+const { isStalePush, stampPush } = require('../domain/eagle-push');
 const { deriveAssessments } = require('../merge/assessments');
 const { deriveInputs } = require('../domain/works-derive');
 const { syncWorkDocs } = require('./sync-works');

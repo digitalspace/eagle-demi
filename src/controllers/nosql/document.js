@@ -30,9 +30,8 @@ const { purgeDocument } = require('../../helpers/purge');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
-const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
-} = require('./eagle-mirror');
+const { eaglePush, ignoreStalePush, pushConflict } = require('./eagle-mirror');
+const { isStalePush, stampPush } = require('../../domain/eagle-push');
 const { logger } = require('../../utils/logger');
 const { fromEdge } = require('../../utils/caller-ip');
 const { notModified, byteRange, UNSATISFIABLE, RANGE } = require('../../utils/http-range');

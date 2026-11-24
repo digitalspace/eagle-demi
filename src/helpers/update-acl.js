@@ -40,7 +40,7 @@ async function setAclForProject(projectEagleId, projectRead) {
       'FROM c WHERE c.projectId = @projectId',
     parameters: [{ name: '@projectId', value: String(projectEagleId) }]
   }, {});
-  // A row DEMI sealed keeps its seal, as a push does (`eagle-mirror:keepSeal`); one an Eagle push
+  // A row DEMI sealed keeps its seal, as a push does (`domain/eagle-push:keepSeal`); one an Eagle push
   // sealed is re-derived like any other.
   const derived = items.filter(row => !heldSealed(row)).map(row => {
     // A row DEMI created has no Eagle copy; its own read and status are in `sources.demi` (domain/updates.js).

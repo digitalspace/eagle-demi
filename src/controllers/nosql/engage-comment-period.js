@@ -16,7 +16,7 @@ const syncOut = require('../../sync-out');
 const { COMMENT_PERIOD, nextSyncVersion } = require('../../sync-out/kinds');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const { upsertWithRetry } = require('./eagle-mirror');
+const { upsertWithRetry } = require('../../domain/eagle-push');
 const { cascadeToComments } = require('./comment-period');
 const { levelOfRead, systemAccess } = require('../../helpers/access-sql');
 
