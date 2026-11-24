@@ -144,7 +144,10 @@ test('passages', async (t) => {
     stubIndex(t, { realDocuments: true });
     t.mock.method(logger, 'warn', () => {});
     // The real read over a projecting store: the ACL is SQL, so each caller gets the rows it admits.
-    const MEMO = { id: 'd2', projectId: 'p1', read: ['staff'], documentFileName: 'memo.pdf', type: 'Memo' };
+    const MEMO = {
+      id: 'd2', projectId: 'p1', read: ['staff'], documentFileName: 'memo.pdf', type: 'Memo',
+      milestone: null, datePosted: ''
+    };
 
     storedDocuments(t, [DIALLED_DOCUMENT]);
     const anon = await call(get, 'q=water');
@@ -162,7 +165,7 @@ test('passages', async (t) => {
     assert.strictEqual(staff.body[0].milestone, 'Application');
     const memo = staff.body.find(row => row.documentId === 'd2');
     assert.strictEqual(memo.documentName, 'memo.pdf', 'a parent with only a file name is named by it');
-    assert.ok(!('milestone' in memo) && !('datePosted' in memo), 'a field the parent lacks is absent');
+    assert.ok(!('milestone' in memo) && !('datePosted' in memo), 'a null or empty parent field is absent');
   });
 
   await t.test('rows carry projectName and projectEagleId', async (t) => {
