@@ -3029,6 +3029,12 @@ paths:
         Any parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
         a 400, except the filters. A rejected Bearer token answers 401; a signed-in read is
         answered `Cache-Control: private, no-store`.
+
+
+        A type, milestone, phase or author type filter the passage index cannot answer yet for
+        this scope is answered through the documents that match it instead. When more documents
+        match than that can hold, each passage is checked against its parent document, so a page
+        can come back shorter than `pageSize` before the last page; page on `x-total-count`.
       parameters:
         - name: q
           in: query
@@ -3036,6 +3042,16 @@ paths:
           description: Keywords, matched over the passage text.
           schema:
             type: string
+        - name: fuzzy
+          in: query
+          required: false
+          description: >-
+            `true` also matches each keyword of 4 or more letters one edit away (`asessment` finds
+            `assessment`), ranked below an exact match. Any other value, or the name given twice, is
+            a 400.
+          schema:
+            type: string
+            enum: ['true']
         - name: page
           in: query
           required: false
@@ -3103,7 +3119,8 @@ paths:
             x-total-count:
               description: >-
                 Matching passages whose parent document the caller may read, sent when
-                `count=true`.
+                `count=true`. An upper bound when a page drops passages, never below the rows
+                already returned.
               schema:
                 type: integer
           content:
@@ -3114,14 +3131,11 @@ paths:
                   $ref: '#/components/schemas/Passage'
         '400':
           description: >-
-            `q` missing, an unknown or repeated parameter (`ids` included), a bad value, pageSize
-            above 250 (above 100 with no credential), or a page past the caller's depth.
+            `q` missing, an unknown or repeated parameter (`ids` included), a bad value (`fuzzy`
+            other than `true` included), pageSize above 250 (above 100 with no credential), or a
+            page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
-        '503':
-          description: >-
-            A type, milestone, phase or author type filter over passages the index cannot yet
-            filter on that field for this scope. Body `{ error }` names the field and the reason.
 
   /api/documents/passages/summary:
     get:
