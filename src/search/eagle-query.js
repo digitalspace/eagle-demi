@@ -121,7 +121,7 @@ const VALUE_ALIASES = {
 };
 
 /**
- * `and[sector]=X` also matches a no-sector row whose sub-type shows as X (controllers/search.js wireSector).
+ * `and[sector]=X` also matches a no-sector row whose sub-type shows as X (`wireSector` in controllers/search/project-fields.js).
  * Null when none does or the caller may not query its fields; adds those fields to `read` if used.
  */
 function sectorFallbackTerm(value, access, read) {
@@ -624,7 +624,7 @@ function sortFieldFor(name, dataset, fields) {
 }
 
 /**
- * Cosmos-backed datasets with a project axis; search.js applies `project` itself. Not derivable from
+ * Cosmos-backed datasets with a project axis; controllers/search/datasets.js applies `project` itself. Not derivable from
  * `fieldsFor`: they have no index, which reads the same as an index without the field.
  */
 const COSMOS_PROJECT_DATASETS = new Set([

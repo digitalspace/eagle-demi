@@ -268,7 +268,7 @@ test('searchLabels joins the six label columns, each guarded so a missing one ca
   }
 });
 
-// Same rule as `wireSector` in src/controllers/search.js: a blank sector yields to the sub-type.
+// Same rule as `wireSector` in src/controllers/search/project-fields.js: a blank sector yields to the sub-type.
 test('searchLabels falls back to the sub-type when the sector is blank', () => {
   const [, ds] = PAIRS[1];
   const expr = projectedColumns(ds.container.query).get('searchLabels');

@@ -78,11 +78,10 @@ The five indexes, and what the app does with each:
 
 The last two are different from the first three in two ways, and both are deliberate.
 
-They rank rows and return **ids only** — `id, eagleId, projectId` and `id, eagleId`. The row a
-caller receives is read back from Cosmos by `controllers/search.js`, through the same mapper the
-keywordless page uses, so the two paths cannot answer different shapes and a row the index still
-holds but Cosmos no longer admits drops out of the page. That is why their searchable fields are
-`retrievable: false`.
+They rank rows and return **ids only**: `id, eagleId, projectId` and `id, eagleId`. Their
+searchable fields are `retrievable: false` because `controllers/search/keyword-index.js` reads each
+row back from Cosmos through the mapper the keywordless page uses. Both paths answer one shape, and
+a row the index holds but Cosmos does not admit drops out of the page.
 
 **Their app setting is a kill switch, and it is OFF unless something turns it on.** Absent and
 empty mean the same thing: the dataset answers keywords from Cosmos with `CONTAINS`, without

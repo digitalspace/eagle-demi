@@ -268,7 +268,7 @@ async function listOpen(access, { limit, now } = {}) {
 
 /**
  * Periods closed since `since`. `closed` complements `listOpen`'s `open` only when both get the same `now`
- * (`openPeriods` in `controllers/search.js`), so no period counts as both.
+ * (`openPeriods` in `controllers/search/periods.js`), so no period counts as both.
  */
 async function countClosedSince(access, since, now) {
   return countMatching(access, [
