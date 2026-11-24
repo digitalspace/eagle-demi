@@ -12,6 +12,7 @@ const { CHUNK_PARENT_LIST_REFS } = require('../../repositories/chunks');
 const { filterFor } = require('../../helpers/access-odata');
 const { MAX_IDS, projectParentJoin } = require('../../helpers/native-query');
 const { listHandler } = require('../nosql/mirror-reads');
+const summary = require('../search/summary');
 const { logger } = require('../../utils/logger');
 
 // Native field -> chunks index column; the index keeps the stored names.
@@ -22,10 +23,24 @@ function failure(status, message) {
   return Object.assign(new Error(message), { status });
 }
 
+/**
+ * The parent document's fields a passage row repeats, read off the row already redacted for this
+ * caller, so a withheld field is absent rather than defaulted.
+ */
+function parentFields(parent) {
+  const documentName = parent.displayName || parent.documentFileName;
+  const fields = { documentName, documentType: parent.type, milestone: parent.milestone,
+    milestoneId: parent.milestoneId, datePosted: parent.datePosted };
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null && value !== ''));
+}
+
 async function readPassages(access, parsed) {
   if (!parsed.q) throw failure(400, 'q is required');
   if (parsed.ids) throw failure(400, 'ids is not supported on passages');
-  if (parsed.pageSize > MAX_IDS) throw failure(400, `pageSize takes at most ${MAX_IDS} on passages`);
+  // Anonymous callers never get here above 100: the contract's `pageSizeFor` refuses them first.
+  if (parsed.pageSize > aiSearch.SERVICE_MAX_TOP) {
+    throw failure(400, `pageSize takes at most ${aiSearch.SERVICE_MAX_TOP} on passages`);
+  }
 
   const acl = filterFor(access, 'projectId', 'documentId');
   const { filter, empty } = indexFilter(INDEX_MAP, parsed, access, acl);
@@ -57,7 +72,8 @@ async function readPassages(access, parsed) {
     projectId: String(chunk.projectId),
     pageNumber: chunk.pageNumber,
     pageNumbered: chunk.pageNumbered === true,
-    snippet: chunk.snippet || ''
+    snippet: chunk.snippet || '',
+    ...parentFields(gated.docById.get(String(chunk.documentId)))
   }));
   return { rows, count: gated.count };
 }
@@ -99,3 +115,24 @@ exports.getPassages = (req, res) => {
   return list(req, res);
 };
 exports.SPEC = SPEC;
+
+const SUMMARY_PARAMS = Object.freeze(['q', 'fuzzy']);
+
+/** The refusal for a summary query, or null. As strict as the list: no `keywords` alias, no paging. */
+function summaryQueryError(query) {
+  for (const [key, value] of Object.entries(query)) {
+    if (!SUMMARY_PARAMS.includes(key)) return `unknown parameter: ${key}`;
+    if (typeof value !== 'string') return `parameter given more than once: ${key}`;
+  }
+  if (query.fuzzy !== undefined && query.fuzzy !== 'true' && query.fuzzy !== 'false') {
+    return 'fuzzy takes only true or false';
+  }
+  return null;
+}
+
+/** `GET /documents/passages/summary`: the `/search/summary` handler behind this route's own parameters. */
+exports.summarizePassages = (req, res) => {
+  const error = summaryQueryError(req.query || {});
+  if (error) return res.status(400).json({ error });
+  return summary.summarize(req, res);
+};

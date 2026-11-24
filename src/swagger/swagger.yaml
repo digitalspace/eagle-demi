@@ -3034,9 +3034,9 @@ paths:
       description: >-
         One row per passage of extracted document text that matches `q`, ranked by relevance,
         only for passages whose parent document the caller may read. A row carries the index
-        highlight as `snippet`, never the passage text. Rows are not grouped by document; read
-        document labels with one `GET /api/documents?ids=` call for the page's `documentId`s. Any
-        parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
+        highlight as `snippet`, never the passage text, plus the parent document's name, type,
+        milestone and posted date as the caller may see them. Rows are not grouped by document.
+        Any parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
         a 400, except the filters. A rejected Bearer token answers 401; a signed-in read is
         answered `Cache-Control: private, no-store`.
       parameters:
@@ -3056,11 +3056,13 @@ paths:
         - name: pageSize
           in: query
           required: false
-          description: Rows per page, at most 100. Omitting it returns 100.
+          description: >-
+            Rows per page. A signed-in caller may ask for up to 250; an unauthenticated one up to
+            100. Omitting it returns 100.
           schema:
             type: integer
             minimum: 1
-            maximum: 100
+            maximum: 250
         - name: count
           in: query
           required: false
@@ -3123,13 +3125,87 @@ paths:
         '400':
           description: >-
             `q` missing, an unknown or repeated parameter (`ids` included), a bad value, pageSize
-            above 100, or a page past the caller's depth.
+            above 250 (above 100 with no credential), or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
         '503':
           description: >-
             A type, milestone, phase or author type filter over passages the index cannot yet
             filter on that field for this scope. Body `{ error }` names the field and the reason.
+
+  /api/documents/passages/summary:
+    get:
+      summary: Summarise the passages that match a query
+      description: >-
+        A short generated summary of the passages that best match `q`, with citations back to the
+        passages it used. Signed-in callers with a staff or admin role only. Only passages whose
+        parent document the caller may read reach the model. A missing `q` answers 200 with
+        `reason: no_query`; no match answers `reason: no_results` and calls no model. A failure
+        answers 200 with `reason: error`, so the caller can hide the panel.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Keywords, matched over the passage text.
+          schema:
+            type: string
+        - name: fuzzy
+          in: query
+          required: false
+          description: '`true` also matches near spellings of each keyword.'
+          schema:
+            type: string
+            enum: ['true', 'false']
+      responses:
+        '200':
+          description: The summary, or `summary` null with a `reason`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    nullable: true
+                  citations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        n:
+                          type: integer
+                          description: 1-based number the summary text cites.
+                        chunkId:
+                          type: string
+                        documentId:
+                          type: string
+                        projectId:
+                          type: string
+                        pageNumber:
+                          type: integer
+                        documentName:
+                          type: string
+                        projectName:
+                          type: string
+                  usage:
+                    type: object
+                    nullable: true
+                  estimatedCostCad:
+                    type: number
+                    nullable: true
+                  reason:
+                    type: string
+                    description: >-
+                      Why `summary` is null, e.g. `no_query`, `no_results`, `disabled`,
+                      `not_configured`, `timeout`, `upstream_error` or `error`.
+        '400':
+          description: >-
+            A parameter other than `q` and `fuzzy`, either one given twice, or `fuzzy` other than
+            `true` or `false`.
+        '401':
+          description: No credential, or the credential was rejected.
+        '403':
+          description: The caller has no staff or admin role.
 
   /api/documents/recent-uploads:
     get:
@@ -11437,7 +11513,9 @@ components:
 
     Passage:
       type: object
-      description: One passage hit. `projectName` and `projectEagleId` are present when the caller may read the project.
+      description: >-
+        One passage hit. `projectName` and `projectEagleId` are present when the caller may read
+        the project. Each parent document field is absent when the caller may not see it.
       properties:
         id:
           type: string
@@ -11460,6 +11538,22 @@ components:
         snippet:
           type: string
           description: Index highlight of the match. Never the passage text.
+        documentName:
+          type: string
+          description: Parent document display name, else its file name.
+        documentType:
+          type: string
+          description: Parent document `type`.
+        milestone:
+          type: string
+          description: Parent document milestone label.
+        milestoneId:
+          type: string
+          description: Parent document milestone List ObjectId.
+        datePosted:
+          type: string
+          format: date-time
+          description: Parent document posted date.
 
     ShortLink:
       type: object

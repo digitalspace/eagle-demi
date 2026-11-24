@@ -275,8 +275,8 @@ async function readStored(id, projectId) {
 }
 
 /**
- * The chunk card's display fields for a bounded id set, in the hits' partitions only. `milestone` is
- * the label: the card binds it raw, so the id alone would put a GUID on screen.
+ * The chunk card's display fields for a bounded id set, in the hits' partitions only; `vis` so the
+ * row's own dials redact them. `milestone` is the label: the id alone would put a GUID on screen.
  */
 async function listByIds(access, ids, projectIds) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -292,7 +292,7 @@ async function listByIds(access, ids, projectIds) {
       // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
       ...listedRows()
     ],
-    select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
+    select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted, c.vis'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

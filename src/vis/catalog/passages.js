@@ -12,10 +12,17 @@ module.exports = {
   pageNumbered: { defaultVis: 4, maxVis: 4 },
   snippet: { defaultVis: 4, maxVis: 4 },
 
+  // Copied off the parent document after `redactAllForAccess('documents', ...)`, so the parent's
+  // own dials have already applied; 4/4 here adds no exposure.
+  documentName: { defaultVis: 4, maxVis: 4 },
+  documentType: { defaultVis: 4, maxVis: 4 },
+  milestone: { defaultVis: 4, maxVis: 4 },
+  milestoneId: { defaultVis: 4, maxVis: 4 },
+  datePosted: { defaultVis: 4, maxVis: 4 },
+
   // Filter-only: the parent's list refs the chunk repeats (catalog/chunks.js). Rows do not carry
   // them; they are listed so `assertFilterable` admits the filters.
   typeId: { defaultVis: 4, maxVis: 4 },
-  milestoneId: { defaultVis: 4, maxVis: 4 },
   projectPhaseId: { defaultVis: 4, maxVis: 4 },
   documentAuthorTypeId: { defaultVis: 4, maxVis: 4 }
 };

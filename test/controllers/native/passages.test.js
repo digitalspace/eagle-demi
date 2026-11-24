@@ -18,6 +18,7 @@ const documentsRepo = require('../../../src/repositories/documents');
 const projectsRepo = require('../../../src/repositories/projects');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
+const { storedDocuments, DIALLED_DOCUMENT } = require('../../helpers/stored-documents');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -29,10 +30,15 @@ const HITS = [
   { chunkId: 'd1::p4::c1', documentId: 'd1', projectId: 'p1', pageNumber: 4, pageNumbered: true, snippet: 'more <mark>water</mark>' }
 ];
 
+const D1 = {
+  id: 'd1', projectId: 'p1', read: ['public'], displayName: 'Water Plan', type: 'Report',
+  milestone: 'Application', milestoneId: 'm1', datePosted: '2024-05-01T00:00:00.000Z'
+};
+
 /** d1 is readable, d2 is not; answers the searchChunks mock so its calls can be read. */
-function stubIndex(t, { hits = HITS, count = 40 } = {}) {
+function stubIndex(t, { hits = HITS, count = 40, realDocuments = false } = {}) {
   const search = t.mock.method(aiSearch, 'searchChunks', async () => ({ items: structuredClone(hits), count }));
-  t.mock.method(documentsRepo, 'listByIds', async () => [{ id: 'd1', projectId: 'p1', read: ['public'] }]);
+  if (!realDocuments) t.mock.method(documentsRepo, 'listByIds', async () => [structuredClone(D1)]);
   t.mock.method(projectsRepo, 'listByIds', async () => [structuredClone(PROJECT)]);
   t.mock.method(projectsRepo, 'listRowsByIds', async () => [structuredClone(PROJECT)]);
   return search;
@@ -67,17 +73,32 @@ test('passages', async (t) => {
     assert.strictEqual(search.mock.callCount(), 0);
   });
 
-  await t.test('pageSize 101 400', async (t) => {
-    const search = stubIndex(t);
+  await t.test('staff pageSize cap is 250', async (t) => {
+    const search = stubIndex(t, { hits: [] });
     // Staff, so the contract's own cap is 1000 and only this list's cap can refuse it.
-    const res = await call(get, 'q=water&pageSize=101', { user: STAFF });
-    assert.strictEqual(res.status, 400);
-    assert.match(res.body.error, /at most 100/);
+    const over = await call(get, 'q=water&pageSize=251', { user: STAFF });
+    assert.strictEqual(over.status, 400);
+    assert.match(over.body.error, /at most 250/);
     assert.strictEqual(search.mock.callCount(), 0);
 
-    const ok = await call(get, 'q=water', { user: STAFF });
+    const ok = await call(get, 'q=water&pageSize=250', { user: STAFF });
     assert.strictEqual(ok.status, 200);
-    assert.strictEqual(search.mock.calls[0].arguments[0].top, 100, 'absent pageSize is 100, not 1000');
+    assert.strictEqual(search.mock.calls[0].arguments[0].top, 250);
+  });
+
+  await t.test('anonymous keeps the 100 cap and the 100 default', async (t) => {
+    const search = stubIndex(t, { hits: [] });
+    const over = await call(get, 'q=water&pageSize=101');
+    assert.strictEqual(over.status, 400);
+    assert.strictEqual(over.body.error, 'pageSize above 100 requires an authenticated request');
+    assert.strictEqual(search.mock.callCount(), 0);
+
+    for (const user of [undefined, STAFF]) {
+      const ok = await call(get, 'q=water', { user });
+      assert.strictEqual(ok.status, 200);
+    }
+    assert.deepStrictEqual(search.mock.calls.map(c => c.arguments[0].top), [100, 100],
+      'absent pageSize is 100 for everyone, not 1000');
   });
 
   await t.test('sort is refused', async (t) => {
@@ -108,10 +129,43 @@ test('passages', async (t) => {
       pageNumber: 3,
       pageNumbered: true,
       snippet: 'the <mark>water</mark> line',
+      documentName: 'Water Plan',
+      documentType: 'Report',
+      milestone: 'Application',
+      milestoneId: 'm1',
+      datePosted: '2024-05-01T00:00:00.000Z',
       projectName: 'Site C',
       projectEagleId: 'bbbbbbbbbbbbbbbbbbbbbbbb'
     });
     assert.ok(res.body.every(row => !('content' in row)));
+  });
+
+  await t.test('parent fields follow the parent read and its own dials', async (t) => {
+    stubIndex(t, { realDocuments: true });
+    t.mock.method(logger, 'warn', () => {});
+    // The real read over a projecting store: the ACL is SQL, so each caller gets the rows it admits.
+    const MEMO = {
+      id: 'd2', projectId: 'p1', read: ['staff'], documentFileName: 'memo.pdf', type: 'Memo',
+      milestone: null, datePosted: ''
+    };
+
+    storedDocuments(t, [DIALLED_DOCUMENT]);
+    const anon = await call(get, 'q=water');
+    assert.deepStrictEqual(anon.body.map(row => row.documentId), ['d1', 'd1']);
+    assert.strictEqual(anon.body[0].documentName, 'water-plan.pdf', 'a dialled display name falls back');
+    assert.ok(anon.body.every(row => !('milestone' in row)), 'a dialled parent field is absent');
+    assert.strictEqual(anon.body[0].milestoneId, 'm1');
+    assert.ok(!JSON.stringify(anon.body).includes('Water Plan'));
+    assert.ok(!JSON.stringify(anon.body).includes('memo.pdf'), 'a hidden parent lends no field');
+    assert.ok(anon.body.every(row => !('vis' in row)));
+
+    storedDocuments(t, [DIALLED_DOCUMENT, MEMO]);
+    const staff = await call(get, 'q=water', { user: STAFF });
+    assert.strictEqual(staff.body[0].documentName, 'Water Plan');
+    assert.strictEqual(staff.body[0].milestone, 'Application');
+    const memo = staff.body.find(row => row.documentId === 'd2');
+    assert.strictEqual(memo.documentName, 'memo.pdf', 'a parent with only a file name is named by it');
+    assert.ok(!('milestone' in memo) && !('datePosted' in memo), 'a null or empty parent field is absent');
   });
 
   await t.test('rows carry projectName and projectEagleId', async (t) => {
