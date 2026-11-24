@@ -129,7 +129,7 @@ async function listByIds(access, ids) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: [NOT_DELETED, inList('id', unique, '@cpid')],
-    select: 'c.id, c.isMet, c.metURL, c.dateStarted, c.dateCompleted'
+    select: 'c.id, c.isMet, c.metURL, c.dateStarted, c.dateCompleted, c.vis'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

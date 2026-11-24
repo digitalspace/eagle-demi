@@ -9,6 +9,7 @@ const { andOData } = require('../../search/native-index');
 const { dialExclusion } = require('../../search/project-dials');
 const { normalizeSubType } = require('../../search/sub-type');
 const projectsRepo = require('../../repositories/projects');
+const { byStoredId } = require('./cosmos-rows');
 
 /**
  * A stored GeoJSON point as the frontend wants it: `[lng, lat]`. Cosmos, the index and the frontend
@@ -31,8 +32,7 @@ async function labelWithProjectNames(access, docs) {
   if (projectIds.length === 0) return;
   // Redacted before anything reads a field off it, like every other repository row on this route
   // (docs/rbac-architecture.md §2 item 9).
-  const parents = redactAllForAccess('projects', await projectsRepo.listByIds(access, projectIds), access);
-  const byId = new Map(parents.map(p => [String(p.id), p]));
+  const byId = byStoredId('projects', await projectsRepo.listByIds(access, projectIds), access);
   for (const doc of docs) {
     const parent = byId.get(String(doc.project));
     doc.projectName = (parent && parent.name) || 'Associated Project';

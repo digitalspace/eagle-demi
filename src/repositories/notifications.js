@@ -87,7 +87,7 @@ async function listByIds(access, ids, { full = false } = {}) {
     access,
     partitionField: SCOPE_FIELD,
     criteria: [inList(PARTITION_FIELD, unique, '@nid')],
-    select: full ? selectFor(CONTAINER, access, PARTITION_FIELD) : 'c.id, c.name'
+    select: full ? selectFor(CONTAINER, access, PARTITION_FIELD) : 'c.id, c.name, c.vis'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

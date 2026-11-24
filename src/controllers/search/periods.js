@@ -1,13 +1,12 @@
 'use strict';
 
 const { isPrivileged } = require('../../helpers/access-sql');
-const { redactAllForAccess } = require('../../vis/redact');
 const { logger } = require('../../utils/logger');
 const { sortEntries } = require('../../search/sort-entries');
 const commentPeriodsRepo = require('../../repositories/comment-periods');
 const notificationsRepo = require('../../repositories/notifications');
 const { firstValue, DAY_MS } = require('./params');
-const { cosmosRows, parentProjects } = require('./cosmos-rows');
+const { cosmosRows, byStoredId, parentProjects } = require('./cosmos-rows');
 
 /** How far back "closed recently" reaches, for the count that rides along with the open rail. */
 const CLOSED_WINDOW_DAYS = 30;
@@ -71,16 +70,13 @@ function periodSortDropped(sortBy) {
  * under the caller's access. A notification-parented period links to the notification's own id.
  */
 async function periodRows(access, rows) {
-  const { demiIds, parents, eagleIdByDemiId } = await parentProjects(access, rows);
-  const nameByDemiId = new Map(parents.filter(p => p.name).map(p => [String(p.id), p.name]));
+  const { demiIds, parentById, eagleIdByDemiId } = await parentProjects(access, rows);
 
   const unmatched = demiIds.filter(id => !eagleIdByDemiId.has(id));
-  const notificationParents = unmatched.length
-    ? redactAllForAccess('notifications',
-      await notificationsRepo.listByIds(access, unmatched), access)
-    : [];
-  for (const parent of notificationParents) {
-    eagleIdByDemiId.set(String(parent.id), String(parent.id));
+  const notificationParents = byStoredId('notifications',
+    unmatched.length ? await notificationsRepo.listByIds(access, unmatched) : [], access);
+  for (const [id, parent] of notificationParents) {
+    eagleIdByDemiId.set(id, parent.id ?? null);
   }
 
   // The period's own ACL admits it only through the publish cascade; if that cascade failed, a
@@ -98,7 +94,7 @@ async function periodRows(access, rows) {
   // `projectName` rides on the parent read above, so the home page rail needs no read per card.
   // Absent, never invented, when the parent is hidden, unnamed, or a notification.
   return cosmosRows('commentPeriods', rows.filter(row => !withheld.includes(row)), access, 'CommentPeriod', (row) => {
-    const name = nameByDemiId.get(String(row.projectId));
+    const name = parentById.get(String(row.projectId))?.name;
     return {
       project: eagleIdByDemiId.get(String(row.projectId)) || null,
       ...(name ? { projectName: name } : {})
