@@ -13,7 +13,6 @@ const chunkQuery = require('../search/chunk-query');
 const groupChunks = require('../search/group-chunks');
 const projectsRepo = require('../repositories/projects');
 const { analyticsEvent } = require('../utils/audit');
-const { filterValue, firstValue } = require('./search/params');
 const {
   geoPoint,
   labelWithProjectNames,
@@ -30,7 +29,7 @@ const {
   liveChunkFacets,
   documentIdScope
 } = require('./search/index-filters');
-const { COSMOS_DATASETS, ITEM_SCHEMAS, COSMOS_DATASET_NAMES } = require('./search/datasets');
+const { COSMOS_DATASETS, COSMOS_DATASET_NAMES } = require('./search/datasets');
 const {
   KEYWORD_INDEX_DATASETS,
   unappliedFilterKeys,
@@ -61,7 +60,7 @@ exports.resetKeywordFallbackWarnings = resetKeywordFallbackWarnings;
 exports.warnKeywordFallback = warnKeywordFallback;
 
 /** Every `dataset=` this route answers; any other name is a 400. */
-const KNOWN_DATASETS = new Set(['Project', 'Document', 'DocumentChunk', 'Item', ...COSMOS_DATASET_NAMES]);
+const KNOWN_DATASETS = new Set(['Project', 'Document', 'DocumentChunk', ...COSMOS_DATASET_NAMES]);
 
 exports.search = async (req, res) => {
   try {
@@ -84,9 +83,6 @@ exports.search = async (req, res) => {
     const unknown = eagleQuery.unknownParams(req.query);
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
-    }
-    if (req.query._schemaName !== undefined && dataset !== 'Item') {
-      return res.status(400).json({ error: '_schemaName applies to dataset=Item only' });
     }
 
     // Typed text, so no name cell or a value past the cap is refused, never trimmed.
@@ -597,27 +593,6 @@ exports.search = async (req, res) => {
         // A fault is NOT "nothing matched", and the status code is the only place to say so.
         logger.error(`[search] chunk search failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, 'Deep Search is unavailable'));
-      }
-    } else if (dataset === 'Item') {
-      const schemaName = firstValue(req.query._schemaName);
-      if (!ITEM_SCHEMAS.includes(schemaName)) {
-        return res.status(400).json({ error: `_schemaName must be one of ${ITEM_SCHEMAS.join(', ')}` });
-      }
-      const id = filterValue(req.query, '_id');
-      const extra = eagleQuery.filterKeysIn(req.query).filter(key => key !== '_id');
-      if (!id || extra.length) {
-        return res.status(400).json({ error: 'dataset=Item takes _id and _schemaName only' });
-      }
-      try {
-        const { searchResults } = await COSMOS_DATASETS[schemaName]({
-          access, query: { _id: id }, filterQuery: { _id: id }, pageNum: 0, pageSize: 1
-        });
-        res.set?.('x-total-count', String(searchResults.length));
-        // A BARE array, not the search envelope: eagle-api answers Item that way and eagle-admin reads `[0]`.
-        return sendJson(searchResults);
-      } catch (err) {
-        logger.error(`[search] Item ${schemaName} read failed: ${err.message}`);
-        return res.status(502).json(searchUnavailable(req, err, 'Item lookup is unavailable'));
       }
     } else {
       // A KEYWORD search over one of the two indexed datasets is ranked by the index; everything

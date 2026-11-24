@@ -1,6 +1,6 @@
 'use strict';
 
-// `GET /search` as eagle-api serves staff: User, Group, inspections, Item, staff project fields, `eaoStatus`.
+// `GET /search` as eagle-api serves staff: staff project fields, `eaoStatus`, the measured total.
 // The `strict` stub applies the read's role arm, so a read without the caller's ACL fails here.
 
 process.env.NODE_ENV = 'test';
@@ -10,198 +10,14 @@ const assert = require('node:assert');
 
 const aiSearch = require('../../src/search/ai-search');
 const {
-  PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, PROJECT_ROW,
-  stubCosmos, specsFor, get, getAsStaff, commentRow
+  PERIOD_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, PROJECT_ROW,
+  stubCosmos, specsFor, get, getAsStaff, commentRow, notificationRow
 } = require('../helpers/search-reads');
-const {
-  USER_EAGLE_ID, GROUP_EAGLE_ID, INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, ITEM_EAGLE_ID,
-  storedInspection, storedElement
-} = require('../helpers/eagle-mirror-fixtures');
 
-/** An Eagle row at level 2, `['sysadmin','staff']`. */
-const STAFF_ONLY = PRIVATE_ACL;
-
-const PRIVATE_USER = {
-  id: USER_EAGLE_ID, eagleId: USER_EAGLE_ID, sourceSystem: 'eagle',
-  firstName: 'Pat', lastName: 'Inspector', email: 'pat@example.invalid', phoneNumber: '250-555-0100',
-  read: STAFF_ONLY
-};
-/** A user Eagle published: the name card reaches the public, the contact fields never do. */
-const PUBLIC_USER = {
-  id: 'u-public', eagleId: 'u-public', sourceSystem: 'eagle',
-  displayName: 'Open Contact', email: 'open@example.invalid', read: PUBLIC_ACL
-};
-const GROUP = {
-  id: GROUP_EAGLE_ID, eagleId: GROUP_EAGLE_ID, projectId: '207', name: 'Working group',
-  members: ['m1'], read: STAFF_ONLY
-};
-const INSPECTION = {
-  ...storedInspection(STAFF_ONLY), eagleId: INSPECTION_EAGLE_ID, name: 'Site visit', email: 'officer@example.invalid'
-};
-const ELEMENT = { ...storedElement(STAFF_ONLY), eagleId: ELEMENT_EAGLE_ID, title: 'Culvert' };
-const ITEM = {
-  id: ITEM_EAGLE_ID, eagleId: ITEM_EAGLE_ID, kind: 'InspectionItem', inspection: INSPECTION_EAGLE_ID,
-  element: ELEMENT_EAGLE_ID, projectId: '207', caption: 'Outflow', internalURL: 'blob/outflow.jpg',
-  read: STAFF_ONLY
-};
-
-const CORPUS = {
-  projects: [PROJECT_ROW],
-  users: [PRIVATE_USER, PUBLIC_USER],
-  groups: [GROUP],
-  inspections: [INSPECTION, ELEMENT, ITEM]
-};
-
-const stub = (t, rows = CORPUS) => stubCosmos(t, rows, {}, { strict: true });
+const stub = (t, rows) => stubCosmos(t, rows, {}, { strict: true });
 
 const resultsOf = (res) => res.body[0].searchResults;
 const idsOf = (res) => resultsOf(res).map(row => row._id);
-
-/** One dataset over a staff-only row: what each caller gets back. */
-const STAFF_ONLY_DATASETS = [
-  { dataset: 'User', id: USER_EAGLE_ID },
-  { dataset: 'Group', id: GROUP_EAGLE_ID },
-  { dataset: 'Inspection', id: INSPECTION_EAGLE_ID },
-  { dataset: 'InspectionElement', id: ELEMENT_EAGLE_ID },
-  { dataset: 'InspectionItem', id: ITEM_EAGLE_ID }
-];
-
-for (const { dataset, id } of STAFF_ONLY_DATASETS) {
-  test(`dataset=${dataset}: an anonymous caller gets no staff-only row`, async (t) => {
-    stub(t);
-    const res = await get(`/api/search?dataset=${dataset}`);
-    assert.strictEqual(res.status, 200);
-    assert.ok(!idsOf(res).includes(id), `anonymous read ${dataset} ${id}`);
-  });
-
-  test(`dataset=${dataset}: a staff caller gets the row, under its Eagle schema name`, async (t) => {
-    stub(t);
-    const res = await getAsStaff(t, `/api/search?dataset=${dataset}`);
-    assert.strictEqual(res.status, 200);
-    const row = resultsOf(res).find(r => r._id === id);
-    assert.strictEqual(row && row._schemaName, dataset);
-  });
-
-  test(`dataset=${dataset}: a sysadmin caller gets the row`, async (t) => {
-    stub(t);
-    const res = await getAsStaff(t, `/api/search?dataset=${dataset}`, ['sysadmin']);
-    assert.ok(idsOf(res).includes(id));
-  });
-}
-
-test('dataset=User: an anonymous caller gets a published user without its email', async (t) => {
-  stub(t);
-  const row = resultsOf(await get('/api/search?dataset=User')).find(r => r._id === 'u-public');
-  assert.strictEqual(row.displayName, 'Open Contact');
-  assert.strictEqual(row.email, undefined);
-});
-
-test('dataset=User: a staff caller gets the email', async (t) => {
-  stub(t);
-  const row = resultsOf(await getAsStaff(t, '/api/search?dataset=User')).find(r => r._id === USER_EAGLE_ID);
-  assert.strictEqual(row.email, 'pat@example.invalid');
-});
-
-test('dataset=User: a project filter answers nothing, since a user has no project', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, `/api/search?dataset=User&and[project]=${PROJECT_EAGLE_ID}`);
-  assert.deepStrictEqual(idsOf(res), []);
-});
-
-test('dataset=Group: the row carries the Eagle project id and the members reach staff', async (t) => {
-  stub(t);
-  const row = resultsOf(await getAsStaff(t, `/api/search?dataset=Group&and[project]=${PROJECT_EAGLE_ID}`))[0];
-  assert.strictEqual(row.project, PROJECT_EAGLE_ID);
-  assert.deepStrictEqual(row.members, ['m1']);
-});
-
-test('dataset=Inspection: a published inspection reaches an anonymous caller without the inspector email', async (t) => {
-  stub(t, { ...CORPUS, inspections: [{ ...INSPECTION, read: PUBLIC_ACL }] });
-  const row = resultsOf(await get('/api/search?dataset=Inspection'))[0];
-  assert.strictEqual(row.name, 'Site visit');
-  assert.strictEqual(row.email, undefined);
-});
-
-test('dataset=Inspection: a staff caller gets the inspector email', async (t) => {
-  stub(t);
-  const row = resultsOf(await getAsStaff(t, '/api/search?dataset=Inspection'))[0];
-  assert.strictEqual(row.email, 'officer@example.invalid');
-});
-
-test('dataset=InspectionItem: and[element] reads the items of that element only', async (t) => {
-  const other = { ...ITEM, id: 'item-2', eagleId: 'item-2', element: 'element-2' };
-  stub(t, { ...CORPUS, inspections: [INSPECTION, ELEMENT, ITEM, other] });
-  const res = await getAsStaff(t,
-    `/api/search?dataset=InspectionItem&and[inspection]=${INSPECTION_EAGLE_ID}&and[element]=${ELEMENT_EAGLE_ID}`);
-  assert.deepStrictEqual(idsOf(res), [ITEM_EAGLE_ID]);
-});
-
-test('dataset=Item: a staff caller gets the bare array eagle-admin reads, with the stored-file fields', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, `/api/search?dataset=Item&_id=${ITEM_EAGLE_ID}&_schemaName=InspectionItem`);
-  assert.strictEqual(res.status, 200);
-  assert.strictEqual(res.body.length, 1);
-  assert.strictEqual(res.body[0]._schemaName, 'InspectionItem');
-  assert.strictEqual(res.body[0].internalURL, 'blob/outflow.jpg');
-});
-
-test('dataset=Item: an anonymous caller gets an empty array for a staff-only item', async (t) => {
-  stub(t);
-  const res = await get(`/api/search?dataset=Item&_id=${ITEM_EAGLE_ID}&_schemaName=InspectionItem`);
-  assert.deepStrictEqual(res.body, []);
-});
-
-test('dataset=Item: a sysadmin caller reads a user by id', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, `/api/search?dataset=Item&_id=${USER_EAGLE_ID}&_schemaName=User`, ['sysadmin']);
-  assert.strictEqual(res.body[0]._id, USER_EAGLE_ID);
-});
-
-test('dataset=Item: a model DEMI does not serve is a 400', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, `/api/search?dataset=Item&_id=${USER_EAGLE_ID}&_schemaName=Audit`);
-  assert.strictEqual(res.status, 400);
-});
-
-test('_schemaName on any dataset but Item is a 400', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, '/api/search?dataset=User&_schemaName=User');
-  assert.strictEqual(res.status, 400);
-});
-
-// eagle-api pushes a deleted user or group with `isDeleted: true`; the row stays stored, unserved.
-const DELETED = {
-  users: { ...PRIVATE_USER, id: 'u-gone', eagleId: 'u-gone', email: 'gone@example.invalid', isDeleted: true },
-  groups: { ...GROUP, id: 'g-gone', eagleId: 'g-gone', name: 'Deleted group', isDeleted: true }
-};
-const WITH_DELETED = { ...CORPUS, users: [...CORPUS.users, DELETED.users], groups: [...CORPUS.groups, DELETED.groups] };
-
-for (const [dataset, container, filter] of [['User', 'users', ''], ['Group', 'groups', `&and[project]=${PROJECT_EAGLE_ID}`]]) {
-  test(`dataset=${dataset}: a deleted row is in no sysadmin list or count`, async (t) => {
-    stubCosmos(t, WITH_DELETED, {}, { strict: true });
-    const res = await getAsStaff(t, `/api/search?dataset=${dataset}${filter}`, ['sysadmin']);
-    assert.ok(!idsOf(res).includes(DELETED[container].id));
-    assert.strictEqual(res.headers.get('x-total-count'), String(CORPUS[container].length));
-  });
-
-  test(`dataset=Item: a deleted ${dataset} by id answers nothing, even to a sysadmin`, async (t) => {
-    stubCosmos(t, WITH_DELETED, {}, { strict: true });
-    const res = await getAsStaff(t, `/api/search?dataset=Item&_id=${DELETED[container].id}&_schemaName=${dataset}`, ['sysadmin']);
-    assert.deepStrictEqual(res.body, []);
-  });
-}
-
-test('dataset=User: keywords are a 400, not every user', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, '/api/search?dataset=User&keywords=pat');
-  assert.strictEqual(res.status, 400);
-});
-
-test('a parameter the endpoint does not read is still a 400', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, '/api/search?dataset=User&inspection=x');
-  assert.strictEqual(res.status, 400);
-});
 
 /** The eighteen level-2 project fields from catalog/projects.js, as stored. */
 const STAFF_FIELDS = {
@@ -256,22 +72,30 @@ test('dataset=Project keyword search: an anonymous caller gets no staff field an
   assert.deepStrictEqual(specsFor(seen, 'projects').filter(s => !s.query.startsWith('SELECT VALUE c.id FROM c ')), []);
 });
 
+/** One published notification and one staff-only one. */
+const NOTIFICATIONS = {
+  notifications: [
+    notificationRow({ read: PUBLIC_ACL }),
+    notificationRow({ id: 'n-staff', eagleId: 'n-staff', read: PRIVATE_ACL })
+  ]
+};
+
 test('x-total-count carries the measured total, not the page length', async (t) => {
-  stubCosmos(t, CORPUS, { users: 7 }, { strict: true });
-  const res = await getAsStaff(t, '/api/search?dataset=User');
+  stubCosmos(t, NOTIFICATIONS, { notifications: 7 }, { strict: true });
+  const res = await getAsStaff(t, '/api/search?dataset=ProjectNotification');
   assert.strictEqual(resultsOf(res).length, 2);
   assert.strictEqual(res.headers.get('x-total-count'), '7');
 });
 
 test('x-total-count on an anonymous read counts only the rows that caller may see', async (t) => {
-  stub(t);
-  const res = await get('/api/search?dataset=User');
+  stub(t, NOTIFICATIONS);
+  const res = await get('/api/search?dataset=ProjectNotification');
   assert.strictEqual(res.headers.get('x-total-count'), '1');
 });
 
 test('HEAD answers the same x-total-count with no body', async (t) => {
-  stub(t);
-  const res = await getAsStaff(t, '/api/search?dataset=User', ['staff'], { method: 'HEAD' });
+  stub(t, NOTIFICATIONS);
+  const res = await getAsStaff(t, '/api/search?dataset=ProjectNotification', ['staff'], { method: 'HEAD' });
   assert.strictEqual(res.status, 200);
   assert.strictEqual(res.headers.get('x-total-count'), '2');
   assert.strictEqual(res.body, '');

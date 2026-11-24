@@ -20,7 +20,6 @@ const { resolveAccess } = require('../../src/helpers/access-sql');
 const { logger } = require('../../src/utils/logger');
 const { mockRes } = require('../helpers/mock-res');
 const { dialRow, hiddenStore } = require('../helpers/projects-dial-store');
-const { updateRow, notificationRow, NOTIFICATION_EAGLE_ID } = require('../helpers/search-reads');
 
 const anonymous = query => ({ query, header: () => null });
 const staff = query => ({ query, header: () => null, user: { realm_access: { roles: ['staff'] } } });
@@ -54,13 +53,6 @@ async function projectSearch(t, req, rows) {
 /** Over the cap: one row past it, each dialled on every field a request here reads. */
 const overCap = () => Array.from({ length: projectsRepo.DIAL_HIDDEN_MAX_IDS + 1 }, (_, i) =>
   dialRow(`p${i}`, { name: 2, decisionDate: 2, description: 2 }));
-
-function stubFeed(t) {
-  t.mock.method(updatesRepo, 'listTop', async () => [updateRow({ id: 'news-1', eagleId: 'news-1', type: 'News', pinned: false })]);
-  t.mock.method(notificationsRepo, 'listDecisions', async () => [notificationRow({
-    decision: 'Certificate Issued', decisionDate: '2026-09-07T00:00:00.000Z'
-  })]);
-}
 
 test('an index column maps to the stored field whose dial governs it', () => {
   const columns = projectsIndex.fields.filter(f => f.filterable || f.sortable).map(f => f.name);
@@ -210,52 +202,5 @@ test('GET /search/counts Project badge under per-project dials', async (t) => {
 
     assert.strictEqual(res.body[0].counts.Project, null);
     assert.deepStrictEqual(res.body[0].meta[0].unavailable, ['Project']);
-  });
-});
-
-test('GET /search?dataset=HomeFeed decisions under per-project dials', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  const feed = async (rows, hits, pageSize = '3') => {
-    const req = anonymous({ dataset: 'HomeFeed', pageSize });
-    hiddenStore(t, rows, resolveAccess(req));
-    stubFeed(t);
-    const sent = projectIndex(t, hits);
-    const res = mockRes();
-    await searchController.search(req, res);
-    return { res, rows: res.body[0]?.searchResults || [], sent };
-  };
-
-  await t.test('a dialled decision does not use up a slot', async () => {
-    const hits = [
-      hit('dialled', { decisionDate: '2026-09-09T00:00:00Z', vis: JSON.stringify({ decisionDate: 2 }) }),
-      hit('open', { decisionDate: '2026-09-08T00:00:00Z' })
-    ];
-
-    const { rows } = await feed([dialRow('dialled', { decisionDate: 2 }), dialRow('open')], hits, '1');
-
-    assert.deepStrictEqual(rows.map(r => `${r.kind}:${r.id}`), ['decision:open']);
-  });
-
-  await t.test('over the cap the feed still serves news and notification decisions', async () => {
-    const error = t.mock.method(logger, 'error', () => {});
-
-    const { res, rows, sent } = await feed(overCap(), [hit('open', { decisionDate: '2026-09-08T00:00:00Z' })]);
-
-    assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(rows.map(r => `${r.kind}:${r.id}`), [`decision:${NOTIFICATION_EAGLE_ID}`, 'update:news-1']);
-    assert.strictEqual(sent.length, 0);
-    assert.ok(error.mock.callCount() >= 1);
-  });
-
-  await t.test('any other failure of the decisions read is a 502', async () => {
-    t.mock.method(logger, 'error', () => {});
-    stubFeed(t);
-    t.mock.method(aiSearch, 'searchProjects', async () => { throw new Error('index down'); });
-    const res = mockRes();
-
-    await searchController.search(anonymous({ dataset: 'HomeFeed', pageSize: '3' }), res);
-
-    assert.strictEqual(res.statusCode, 502);
   });
 });

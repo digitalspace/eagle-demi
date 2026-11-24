@@ -1,7 +1,6 @@
 'use strict';
 
 const eagleQuery = require('../../search/eagle-query');
-const { sortEntries } = require('../../search/sort-entries');
 const updatesRepo = require('../../repositories/updates');
 
 /**
@@ -88,7 +87,7 @@ function documentFilter(query) {
  */
 const keywordText = (raw) => String(firstValue(raw) || '').replace(/\s+/g, ' ').trim();
 
-/** The most rows `top=true` and dataset=HomeFeed answer. A longer list is a page, not a strip. */
+/** The most rows `top=true` answers. A longer list is a page, not a strip. */
 const TOP_MAX_ROWS = 20;
 
 /**
@@ -105,26 +104,6 @@ function stripLimit(query) {
   return { limit: n };
 }
 
-/** `sortBy` keys a read fixed on `c.id` did not apply (a mirror field may be absent; see `orderByFrom`). */
-function sortKeysDropped(sortBy) {
-  return sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
-}
-
-/** These mirrors have no text index: keywords are refused rather than answered with every row. */
-function keywordsRefused(dataset, query) {
-  return query.keywords || query.q ? { error: `dataset=${dataset} does not take keywords` } : null;
-}
-
-/**
- * The one DEMI project id a `project` filter names, from the translated query. Two are REFUSED: the
- * repositories read one partition, and taking the first would answer for a project nobody chose.
- */
-function oneProject(filterQuery) {
-  const ids = eagleQuery.projectIdsFrom(filterQuery);
-  if (ids.length > 1) return { error: `and[project] takes one value, not ${ids.join(', ')}` };
-  return { projectId: ids[0] || null };
-}
-
 module.exports = {
   filterValue,
   filterValues,
@@ -133,8 +112,5 @@ module.exports = {
   DAY_MS,
   documentFilter,
   keywordText,
-  stripLimit,
-  sortKeysDropped,
-  keywordsRefused,
-  oneProject
+  stripLimit
 };
