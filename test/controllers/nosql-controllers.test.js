@@ -876,7 +876,7 @@ test('nosql project controller', async (t) => {
 test('nosql document controller — ACL cannot out-rank the parent project', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  const { resolveDocumentAcl } = documentController;
+  const { resolveDocumentAcl } = require('../../src/domain/documents');
 
   await t.test('published parent -> new document still admits at level 1', () => {
     const acl = resolveDocumentAcl({ read: ['public', 'sysadmin'], isPublished: true });

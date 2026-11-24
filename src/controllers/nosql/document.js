@@ -19,9 +19,8 @@ const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
   require('../../chunker');
-const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, heldSealed, isAnonymous
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, heldSealed, isAnonymous
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -29,9 +28,8 @@ const { documentIndexRow, indexDocumentsNow } = require('../../search/document-q
 const { purgeDocument } = require('../../helpers/purge');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { writeGuarded } = require('../../helpers/etag-write');
 const { eaglePush, ignoreStalePush, pushConflict } = require('./eagle-mirror');
-const { isStalePush, stampPush } = require('../../domain/eagle-push');
+const { isStalePush } = require('../../domain/eagle-push');
 const { logger } = require('../../utils/logger');
 const { fromEdge } = require('../../utils/caller-ip');
 const { notModified, byteRange, UNSATISFIABLE, RANGE } = require('../../utils/http-range');
@@ -44,6 +42,14 @@ const config = require('../../config');
 const syncOut = require('../../sync-out');
 const { DOCUMENT } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
+const {
+  resolveDocumentAcl, upsertGuarded, propagateParentFields, reStampParentFieldDrift, badParentFieldTypes
+} = require('../../domain/documents');
+const {
+  sanitizeExtraction, CAP_REJECTED, REPEATED_REJECTED, INDEX_DELETE_INCOMPLETE, capExceededMessage,
+  recentIngestFailures, tryRecordIngestFailure, logIngestFailure, recordIngested, removeOverCapChunks,
+  parentStampedAt
+} = require('../../domain/document-ingest');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -63,170 +69,6 @@ const STREAM_OPEN_TIMEOUT_MS = 10000;
 // Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
 // body can set it.
 const LEGACY_PUBLISH = Symbol('legacy publish alias');
-
-// One line per worker, not per push — see propagateParentFields.
-let warnedNoRestampTarget = false;
-
-/**
- * A new document's ACL: level 1 (docs/rbac-architecture.md §1), capped at the parent's level.
- * EVERY document write path must go through this.
- */
-function resolveDocumentAcl(parentProject) {
-  const read = capRead(readForLevel(1), parentProject.read);
-
-  // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
-  return { published: read.includes('public'), read };
-}
-
-/**
- * The flagged row for a write that moves a chunk parent field, or null when nothing moved. The flag
- * rides the same upsert, so a re-stamp lost to the poison queue still leaves the row on reconcile.
- */
-function stampParentFieldsPending(existing, row) {
-  if (!existing || !chunks.parentFieldsChanged(existing, row)) return null;
-  // The repository mints the token so it is always later than the row's: two raises sharing one
-  // millisecond would let the first re-stamp's clear drop the second flag.
-  return { ...row, ...documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
-}
-
-/**
- * Write a row built from `existing` only while it is still the stored revision. An unguarded upsert
- * from a snapshot resurrects a cleared pending flag and reverts another writer's parent field.
- *
- * @param {object|null} existing the row the first build read, `null` when there is none
- * @param {() => Promise<object|null>} reread fetches the stored row again after a lost race
- * @param {(current: object|null) => object|null} build the row to write; `null` refuses the row
- * @param {{pushedAt?: number|null}} [options] the eagle mirror's ordering stamp; staff edits have none
- * @returns {Promise<{status: string, saved?: object, owed?: boolean, existing?: object|null}>} status is `saved`, `conflict`, `missing` or `stale`
- */
-async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) {
-  let written = null;
-
-  return writeGuarded({
-    existing,
-    reread,
-    attempt: async (current) => {
-      // Build first: a row `build` refuses (a sealed one) is refused whatever the stamp says.
-      const row = build(current);
-      if (!row) return { status: 'missing' };
-      // Inside the attempt, so a retry after a 412 judges this push against the one that won.
-      if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
-      written = row;
-      // Recomputed per try: the token must be minted off the STORED row, or the other writer's
-      // clear takes this flag down with it.
-      const owed = stampParentFieldsPending(current, row);
-      const item = stampPush(owed || row, pushedAt, current);
-      // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
-      // upsert would replace a document another writer created in between.
-      const saved = await documents.upsert(item,
-        current ? { etag: current._etag } : { create: true });
-      return { status: 'saved', saved, owed: Boolean(owed), existing: current };
-    },
-    onLost: (_current, attempt) =>
-      logger.warn('[Document Controller] document write lost its etag race, rebuilding', {
-        documentId: written.id, projectId: written.projectId, attempt
-      })
-  });
-}
-
-/**
- * Queue the re-stamp of a moved parent field onto the document's chunks; best-effort, since a stale
- * copy only makes a filter miss. With no queue and no inline opt-in it is skipped, not run inline.
- */
-async function propagateParentFields(saved) {
-  if (!restampChunks.enabled()) {
-    // `func start` with no storage account, and the test suite, ask for the walk explicitly.
-    if (config.chunkRestampInline) return patchParentFieldsInline(saved);
-    // Once per worker: this fires on every write that moves a field. The row's own flag is per
-    // document and is what makes the skip countable.
-    if (!warnedNoRestampTarget) {
-      warnedNoRestampTarget = true;
-      logger.warn(
-        '[Document Controller] no CHUNK_RESTAMP_QUEUE and no CHUNK_RESTAMP_INLINE, chunk ' +
-        'parent fields left stale — repair with scripts/backfill-chunk-parent-fields.js --pending',
-        { documentId: saved.id }
-      );
-    }
-    return;
-  }
-
-  try {
-    await restampChunks.enqueue({ documentId: saved.id, projectId: saved.projectId });
-  } catch (err) {
-    // Only a log: the row went in flagged, so the reconcile and `--pending` already see this one.
-    logger.error('[Document Controller] chunk parent-field restamp could not be queued', {
-      documentId: saved.id, error: err.message, stack: err.stack
-    });
-  }
-}
-
-/** The re-stamp on the request, for a local run that opts in. Swallows errors. */
-async function patchParentFieldsInline(saved) {
-  try {
-    // Guarded on the same token the queue handler uses, so the two walks cannot undo each other.
-    const result = await chunks.setParentFieldsForDocument(systemAccess(), saved.id, saved,
-      typeof saved.parentFieldsPendingAt === 'string'
-        ? { stampedAt: saved.parentFieldsPendingAt }
-        : {});
-    if (result.failed > 0) {
-      // The flag stays raised, same as a partly failed queue run.
-      logger.error('[Document Controller] chunk parent-field patch partially failed', {
-        documentId: saved.id, ...result
-      });
-      return;
-    }
-    // Landed, so clear it here for the same reason the handler does.
-    await restampChunks.clearPending(saved);
-  } catch (err) {
-    logger.error('[Document Controller] chunk parent-field patch failed', {
-      documentId: saved.id, error: err.message, stack: err.stack
-    });
-  }
-}
-
-/**
- * After an ingest, raise the pending flag and re-stamp when the parent fields moved mid-ingest: a
- * re-stamp that ran halfway reached only the chunks written so far, then cleared its flag.
- *
- * @param {object} snapshot the document row the ingest stamped its FIRST batch from
- * @param {{moved?: boolean}} [opts] the stream's latch: a value moved mid-ingest, even if it moved back
- */
-async function reStampParentFieldDrift(snapshot, { moved = false } = {}) {
-  try {
-    const current = await documents.getById(systemAccess(), snapshot.id, snapshot.projectId);
-    if (!current || (!moved && !chunks.parentFieldsChanged(snapshot, current))) return null;
-
-    // Throws after three lost raises; the catch logs it, as a 500 would make the host re-ingest a
-    // document already in. The winning raise keeps the drift on the reconcile line.
-    const raised = await documents.setParentFieldsPending(current.id, current.projectId, true);
-    if (raised.status !== 'raised') return null;
-
-    logger.info('[Document Controller] parent fields moved during ingest, re-stamp owed', {
-      documentId: current.id, projectId: current.projectId, pendingAt: raised.pendingAt
-    });
-    const flagged = {
-      ...current,
-      parentFieldsPending: true,
-      parentFieldsPendingAt: raised.pendingAt
-    };
-    await propagateParentFields(flagged);
-    return flagged;
-  } catch (err) {
-    logger.error('[Document Controller] parent-field drift check after ingest failed', {
-      documentId: snapshot.id, error: err.message, stack: err.stack
-    });
-    return null;
-  }
-}
-
-/**
- * The parent fields whose value is not a List id string or null. Chunks String-coerce these, so a
- * number on the row would never match its chunk copy.
- */
-function badParentFieldTypes(changes) {
-  return chunks.CHUNK_PARENT_FIELDS.filter(field => Object.hasOwn(changes, field) &&
-    changes[field] !== null && typeof changes[field] !== 'string');
-}
 
 /**
  * Token-paged scan: `GET /documents/scan`, for callers that walk every row (the extraction host's
@@ -1527,35 +1369,6 @@ exports.deleteDocument = async (req, res) => {
   }
 };
 
-/** Paths the router can take. Anything else is recorded as 'unknown' rather than trusted. */
-const EXTRACTION_PATHS = ['ocr', 'text'];
-
-/**
- * The extraction host's optional provenance, allow-listed and length-capped: it comes from an
- * external process and is served back verbatim. Null when nothing is usable.
- */
-function sanitizeExtraction(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-
-  const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
-
-  const out = {
-    // An unrecognised path is 'unknown', NOT dropped: knowing the host claimed something we do not
-    // understand is worth more than silently recording nothing.
-    path: EXTRACTION_PATHS.includes(raw.path) ? raw.path : 'unknown',
-    engine: str(raw.engine, 60),
-    doclingVersion: str(raw.doclingVersion, 40),
-    // Free-form knobs, but bounded. JSON.stringify so a nested object cannot smuggle in depth.
-    options: raw.options === undefined ? undefined : String(JSON.stringify(raw.options)).slice(0, 500),
-    at: str(raw.at, 40) || new Date().toISOString()
-  };
-
-  for (const key of Object.keys(out)) {
-    if (out[key] === undefined) delete out[key];
-  }
-  return out;
-}
-
 /** Chunks per bulk call on the streaming path; bounds peak memory to about half a megabyte. */
 const STREAM_BATCH_CHUNKS = 200;
 
@@ -1571,19 +1384,6 @@ const HOLD_WARN_CHARS = 10 * 1024 * 1024;
  */
 const PARENT_FIELD_REFRESH_BATCHES = 25;
 
-// Alerts match these two strings; keep them verbatim.
-const CAP_REJECTED = 'chunk ingest rejected: chunk cap exceeded';
-const REPEATED_REJECTED = 'chunk ingest rejected: repeated failures';
-
-const INDEX_DELETE_INCOMPLETE = 'chunk ingest incomplete: search index delete failed, retry';
-
-// A successful ingest also clears a failed purge's stamp: the chunks it described were replaced.
-const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null, chunkPurgeFailedAt: null };
-
-function capExceededMessage() {
-  return `${CAP_REJECTED} (limit ${config.maxChunksPerDocument} chunks per document)`;
-}
-
 /**
  * The 413 both ingest doors answer with once a document has more chunks than the cap. `stored` is
  * appended to the recorded error only, and `fields` rides the same patch.
@@ -1595,37 +1395,6 @@ async function rejectOverCap(res, document, detail, { stored = '', fields = {} }
   const message = capExceededMessage();
   await tryRecordIngestFailure(document, stored ? `${message}; ${stored}` : message, fields);
   return res.status(413).json({ error: message });
-}
-
-/** Consecutive chunk-ingest failures still inside the window; 0 once the last one has aged out. */
-function recentIngestFailures(document) {
-  const age = Date.now() - Date.parse(document.chunkIngestFailedAt);
-  return age < config.chunkIngestFailureWindowMs ? (document.chunkIngestFailures || 0) : 0;
-}
-
-/**
- * Record a failed ingest on the document and count it toward the repeated-failure guard. Never
- * throws: a failure that cannot be recorded must not change the answer the caller gets.
- */
-async function tryRecordIngestFailure(document, message, fields = {}) {
-  try {
-    // Read-then-write: overlapping failed requests can undercount, which only delays the lockout.
-    await documents.patchExtraction(document.id, document.projectId, {
-      ...fields,
-      contentExtractionError: message.slice(0, 500),
-      chunkIngestFailures: recentIngestFailures(document) + 1,
-      chunkIngestFailedAt: new Date().toISOString()
-    });
-  } catch (err) {
-    logger.warn('[Document Controller] chunk ingest failure not recorded', {
-      documentId: document.id, error: err.message, stack: err.stack
-    });
-  }
-}
-
-/** Logged, never thrown: the ingest-failure alert matches this line. */
-function logIngestFailure(document, message) {
-  logger.error(`[Document Controller] Chunk ingest failed: ${message}`, { documentId: document.id });
 }
 
 /** A 500 the host will retry: logged for the ingest-failure alert and counted by the guard. */
@@ -1646,22 +1415,6 @@ function failIndexDelete(res, document, detail) {
 }
 
 /**
- * The success patch as two, since Cosmos caps a patch at ten operations. The done half goes last, so
- * a failed second patch leaves the document on the work list.
- */
-async function recordIngested(ingest, document, found, done) {
-  await documents.patchExtraction(document.id, document.projectId, found);
-  await documents.patchExtraction(document.id, document.projectId, {
-    contentExtracted: true,
-    contentExtractedAt: new Date().toISOString(),
-    contentExtractionError: null,
-    ...INGEST_FAILURES_CLEARED,
-    ...done
-  });
-  ingest.recorded = true;
-}
-
-/**
  * Read out what is left of an NDJSON body answered early. The answer only goes out once the
  * handler returns, and a client still uploading is otherwise cut off before it can read it.
  */
@@ -1673,49 +1426,6 @@ async function drainRequest(stream) {
   } catch (err) {
     logger.warn('[Document Controller] request body not drained', { error: err.message, stack: err.stack });
   }
-}
-
-/**
- * Undo an over-cap stream's batches, index rows first so a short index delete keeps the Cosmos
- * chunks for the retry to find (`{ indexIncomplete }`). Else returns the patch and any shortfall.
- */
-async function removeOverCapChunks(document) {
-  try {
-    await aiSearch.deleteChunksForDocument(document.id, { strict: true });
-  } catch (err) {
-    logger.warn('[Document Controller] over-cap index delete incomplete', {
-      documentId: document.id, error: err.message, stack: err.stack
-    });
-    return { indexIncomplete: err.message };
-  }
-  const shortfall = [];
-  try {
-    const removed = await chunks.removeForDocument(systemAccess(), document.id);
-    if (removed && removed.failed) {
-      logger.warn('[Document Controller] over-cap chunks not fully removed', {
-        documentId: document.id, failed: removed.failed, statusCounts: removed.statusCounts
-      });
-      shortfall.push(`${removed.failed} chunks not removed`);
-    }
-  } catch (err) {
-    logger.warn('[Document Controller] over-cap chunk removal failed', {
-      documentId: document.id, error: err.message, stack: err.stack
-    });
-    shortfall.push('chunk removal failed');
-  }
-  return {
-    stored: shortfall.join('; '),
-    fields: { contentExtracted: false, contentPageCount: 0 }
-  };
-}
-
-/**
- * The token a NEW chunk's parent values carry, so a walk running behind this ingest cannot overwrite
- * them: the row's pending token when it has one, else the ingest's start.
- */
-function parentStampedAt(document, startedAt) {
-  const token = document && document.parentFieldsPendingAt;
-  return typeof token === 'string' ? token : startedAt;
 }
 
 /**
@@ -2108,6 +1818,5 @@ exports.ingestChunks = async (req, res) => {
   }
 };
 
-exports.resolveDocumentAcl = resolveDocumentAcl;
 // Shared with controllers/nosql/sealed.js's own download route, so both quote the same TTL.
 exports.DOWNLOAD_URL_TTL_SECONDS = DOWNLOAD_URL_TTL_SECONDS;

@@ -14,7 +14,7 @@ const {
 const { unwrapSearchResponse, fetchAllPages, eagleRowLive, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
 const chunksRepo = require('../../src/repositories/chunks');
 const documentsRepo = require('../../src/repositories/documents');
-const projectController = require('../../src/controllers/nosql/project');
+const projectCascade = require('../../src/domain/project-cascade');
 const projectTwin = require('../../src/helpers/project-twin');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 const config = require('../../src/config');
@@ -741,7 +741,7 @@ test('seed() end to end with stubbed sources', async (t) => {
   await t.test('a project the reconcile retired comes back only when the feed lists it again', async (tt) => {
     const { written, repos } = makeRepos();
     const cascaded = [];
-    tt.mock.method(projectController, 'runCascade', async (row) => { cascaded.push(row.id); return null; });
+    tt.mock.method(projectCascade, 'runCascade', async (row) => { cascaded.push(row.id); return null; });
     tt.mock.method(projectTwin, 'narrowTwin', async () => null);
     // 207 is in the Eagle feed; 373 is not.
     const retired = id => ({ id, isDeleted: true, read: ['staff'], isPublished: false,
@@ -1938,7 +1938,7 @@ test('seed --reconcile end to end', async (t) => {
         sources: { track: null, eagle: { _id: 'gone', read: ['public'] } } }
       : null);
     deps.repos.projects.upsert = async (p) => { upserts.push(p); return p; };
-    tt.mock.method(projectController, 'runCascade', async (row) => { cascaded.push(row.id); return cascadeResult; });
+    tt.mock.method(projectCascade, 'runCascade', async (row) => { cascaded.push(row.id); return cascadeResult; });
     return { deps, upserts, cascaded };
   };
 
@@ -1992,7 +1992,7 @@ test('seed --reconcile end to end', async (t) => {
     const cleared = [];
     deps.repos.projects.patchCascadePending = async (id, pendingAt, etag) => { cleared.push([id, pendingAt, etag]); };
     const cascaded = [];
-    tt.mock.method(projectController, 'runCascade', async (row, _eagleId, options) => {
+    tt.mock.method(projectCascade, 'runCascade', async (row, _eagleId, options) => {
       cascaded.push([row.id, options]);
       return cascadeResult;
     });
