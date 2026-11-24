@@ -14,8 +14,11 @@ const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');
 const { makeRes } = require('../../../src/http/router');
 const { cosmosKind } = require('../../../src/helpers/native-query');
+const { filterFor } = require('../../../src/helpers/access-odata');
+const { resolveAccess } = require('../../../src/helpers/access-sql');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
+const ANON = resolveAccess({ query: {}, headers: {}, header: () => undefined });
 
 // Comment `author` is level 2: staff may filter on it, an anonymous caller may not.
 const COMMENTS_PROBE = {
@@ -106,6 +109,36 @@ test('GET /counts', async (t) => {
     const res = await call('kind=projects&q=mine');
     assert.strictEqual(res.status, 400);
     assert.deepStrictEqual(res.body, { error: 'The search service could not run this query.' });
+  });
+
+  await t.test('updates and notifications count when named, each index asked under the anonymous ACL', async (t) => {
+    t.mock.method(cosmos, 'query', async (container, spec) => ({ items: spec.query.includes('COUNT(1)') ? [7] : [] }));
+    const asked = {};
+    const none = name => async (opts) => { asked[name] = opts; return { count: 0, items: [] }; };
+    t.mock.method(aiSearch, 'searchActivities', none('updates'));
+    t.mock.method(aiSearch, 'searchNotifications', none('notifications'));
+
+    const res = await call('kind=updates,notifications&q=x');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body, { updates: 0, notifications: 0 });
+    assert.ok(asked.updates.filter.includes(filterFor(ANON, 'projectId').filter), asked.updates.filter);
+    assert.match(asked.updates.filter, /status eq 'published' and publishDate le /);
+    assert.strictEqual(asked.notifications.filter, `(${filterFor(ANON, null).filter})`);
+  });
+
+  await t.test('no kind counts exactly projects and documents, and still refuses a project filter', async (t) => {
+    const specs = fakeCosmos(t);
+    t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 0, items: [] }));
+    t.mock.method(aiSearch, 'searchDocumentIds', async () => ({ count: 0, ids: [] }));
+    const res = await call('q=x');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(Object.keys(res.body).sort(), ['documents', 'projects']);
+
+    specs.length = 0;
+    const scoped = await call('project=p1');
+    assert.strictEqual(scoped.status, 400);
+    assert.match(scoped.body.error, /^projects: unknown parameter: project/);
+    assert.strictEqual(specs.length, 0);
   });
 
   await t.test('an unknown kind, a repeated kind and a paging parameter are each refused', async (t) => {

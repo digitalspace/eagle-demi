@@ -777,13 +777,16 @@ paths:
         How many rows each named kind's list would hold for this caller, as `{ <kind>: <count> }`.
         Each count takes its list's filters, `q` and `ids`, and the same visibility rules, so a
         filter on a field the caller cannot see is refused with 400 rather than counted. Paging
-        and sort parameters are refused. Supported kinds: `projects`. A rejected Bearer token
-        answers 401; an authenticated answer carries `Cache-Control: private, no-store`.
+        and sort parameters are refused. Supported kinds: `projects`, `documents`, `updates` and
+        `notifications`. A rejected Bearer token answers 401; an authenticated answer carries
+        `Cache-Control: private, no-store`.
       parameters:
         - name: kind
           in: query
           required: false
-          description: Comma-separated kinds. Omitted, every supported kind is counted.
+          description: >-
+            Comma-separated kinds. Omitted, `projects` and `documents` are counted, and a filter
+            must fit both; `updates` and `notifications` are counted only when named.
           schema:
             type: string
             example: projects

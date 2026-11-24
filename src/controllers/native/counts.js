@@ -2,7 +2,7 @@
 
 /**
  * `GET /counts?kind=<kind>[,...]`: `{ <kind>: <count> }` through each kind's own list spec, so a count
- * never answers what its list would hide. No `kind` counts all; a filter must then fit every kind.
+ * never answers what its list would hide. No `kind` counts `DEFAULT_KINDS`; a filter must then fit both.
  */
 
 const { resolveAccess } = require('../../helpers/access-sql');
@@ -16,14 +16,19 @@ const { NO_STORE } = require('../nosql/mirror-reads');
  */
 const KINDS = {
   projects: () => require('../nosql/project').projectsKind,
-  documents: () => require('../nosql/document').documentsKind
+  documents: () => require('../nosql/document').documentsKind,
+  updates: () => require('./updates').SPEC,
+  notifications: () => require('./notifications').SPEC
 };
+
+// Every other kind is counted only when named, so a no-`kind` call costs no extra reads.
+const DEFAULT_KINDS = Object.freeze(['projects', 'documents']);
 
 // These shape a page, and a count has none: refused, not ignored.
 const PAGE_PARAMS = Object.freeze(['page', 'pageSize', 'sort', 'count']);
 
 function requestedKinds(raw) {
-  if (raw === undefined) return { kinds: Object.keys(KINDS) };
+  if (raw === undefined) return { kinds: DEFAULT_KINDS };
   if (Array.isArray(raw)) return { error: 'parameter given more than once: kind' };
   const kinds = [...new Set(String(raw).split(',').map(kind => kind.trim()).filter(Boolean))];
   if (kinds.length === 0) return { error: 'kind needs at least one kind' };
