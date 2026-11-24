@@ -20,7 +20,7 @@ const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
 const { refId } = require('../seed/transform');
-const projectController = require('../controllers/nosql/project');
+const projectCascade = require('../domain/project-cascade');
 const projectTwin = require('../helpers/project-twin');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
@@ -440,7 +440,7 @@ async function runSeed(args, deps, summary) {
     }
     if (written.status !== 'saved') return { skipped: true };
     const { saved } = written;
-    const failure = await projectController.runCascade(saved, saved.eagleId);
+    const failure = await projectCascade.runCascade(saved, saved.eagleId);
     if (failure) summary.failures.push(`reconcile: retired project ${id}: ${failure} ${CASCADE_RETRY}`);
     return null;
   });
@@ -451,7 +451,7 @@ async function runSeed(args, deps, summary) {
     // A twin's updates belong to its Track row, as in narrowTwin.
     const options = isEagleOnlyProjectId(row.id) && trackEagleIds.has(String(row.eagleId))
       ? { updates: false } : undefined;
-    const failure = await projectController.runCascade(row, row.eagleId, options);
+    const failure = await projectCascade.runCascade(row, row.eagleId, options);
     if (failure) {
       summary.failures.push(`reconcile: deleted project ${id}: ${failure} ${CASCADE_RETRY}`);
       return;
@@ -582,8 +582,8 @@ async function runSeed(args, deps, summary) {
         summary.stages.projects.written++;
         // The retire capped its engagement too, and no later push sees a move to cascade on.
         if (existing && deletedBy(existing) && !deletedBy(saved)) {
-          const cascade = (row, eagleId, options) => projectController.runCascade(row, eagleId, options);
-          let failure = projectController.visibilityMoved(existing, saved) ? await cascade(saved, saved.eagleId) : null;
+          const cascade = (row, eagleId, options) => projectCascade.runCascade(row, eagleId, options);
+          let failure = projectCascade.visibilityMoved(existing, saved) ? await cascade(saved, saved.eagleId) : null;
           if (!failure && saved.eagleId) {
             failure = await projectTwin.narrowTwin(saved, saved.eagleId, (twin, id) => cascade(twin, id, { updates: false }));
           }
@@ -698,7 +698,7 @@ async function runSeed(args, deps, summary) {
         // chunks yet, and the ingest that creates them stamps the fields itself.
         let row = transformed;
         if (existing && repos.chunks.parentFieldsChanged(existing, transformed)) {
-          // Flag rides the same upsert as the change (`document.js stampParentFieldsPending`), so a killed
+          // Flag rides the same upsert as the change (`domain/documents.js stampParentFieldsPending`), so a killed
           // run stays visible to the reconcile. No etag: offline, nothing else writes this corpus.
           row = { ...transformed, ...repos.documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
           if (!stampedAt || row.parentFieldsPendingAt > stampedAt) {
