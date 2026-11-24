@@ -9,7 +9,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const { cosmosKind } = require('../helpers/native-query');
 const {
-  eq, selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
+  eq, selectWhere, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
 } = require('./_sql');
 
 const CONTAINER = 'users';
@@ -25,27 +25,6 @@ async function getById(access, id) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id) {
   return readForWriteIn(CONTAINER, id, id, PARTITION_FIELD);
-}
-
-function visibleSpec(access) {
-  return selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: [NOT_DELETED],
-    select: selectFor(ENTITY, access, PARTITION_FIELD),
-    orderBy: 'c.id ASC'
-  });
-}
-
-/** One offset page (`pageNum`, `pageSize`) of the users this caller may read, in id order, as `/search` pages. */
-async function listPage(access, { pageNum, pageSize } = {}) {
-  return readPage(CONTAINER, visibleSpec(access), { pageNum, pageSize });
-}
-
-/** The same predicate as the read, so the total never counts a user the page could not hold. */
-async function countVisible(access) {
-  const { items } = await cosmos.query(CONTAINER, countWhere({ access, partitionField: PARTITION_FIELD, criteria: [NOT_DELETED] }), {});
-  return items[0] || 0;
 }
 
 async function upsert(item, existing) {
@@ -83,5 +62,5 @@ const native = {
 };
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, listByOrg, listAclRows, native
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, upsert, listByOrg, listAclRows, native
 };
