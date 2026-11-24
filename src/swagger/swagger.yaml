@@ -777,13 +777,16 @@ paths:
         How many rows each named kind's list would hold for this caller, as `{ <kind>: <count> }`.
         Each count takes its list's filters, `q` and `ids`, and the same visibility rules, so a
         filter on a field the caller cannot see is refused with 400 rather than counted. Paging
-        and sort parameters are refused. Supported kinds: `projects`. A rejected Bearer token
-        answers 401; an authenticated answer carries `Cache-Control: private, no-store`.
+        and sort parameters are refused. Supported kinds: `projects`, `documents`, `updates` and
+        `notifications`. A rejected Bearer token answers 401; an authenticated answer carries
+        `Cache-Control: private, no-store`.
       parameters:
         - name: kind
           in: query
           required: false
-          description: Comma-separated kinds. Omitted, every supported kind is counted.
+          description: >-
+            Comma-separated kinds. Omitted, `projects` and `documents` are counted, and a filter
+            must fit both; `updates` and `notifications` are counted only when named.
           schema:
             type: string
             example: projects
@@ -925,6 +928,17 @@ paths:
               type: string
           style: form
           explode: true
+        - name: proponentId
+          in: query
+          required: false
+          description: Proponent Organization id, as each row's `proponentId` holds it. Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - $ref: '#/components/parameters/ProjectRegionalDistrict'
         - $ref: '#/components/parameters/ProjectMunicipality'
         - $ref: '#/components/parameters/ProjectElectoralDistrict'
@@ -1028,7 +1042,7 @@ paths:
         One page of the projects and the project notifications this caller may read, as separate
         rows in one list. Each row carries `recordKind`, `project` or `notification`; a
         notification is never folded into a project. A filter on a field only projects have
-        (phase, EAC decision, CEAA involvement, state, district, municipality, or a
+        (phase, EAC decision, CEAA involvement, state, district, municipality, proponent id, or a
         `decisionDate` or `dateUpdated` range) leaves out every notification row. `decision`,
         which only notifications have, leaves out every project row. Unknown and repeated
         parameters are refused with 400, except the filters that say they repeat. A rejected
@@ -1151,6 +1165,19 @@ paths:
           in: query
           required: false
           description: Proponent, a notification's `proponent`. Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: proponentId
+          in: query
+          required: false
+          description: >-
+            Proponent Organization id. Projects only: set, it leaves out every notification row.
+            Repeat it to match any of several.
           schema:
             type: array
             maxItems: 100
@@ -7567,7 +7594,9 @@ paths:
         Updates the caller may read, with hidden fields left out. Below staff level, only
         published updates whose `publishDate` has passed are listed. `projectId` holds the Eagle
         project id. Each row also carries `projectName` and `projectEagleId` when the caller may
-        read the project. Any parameter not listed here, or a parameter given twice (except
+        read the project. A row raised by a project notification (`projectNotification`) with no
+        stored `notificationName` carries the notification's `name` as `notificationName` when the
+        caller may read it. Any parameter not listed here, or a parameter given twice (except
         `project` and `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
       parameters:
         - name: project

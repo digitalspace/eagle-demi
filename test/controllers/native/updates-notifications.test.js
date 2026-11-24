@@ -110,13 +110,21 @@ function admitted(container, given) {
     .sort((a, b) => key(a).localeCompare(key(b)) * (dir === 'DESC' ? -1 : 1));
 }
 
+/** A `SELECT c.a, c.b FROM` keeps only those fields, so a read that drops `vis` loses its dials as Cosmos would. */
+function projected(query) {
+  const listed = query.match(/^SELECT ((?:c\.\w+, )*c\.\w+) FROM/);
+  if (!listed) return row => row;
+  const fields = listed[1].split(', ').map(field => field.slice(2));
+  return row => Object.fromEntries(fields.filter(field => field in row).map(field => [field, row[field]]));
+}
+
 function fakeStores(t, { ranked = [] } = {}) {
   updates.forgetParents();
   const searches = [];
   t.mock.method(cosmos, 'query', async (container, spec, opts = {}) => {
     const rows = admitted(container, spec);
     if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
-    return { items: structuredClone(rows.slice(0, opts.maxItemCount || rows.length)) };
+    return { items: structuredClone(rows.slice(0, opts.maxItemCount || rows.length).map(projected(spec.query))) };
   });
   t.mock.method(cosmos, 'queryFirst', async (container, spec) => structuredClone(admitted(container, spec)[0] || null));
   t.mock.method(cosmos, 'readItem', async (container, id) =>
@@ -277,6 +285,28 @@ test('native updates list', async (t) => {
     assert.deepStrictEqual(ids(res.body), ['u1']);
     assert.strictEqual(res.body[0].projectName, 'Site C');
     assert.strictEqual(res.body[0].projectEagleId, PROJECT_EAGLE_ID);
+  });
+
+  await t.test('a notification-raised update names its notification only where the caller may read the name', async (t) => {
+    fakeStores(t);
+    const dialled = { id: 'n-dialled', name: 'Dialled notice', read: ['public'], vis: { name: 2 } };
+    CONTAINERS.notifications.push(dialled);
+    // u2 keeps the copy it stores; u1 also joins its project, so both joins land on one row.
+    const raisedBy = { u1: 'n1', u2: 'n1', u4: 'n-staff', u6: 'n-dialled' };
+    const rows = CONTAINERS.updates.filter(row => raisedBy[row.id]);
+    rows.forEach((row) => { row.projectNotification = raisedBy[row.id]; });
+    CONTAINERS.updates.find(row => row.id === 'u2').notificationName = 'Stored copy';
+    t.after(() => {
+      CONTAINERS.notifications.splice(CONTAINERS.notifications.indexOf(dialled), 1);
+      rows.forEach((row) => { delete row.projectNotification; delete row.notificationName; });
+    });
+
+    const named = body => Object.fromEntries(body.map(row => [row.id, row.notificationName]));
+    assert.deepStrictEqual(named((await call(list, '')).body),
+      { u1: 'Pipeline notice', u4: undefined, u6: undefined });
+    assert.deepStrictEqual(named((await call(list, '', { user: STAFF })).body), {
+      u1: 'Pipeline notice', u2: 'Stored copy', u3: undefined, u4: 'Unreleased notice', u5: undefined, u6: 'Dialled notice'
+    });
   });
 
   await t.test('type takes several values', async (t) => {

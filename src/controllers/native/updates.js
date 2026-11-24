@@ -21,17 +21,33 @@ const { logger } = require('../../utils/logger');
 /** Most rows the feed answers; the compat strip refuses past the same 20 (`TOP_MAX_ROWS` in `controllers/search/params.js`). */
 const FEED_MAX_ROWS = 20;
 
+const idsOf = (rows, field) => [...new Set(rows.map(row => row && row[field]).filter(Boolean).map(String))];
+
 /**
- * `projectName` and `projectEagleId` from the parent project, as this caller may see it. By Eagle
- * id, since that is what an update carries; a parent the caller cannot read adds nothing.
+ * `projectName`, `projectEagleId` (by Eagle id, as an update carries it) and `notificationName`, each
+ * as this caller may see its source; a source the caller cannot read adds nothing.
  */
 async function updateParentJoin(access, rows) {
-  const ids = [...new Set(rows.map(row => row && row.projectId).filter(Boolean).map(String))];
-  if (ids.length === 0) return rows;
+  // A stored `notificationName` is the update's own field and is kept, so a read never rewrites it.
+  const unnamed = new Set(rows.filter(row => row && row.projectNotification && !row.notificationName));
+  const projectIds = idsOf(rows, 'projectId');
+  const notificationIds = idsOf([...unnamed], 'projectNotification');
+  if (projectIds.length === 0 && notificationIds.length === 0) return rows;
 
-  const parents = new Map(redactAllForAccess('projects', await projects.listByEagleIds(access, ids), access)
+  // Whole rows, not the id-and-name label: the redactor needs each row's `vis` to honour a dial on `name`.
+  const [parentRows, notificationRows] = await Promise.all([
+    projectIds.length ? projects.listByEagleIds(access, projectIds) : [],
+    notificationIds.length ? notifications.listByIds(access, notificationIds, { full: true }) : []
+  ]);
+  const parents = new Map(redactAllForAccess('projects', parentRows, access)
     .map(parent => [String(parent.eagleId), parent]));
-  return withProjectNames(rows, parents);
+  const names = new Map(redactAllForAccess('notifications', notificationRows, access)
+    .filter(notification => notification.name !== undefined)
+    .map(notification => [String(notification.id), notification.name]));
+  return withProjectNames(rows, parents).map((row, i) => {
+    const name = unnamed.has(rows[i]) ? names.get(String(row.projectNotification)) : undefined;
+    return name === undefined ? row : { ...row, notificationName: name };
+  });
 }
 
 const SPEC = Object.freeze({

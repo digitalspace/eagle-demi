@@ -24,9 +24,9 @@ const catalog = {
   projectType: { defaultVis: 4, maxVis: 4 },
   projectSubType: { defaultVis: 4, maxVis: 4 },
   proponentName: { defaultVis: 4, maxVis: 4 },
-  // The Organization ObjectId behind the name. Public because it is only useful as a filter value,
-  // and eagle-public's own project-list URLs already carry it.
-  proponentId: { defaultVis: 4, maxVis: 4 },
+  // The Organization ObjectId behind the name, public as eagle-public's URLs carry it. A match on it
+  // names the proponent, so the name's dial gates queries too (`queryDialOf`, dial.js); rows keep it.
+  proponentId: { defaultVis: 4, maxVis: 4, queryDialOf: 'proponentName' },
   projectState: { defaultVis: 4, maxVis: 4 },
   abbreviation: { defaultVis: 4, maxVis: 4 },
   address: { defaultVis: 4, maxVis: 4 },
