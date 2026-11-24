@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveAccess } = require('../../helpers/access-sql');
+const { accessFingerprint, createCountsCache } = require('../../helpers/counts-cache');
 const { logger } = require('../../utils/logger');
 const { filterFor } = require('../../helpers/access-odata');
 const aiSearch = require('../../search/ai-search');
@@ -24,35 +25,9 @@ const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotifi
  */
 const COUNTS_PARAMS = new Set(['keywords', 'q', 'prefix', 'datasets']);
 
-/**
- * How long one caller's badge row is reused: bounds a count per type per keystroke pause on a 1-SU
- * service, short enough that a newly published record shows within a page view.
- */
-const COUNTS_TTL_MS = 45 * 1000;
-
-/** Entries kept. One per distinct keyword/access pair, evicted oldest-first. */
-const COUNTS_CACHE_MAX = 200;
-
-/** key -> `{at, promise}`. The PROMISE is cached, not the value, which is what dedupes in flight. */
-const countsCache = new Map();
+const countsCache = createCountsCache();
 
 exports.resetCountsCache = () => countsCache.clear();
-
-/**
- * Every input `filterFor` and `updatesRepo.inEagleIdSpace` read. Over-specific on purpose: an extra
- * field costs a cache miss, a missing one serves one caller's counts to another.
- */
-function accessFingerprint(access) {
-  return JSON.stringify({
-    tier: access.tier,
-    level: access.level,
-    roles: [...(access.roles || [])].sort(),
-    teams: [...(access.teams || [])].sort(),
-    projectScope: access.projectScope ? [...access.projectScope].sort() : null,
-    compartment: access.compartment || null,
-    credentials: access.credentials || []
-  });
-}
 
 /**
  * One count per record type: `null` where it could not MEASURE one, never 0. `degraded: true` marks
@@ -207,28 +182,9 @@ exports.counts = async (req, res) => {
     const prefix = req.query.prefix !== 'false';
     const access = resolveAccess(req);
 
-    const key = `${keywords}|${prefix}|${accessFingerprint(access)}`;
-    const now = Date.now();
-    const hit = countsCache.get(key);
-    const cached = Boolean(hit) && now - hit.at < COUNTS_TTL_MS;
-    let entry = hit;
-
-    if (!cached) {
-      entry = { at: now, promise: computeCounts(access, keywords, prefix) };
-      // Re-inserted so eviction order is by freshness rather than by first sighting.
-      countsCache.delete(key);
-      countsCache.set(key, entry);
-      // A rejection must not be remembered for the whole TTL — every leg is caught above, so this
-      // only fires on a fault in the orchestration itself.
-      entry.promise.catch(() => {
-        if (countsCache.get(key) === entry) countsCache.delete(key);
-      });
-      while (countsCache.size > COUNTS_CACHE_MAX) {
-        countsCache.delete(countsCache.keys().next().value);
-      }
-    }
-
-    const { counts, unavailable, degraded } = await entry.promise;
+    const { promise, cached } = countsCache.read(`${keywords}|${prefix}|${accessFingerprint(access)}`,
+      () => computeCounts(access, keywords, prefix));
+    const { counts, unavailable, degraded } = await promise;
 
     // Sliced to what the caller asked about: a badge they do not render is not a tab they can be
     // told is unavailable.

@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
-const { counts, KINDS } = require('../../../src/controllers/native/counts');
+const { counts, KINDS, resetCountsCache } = require('../../../src/controllers/native/counts');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');
 const { makeRes } = require('../../../src/http/router');
@@ -49,7 +49,15 @@ async function call(qs, user) {
   return { status: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : undefined };
 }
 
+/** Each COUNT answers one more than the last, so a cached answer shows as a repeated number. */
+function countingCosmos(t) {
+  let reads = 0;
+  t.mock.method(cosmos, 'query', async () => ({ items: [++reads] }));
+  return () => reads;
+}
+
 test('GET /counts', async (t) => {
+  t.beforeEach(() => resetCountsCache());
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('an anonymous count filtered on a hidden field is refused before any read', async (t) => {
@@ -147,5 +155,69 @@ test('GET /counts', async (t) => {
     assert.strictEqual((await call('kind=projects&kind=projects')).status, 400);
     assert.strictEqual((await call('kind=projects&page=2')).status, 400);
     assert.strictEqual(specs.length, 0);
+  });
+});
+
+test('the /counts cache', async (t) => {
+  t.beforeEach(() => resetCountsCache());
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a repeat inside 45 s is answered without a read', async (t) => {
+    const reads = countingCosmos(t);
+    t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+
+    const first = await call('kind=projects&projectState=Active');
+    t.mock.timers.tick(44 * 1000);
+    const second = await call('kind=projects&projectState=Active');
+
+    assert.strictEqual(reads(), 1);
+    assert.deepStrictEqual(second.body, first.body);
+  });
+
+  await t.test('a repeat after 45 s reads again', async (t) => {
+    const reads = countingCosmos(t);
+    t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+
+    await call('kind=projects&projectState=Active');
+    t.mock.timers.tick(46 * 1000);
+    const second = await call('kind=projects&projectState=Active');
+
+    assert.strictEqual(reads(), 2);
+    assert.deepStrictEqual(second.body, { projects: 2 });
+  });
+
+  // Counts are access-scoped: a shared entry would publish one caller's totals to another.
+  await t.test('two callers with different access never share an entry', async (t) => {
+    countingCosmos(t);
+
+    const anonymous = await call('kind=projects&projectState=Active');
+    const staff = await call('kind=projects&projectState=Active', STAFF);
+
+    assert.deepStrictEqual(anonymous.body, { projects: 1 });
+    assert.deepStrictEqual(staff.body, { projects: 2 });
+  });
+
+  await t.test('a different filter value is a different entry', async (t) => {
+    countingCosmos(t);
+
+    await call('kind=projects&projectState=Active');
+    const other = await call('kind=projects&projectState=Complete');
+
+    assert.deepStrictEqual(other.body, { projects: 2 });
+  });
+
+  await t.test('a failed read is not served to the next call', async (t) => {
+    fakeCosmos(t);
+    const failing = t.mock.method(aiSearch, 'searchProjects', async () => {
+      throw Object.assign(new Error('HTTP 400 Invalid expression'), { status: 400, searchService: true });
+    });
+
+    const refused = await call('kind=projects&q=mine');
+    failing.mock.mockImplementation(async () => ({ count: 0, items: [] }));
+    const answered = await call('kind=projects&q=mine');
+
+    assert.strictEqual(refused.status, 400);
+    assert.strictEqual(answered.status, 200);
+    assert.strictEqual(failing.mock.callCount(), 2, 'the second call asked the index again');
   });
 });

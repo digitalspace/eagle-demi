@@ -727,7 +727,9 @@ paths:
         filter on a field the caller cannot see is refused with 400 rather than counted. Paging
         and sort parameters are refused. Supported kinds: `projects`, `documents`, `updates` and
         `notifications`. A rejected Bearer token answers 401; an authenticated answer carries
-        `Cache-Control: private, no-store`.
+        `Cache-Control: private, no-store`. The server reuses an answer for up to 45 seconds for
+        the same kinds, the same parameters and the same access, so a count can lag a write by up
+        to 45 seconds. A refused request or a failed read is never reused.
       parameters:
         - name: kind
           in: query

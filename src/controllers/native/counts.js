@@ -6,9 +6,13 @@
  */
 
 const { resolveAccess } = require('../../helpers/access-sql');
+const { accessFingerprint, createCountsCache } = require('../../helpers/counts-cache');
 const { parseNativeQuery, nativeCriteria } = require('../../helpers/native-query');
 const { serverError, searchServiceError } = require('../../helpers/response');
 const { NO_STORE } = require('../nosql/mirror-reads');
+
+// A count up to 45 s old: the same bound `/search/counts` badges are served under.
+const countsCache = createCountsCache();
 
 /**
  * Kind name -> its list's kind spec, loaded on first use so a kind's controller loads only when
@@ -59,9 +63,15 @@ exports.counts = async (req, res) => {
       reads.push({ name, spec, parsed, criteria: nativeCriteria(spec, parsed, access).criteria });
     }
 
-    const totals = await Promise.all(reads.map(({ spec, criteria, parsed }) =>
-      spec.repository.count(access, { criteria, parsed })));
-    return res.json(Object.fromEntries(reads.map(({ name }, i) => [name, totals[i]])));
+    // Keyed only after every kind parsed, so a refusal is never cached.
+    const sortedQuery = Object.keys(query).sort().map(key => [key, query[key]]);
+    const { promise } = countsCache.read(JSON.stringify([kinds, sortedQuery, accessFingerprint(access)]),
+      async () => {
+        const totals = await Promise.all(reads.map(({ spec, criteria, parsed }) =>
+          spec.repository.count(access, { criteria, parsed })));
+        return Object.fromEntries(reads.map(({ name }, i) => [name, totals[i]]));
+      });
+    return res.json(await promise);
   } catch (err) {
     const searchFailed = searchServiceError(res, err, 'counts');
     if (searchFailed) return searchFailed;
@@ -72,3 +82,4 @@ exports.counts = async (req, res) => {
 };
 
 exports.KINDS = KINDS;
+exports.resetCountsCache = () => countsCache.clear();
