@@ -110,13 +110,21 @@ function admitted(container, given) {
     .sort((a, b) => key(a).localeCompare(key(b)) * (dir === 'DESC' ? -1 : 1));
 }
 
+/** A `SELECT c.a, c.b FROM` keeps only those fields, so a read that drops `vis` loses its dials as Cosmos would. */
+function projected(query) {
+  const listed = query.match(/^SELECT ((?:c\.\w+, )*c\.\w+) FROM/);
+  if (!listed) return row => row;
+  const fields = listed[1].split(', ').map(field => field.slice(2));
+  return row => Object.fromEntries(fields.filter(field => field in row).map(field => [field, row[field]]));
+}
+
 function fakeStores(t, { ranked = [] } = {}) {
   updates.forgetParents();
   const searches = [];
   t.mock.method(cosmos, 'query', async (container, spec, opts = {}) => {
     const rows = admitted(container, spec);
     if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
-    return { items: structuredClone(rows.slice(0, opts.maxItemCount || rows.length)) };
+    return { items: structuredClone(rows.slice(0, opts.maxItemCount || rows.length).map(projected(spec.query))) };
   });
   t.mock.method(cosmos, 'queryFirst', async (container, spec) => structuredClone(admitted(container, spec)[0] || null));
   t.mock.method(cosmos, 'readItem', async (container, id) =>
