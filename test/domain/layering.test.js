@@ -44,7 +44,7 @@ const MOVED_RULES = Object.freeze([
 function movedRulesIn(source) {
   const text = code(source);
   return MOVED_RULES.filter(name => new RegExp(
-    `\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=\\s*(?:async\\b|\\(|function\\b)`).test(text));
+    `\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=\\s*(?:async\\b|\\(|function\\b|[\\w$]+\\s*=>)`).test(text));
 }
 
 /** Every relative `require` in `source`, as a path under src/ with no extension. */
@@ -158,9 +158,11 @@ test('a nosql write controller may not reach db, but keeps its own responses', (
 test('a moved write rule defined in a controller is reported, an imported one is not', () => {
   const source = [
     'function runCascade() {}', 'const recordIngested = async () => {};',
-    "const { mergeEaglePush } = require('../../domain/project-push');"
+    'const visibilityMoved = id => id;', 'let markCascadePending = async id => id;',
+    'const cascadeOnce = make();', "const { mergeEaglePush } = require('../../domain/project-push');"
   ].join('\n');
-  assert.deepStrictEqual(movedRulesIn(source), ['runCascade', 'recordIngested']);
+  assert.deepStrictEqual(movedRulesIn(source),
+    ['runCascade', 'markCascadePending', 'visibilityMoved', 'recordIngested']);
 });
 
 test('a native controller without a domain import keeps its own responses', () => {
