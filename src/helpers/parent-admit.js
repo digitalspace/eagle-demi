@@ -12,7 +12,7 @@ const { eagleBaseAcl } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 // Dependency-free reference parser shared with every mirror, so a populated `{_id}` and a bare
 // ObjectId resolve here exactly as they do there.
-const { refId } = require('../controllers/nosql/eagle-mirror');
+const { refId } = require('../seed/transform');
 
 /**
  * A notification wins over a project row: a Track project's `epic_guid` can hold a notification id,

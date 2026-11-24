@@ -194,12 +194,6 @@ function underDeleteCeiling(read, doc) {
   return doc.isDeleted === true ? constrainToProject(read, DELETED_CEILING) : read;
 }
 
-/** The Mongo `ObjectId | { _id }` a populated Eagle reference arrives as, as a string or null. */
-function refId(value) {
-  if (!value) return null;
-  return String((typeof value === 'object' && value._id) || value) || null;
-}
-
 module.exports = {
   eaglePush,
   mismatchedPush,
@@ -211,6 +205,5 @@ module.exports = {
   keepSeal,
   upsertWithRetry,
   upsertKeepingDemiRows,
-  underDeleteCeiling,
-  refId
+  underDeleteCeiling
 };

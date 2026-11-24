@@ -26,7 +26,7 @@ const SAME_NAME = Object.freeze([
 ]);
 /** ObjectId fields in eagle-api's model that DEMI may hold as `{ _id, name }` refs: sent as the bare id or null. */
 const REFS = Object.freeze(['currentPhaseName', 'eacDecision', 'CEAAInvolvement', 'projectLeadId', 'responsibleEPDId']);
-// Not eagle-mirror's refId: a stored `{ _id: null, name: null }` would come out as "[object Object]".
+// Not seed/transform's refId: a stored `{ _id: null, name: null }` would come out as "[object Object]".
 const bareId = (ref) => {
   const id = ref && typeof ref === 'object' ? ref._id : ref;
   return id ? String(id) : null;

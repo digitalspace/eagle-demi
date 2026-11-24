@@ -19,7 +19,7 @@ const {
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
-const { refId } = require('../controllers/nosql/eagle-mirror');
+const { refId } = require('../seed/transform');
 const projectController = require('../controllers/nosql/project');
 const projectTwin = require('../helpers/project-twin');
 const { writeGuarded } = require('../helpers/etag-write');

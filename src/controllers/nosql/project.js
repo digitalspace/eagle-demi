@@ -41,9 +41,9 @@ const {
 const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
 const { writeGuarded, raced } = require('../../helpers/etag-write');
-const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal, refId
-} = require('./eagle-mirror');
+const { eaglePush, ignoreStalePush, pushConflict } = require('./eagle-mirror');
+const { isStalePush, stampPush, keepSeal } = require('./eagle-mirror');
+const { refId } = require('../../seed/transform');
 const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
 const { listHandler } = require('./mirror-reads');
