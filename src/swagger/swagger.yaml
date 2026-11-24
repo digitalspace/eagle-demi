@@ -7591,7 +7591,9 @@ paths:
         Updates the caller may read, with hidden fields left out. Below staff level, only
         published updates whose `publishDate` has passed are listed. `projectId` holds the Eagle
         project id. Each row also carries `projectName` and `projectEagleId` when the caller may
-        read the project. Any parameter not listed here, or a parameter given twice (except
+        read the project. A row raised by a project notification (`projectNotification`) with no
+        stored `notificationName` carries the notification's `name` as `notificationName` when the
+        caller may read it. Any parameter not listed here, or a parameter given twice (except
         `project` and `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
       parameters:
         - name: project
