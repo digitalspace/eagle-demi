@@ -8,7 +8,7 @@ const eagleQuery = require('../../search/eagle-query');
 const projectsRepo = require('../../repositories/projects');
 const notificationsRepo = require('../../repositories/notifications');
 const updatesRepo = require('../../repositories/updates');
-const { stripLimit } = require('./params');
+const { stripLimit, keywordsRefused } = require('./params');
 const { withoutDialHidden, redactIndexProject } = require('./project-fields');
 const { cosmosRows, updateProjects } = require('./cosmos-rows');
 
@@ -93,7 +93,8 @@ async function notificationDecisionRows(access, limit, now) {
  * and decisions merged by date to fill the rest. Every half reads under the caller's own access.
  */
 async function homeFeed({ access, query }) {
-  if (query.keywords || query.q) return { error: 'dataset=HomeFeed does not take keywords' };
+  const refused = keywordsRefused('HomeFeed', query);
+  if (refused) return refused;
   const { limit, error } = stripLimit(query);
   if (error) return { error };
 
