@@ -132,14 +132,14 @@ function redactAllForAccess(entity, docs, access) {
 }
 
 /**
- * Body keys a caller may not write: `vis` at every level, anything uncatalogued, anything the
- * caller cannot see on the existing row (docs/rbac-architecture.md §2 item 1).
+ * Body keys a caller may not write: `vis` and `highlighted` (search markup read as HTML) at every level,
+ * anything uncatalogued, anything the caller cannot see on the existing row (docs/rbac-architecture.md §2 item 1).
  */
 function refusedWriteKeys(entity, changes, access, existing) {
   const catalog = catalogFor(entity);
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
   const level = levelOf(access);
-  return Object.keys(changes).filter(key => key === 'vis' || !Object.hasOwn(catalog, key) ||
+  return Object.keys(changes).filter(key => key === 'vis' || key === 'highlighted' || !Object.hasOwn(catalog, key) ||
     !visible(level, fieldVis(catalog, dials, key, existing)));
 }
 

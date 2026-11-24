@@ -724,8 +724,8 @@ paths:
       description: >-
         How many rows each named kind's list would hold for this caller, as `{ <kind>: <count> }`.
         Each count takes its list's filters, `q` and `ids`, and the same visibility rules, so a
-        filter on a field the caller cannot see is refused with 400 rather than counted. Paging
-        and sort parameters are refused. Supported kinds: `projects`, `documents`, `updates` and
+        filter on a field the caller cannot see is refused with 400 rather than counted. Paging,
+        sort and `highlight` parameters are refused. Supported kinds: `projects`, `documents`, `updates` and
         `notifications`. A rejected Bearer token answers 401; an authenticated answer carries
         `Cache-Control: private, no-store`. The server reuses an answer for up to 45 seconds for
         the same kinds, the same parameters and the same access, so a count can lag a write by up
@@ -753,6 +753,16 @@ paths:
             `true` also matches each keyword of 4 or more letters one edit away, as the kind's list
             does with `fuzzy=true`. Every kind takes it. Any other value, or the name given twice, is
             a 400.
+          schema:
+            type: string
+            enum: ['true']
+        - name: projectNames
+          in: query
+          required: false
+          description: >-
+            `documents` only, so it needs `kind=documents`. `true` also counts the documents of
+            projects whose name, proponent or tags match `q`, as `/api/documents` does with
+            `projectNames=true`. With another kind, or no `kind`, it is a 400.
           schema:
             type: string
             enum: ['true']
@@ -841,6 +851,17 @@ paths:
             `true` also matches each keyword of 4 or more letters one edit away (`asessment` finds
             `assessment`), ranked below an exact match. No effect without `q`. Any other value, or
             the name given twice, is a 400.
+          schema:
+            type: string
+            enum: ['true']
+        - name: highlight
+          in: query
+          required: false
+          description: >-
+            `true` adds `highlighted` to each row: `{ name, description }`, HTML-escaped text with
+            each matched word wrapped in `<mark>`, the whole field when nothing in it matched. `name`
+            falls back to the marked `displayName`. A part whose field the caller cannot see is left
+            out. No effect without `q`. Any other value, or the name given twice, is a 400.
           schema:
             type: string
             enum: ['true']
@@ -2809,6 +2830,29 @@ paths:
             `true` also matches each keyword of 4 or more letters one edit away (`asessment` finds
             `assessment`), ranked below an exact match. No effect without `q`. Any other value, or
             the name given twice, is a 400.
+          schema:
+            type: string
+            enum: ['true']
+        - name: highlight
+          in: query
+          required: false
+          description: >-
+            `true` adds `highlighted` to each row: `{ displayName, description }`, HTML-escaped text
+            with each matched word wrapped in `<mark>`, the whole field when nothing in it matched. A
+            part whose field the caller cannot see is left out. No effect without `q`. Any other
+            value, or the name given twice, is a 400.
+          schema:
+            type: string
+            enum: ['true']
+        - name: projectNames
+          in: query
+          required: false
+          description: >-
+            `true` also returns the documents of projects whose name, proponent or tags match `q`,
+            among the projects the caller may read. They come after every direct match, in the list's
+            order, and `x-total-count` counts both. Their own fields did not match, so their
+            `highlighted` parts hold the plain field. No effect without `q`. Any other value, or the
+            name given twice, is a 400.
           schema:
             type: string
             enum: ['true']
