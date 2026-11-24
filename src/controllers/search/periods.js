@@ -4,11 +4,10 @@ const { isPrivileged } = require('../../helpers/access-sql');
 const { redactAllForAccess } = require('../../vis/redact');
 const { logger } = require('../../utils/logger');
 const { sortEntries } = require('../../search/sort-entries');
-const projectsRepo = require('../../repositories/projects');
 const commentPeriodsRepo = require('../../repositories/comment-periods');
 const notificationsRepo = require('../../repositories/notifications');
 const { firstValue, DAY_MS } = require('./params');
-const { cosmosRows } = require('./cosmos-rows');
+const { cosmosRows, parentProjects } = require('./cosmos-rows');
 
 /** How far back "closed recently" reaches, for the count that rides along with the open rail. */
 const CLOSED_WINDOW_DAYS = 30;
@@ -72,11 +71,7 @@ function periodSortDropped(sortBy) {
  * under the caller's access. A notification-parented period links to the notification's own id.
  */
 async function periodRows(access, rows) {
-  const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
-  const parents = demiIds.length
-    ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
-    : [];
-  const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+  const { demiIds, parents, eagleIdByDemiId } = await parentProjects(access, rows);
   const nameByDemiId = new Map(parents.filter(p => p.name).map(p => [String(p.id), p.name]));
 
   const unmatched = demiIds.filter(id => !eagleIdByDemiId.has(id));

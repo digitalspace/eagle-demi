@@ -132,16 +132,25 @@ async function updateResults(access, rows) {
 }
 
 /**
- * Eagle's `project` (its ObjectId) beside the stored DEMI `projectId`, looked up under the caller's
- * access. A project the caller cannot read gives `project: null`.
+ * The rows' DEMI parent projects, read and redacted under the caller's access, with each readable
+ * one's Eagle id (null when it has none). An unreadable parent is absent from both.
  */
-async function eagleProjectOf(access, rows) {
+async function parentProjects(access, rows) {
   const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
   const parents = demiIds.length
     ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
     : [];
-  const byId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
-  return (row) => ({ project: byId.get(String(row.projectId)) || null });
+  const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+  return { demiIds, parents, eagleIdByDemiId };
+}
+
+/**
+ * Eagle's `project` (its ObjectId) beside the stored DEMI `projectId`, looked up under the caller's
+ * access. A project the caller cannot read gives `project: null`.
+ */
+async function eagleProjectOf(access, rows) {
+  const { eagleIdByDemiId } = await parentProjects(access, rows);
+  return (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null });
 }
 
 /**
@@ -173,6 +182,7 @@ module.exports = {
   cosmosRows,
   updateProjects,
   updateResults,
+  parentProjects,
   eagleProjectOf,
   notificationRows,
   commentRows
