@@ -55,12 +55,13 @@ async function updatesIndexAcl(access) {
 }
 
 /**
- * Per index: its search, the ACL column, and native filter field -> filterable column. A keyword hit
- * needs every `searched` field visible to the caller, since the matched field is not reported.
+ * Per index: its search, the search options its list spec takes, the ACL column, and native filter field ->
+ * filterable column. A keyword hit needs every `searched` field visible to the caller, since the matched field is not reported.
  */
 const INDEX_MAPS = Object.freeze({
   projects: {
     search: opts => aiSearch.searchProjects(opts),
+    options: ['fuzzy'],
     partitionField: 'id',
     columns: {
       projectType: 'type',
@@ -84,6 +85,7 @@ const INDEX_MAPS = Object.freeze({
   },
   activities: {
     search: opts => aiSearch.searchActivities(opts),
+    options: ['fuzzy'],
     partitionField: 'projectId',
     acl: updatesIndexAcl,
     columns: { projectId: 'projectId', type: 'type', dateAdded: 'dateAdded', documentUrl: 'documentUrl' },
@@ -93,6 +95,7 @@ const INDEX_MAPS = Object.freeze({
   // No project axis, like `notifications.SCOPE_FIELD`: role ACL is the whole filter.
   'project-notifications': {
     search: opts => aiSearch.searchNotifications(opts),
+    options: ['fuzzy'],
     partitionField: null,
     columns: { type: 'type', region: 'region', pcp: 'pcp', decision: 'decision' },
     searched: keywordSearched('notifications')
@@ -102,6 +105,7 @@ const INDEX_MAPS = Object.freeze({
   documents: {
     paged: true,
     search: opts => aiSearch.searchDocumentIds(opts),
+    options: ['fuzzy'],
     partitionField: 'projectId',
     acl: documentsAcl,
     always: [NOT_UPDATE_IMAGE, NOT_DELETED_DOCUMENT],
@@ -276,7 +280,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const top = Number.isInteger(parsed.idPage) && parsed.idPage > 0
       ? Math.min(parsed.idPage, ID_PAGE)
       : ID_PAGE;
-    const { items } = await map.search({ keywords: parsed.q, filter, top });
+    const { items } = await map.search({ keywords: parsed.q, fuzzy: parsed.fuzzy, filter, top });
     const ranked = [...new Set(items.map(hit => String(hit.id)))];
     if (ranked.length === 0) return [];
 
@@ -304,7 +308,7 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     if (empty) return { rows: [], count: 0 };
 
     const { ids, count } = await map.search({
-      keywords: parsed.q, filter, orderby, top: parsed.pageSize, skip: parsed.pageNum * parsed.pageSize
+      keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top: parsed.pageSize, skip: parsed.pageNum * parsed.pageSize
     });
     if (ids.length === 0) return { rows: [], count };
 

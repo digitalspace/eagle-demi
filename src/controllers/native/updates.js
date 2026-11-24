@@ -64,6 +64,7 @@ const SPEC = Object.freeze({
   presence: { hasDocumentUrl: 'documentUrl' },
   flags: { complianceAndEnforcement: 'complianceAndEnforcement' },
   qFields: INDEX_MAPS.activities.searched,
+  searchOptions: INDEX_MAPS.activities.options,
   parentJoin: updateParentJoin,
   notFound: 'Update not found'
 });

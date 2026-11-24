@@ -301,6 +301,19 @@ test('GET /project-records', async (t) => {
     assert.deepStrictEqual(warnings.filter(({ message }) => message.startsWith('[project-records]')).map(({ meta }) => meta), [{ rows: 501 }]);
   });
 
+  await t.test('fuzzy=true reaches both the projects and the notifications index search', async (t) => {
+    fakeStores(t);
+    const asked = [];
+    const record = side => async (opts) => {
+      asked.push([side, opts.fuzzy === true]);
+      return { count: 0, items: [] };
+    };
+    t.mock.method(aiSearch, 'searchProjects', record('projects'));
+    t.mock.method(aiSearch, 'searchNotifications', record('notifications'));
+    assert.strictEqual((await call('q=asessment&fuzzy=true')).status, 200);
+    assert.deepStrictEqual(asked.sort(), [['notifications', true], ['projects', true]]);
+  });
+
   await t.test('a search-service failure on a keyword list answers as /projects does', async (t) => {
     fakeStores(t);
     const failure = () => Object.assign(new Error('HTTP 403 [req-1]'), { status: 403, searchService: true });

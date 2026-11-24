@@ -144,7 +144,7 @@ const documentsKind = Object.freeze({
   },
   // Word prefixes over displayName and documentFileName in the index (INDEX_MAPS.documents.contains).
   contains: { displayNameContains: 'displayName' },
-  qFields: INDEX_MAPS.documents.searched,
+  qFields: INDEX_MAPS.documents.searched, searchOptions: INDEX_MAPS.documents.options,
   parentJoin: projectParentJoin
 });
 exports.documentsKind = documentsKind;

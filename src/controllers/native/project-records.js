@@ -21,7 +21,7 @@ const RECORD_KINDS = Object.freeze(['project', 'notification']);
 const NOTIFICATIONS_KIND = Object.freeze({
   ...notifications.SPEC,
   filters: [...notifications.SPEC.filters, 'proponent', 'subType'],
-  multiValueFilters: [...notifications.SPEC.multiValueFilters, 'pcp', 'proponent', 'subType'],
+  multiValueFilters: [...notifications.SPEC.multiValueFilters, 'proponent', 'subType'],
   valueAliases: { type: PROJECT_TYPE_SPELLINGS },
   contains: { nameContains: 'name' }
 });
@@ -30,7 +30,7 @@ assertKindSpec(NOTIFICATIONS_KIND);
 /** Union query name -> notification query name, for every parameter both sides take. */
 const NOTIFICATION_PARAMS = Object.freeze({
   q: 'q', nameContains: 'nameContains', projectType: 'type', region: 'region', proponentName: 'proponent',
-  sector: 'subType', pcp: 'pcp', decision: 'decision'
+  sector: 'subType', pcp: 'pcp', decision: 'decision', fuzzy: 'fuzzy'
 });
 
 /** Project fields the notification side also matches; a filter on any other project field drops notifications. */

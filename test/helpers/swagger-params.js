@@ -45,6 +45,7 @@ function queryNames(spec) {
     ...Object.keys(spec.contains || {}),
     ...Object.keys(spec.presence || {}),
     ...Object.keys(spec.flags || {}),
+    ...(spec.searchOptions || []),
     ...(spec.wrapperParams || [])
   ].sort();
 }

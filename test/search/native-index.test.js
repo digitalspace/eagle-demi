@@ -37,7 +37,8 @@ const SPEC = {
   multiValueFilters: ['projectState'],
   ranges: { dateUpdatedStart: { field: 'dateUpdated', op: 'ge' } },
   contains: { nameContains: 'name' },
-  qFields: ['name', 'description']
+  qFields: ['name', 'description'],
+  searchOptions: MAP.options
 };
 const list = listHandler(SPEC);
 
@@ -307,6 +308,13 @@ test('keyword list over the index', async (t) => {
     assert.strictEqual(queries.length, 0);
   });
 
+  await t.test('fuzzy=true asks the index for near spellings; without it the search is exact', async (t) => {
+    const { searches } = fakeStores(t);
+    assert.strictEqual((await call('q=asessment&fuzzy=true')).status, 200);
+    await call('q=asessment');
+    assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
+  });
+
   await t.test('a list with no q stays on Cosmos', async (t) => {
     const { searches, queries } = fakeStores(t);
     const res = await call('projectState=Active&count=true');
@@ -341,7 +349,8 @@ const DOC_SPEC = {
   aliases: { project: 'projectId' },
   multiValueFilters: [...ID_FILTERS, 'legislation'],
   ranges: { datePostedStart: { field: 'datePosted', op: 'ge' }, datePostedEnd: { field: 'datePosted', op: 'le' } },
-  qFields: ['displayName', 'description']
+  qFields: ['displayName', 'description'],
+  searchOptions: INDEX_MAPS.documents.options
 };
 const docList = listHandler(DOC_SPEC);
 const STAFF_USER = { realm_access: { roles: ['staff'] } };
@@ -415,6 +424,13 @@ test('documents list over the paged index', async (t) => {
     await callDocs('q=report&legislation=2002&legislation=2018');
     assert.strictEqual(searches[0].filter, `(${documentsAcl(ANON).filter}) and (documentSource ne 'UPDATE')` +
       ' and (isDeleted ne true) and (searchVis ge 4) and ((legislation eq 2002 or legislation eq 2018))');
+  });
+
+  await t.test('fuzzy=true reaches the paged index search; without it the search is exact', async (t) => {
+    const { searches } = fakeDocStores(t);
+    assert.strictEqual((await callDocs('q=asessment&fuzzy=true')).status, 200);
+    await callDocs('q=asessment');
+    assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
   });
 
   await t.test('searchVis clause only with q', async (t) => {
@@ -647,4 +663,24 @@ test('documents store choice', async (t) => {
       assert.strictEqual(searches.length, 1);
     });
   }
+});
+
+test('project notifications list', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const notifications = require('../../src/controllers/native/notifications');
+
+  await t.test('pcp repeated matches any of its values', async (t) => {
+    const queries = [];
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      queries.push(spec);
+      return { items: [] };
+    });
+    const req = { query: querystring.parse('pcp=open&pcp=closed'), params: {}, headers: {}, header: () => undefined };
+    const res = makeRes('test');
+    await notifications.getNotifications(req, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.match(queries[0].query, /c\.pcp IN \(@nf0_0, @nf0_1\)/);
+    assert.deepStrictEqual(queries[0].parameters.filter(p => p.name.startsWith('@nf0_')).map(p => p.value), ['open', 'closed']);
+  });
 });
