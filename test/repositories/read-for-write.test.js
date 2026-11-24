@@ -209,6 +209,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/user.js',
     // A taken-over group's parent, read to derive the group's read: a filtered read would miss a sealed one.
     'domain/groups.js',
+    // The cascade re-reads the project it just wrote, whatever its level, to see whether it moved.
+    'domain/project-cascade.js',
     // The twin restore: it must find the `eagle-<id>` copy a DEMI delete narrowed, whatever its level.
     'domain/project-rows.js',
     'helpers/parent-admit.js',
