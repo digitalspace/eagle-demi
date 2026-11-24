@@ -315,6 +315,29 @@ test('keyword list over the index', async (t) => {
     assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
   });
 
+  await t.test('highlight=true carries the hit marks in the /search shape; a part the row withholds is dropped', async (t) => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 2,
+      items: [
+        { id: 'p1', highlighted: { name: '', displayName: '<mark>Mine</mark> A', description: 'a <mark>mine</mark>' } },
+        { id: 'p2', highlighted: { name: '<mark>Mine</mark> B', description: 'b <mark>mine</mark>' } }
+      ]
+    }));
+    t.mock.method(cosmos, 'query', async () => ({
+      items: [
+        { id: 'p1', name: 'Mine A', description: 'a mine', read: ['public'] },
+        { id: 'p2', name: 'Mine B', description: 'b mine', read: ['public'], vis: { description: 2 } }
+      ]
+    }));
+    const marked = await call('q=mine&highlight=true');
+    assert.strictEqual(marked.status, 200);
+    assert.deepStrictEqual(marked.body.map(row => row.highlighted), [
+      { name: '<mark>Mine</mark> A', description: 'a <mark>mine</mark>' },
+      { name: '<mark>Mine</mark> B' }
+    ]);
+    assert.ok((await call('q=mine')).body.every(row => !Object.hasOwn(row, 'highlighted')));
+  });
+
   await t.test('a list with no q stays on Cosmos', async (t) => {
     const { searches, queries } = fakeStores(t);
     const res = await call('projectState=Active&count=true');
@@ -431,6 +454,30 @@ test('documents list over the paged index', async (t) => {
     assert.strictEqual((await callDocs('q=asessment&fuzzy=true')).status, 200);
     await callDocs('q=asessment');
     assert.deepStrictEqual(searches.map(s => s.fuzzy === true), [true, false]);
+  });
+
+  await t.test('highlight=true reads whole hits and carries their marks; projectNames adds the project-name leg', async (t) => {
+    const asked = [];
+    t.mock.method(aiSearch, 'searchDocumentIds', async () => assert.fail('the id search has no marks'));
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      asked.push(opts);
+      return { count: 851, items: [{ id: 'd2', highlighted: { displayName: '<mark>Ajax</mark> plan', description: '' } }, { id: 'd1' }] };
+    });
+    fakeDocStores(t);
+    const marked = await callDocs('q=ajax&highlight=true&count=true');
+    assert.strictEqual(marked.status, 200);
+    assert.strictEqual(marked.headers['x-total-count'], '851');
+    assert.deepStrictEqual(marked.body.map(row => [row.id, row.highlighted]), [
+      ['d2', { displayName: '<mark>Ajax</mark> plan' }],
+      ['d1', {}]
+    ]);
+    assert.strictEqual(asked[0].projectFilter, undefined, 'no project-name leg without projectNames');
+
+    const both = await callDocs('q=ajax&projectNames=true');
+    assert.strictEqual(both.status, 200);
+    assert.ok(both.body.every(row => !Object.hasOwn(row, 'highlighted')));
+    assert.strictEqual(asked[1].projectFilter, filterFor(ANON, 'id').filter);
+    assert.strictEqual(asked[1].filter, asked[0].filter);
   });
 
   await t.test('searchVis clause only with q', async (t) => {

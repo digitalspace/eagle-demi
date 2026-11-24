@@ -200,6 +200,7 @@ test('GET /project-records', async (t) => {
   for (const [qs, error, label = qs] of [
     ['foo=1', /unknown parameter: foo/],
     ['ids=p1', /unknown parameter: ids/],
+    ['q=mine&highlight=true', /unknown parameter: highlight/],
     ['pcp=none', /pcp takes/],
     ['recordKind=project&recordKind=document', /recordKind takes/],
     [`recordKind=project&${Array.from({ length: 101 }, (_, i) => `decision=d${i}`).join('&')}`, /decision takes at most 100/,
@@ -327,6 +328,6 @@ test('GET /project-records', async (t) => {
 });
 
 test('swagger lists exactly the query parameters /project-records answers to', () => {
-  const answered = [...queryNames(projectController.projectsKind).filter(name => name !== 'ids'), 'recordKind', 'decision'];
+  const answered = [...queryNames(projectController.projectsKind).filter(name => !['ids', 'highlight'].includes(name)), 'recordKind', 'decision'];
   assert.deepStrictEqual([...swaggerParams('/api/project-records').keys()].sort(), answered.sort());
 });

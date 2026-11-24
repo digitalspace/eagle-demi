@@ -153,6 +153,9 @@ const catalog = {
   pins: { defaultVis: 2, maxVis: 4, when: 'pinsPublished' },
   // Not stored: the redactor derives it from `pinsRead`, so staff see the publish state, not the ACL.
   pinsPublished: { defaultVis: 2, maxVis: 2 },
+  // Not stored: a keyword list's marked-up `name` and `description` (`highlight=true`). It cannot
+  // outrank its sources, and the redactor keeps only the parts whose field the row still holds.
+  highlighted: { defaultVis: 4, maxVis: 4 },
   featuredDocuments: { defaultVis: 4, maxVis: 4 },
 
   // Written by the boundary, wildfire and NRPTI jobs, not by the merge.

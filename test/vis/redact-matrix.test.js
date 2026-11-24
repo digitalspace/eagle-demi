@@ -333,6 +333,14 @@ test('prototype names are never catalogued', () => {
   assert.strictEqual(Object.hasOwn(out, 'constructor'), false);
 });
 
+test('no writer may store highlighted, the search markup a reader binds as HTML', () => {
+  const { refusedWriteKeys } = require('../../src/vis/redact');
+  for (const entity of ['projects', 'documents']) {
+    assert.deepStrictEqual(refusedWriteKeys(entity, { highlighted: { description: '<img>' }, description: 'ok' },
+      { level: 0 }, { read: ['staff'] }), ['highlighted'], entity);
+  }
+});
+
 test('a writer cannot name a stored copy its source dial hides', () => {
   const { refusedWriteKeys } = require('../../src/vis/redact');
   const existing = { read: ['staff'], vis: { eacDecision: 1 } };
