@@ -12,6 +12,7 @@ const { CHUNK_PARENT_LIST_REFS } = require('../../repositories/chunks');
 const { filterFor } = require('../../helpers/access-odata');
 const { MAX_IDS, projectParentJoin } = require('../../helpers/native-query');
 const { listHandler } = require('../nosql/mirror-reads');
+const summary = require('../search/summary');
 const { logger } = require('../../utils/logger');
 
 // Native field -> chunks index column; the index keeps the stored names.
@@ -114,3 +115,24 @@ exports.getPassages = (req, res) => {
   return list(req, res);
 };
 exports.SPEC = SPEC;
+
+const SUMMARY_PARAMS = Object.freeze(['q', 'fuzzy']);
+
+/** The refusal for a summary query, or null. As strict as the list: no `keywords` alias, no paging. */
+function summaryQueryError(query) {
+  for (const [key, value] of Object.entries(query)) {
+    if (!SUMMARY_PARAMS.includes(key)) return `unknown parameter: ${key}`;
+    if (typeof value !== 'string') return `parameter given more than once: ${key}`;
+  }
+  if (query.fuzzy !== undefined && query.fuzzy !== 'true' && query.fuzzy !== 'false') {
+    return 'fuzzy takes only true or false';
+  }
+  return null;
+}
+
+/** `GET /documents/passages/summary`: the `/search/summary` handler behind this route's own parameters. */
+exports.summarizePassages = (req, res) => {
+  const error = summaryQueryError(req.query || {});
+  if (error) return res.status(400).json({ error });
+  return summary.summarize(req, res);
+};

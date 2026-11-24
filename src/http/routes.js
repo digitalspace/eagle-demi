@@ -138,7 +138,7 @@ const routes = [
   // Credential only, so an anonymous caller cannot scrape past the native list's offset cap.
   { method: 'get', path: '/documents/scan', guards: [authMiddleware, credentialsMiddleware], load: () => documentController().scanDocuments },
   { method: 'get', path: '/documents/passages', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/passages').getPassages },
-  { method: 'get', path: '/documents/passages/summary', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/search/summary').summarize },
+  { method: 'get', path: '/documents/passages/summary', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/passages').summarizePassages },
   { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getRecentUploads },
   { method: 'get', path: '/documents/pdf-title/pending', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().listPending },
   { method: 'post', path: '/documents/pdf-title/sweep', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().sweep },

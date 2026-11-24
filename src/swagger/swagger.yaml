@@ -3128,7 +3128,7 @@ paths:
           description: '`true` also matches near spellings of each keyword.'
           schema:
             type: string
-            enum: ['true']
+            enum: ['true', 'false']
       responses:
         '200':
           description: The summary, or `summary` null with a `reason`.
@@ -3171,6 +3171,10 @@ paths:
                     description: >-
                       Why `summary` is null, e.g. `no_query`, `no_results`, `disabled`,
                       `not_configured`, `timeout`, `upstream_error` or `error`.
+        '400':
+          description: >-
+            A parameter other than `q` and `fuzzy`, either one given twice, or `fuzzy` other than
+            `true` or `false`.
         '401':
           description: No credential, or the credential was rejected.
         '403':
