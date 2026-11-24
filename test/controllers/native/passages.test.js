@@ -18,6 +18,7 @@ const documentsRepo = require('../../../src/repositories/documents');
 const projectsRepo = require('../../../src/repositories/projects');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
+const { storedDocuments, DIALLED_DOCUMENT } = require('../../helpers/stored-documents');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -33,12 +34,11 @@ const D1 = {
   id: 'd1', projectId: 'p1', read: ['public'], displayName: 'Water Plan', type: 'Report',
   milestone: 'Application', milestoneId: 'm1', datePosted: '2024-05-01T00:00:00.000Z'
 };
-const D2 = { id: 'd2', projectId: 'p1', read: ['staff'], displayName: 'Staff Memo', type: 'Memo' };
 
 /** d1 is readable, d2 is not; answers the searchChunks mock so its calls can be read. */
-function stubIndex(t, { hits = HITS, count = 40 } = {}) {
+function stubIndex(t, { hits = HITS, count = 40, realDocuments = false } = {}) {
   const search = t.mock.method(aiSearch, 'searchChunks', async () => ({ items: structuredClone(hits), count }));
-  t.mock.method(documentsRepo, 'listByIds', async () => [structuredClone(D1)]);
+  if (!realDocuments) t.mock.method(documentsRepo, 'listByIds', async () => [structuredClone(D1)]);
   t.mock.method(projectsRepo, 'listByIds', async () => [structuredClone(PROJECT)]);
   t.mock.method(projectsRepo, 'listRowsByIds', async () => [structuredClone(PROJECT)]);
   return search;
@@ -140,28 +140,29 @@ test('passages', async (t) => {
     assert.ok(res.body.every(row => !('content' in row)));
   });
 
-  await t.test('parent fields come from the parent as this caller may see it', async (t) => {
-    stubIndex(t);
+  await t.test('parent fields follow the parent read and its own dials', async (t) => {
+    stubIndex(t, { realDocuments: true });
     t.mock.method(logger, 'warn', () => {});
-    // The read honours the caller: d2 only for staff, and d1 with `milestone` dialled to staff.
-    const reads = t.mock.method(documentsRepo, 'listByIds', async (access) => (
-      access.authenticated
-        ? [structuredClone(D1), structuredClone(D2)]
-        : [{ ...structuredClone(D1), vis: { milestone: 2 } }]
-    ));
+    // The real read over a projecting store: the ACL is SQL, so each caller gets the rows it admits.
+    const MEMO = { id: 'd2', projectId: 'p1', read: ['staff'], documentFileName: 'memo.pdf', type: 'Memo' };
 
+    storedDocuments(t, [DIALLED_DOCUMENT]);
     const anon = await call(get, 'q=water');
     assert.deepStrictEqual(anon.body.map(row => row.documentId), ['d1', 'd1']);
+    assert.strictEqual(anon.body[0].documentName, 'water-plan.pdf', 'a dialled display name falls back');
     assert.ok(anon.body.every(row => !('milestone' in row)), 'a dialled parent field is absent');
     assert.strictEqual(anon.body[0].milestoneId, 'm1');
-    assert.ok(!JSON.stringify(anon.body).includes('Staff Memo'), 'a hidden parent lends no field');
+    assert.ok(!JSON.stringify(anon.body).includes('Water Plan'));
+    assert.ok(!JSON.stringify(anon.body).includes('memo.pdf'), 'a hidden parent lends no field');
+    assert.ok(anon.body.every(row => !('vis' in row)));
 
+    storedDocuments(t, [DIALLED_DOCUMENT, MEMO]);
     const staff = await call(get, 'q=water', { user: STAFF });
+    assert.strictEqual(staff.body[0].documentName, 'Water Plan');
     assert.strictEqual(staff.body[0].milestone, 'Application');
     const memo = staff.body.find(row => row.documentId === 'd2');
-    assert.strictEqual(memo.documentName, 'Staff Memo');
+    assert.strictEqual(memo.documentName, 'memo.pdf', 'a parent with only a file name is named by it');
     assert.ok(!('milestone' in memo) && !('datePosted' in memo), 'a field the parent lacks is absent');
-    assert.strictEqual(reads.mock.callCount(), 2);
   });
 
   await t.test('rows carry projectName and projectEagleId', async (t) => {
