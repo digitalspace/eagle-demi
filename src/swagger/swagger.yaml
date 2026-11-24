@@ -3029,11 +3029,13 @@ paths:
         - name: pageSize
           in: query
           required: false
-          description: Rows per page, at most 100. Omitting it returns 100.
+          description: >-
+            Rows per page. A signed-in caller may ask for up to 250; an unauthenticated one up to
+            100. Omitting it returns 100.
           schema:
             type: integer
             minimum: 1
-            maximum: 100
+            maximum: 250
         - name: count
           in: query
           required: false
@@ -3096,7 +3098,7 @@ paths:
         '400':
           description: >-
             `q` missing, an unknown or repeated parameter (`ids` included), a bad value, pageSize
-            above 100, or a page past the caller's depth.
+            above 250 (above 100 with no credential), or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
         '503':

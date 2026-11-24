@@ -73,17 +73,32 @@ test('passages', async (t) => {
     assert.strictEqual(search.mock.callCount(), 0);
   });
 
-  await t.test('pageSize 101 400', async (t) => {
-    const search = stubIndex(t);
+  await t.test('staff pageSize cap is 250', async (t) => {
+    const search = stubIndex(t, { hits: [] });
     // Staff, so the contract's own cap is 1000 and only this list's cap can refuse it.
-    const res = await call(get, 'q=water&pageSize=101', { user: STAFF });
-    assert.strictEqual(res.status, 400);
-    assert.match(res.body.error, /at most 100/);
+    const over = await call(get, 'q=water&pageSize=251', { user: STAFF });
+    assert.strictEqual(over.status, 400);
+    assert.match(over.body.error, /at most 250/);
     assert.strictEqual(search.mock.callCount(), 0);
 
-    const ok = await call(get, 'q=water', { user: STAFF });
+    const ok = await call(get, 'q=water&pageSize=250', { user: STAFF });
     assert.strictEqual(ok.status, 200);
-    assert.strictEqual(search.mock.calls[0].arguments[0].top, 100, 'absent pageSize is 100, not 1000');
+    assert.strictEqual(search.mock.calls[0].arguments[0].top, 250);
+  });
+
+  await t.test('anonymous keeps the 100 cap and the 100 default', async (t) => {
+    const search = stubIndex(t, { hits: [] });
+    const over = await call(get, 'q=water&pageSize=101');
+    assert.strictEqual(over.status, 400);
+    assert.strictEqual(over.body.error, 'pageSize above 100 requires an authenticated request');
+    assert.strictEqual(search.mock.callCount(), 0);
+
+    for (const user of [undefined, STAFF]) {
+      const ok = await call(get, 'q=water', { user });
+      assert.strictEqual(ok.status, 200);
+    }
+    assert.deepStrictEqual(search.mock.calls.map(c => c.arguments[0].top), [100, 100],
+      'absent pageSize is 100 for everyone, not 1000');
   });
 
   await t.test('sort is refused', async (t) => {

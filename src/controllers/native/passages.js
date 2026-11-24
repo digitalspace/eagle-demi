@@ -36,7 +36,10 @@ function parentFields(parent) {
 async function readPassages(access, parsed) {
   if (!parsed.q) throw failure(400, 'q is required');
   if (parsed.ids) throw failure(400, 'ids is not supported on passages');
-  if (parsed.pageSize > MAX_IDS) throw failure(400, `pageSize takes at most ${MAX_IDS} on passages`);
+  // Anonymous callers never get here above 100: the contract's `pageSizeFor` refuses them first.
+  if (parsed.pageSize > aiSearch.SERVICE_MAX_TOP) {
+    throw failure(400, `pageSize takes at most ${aiSearch.SERVICE_MAX_TOP} on passages`);
+  }
 
   const acl = filterFor(access, 'projectId', 'documentId');
   const { filter, empty } = indexFilter(INDEX_MAP, parsed, access, acl);
