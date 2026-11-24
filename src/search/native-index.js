@@ -268,8 +268,8 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
 }
 
 /**
- * `$orderby` for paged mode: the sort column and its `tiebreaks` entry, else relevance with `q`,
- * else the map's default; then `id` so pages never overlap.
+ * `$orderby`: the sort column and its `tiebreaks` entry, else relevance with `q`, else the map's
+ * default; then `id` so pages never overlap and score ties order as on the envelope route.
  */
 function indexOrderby(map, parsed) {
   if (!parsed.sort) return `${parsed.q ? 'search.score() desc' : map.defaultOrderby}, id`;
@@ -304,7 +304,8 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const top = Number.isInteger(parsed.idPage) && parsed.idPage > 0
       ? Math.min(parsed.idPage, ID_PAGE)
       : ID_PAGE;
-    const { items } = await map.search({ keywords: parsed.q, fuzzy: parsed.fuzzy, filter, top });
+    const orderby = parsed.sort ? undefined : indexOrderby(map, parsed);
+    const { items } = await map.search({ keywords: parsed.q, fuzzy: parsed.fuzzy, filter, orderby, top });
     const ranked = [...new Set(items.map(hit => String(hit.id)))];
     if (ranked.length === 0) return [];
 
