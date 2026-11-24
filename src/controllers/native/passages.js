@@ -22,6 +22,17 @@ function failure(status, message) {
   return Object.assign(new Error(message), { status });
 }
 
+/**
+ * The parent document's fields a passage row repeats, read off the row already redacted for this
+ * caller, so a withheld field is absent rather than defaulted.
+ */
+function parentFields(parent) {
+  const documentName = parent.displayName || parent.documentFileName;
+  const fields = { documentName, documentType: parent.type, milestone: parent.milestone,
+    milestoneId: parent.milestoneId, datePosted: parent.datePosted };
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null && value !== ''));
+}
+
 async function readPassages(access, parsed) {
   if (!parsed.q) throw failure(400, 'q is required');
   if (parsed.ids) throw failure(400, 'ids is not supported on passages');
@@ -57,7 +68,8 @@ async function readPassages(access, parsed) {
     projectId: String(chunk.projectId),
     pageNumber: chunk.pageNumber,
     pageNumbered: chunk.pageNumbered === true,
-    snippet: chunk.snippet || ''
+    snippet: chunk.snippet || '',
+    ...parentFields(gated.docById.get(String(chunk.documentId)))
   }));
   return { rows, count: gated.count };
 }

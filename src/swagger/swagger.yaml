@@ -3007,9 +3007,9 @@ paths:
       description: >-
         One row per passage of extracted document text that matches `q`, ranked by relevance,
         only for passages whose parent document the caller may read. A row carries the index
-        highlight as `snippet`, never the passage text. Rows are not grouped by document; read
-        document labels with one `GET /api/documents?ids=` call for the page's `documentId`s. Any
-        parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
+        highlight as `snippet`, never the passage text, plus the parent document's name, type,
+        milestone and posted date as the caller may see them. Rows are not grouped by document.
+        Any parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
         a 400, except the filters. A rejected Bearer token answers 401; a signed-in read is
         answered `Cache-Control: private, no-store`.
       parameters:
@@ -11408,7 +11408,9 @@ components:
 
     Passage:
       type: object
-      description: One passage hit. `projectName` and `projectEagleId` are present when the caller may read the project.
+      description: >-
+        One passage hit. `projectName` and `projectEagleId` are present when the caller may read
+        the project. Each parent document field is absent when the caller may not see it.
       properties:
         id:
           type: string
@@ -11431,6 +11433,22 @@ components:
         snippet:
           type: string
           description: Index highlight of the match. Never the passage text.
+        documentName:
+          type: string
+          description: Parent document display name, else its file name.
+        documentType:
+          type: string
+          description: Parent document `type`.
+        milestone:
+          type: string
+          description: Parent document milestone label.
+        milestoneId:
+          type: string
+          description: Parent document milestone List ObjectId.
+        datePosted:
+          type: string
+          format: date-time
+          description: Parent document posted date.
 
     ShortLink:
       type: object
