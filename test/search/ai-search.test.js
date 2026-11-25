@@ -1332,8 +1332,8 @@ test('the deploy template pins every index name to the code defaults', () => {
   // setting the template omits is deleted on deploy (whole-collection PUT) and falls back.
   const fs = require('node:fs');
   const path = require('node:path');
-  const bicep = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
+  const bicep = require('../helpers/bicep-resource').withoutLineComments(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'azure', 'modules', 'api-function-flex.bicep'), 'utf8'));
 
   const saved = { ...process.env };
   delete process.env.SEARCH_INDEX;

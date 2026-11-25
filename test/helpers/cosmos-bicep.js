@@ -2,8 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const { withoutLineComments } = require('./bicep-resource');
 
-const COSMOS_MODULE = fs.readFileSync(path.join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
+const COSMOS_MODULE = withoutLineComments(
+  fs.readFileSync(path.join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8'));
 
 /** The `resource` block in cosmos-nosql.bicep that declares the SQL container `name`, or undefined. */
 function cosmosContainer(name) {

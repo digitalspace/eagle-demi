@@ -10,4 +10,9 @@ function resourceBlock(source, symbol) {
   return source.slice(start, end);
 }
 
-module.exports = { resourceBlock };
+/** `source` without its whole-line comments, so a commented-out line cannot satisfy a text assert. */
+function withoutLineComments(source, marker = '//') {
+  return source.split('\n').filter(line => !line.trimStart().startsWith(marker)).join('\n');
+}
+
+module.exports = { resourceBlock, withoutLineComments };

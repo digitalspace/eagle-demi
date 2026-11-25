@@ -8,9 +8,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
-
+const { COSMOS_MODULE } = require('../helpers/cosmos-bicep');
 const cosmos = require('../../src/db/cosmos-nosql');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
@@ -24,9 +22,7 @@ const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: 
 
 /** Included paths of one container's indexing policy as dotted field names: `/read/[]/?` is `read`. */
 function indexedFields(container) {
-  const bicep = readFileSync(
-    join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
-  const policy = bicep.split(`id: '${container}'`)[1].split('excludedPaths')[0];
+  const policy = COSMOS_MODULE.split(`id: '${container}'`)[1].split('excludedPaths')[0];
   return [...policy.matchAll(/path: '\/([A-Za-z_]+(?:\/[A-Za-z_]+)*)(?:\/\[\])?\/\?'/g)]
     .map(m => m[1].replace(/\//g, '.'));
 }
