@@ -10,7 +10,7 @@ const chunkQuery = require('../../search/chunk-query');
 const { andOData, indexFilter } = require('../../search/native-index');
 const { DOCUMENT_FACETS } = require('../../search/eagle-query');
 const { CHUNK_PARENT_LIST_REFS } = require('../../repositories/chunks');
-const { filterFor, inClause } = require('../../helpers/access-odata');
+const { filterFor } = require('../../helpers/access-odata');
 const { MAX_IDS, projectParentJoin } = require('../../helpers/native-query');
 const { listHandler } = require('../nosql/mirror-reads');
 const { recoverChunkFilters } = require('../search/index-filters');
@@ -65,7 +65,7 @@ async function readPassages(access, parsed) {
   if (items.length === 0) return { rows: [], count };
 
   const gated = await chunkQuery.gateChunksByParent(access, items, count);
-  const checked = checkParents(gated, recovery.checks);
+  const checked = chunkQuery.checkParents(gated, recovery.checks);
   const rows = checked.visible.map(chunk => ({
     id: String(chunk.chunkId),
     documentId: String(chunk.documentId),
@@ -97,30 +97,13 @@ async function recoverFacets(access, parsed, live) {
 
   const checks = live.unavailable.filter(column => !recovered.includes(WIRE_KEYS[column]))
     .map(column => [column, parsed.filters[column]]);
-  const clauses = scope ? [scope] : [];
-  // Only the backlog blocks these columns, and a never-stamped chunk carries null in all of them, so
-  // the clause keeps every chunk the row check may admit. A column the index lacks fails the request.
-  if (live.unstampedScope && !live.missingColumn && !live.unknownScope) {
-    clauses.push(...checks.map(([column, values]) => `${inClause(column, values)} or ${column} eq null`));
-  }
+  const clauses = [scope, ...chunkQuery.parentCheckClauses(live, checks)].filter(Boolean);
   if (checks.length) {
     logger.warn('[passages] facet filter checked on parent documents: the documents index could not scope it', {
       columns: checks.map(([column]) => column), reasons: chunkQuery.facetReasons(live), capped
     });
   }
   return { parsed: { ...parsed, filters }, clauses, checks };
-}
-
-/** Keeps a gated chunk only if its parent, as this caller may read it, holds an asked value of each checked column. */
-function checkParents(gated, checks) {
-  if (!checks.length) return gated;
-  const visible = gated.visible.filter((chunk) => {
-    const parent = gated.docById.get(String(chunk.documentId));
-    return checks.every(([column, values]) => parent[column] != null && values.includes(String(parent[column])));
-  });
-  // An upper bound, as the gate's own count is for withheld parents.
-  const removed = gated.visible.length - visible.length;
-  return { visible, count: Math.max(gated.count - removed, visible.length) };
 }
 
 // list and count of one request get the same `parsed`, so they share one index read.

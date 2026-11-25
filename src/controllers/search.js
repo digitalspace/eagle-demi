@@ -25,7 +25,7 @@ const {
 } = require('./search/project-fields');
 const {
   resolveProjectFilter,
-  recoverChunkFilters,
+  recoverChunkFacets,
   liveChunkFacets,
   documentIdScope
 } = require('./search/index-filters');
@@ -498,9 +498,9 @@ exports.search = async (req, res) => {
         const { filter, dropped } = eagleQuery.buildFilter(
           filterQuery, dataset, acl, access, { unexpressible: unavailable });
 
-        // Reported only for what STAYED dropped: a recovered key is one that worked.
-        const { scope, recovered, capped } = await recoverChunkFilters(filterQuery, dropped, access);
-        noteDropped('filter', dropped.filter(key => !recovered.includes(key)));
+        // Reported only for what STAYED dropped: a recovered or parent-checked key is answered.
+        const { scope, handled, capped, checks } = await recoverChunkFacets(filterQuery, dropped, access, liveFacets);
+        noteDropped('filter', dropped.filter(key => !handled.includes(key)));
         // `filter` is UNDEFINED for an unscoped privileged caller; a bare template would emit
         // `(undefined) and …`.
         const scopedFilter = scope
@@ -539,7 +539,7 @@ exports.search = async (req, res) => {
 
         // Chunks carry ids, not labels; the parent document is also the gate.
         const { visible, docById, projById, count: netCount } =
-          await chunkQuery.gateChunksByParent(access, items, count);
+          chunkQuery.checkParents(await chunkQuery.gateChunksByParent(access, items, count), checks);
 
         const mappedChunks = visible.map(chunk => {
           const parent = docById.get(String(chunk.documentId));
