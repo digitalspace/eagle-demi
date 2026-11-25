@@ -38,12 +38,8 @@ def _iso(epoch):
 
 
 class World:
-    """Fake DEMI API plus fake store. Follows the lease contract closely enough to judge the runner.
-
-    `faults[label]` is a list consumed one per request before normal handling: a `run.Response` is
-    returned as is, an exception is raised. Labels: pending, sweep, lease, commit, report, download,
-    upload. `now` is the clock both sides read; the runner's `time` is patched to it.
-    """
+    """Fake DEMI API and store. `faults[label]`: per request, a Response is returned or an exception
+    raised before normal handling. `now` is the clock both sides read."""
 
     def __init__(self):
         self.objects = {}
@@ -262,7 +258,7 @@ def test_title_mode_writes_original_plus_one_update_and_reports_titled(world):
 
 
 def test_commit_without_if_match_uploads_and_the_row_is_titled(world):
-    # The NRS store answers 412 to If-Match on old objects, so the commit no longer sends it.
+    # The NRS store answers 412 to If-Match on old objects, so the commit must not send it.
     original = _pdf()
     world.add("d1", original)
 
