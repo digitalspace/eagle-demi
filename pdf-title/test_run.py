@@ -393,7 +393,8 @@ def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog
 
 
 def _tracebacks(caplog):
-    return [r for r in caplog.records if "Traceback (most recent call last)" in r.getMessage()]
+    # A cut traceback has lost its "Traceback" header, so match the row's error marker.
+    return [r for r in caplog.records if " unexpected error\n" in r.getMessage()]
 
 
 def test_unexpected_error_in_a_row_logs_its_traceback_once_on_the_main_thread(world, caplog, monkeypatch):
@@ -409,6 +410,23 @@ def test_unexpected_error_in_a_row_logs_its_traceback_once_on_the_main_thread(wo
     assert record.threadName == "MainThread"
     assert record.getMessage().startswith("id=d1 mode=title unexpected error")
     assert record.getMessage().splitlines()[-1] == "TypeError: boom"
+
+
+@pytest.mark.parametrize("message, kept", [
+    ("\n".join(f"line {i}" for i in range(40)), "".join(f"line {i}\n" for i in range(20, 40))),
+    ("x" * 5000, "x" * 4095 + "\n"),
+], ids=["many lines", "long line"])
+def test_long_traceback_is_cut_to_its_last_lines(world, caplog, monkeypatch, message, kept):
+    world.add("d1", _pdf())
+
+    def boom(*_):
+        raise TypeError(message)
+    monkeypatch.setattr(run.titler, "set_title", boom)
+
+    run.run(_client(world), max_rows=10, live=True)
+
+    (record,) = _tracebacks(caplog)
+    assert record.getMessage() == "id=d1 mode=title unexpected error\n" + kept
 
 
 def test_unexpected_error_in_a_single_row_logs_its_traceback_once(world, caplog, monkeypatch):
