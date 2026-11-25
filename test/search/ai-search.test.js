@@ -1515,7 +1515,7 @@ test('a projects index that cannot search tags', async (t) => {
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
 
     assert.strictEqual(calls.length, 2);
-    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,descriptionTokens,searchLabels');
     assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
     assert.strictEqual(res.count, 1, 'the page is served');
     assert.deepStrictEqual(logged.mock.calls[0].arguments[1].fields, ['tags', 'tagsTokens'],
@@ -1530,7 +1530,7 @@ test('a projects index that cannot search tags', async (t) => {
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
 
     assert.strictEqual(calls[1].body.searchFields,
-      'name,displayName,description,proponent,nameTokens,searchLabels,tagsTokens');
+      'name,displayName,description,proponent,nameTokens,descriptionTokens,searchLabels,tagsTokens');
     assert.deepStrictEqual(res.meta.degraded, { missing: ['tags'] });
   });
 
@@ -1564,7 +1564,7 @@ test('a projects index that cannot search tags', async (t) => {
 
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
 
-    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,descriptionTokens,searchLabels');
     assert.deepStrictEqual(res.meta.degraded, { missing: ['tagsTokens', 'tags'] });
   });
 
@@ -1591,7 +1591,7 @@ test('a projects index that cannot search tags', async (t) => {
 
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
 
-    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,searchLabels,tags,tagsTokens');
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,descriptionTokens,searchLabels,tags,tagsTokens');
     assert.ok(calls[1].body.select.split(',').includes('name'), `got select: ${calls[1].body.select}`);
     assert.deepStrictEqual(res.meta.degraded, { missing: ['nameTokens'] });
   });

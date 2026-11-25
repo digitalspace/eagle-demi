@@ -37,6 +37,7 @@ const INDEXES = [
     dataset: 'Document',
     definition: require('../../azure/search/indexes/documents.json'),
     select: () => aiSearch.DOCUMENT_SELECT,
+    searchFields: () => aiSearch.DOCUMENT_SEARCH_FIELDS,
     liveName: cfg => cfg.documentsIndex
   },
   // The two keyword indexes. Their live name is EMPTY when the dataset's kill switch is set, and

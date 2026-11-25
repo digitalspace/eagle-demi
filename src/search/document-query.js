@@ -51,6 +51,8 @@ function documentIndexRow(row) {
   const out = {};
   for (const name of PLAIN_COLUMNS) if (row[name] !== undefined) out[name] = row[name];
   if (row.documentFileName !== undefined) out.fileNameTokens = row.documentFileName;
+  if (row.displayName !== undefined) out.displayNameTokens = row.displayName;
+  if (row.description !== undefined) out.descriptionTokens = row.description;
   // Cosmos LOWER is proven equal to toLowerCase on ASCII only; any other author waits for the indexer.
   if (typeof row.documentAuthor === 'string' && /^[\x20-\x7e]*$/.test(row.documentAuthor)) {
     out.documentAuthorSort = row.documentAuthor.toLowerCase();

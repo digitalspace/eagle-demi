@@ -8,6 +8,7 @@ const projects = require('./projects');
 const PROJECT_TO_INDEX = {
   // `name` reaches the index twice: itself, and again as `nameTokens` under the `filename` analyzer.
   name: ['name', 'nameTokens'],
+  description: ['description', 'descriptionTokens'],
   tags: ['tags', 'tagsTokens'],
   abbreviation: ['displayName'],
   proponentName: ['proponent'],

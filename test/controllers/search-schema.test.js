@@ -147,8 +147,8 @@ test('search schema health', async (t) => {
   });
 
   // A field the index holds but cannot search passes every select and order probe, and still makes
-  // each project keyword query a 400. Only `projects` names a field list by default.
-  await t.test('it probes the project index with the fields the keyword search names', async (tt) => {
+  // each keyword query a 400. Only `projects` and `documents` name a field list by default.
+  await t.test('it probes the project and document indexes with the fields the keyword search names', async (tt) => {
     const probes = stubProbe(tt);
 
     const { out, res } = capture();
@@ -157,7 +157,7 @@ test('search schema health', async (t) => {
     assert.strictEqual(out.status, 200);
     const searched = probes.filter(p => p.searchFields);
     assert.deepStrictEqual(searched.map(p => [p.indexName, p.searchFields]),
-      [['projects-live', aiSearch.PROJECT_SEARCH_FIELDS]]);
+      [['projects-live', aiSearch.PROJECT_SEARCH_FIELDS], ['documents-live', aiSearch.DOCUMENT_SEARCH_FIELDS]]);
   });
 
   await t.test('a live index that cannot search a field the app searches is a 503 that names it',
@@ -338,7 +338,8 @@ test('search schema health', async (t) => {
       }
     }), res);
 
-    const documents = probes.filter(p => p.indexName === 'documents-live');
+    // A definition with no searchable field keeps the app's own field list, probed on its own.
+    const documents = probes.filter(p => p.indexName === 'documents-live' && !p.searchFields);
     assert.deepStrictEqual(documents.map(p => p.select), [['id', 'fileSize']],
       'a non-retrievable field cannot be selected, and asking is a 400 that means nothing');
     assert.deepStrictEqual(documents.map(p => p.orderby), [undefined]);

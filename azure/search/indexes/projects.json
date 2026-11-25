@@ -471,6 +471,24 @@
       "synonymMaps": []
     },
     {
+      "name": "descriptionTokens",
+      "type": "Edm.String",
+      "searchable": true,
+      "filterable": false,
+      "retrievable": false,
+      "stored": true,
+      "sortable": false,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": "filename",
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
+    },
+    {
       "name": "searchLabels",
       "type": "Edm.String",
       "searchable": true,

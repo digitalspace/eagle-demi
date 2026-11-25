@@ -456,8 +456,8 @@ paths:
       summary: Can the live search indexes answer what this app asks them?
       description: >-
         Unauthenticated, like the other health routes. Each live index is asked for an empty page
-        (`top: 0`) with the `select` and the `$orderby` clauses the app emits, and `projects` also
-        with the keyword search's `searchFields`; Azure AI Search answers a 400 naming the first
+        (`top: 0`) with the `select` and the `$orderby` clauses the app emits, and `projects` and
+        `documents` also with the keyword search's `searchFields`; Azure AI Search answers a 400 naming the first
         field the index does not carry, or carries without `searchable`. Nothing applies index
         definitions on deploy, so the committed `azure/search/indexes/*.json` can be wider than the
         live index — this is the only check that compares the two.

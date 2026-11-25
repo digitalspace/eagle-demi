@@ -31,11 +31,13 @@ const scopedIds = calls => scopeOf(calls.find(c => c.body.search === '*').body.f
 
 // Relevance order shifts with each request's offset, as tied scores can on the service; only
 // `orderby: 'id asc'` is stable. Documents answer by their `search.in` project scope.
-function serve(t, firstProjectsAnswer = null) {
+function serve(t, firstProjectsAnswer = null, refuse = () => null) {
   let pending = firstProjectsAnswer;
   let calls;
   calls = captureFetch(t, (i) => {
     const { url, body } = calls[i];
+    const refused = refuse(calls[i]);
+    if (refused) return refused;
     if (pending && url.includes('/indexes/projects/')) {
       const answer = pending;
       pending = null;
@@ -104,4 +106,33 @@ test('a projects page narrowed by a missing field is reported on the document an
 
   assert.ok(projectCalls(calls).length > 2, 'the premise: a refused request, its retry, then a later page');
   assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
+});
+
+// A documents index from before the description and display name copies: it refuses them by name in
+// `searchFields`, and any filter naming them, as the service does.
+const NEW_COPIES = ['displayNameTokens', 'descriptionTokens'];
+const refused = message => ({ ok: false, status: 400, json: { error: { message } } });
+function staleDocuments({ url, body }) {
+  if (!url.includes('/indexes/documents/')) return null;
+  const unknown = (body.searchFields || '').split(',').find(name => NEW_COPIES.includes(name));
+  if (unknown) return refused(`Unknown field '${unknown}' in search field list.\r\nParameter name: searchFields`);
+  return NEW_COPIES.some(name => (body.filter || '').includes(name)) ? refused('Invalid expression in $filter') : null;
+}
+
+test('a documents index without both new copies still answers a document keyword search', async (t) => {
+  t.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
+  serve(t, null, staleDocuments);
+  const res = await aiSearch.searchDocumentIds({ keywords: 'mine', top: 10 });
+
+  assert.strictEqual(res.ids.length, DIRECT_COUNT);
+  assert.deepStrictEqual(res.meta.degraded, { missing: NEW_COPIES });
+});
+
+test('and its project-name leg excludes leg one by the fields leg one was sent with', async (t) => {
+  t.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
+  serve(t, null, staleDocuments);
+  const res = await search(ANON_PROJECTS);
+
+  assert.strictEqual(res.count, DIRECT_COUNT + PROJECT_IDS.length * DOCS_PER_PROJECT);
+  assert.deepStrictEqual(res.meta.degraded, { missing: NEW_COPIES });
 });

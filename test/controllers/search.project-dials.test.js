@@ -66,6 +66,7 @@ test('an index column maps to the stored field whose dial governs it', () => {
   assert.deepStrictEqual(storedFieldsOf('currentPhaseNameId'), ['currentPhaseName']);
   assert.deepStrictEqual(storedFieldsOf('legacyEagleId'), ['eagleId']);
   assert.deepStrictEqual(storedFieldsOf('nameTokens'), ['name']);
+  assert.deepStrictEqual(storedFieldsOf('descriptionTokens'), ['description']);
   // Native `/projects` filters the proponent on `proponentName`; its id is the same fact.
   assert.deepStrictEqual(storedFieldsOf('proponentId').sort(), ['proponentId', 'proponentName']);
 });

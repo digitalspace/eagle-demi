@@ -13,30 +13,12 @@ const eagleQuery = require('../../src/search/eagle-query');
 const aiSearch = require('../../src/search/ai-search');
 const { TIER } = require('../../src/helpers/access-sql');
 
-// Keeps the token lookup off the network; DefaultAzureCredential would hang in CI rather than fail.
-const { DefaultAzureCredential } = require('@azure/identity');
-DefaultAzureCredential.prototype.getToken = async () => ({
-  token: 'test-token',
-  expiresOnTimestamp: Date.now() + 60 * 60 * 1000
-});
+const { captureFetch, stubToken } = require('../helpers/capture-fetch');
 
-/** Answers every search request with `json` and `status`, and records each request body. */
-function captureSearch(t, json, status = 200) {
-  const bodies = [];
-  const originalFetch = global.fetch;
-  global.fetch = async (url, init) => {
-    bodies.push(JSON.parse(init.body));
-    return {
-      ok: status < 400,
-      status,
-      headers: { get: () => null },
-      json: async () => json,
-      text: async () => JSON.stringify(json)
-    };
-  };
-  t.after(() => { global.fetch = originalFetch; });
-  return bodies;
-}
+stubToken();
+
+/** Answers every search request with `json` and `status`. */
+const captureSearch = (t, json, status = 200) => captureFetch(t, () => ({ json, status, ok: status < 400 }));
 
 const anonymous = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
 
@@ -60,7 +42,7 @@ test('documentsAcl compares a document-scoped grant on the index key id', () => 
 });
 
 test('searchDocumentIds with no keywords sends matchAll and returns ranked ids', async (t) => {
-  const bodies = captureSearch(t, { '@odata.count': 742, value: [{ id: 'b' }, { id: 'a' }] });
+  const calls = captureSearch(t, { '@odata.count': 742, value: [{ id: 'b' }, { id: 'a' }] });
 
   const out = await aiSearch.searchDocumentIds({
     filter: "projectId eq 'p1'", orderby: 'datePosted desc, id', top: 10, skip: 290
@@ -68,7 +50,7 @@ test('searchDocumentIds with no keywords sends matchAll and returns ranked ids',
 
   assert.deepStrictEqual(out.ids, ['b', 'a']);
   assert.strictEqual(out.count, 742);
-  const [body] = bodies;
+  const [{ body }] = calls;
   assert.strictEqual(body.search, '*');
   assert.strictEqual(body.select, 'id');
   assert.strictEqual(body.searchFields, aiSearch.DOCUMENT_SEARCH_FIELDS);
@@ -81,14 +63,14 @@ test('searchDocumentIds with no keywords sends matchAll and returns ranked ids',
 });
 
 test('searchDocumentIds with keywords runs one leg over the document fields only', async (t) => {
-  const bodies = captureSearch(t, { '@odata.count': 1, value: [{ id: 'd1' }] });
+  const calls = captureSearch(t, { '@odata.count': 1, value: [{ id: 'd1' }] });
 
   await aiSearch.searchDocumentIds({ keywords: 'river', filter: "projectId eq 'p1'" });
 
-  assert.strictEqual(bodies.length, 1, 'no project-name leg');
-  assert.notStrictEqual(bodies[0].search, '*');
-  assert.match(bodies[0].search, /river/);
-  assert.strictEqual(bodies[0].queryType, 'full');
+  assert.strictEqual(calls.length, 1, 'no project-name leg');
+  assert.notStrictEqual(calls[0].body.search, '*');
+  assert.match(calls[0].body.search, /river/);
+  assert.strictEqual(calls[0].body.queryType, 'full');
 });
 
 // A write that lands between the caller's own write and this index write must win in the index.
@@ -112,9 +94,9 @@ test('indexDocumentsNow reads nothing back when search is not configured', async
 });
 
 test('writeAcls merges isDeleted when a row carries it', async (t) => {
-  const bodies = captureSearch(t, { value: [] });
+  const calls = captureSearch(t, { value: [] });
   await aiSearch.writeAcls('documents', [{ id: 'd1', read: ['staff'], isPublished: false, isDeleted: true }]);
-  assert.strictEqual(bodies[0].value[0].isDeleted, true);
+  assert.strictEqual(calls[0].body.value[0].isDeleted, true);
 });
 
 test('writeAcls logs a bad entry and counts it 0, never throws', async (t) => {
@@ -123,13 +105,13 @@ test('writeAcls logs a bad entry and counts it 0, never throws', async (t) => {
 });
 
 test('upsertIndexRows sends whole rows as mergeOrUpload, since merge refuses a new row', async (t) => {
-  const bodies = captureSearch(t, { value: [] });
+  const calls = captureSearch(t, { value: [] });
   await aiSearch.upsertIndexRows('documents', [{ id: 'd1', displayName: 'Report' }]);
-  assert.deepStrictEqual(bodies[0].value, [{ '@search.action': 'mergeOrUpload', id: 'd1', displayName: 'Report' }]);
+  assert.deepStrictEqual(calls[0].body.value, [{ '@search.action': 'mergeOrUpload', id: 'd1', displayName: 'Report' }]);
 });
 
 test('upsertIndexRows tries once, so a throttled service cannot hold a create', async (t) => {
-  const bodies = captureSearch(t, {}, 503);
+  const calls = captureSearch(t, {}, 503);
   assert.strictEqual(await aiSearch.upsertIndexRows('documents', [{ id: 'd1' }]), 0);
-  assert.strictEqual(bodies.length, 1);
+  assert.strictEqual(calls.length, 1);
 });
