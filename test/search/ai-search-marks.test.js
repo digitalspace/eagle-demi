@@ -59,6 +59,56 @@ test('marks from the token copies', async (t) => {
       'Tailings from the <mark>mine</mark>. Mineral water returns to the creek.');
   });
 
+  // The service drops a marker that would be the first or last character of a fragment.
+  await t.test('a nameTokens match on the last word is marked without its closing marker', async (tt) => {
+    captureFetch(tt, answer({
+      id: 'p1',
+      name: 'Kitsault Mine',
+      '@search.highlights': { nameTokens: [`Kitsault ${PRE}Mine`] }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'mine' });
+
+    assert.strictEqual(items[0].highlighted.name, 'Kitsault <mark>Mine</mark>');
+  });
+
+  await t.test('a descriptionTokens match on the first word is marked without its opening marker', async (tt) => {
+    captureFetch(tt, answer({
+      id: 'd1',
+      displayName: 'Mill Report',
+      description: 'Mine Mill Expansion',
+      '@search.highlights': { descriptionTokens: [`Mine${POST} Mill Expansion`] }
+    }));
+
+    const { items } = await aiSearch.searchDocuments({ filter: null, keywords: 'mine' });
+
+    assert.strictEqual(items[0].highlighted.description, '<mark>Mine</mark> Mill Expansion');
+  });
+
+  await t.test('an own-field match on the first word is marked and all its text stays escaped', async (tt) => {
+    captureFetch(tt, answer({
+      id: 'p1',
+      name: '<Gold> River Power',
+      '@search.highlights': { name: [`<Gold${POST}> River Power`] }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'gold' });
+
+    assert.strictEqual(items[0].highlighted.name, '<mark>&lt;Gold</mark>&gt; River Power');
+  });
+
+  await t.test('a marker with no text beside it at a fragment edge leaves no empty mark', async (tt) => {
+    captureFetch(tt, answer({
+      id: 'p1',
+      name: 'Gold River',
+      '@search.highlights': { name: [`${POST}Gold River ${PRE}`] }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'gold' });
+
+    assert.strictEqual(items[0].highlighted.name, 'Gold River ');
+  });
+
   // An index the copies have not reached yet must still serve the page, not 400 on the highlight.
   await t.test('a documents index without the copies retries with neither in the highlight', async (tt) => {
     tt.mock.method(require('../../src/utils/logger').logger, 'error', () => {});

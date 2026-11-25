@@ -286,8 +286,8 @@ test('ai-search snippets are escaped before they are marked', async (t) => {
     const orphanClose = aiSearch.snippetFrom({
       '@search.highlights': { content: [`Injected${aiSearch.HL_POST}: rest of the text`] }
     });
-    assert.ok(!orphanClose.includes('</mark>'), 'an orphaned closer is dropped, not emitted');
-    assert.ok(orphanClose.startsWith('Injected'));
+    assert.strictEqual(orphanClose, '<mark>Injected</mark>: rest of the text',
+      'a closer with no opener marks the text before it');
 
     const orphanOpen = aiSearch.snippetFrom({
       '@search.highlights': { content: [`text ${aiSearch.HL_PRE}river`] }
