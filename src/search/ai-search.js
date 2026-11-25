@@ -937,8 +937,8 @@ async function searchProjects(opts = {}) {
     prefix: opts.prefix !== false,
     searchFields: PROJECT_SEARCH_FIELDS,
     select: PROJECT_SELECT,
-    // Only the fields the result card renders.
-    highlight: 'name,displayName,description'
+    // The fields the result card renders, and the token copies that mark them.
+    highlight: 'name,displayName,description,nameTokens,descriptionTokens'
   });
 
   return {
@@ -993,7 +993,7 @@ async function searchDocuments(opts = {}) {
     prefix,
     searchFields: DOCUMENT_SEARCH_FIELDS,
     select: countOnly ? 'id' : DOCUMENT_SELECT,
-    ...(countOnly ? {} : { highlight: 'displayName,description' })
+    ...(countOnly ? {} : { highlight: 'displayName,description,displayNameTokens,descriptionTokens' })
   });
 
   const items = [...direct.value];
