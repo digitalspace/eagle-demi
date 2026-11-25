@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 const { cosmosContainer } = require('../helpers/cosmos-bicep');
 const { withoutLineComments } = require('../helpers/bicep-resource');
+const { code } = require('../helpers/router-source');
 
 const ROOT = path.join(__dirname, '..', '..');
 const readRaw = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -20,8 +21,8 @@ const PROD_PARAMS = readCode('azure/main.prod.bicepparam');
 const SEARCH_EXISTING = readCode('azure/modules/search-existing.bicep');
 const OBSERVABILITY = readCode('azure/modules/observability.bicep');
 const AVAILABILITY = readCode('azure/modules/availability.bicep');
-const SEARCH_CONTROLLER = readCode('src/controllers/search.js');
-const ROUTES = readCode('src/http/routes.js');
+const SEARCH_CONTROLLER = code(readRaw('src/controllers/search.js'));
+const ROUTES = code(readRaw('src/http/routes.js'));
 const APIM_MODULE = readCode('azure/modules/apim.bicep');
 const DEVBOX_MODULE = readCode('azure/modules/devbox.bicep');
 // The cloud-init hashes pin exact bytes, comments in the span included.
@@ -811,8 +812,7 @@ for (const { name, param, lineOf, fatal, span, why } of [
     name: 'demi-track-teams', param: 'syncTeamsSchedule',
     lineOf: async () => ({
       line: require('../../src/scripts/sync-track-teams').summaryLine({ mode: 'live', failures: 1 }),
-      fatalLine: /'(\[track-teams\] nightly run failed)'/.exec(
-        readCode('api/index.js'))?.[1] || '',
+      fatalLine: /'(\[track-teams\] nightly run failed)'/.exec(code(readRaw('api/index.js')))?.[1] || '',
     }),
     fatal: 'nightly run failed',
     span: '26h', why: 'the sync runs once a day, so 26h is one run plus slack for a late one',
@@ -1372,7 +1372,7 @@ test('both APIM APIs expose wildcard operations over every method', () => {
 // Every `<call>.<level>` message in `sources` (default: `logger` under the request path), rendered as
 // the runtime renders it: interpolations stand in as `x`, concatenated literals are rejoined.
 const LOG_SOURCES = ['controllers', 'search'].flatMap(dir => fs.readdirSync(path.join(ROOT, 'src', dir), { recursive: true })
-  .filter(f => f.endsWith('.js')).map(f => path.join('src', dir, f)).map(file => ({ file, source: readCode(file) })));
+  .filter(f => f.endsWith('.js')).map(f => path.join('src', dir, f)).map(file => ({ file, source: code(readRaw(file)) })));
 
 const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/;
 
@@ -1502,7 +1502,7 @@ test('the search 5xx rule matches the paths the search routes are mounted at', (
 const ROTATOR_DIR = path.join(ROOT, 'src', 'secret-rotator');
 const ROTATOR_SOURCES = fs.readdirSync(ROTATOR_DIR, { recursive: true })
   .filter(f => f.endsWith('.js') && !f.includes('node_modules'))
-  .map(f => ({ file: path.join('src', 'secret-rotator', f), source: readCode(path.join('src', 'secret-rotator', f)) }));
+  .map(f => ({ file: path.join('src', 'secret-rotator', f), source: code(readRaw(path.join('src', 'secret-rotator', f))) }));
 const ROTATOR_TAG = /^const TAG = '([^']+)';$/m.exec(
   ROTATOR_SOURCES.find(s => path.relative(ROTATOR_DIR, path.join(ROOT, s.file)) === 'rotate.js')?.source ?? '')?.[1];
 // `\b(?:log|logger)` takes the `log.`, `s.log.` and `ctx.log.` forms in rotate.js and covers

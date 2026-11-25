@@ -5,8 +5,9 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const { cosmosContainer } = require('../helpers/cosmos-bicep');
+const { withoutLineComments } = require('../helpers/bicep-resource');
 
-const read = (...parts) => fs.readFileSync(path.join(__dirname, '..', '..', 'azure', ...parts), 'utf8');
+const read = (...parts) => withoutLineComments(fs.readFileSync(path.join(__dirname, '..', '..', 'azure', ...parts), 'utf8'));
 const MAIN = read('main.bicep');
 const API_MODULE = read('modules', 'api-function-flex.bicep');
 const PROD_PARAMS = read('main.prod.bicepparam');

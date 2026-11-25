@@ -6,7 +6,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const read = (...parts) => fs.readFileSync(path.join(ROOT, 'azure', ...parts), 'utf8');
+const { withoutLineComments } = require('../helpers/bicep-resource');
+const read = (...parts) => withoutLineComments(fs.readFileSync(path.join(ROOT, 'azure', ...parts), 'utf8'));
 const MAIN = read('main.bicep');
 const API_MODULE = read('modules', 'api-function-flex.bicep');
 const APIM_MODULE = read('modules', 'apim.bicep');
