@@ -1522,8 +1522,8 @@ module.exports = {
   DOCUMENT_SCOPE_CAP,
   chunkParentFieldStatus,
   staleChunkCount,
-  // For the orphan purge in `backfill-chunk-parent-fields.js`.
-  listStaleChunkIds,
+  // For the purges in `backfill-chunk-parent-fields.js` and `purge-index-only-chunks.js`.
+  listStaleChunkIds, runSearch,
   LIVE_SCHEMA_TTL_MS,
   UNKNOWN_STATUS_TTL_MS,
   deleteChunksForDocument,

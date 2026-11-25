@@ -480,7 +480,7 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, loadState, saveState, backfill, exitCodeFor,
+  parseArgs, loadState, saveState, backfill, exitCodeFor, partitionsFor,
   DEFAULT_CONCURRENCY, DEFAULT_MAX_ATTEMPTS, DEFAULT_STATE, NULL_PARTITION
 };
 
