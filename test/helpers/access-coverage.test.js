@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const { code, routeChains, balancedArgs, jsonEmissions } = require('./router-source');
 
@@ -194,6 +195,27 @@ test('access gate coverage', async (t) => {
     const commented = code('// canRead(doc, access)\n/* selectWhere({}) */\nconst x = 1;');
     assert.ok(!/canRead\s*\(/.test(commented));
     assert.ok(!/selectWhere\s*\(/.test(commented));
+  });
+
+  await t.test('comment markers inside literals stay code', () => {
+    const out = code("const u = 'http://a//b';\nconst r = /\\/\\//;\nconst t = `// x`;\n// gone\n/* gone */");
+    assert.ok(out.includes("'http://a//b'"), out);
+    assert.ok(out.includes('/\\/\\//'), out);
+    assert.ok(out.includes('`// x`'), out);
+    assert.ok(!out.includes('gone'), out);
+  });
+
+  await t.test('code() of every src file still parses', () => {
+    const src = path.join(__dirname, '..', '..', 'src');
+    const broken = fs.readdirSync(src, { recursive: true }).filter(file => file.endsWith('.js')).filter(file => {
+      try {
+        vm.compileFunction(code(fs.readFileSync(path.join(src, file), 'utf8')), ['exports', 'require', 'module']);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.deepStrictEqual(broken, []);
   });
 
   await t.test('the allowlist carries a reason, not just a name', () => {
