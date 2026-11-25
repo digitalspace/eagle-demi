@@ -96,7 +96,9 @@ def _is_signed(original: bytes, reader: PdfReader) -> bool:
     if b"/ByteRange" in original:
         return True
     acroform = reader.trailer["/Root"].get("/AcroForm")
-    return acroform is not None and "/SigFlags" in acroform.get_object()
+    # A reference to an object the file never defines resolves to None, which is PDF null.
+    acroform = acroform.get_object() if acroform is not None else None
+    return isinstance(acroform, DictionaryObject) and "/SigFlags" in acroform
 
 
 def _titled(original: bytes, title: str) -> tuple:

@@ -395,6 +395,19 @@ def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog
     assert "id=d1 mode=title result=error reason=RuntimeError: boom" in caplog.text
 
 
+def test_unexpected_error_in_a_row_logs_its_traceback_once(world, caplog, monkeypatch):
+    world.add("d1", _pdf())
+
+    def boom(*_):
+        raise TypeError("boom")
+    monkeypatch.setattr(run.titler, "set_title", boom)
+
+    run.run(_client(world), max_rows=10, live=True)
+
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert [r.exc_info[0] for r in tracebacks] == [TypeError]
+
+
 def test_put_that_dies_mid_body_leaves_the_original(world):
     original = _pdf()
     world.add("d1", original)

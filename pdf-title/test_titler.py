@@ -530,6 +530,15 @@ def test_signed_pdf_is_skipped(marker):
     assert (result.status, result.reason, result.data) == ("skipped", "signed", None)
 
 
+def test_acroform_reference_to_an_object_the_file_never_defines_is_not_signed():
+    placeholder = _pdf(root_extra={NameObject("/AcroForm"): NameObject("/DDDDD")})
+    dangling = placeholder.replace(b"/AcroForm /DDDDD", b"/AcroForm 99 0 R")  # same length, xref stays valid
+
+    result = set_title(dangling, TITLE)
+
+    assert (result.status, _reopen(result.data).metadata.title) == ("ready", TITLE)
+
+
 def test_zero_byte_file_is_skipped():
     result = set_title(b"", TITLE)
 

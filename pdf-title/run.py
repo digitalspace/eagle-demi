@@ -286,6 +286,8 @@ def start(client, row, want=None):
     except Released as exc:
         return Done(doc_id, mode, "refused", str(exc))
     except Exception as exc:
+        if not isinstance(exc, Failed):
+            log.exception("id=%s mode=%s unexpected error", doc_id, mode)
         # The plain report has no skip flag: a passing failure must not mark the file skipped.
         failure = str(exc) if isinstance(exc, Failed) else f"{type(exc).__name__}: {exc}"
     if failure:
