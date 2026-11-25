@@ -134,6 +134,11 @@ function readSheet(ws, source, file, out) {
       const slotFlags = [];
       const fields = pick(row, columns, slotRef, slotFlags);
       if (blankSlot(fields)) return;
+      // Days over a =NOW() End Date counts only to the day the file was saved.
+      if (fields.days != null && slotFlags.some(f => f.field === 'endDate' && f.kind === 'nowFormula')) {
+        fields.days = null;
+        slotFlags.push({ ...slotRef, field: 'days', kind: 'nowFormula' });
+      }
       rangeFlags(source, fields, slotRef, slotFlags);
       flags.push(...slotFlags);
       out.records[source.key].push({ ref: slotRef, id: base.id, name: base.name, ...fields });

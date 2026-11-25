@@ -201,7 +201,7 @@ async function buildWorkbooks(dir) {
   }
   await save(dir, '03 - Project Suspension Data.xlsx', wb => interruptions(wb, 'Suspensions', 'Suspension', [{
     A: 45, B: PROJECT_NAMES[0], F: 'Suspension s.24(2)', G: 'Review', H: day('1998-01-01'),
-    I: { formula: 'NOW()', result: day('2026-11-01') }, L: 'Suspension s.30(1)', M: 'Evaluation',
+    I: { formula: 'NOW()', result: day('2026-11-01') }, J: { formula: 'I5-H5', result: 10531 }, L: 'Suspension s.30(1)', M: 'Evaluation',
     N: day('1998-03-01'), O: day('1998-04-01'), P: { formula: 'O5-N5', result: 32 }
   }, {
     A: 233, B: PROJECT_NAMES[3], F: 'Suspension s.24(2)', G: 'Evaluation', H: day('2005-06-01'), I: day('2005-07-01'),

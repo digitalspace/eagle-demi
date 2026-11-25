@@ -44,7 +44,7 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   assert.equal(records.amendments.find(r => r.id === 45 && r.ref.slot === 2).endDate, null);
   assert.deepEqual(records.suspensions.map(r => [r.id, r.ref.slot, r.appliedTo, r.endDate, r.days]),
     [[45, 1, 'Review', null, null], [45, 2, 'Evaluation', '1998-04-01', 32], [233, 1, 'Evaluation', '2005-07-01', 30]],
-    'Days is the cached cell value, not end minus start; a slot holding only a Days formula is no record');
+    'Days is the cached cell value unless End Date is =NOW(); a slot holding only a Days formula is no record');
   assert.deepEqual(records.extensions.map(r => r.days), [28]);
   assert.deepEqual(records.timeline2002.map(r => [r.name, r.decision, r.decisionDate, r.startExtra]),
     [[PROJECT_NAMES[2], 'Incomplete/Inactive', null, '2003-08-25']]);
@@ -72,6 +72,7 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
     'Projects:9:0:name:unnamedRow',
     'Section 13:31:0:id:badId',
     'Suspensions:31:0:id:badId',
+    'Suspensions:5:1:days:nowFormula',
     'Suspensions:5:1:endDate:nowFormula'
   ]);
   assert.deepEqual(counts, {

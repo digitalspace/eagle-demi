@@ -96,12 +96,15 @@ const spansOf = (fields) => {
 };
 const BLANK_EXTRA = [['Evaluation', '2005-01-01', '2005-03-01', 30, true], ['Application Review', '2005-03-01', '2008-05-01', 180, true]];
 
-test('Start Extra ends Evaluation and starts an Extra Time phase with no limit', () => {
-  const { phases, outOfOrder, work } = spansOf({ startExtra: '2005-01-31' });
-  assert.deepStrictEqual(phases, [['Evaluation', '2005-01-01', '2005-01-31', 30, true],
-    ['Extra Time', '2005-01-31', '2005-03-01', undefined, undefined], ['Application Review', '2005-03-01', '2008-05-01', 180, true]]);
-  assert.deepStrictEqual(outOfOrder, []);
-  assert.ok(validateWork(work).ok);
+test('Start Extra on or after Start (30) ends Evaluation and starts an Extra Time phase with no limit', () => {
+  for (const startExtra of ['2005-01-31', '2005-01-01']) {
+    const { phases, outOfOrder, work } = spansOf({ startExtra });
+    assert.deepStrictEqual(phases, [['Evaluation', '2005-01-01', startExtra, 30, true],
+      ['Extra Time', startExtra, '2005-03-01', undefined, undefined], ['Application Review', '2005-03-01', '2008-05-01', 180, true]],
+    `startExtra ${startExtra}`);
+    assert.deepStrictEqual(outOfOrder, []);
+    assert.ok(validateWork(work).ok);
+  }
 });
 
 test('Start Extra after Start (180) is dropped alone and listed; Review keeps its start milestone', () => {
