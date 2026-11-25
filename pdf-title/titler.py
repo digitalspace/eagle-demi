@@ -1,8 +1,5 @@
 """Write a display title into a PDF as an appended incremental update.
-
-The original bytes stay an exact prefix, so truncating to `source_length` restores them. Anything
-unsafe is a skip with a reason, and the file is left as it was.
-"""
+The original bytes stay an exact prefix, so truncating to `source_length` restores them."""
 
 import hashlib
 import io
