@@ -10,6 +10,7 @@ const controller = require('../../../src/controllers/nosql/pdf-title');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
 const { readForLevel } = require('../../../src/helpers/access-sql');
+const { CLEAN_SAFE } = require('../../../src/helpers/pdf-title');
 
 const ID = '5f1d7a3c9b2e4d6f8a0b1c2d';
 const DOC = {
@@ -17,13 +18,13 @@ const DOC = {
   mimeType: 'application/pdf', fileExt: 'pdf', fileSize: 1000, read: readForLevel(4)
 };
 
-/** The work-list query answers with `pages(n)`, the n-th store page (1-based); other queries see no shared key. */
+/** The work-list query answers with `pages(n, spec)`, the n-th store page (1-based); other queries see no shared key. */
 function storePages(t, pages) {
   const seen = [];
   t.mock.method(cosmos, 'query', async (container, spec, opts) => {
     if (spec.query.includes('ARRAY_CONTAINS(@keys')) return { items: [] };
     seen.push(opts.continuationToken);
-    return pages(seen.length);
+    return pages(seen.length, spec);
   });
   return seen;
 }
@@ -48,6 +49,31 @@ test('pdf title work list', async (t) => {
     const lines = logged.mock.calls.filter(c => c.arguments[0] === '[pdf-title] work list');
     assert.equal(lines.length, 1, 'one log line per call');
     assert.equal(lines[0].arguments[1].fetches, 4);
+  });
+
+  await t.test('the store query drops non-Eagle ids and rows whose clean title is current', async (t) => {
+    const specs = [];
+    storePages(t, (n, spec) => {
+      specs.push(spec);
+      return { items: [], continuationToken: n === 1 ? 'page-2' : undefined };
+    });
+    await listPending();
+    assert.match(specs[0].query, /WHERE LENGTH\(c\.id\) = 24 AND /);
+    assert.match(specs[0].query, / AND NOT \(IS_STRING\(c\.s3Key\) .*RegexMatch\(c\.displayName, @cleanSafe\)/);
+    assert.deepEqual(specs[0].parameters, [{ name: '@cleanSafe', value: CLEAN_SAFE }]);
+    assert.deepEqual(specs[1], specs[0], 'a continuation fetch sends the same query and parameters');
+  });
+
+  await t.test('the size cap holds back titling but never a restore', async (t) => {
+    const big = { fileSize: controller.MAX_BYTES + 1 };
+    const restoreId = '5f1d7a3c9b2e4d6f8a0b1c2e';
+    const toRestore = {
+      ...DOC, ...big, id: restoreId, s3Key: 'etl/p1/withheld.pdf', vis: { displayName: 3 },
+      pdfTitle: { status: 'titled', sourceKey: 'etl/p1/withheld.pdf', title: 'Site C Report' }
+    };
+    storePages(t, () => ({ items: [{ ...DOC, ...big }, toRestore] }));
+    const body = await listPending();
+    assert.deepEqual(body.items.map(i => [i.id, i.mode]), [[restoreId, 'restore']]);
   });
 
   await t.test('the first store page with work is answered with its continuation', async (t) => {
