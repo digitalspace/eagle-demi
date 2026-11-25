@@ -170,8 +170,8 @@ function timelines(workbook) {
     ['Evaluation (F)', ['Start (30)']], ['Extra Time (G)', ['Start Extra']], days, ['Review (H)', ['Start (180)']], days,
     ['Referral (I)', ['Start (45)']], days, ['Decision (J)', ['Date', 'Decision']]
   ]);
-  put(ws, 10, { A: PROJECT_NAMES[2], B: day('2002-11-01'), D: day('2003-05-05'), F: day('2003-06-06'), U: FILL,
-    V: 'Incomplete/Inactive' });
+  put(ws, 10, { A: PROJECT_NAMES[2], B: day('2002-11-01'), D: day('2003-05-05'), F: day('2003-06-06'), N: day('2003-08-01'),
+    O: day('2003-08-25'), U: FILL, V: 'Incomplete/Inactive' });
   workbook.addWorksheet('2018').addRow(['not', 'the', '2002', 'tab']);
   junk(workbook, 'Slide');
 }
@@ -202,12 +202,14 @@ async function buildWorkbooks(dir) {
   await save(dir, '03 - Project Suspension Data.xlsx', wb => interruptions(wb, 'Suspensions', 'Suspension', [{
     A: 45, B: PROJECT_NAMES[0], F: 'Suspension s.24(2)', G: 'Review', H: day('1998-01-01'),
     I: { formula: 'NOW()', result: day('2026-11-01') }, L: 'Suspension s.30(1)', M: 'Evaluation',
-    N: day('1998-03-01'), O: day('1998-04-01')
+    N: day('1998-03-01'), O: day('1998-04-01'), P: { formula: 'O5-N5', result: 32 }
   }, {
-    A: 233, B: PROJECT_NAMES[3], F: 'Suspension s.24(2)', G: 'Evaluation', H: day('2005-06-01'), I: day('2005-07-01')
-  }]));
+    A: 233, B: PROJECT_NAMES[3], F: 'Suspension s.24(2)', G: 'Evaluation', H: day('2005-06-01'), I: day('2005-07-01'),
+    // Days formulas over blank dates count inclusively: exceljs drops a cached 0 on write.
+    J: { formula: 'I6-H6', result: 30 }, P: { formula: 'O6-N6+1', result: 1 }
+  }, { A: 3, J: { formula: 'I7-H7+1', result: 1 } }]));
   await save(dir, '04 - Project Extension Data.xlsx', wb => interruptions(wb, 'Extensions', 'Extension', [{
-    A: 7, B: PROJECT_NAMES[1], F: 'Extension s.24(4)', G: 'Decision', H: day('2001-02-01'), I: day('2001-03-01')
+    A: 7, B: PROJECT_NAMES[1], F: 'Extension s.24(4)', G: 'Decision', H: day('2001-02-01'), I: day('2001-03-01'), J: 28
   }]));
   await save(dir, '05 - Project Section 13 Data.xlsx', sectionThirteen);
   await save(dir, '06 - Project PCP Data 1.xlsx', commentPeriods);

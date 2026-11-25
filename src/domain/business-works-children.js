@@ -58,6 +58,20 @@ function childDays(row, [startKey, endKey], list) {
   return null;
 }
 
+/** The sheet's Days when it is a whole number that the dates do not give, else end minus start; a bad or differing Days is listed. */
+function daysOf(row, { start, end }, list) {
+  const counted = end ? Math.max(0, daysBetween(start, end)) : null;
+  const sheet = row.days;
+  if (sheet === null || sheet === undefined || sheet === '') return { days: counted };
+  if (!Number.isInteger(sheet) || sheet < 0) {
+    list('badDays', { field: 'days' });
+    return { days: counted };
+  }
+  if (sheet === counted) return { days: counted };
+  if (counted !== null) list('daysDiffer', { field: 'days', days: sheet, dateDays: counted });
+  return { days: sheet, daysSource: 'sheet' };
+}
+
 function attachInterruption(ctx, { project, list, noWork }, row, tabKind) {
   if (skips2018(ctx.catalog, 'appliedTo', row.appliedTo) || skips2018(ctx.catalog, 'interruptionTypes', row.type)) return list('act2018');
   const days = childDays(row, ['startDate', 'endDate'], list);
@@ -71,7 +85,7 @@ function attachInterruption(ctx, { project, list, noWork }, row, tabKind) {
   const interruption = {
     id: childIdOf(type.code, nextN(work, type.code)), kind: type.kind || tabKind, typeCode: type.code,
     legalSection: type.legalSection ?? null, startDate: days.start, endDate: days.end,
-    days: days.end ? Math.max(0, daysBetween(days.start, days.end)) : null, links: { eagleItemId: null },
+    ...daysOf(row, days, list), links: { eagleItemId: null },
     sourceRef: { sheet: refOf(row.ref) }
   };
   interruption.links.eagleItemId = eagleItemIdFor(ctx.eagleItems.get(project.projectId), interruption, list);

@@ -21,7 +21,9 @@ const { REGISTER_SYSTEM, sheetIdOf } = require('./business-works-inputs');
 const INVESTMENT_USE_TRACK = Object.freeze([8]);
 const MARKER_SCHEMA_VERSION = 1;
 const TIMELINE_DATES = Object.freeze(['intakeDate', 'determinationDate', 's11Order', 'airAccepted', 'start30',
-  'start180', 'start45', 'decisionDate']);
+  'start180', 'start45', 'decisionDate', 'startExtra']);
+// The register has no column for these, so they are copied from Timelines but never listed as differing.
+const TIMELINE_ONLY = Object.freeze(['startExtra']);
 const STAFF_LISTS = Object.freeze(['externalIds', 'staffAssignments', 'capitalInvestments', 'staffNotes']);
 
 function contextOf(extract, options = {}) {
@@ -75,10 +77,10 @@ function joinTimelines(ctx, rows, registers) {
 /** Column A of the transitions tab holds the register id. */
 const transitionsOf = (ctx, rows) => onePerId(ctx, 'transitions', Map.groupBy(rows, row => row.id), 'transitionRepeated');
 
-/** `{row, differs}`: the Timelines tab's dates win, its decision fills only a blank one; `differs` holds each field that disagrees. */
+/** `{row, differs}`: the Timelines tab's dates win, its decision fills only a blank one; `differs` holds each register field that disagrees. */
 function overlaid(raw, timeline) {
   const dates = TIMELINE_DATES.filter(field => dayOf(timeline[field]) && dayOf(timeline[field]) !== dayOf(raw[field]));
-  const differs = dates.map(field => ({ field, kept: 'timeline' }));
+  const differs = dates.filter(field => !TIMELINE_ONLY.includes(field)).map(field => ({ field, kept: 'timeline' }));
   const labelled = oneLine(raw.decision);
   if (labelled && oneLine(timeline.decision) && keyOf(raw.decision) !== keyOf(timeline.decision)) differs.push({ field: 'decision', kept: 'register' });
   const decision = labelled || !oneLine(timeline.decision) ? raw.decision : timeline.decision;
