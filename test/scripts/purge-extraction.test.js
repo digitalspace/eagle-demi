@@ -50,11 +50,19 @@ function fakeChunks(perDoc, opts = {}) {
  * Stands in for `src/search/ai-search.js` under `opts.index`. A wrong key falls through to the real
  * client; asserting on `state.deleted` in live tests catches that here instead of in Azure.
  */
-function fakeIndex() {
+function fakeIndex(opts = {}) {
+  const configured = opts.configured ?? true;
   const state = { deleted: [] };
   return {
     state,
-    async deleteChunksForDocument(documentId) {
+    config: () => ({ configured }),
+    async deleteChunksForDocument(documentId, deleteOpts = {}) {
+      // As in the real client: unconfigured or failed is incomplete, and strict turns that into a throw.
+      const incomplete = !configured || opts.failFor === documentId;
+      if (incomplete && deleteOpts.strict) {
+        throw Object.assign(new Error('index boom'), { code: 'INDEX_DELETE_INCOMPLETE' });
+      }
+      if (incomplete) return 0;
       state.deleted.push(documentId);
       return 3;
     }
@@ -161,10 +169,35 @@ test('a document whose chunks fail to delete keeps its flags', async () => {
   const summary = await purge(['--live'], { documents: docs, chunks, index });
 
   assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd3']);
-  assert.deepStrictEqual(index.state.deleted, ['d1', 'd3']);
+  // The index goes first, so d2 is already out of it when Cosmos throws.
+  assert.deepStrictEqual(index.state.deleted, ['d1', 'd2', 'd3']);
   assert.strictEqual(summary.failures.length, 1);
   assert.strictEqual(summary.failures[0].id, 'd2');
   assert.strictEqual(summary.failures[0].stage, 'chunks');
+});
+
+test('with search configured, a failed index delete leaves Cosmos and the flags alone', async () => {
+  // Surplus is worked out from Cosmos ids, so index rows whose Cosmos chunks are gone stay forever.
+  const docs = fakeDocuments(DOCS);
+  const chunks = fakeChunks(PER_DOC);
+
+  const summary = await purge(['--live'], { documents: docs, chunks, index: fakeIndex({ failFor: 'd2' }) });
+
+  assert.deepStrictEqual(chunks.state.removed, ['d1', 'd3']);
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd3']);
+  assert.deepStrictEqual(summary.failures.map(f => [f.id, f.stage]), [['d2', 'index']]);
+});
+
+test('with search not configured, a live run still purges Cosmos and clears the flags', async () => {
+  // Local runs have no index; a strict delete there would fail every document.
+  const docs = fakeDocuments(DOCS);
+  const chunks = fakeChunks(PER_DOC);
+
+  const summary = await purge(['--live'], { documents: docs, chunks, index: fakeIndex({ configured: false }) });
+
+  assert.deepStrictEqual(chunks.state.removed, ['d1', 'd2', 'd3']);
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd2', 'd3']);
+  assert.deepStrictEqual(summary.failures, []);
 });
 
 test('a partial bulk failure is recorded rather than counted as success', async () => {
@@ -177,8 +210,8 @@ test('a partial bulk failure is recorded rather than counted as success', async 
   assert.strictEqual(summary.failures.length, 1);
   assert.match(summary.failures[0].message, /bulk operation/);
   // Unlike a throw, a partial failure still clears d1: chunk ids are deterministic, so re-ingest
-  // upserts over the few survivors. This also proves the fake index was wired in.
-  assert.deepStrictEqual(index.state.deleted, ['d1', 'd2', 'd3']);
+  // upserts over the few survivors.
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd2', 'd3']);
 });
 
 test('paging follows continuation tokens instead of reading one page', async () => {
