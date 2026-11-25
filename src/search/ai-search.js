@@ -882,7 +882,7 @@ async function searchChunks(opts = {}) {
     semantic: true,
     // This `select` is what stops the API shipping whole chunks — see CHUNK_SELECT.
     select: CHUNK_SELECT,
-    highlight: 'content'
+    searchFields: 'content', highlight: 'content'
   });
 
   return {
