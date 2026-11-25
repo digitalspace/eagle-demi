@@ -956,7 +956,7 @@ test('project and document search return the analyzer\'s highlights', async (t) 
 
     await aiSearch.searchProjects({ filter: null, keywords: 'flood' });
 
-    assert.strictEqual(calls[0].body.highlight, 'name,displayName,description');
+    assert.strictEqual(calls[0].body.highlight, 'name,displayName,description,nameTokens,descriptionTokens');
     assert.strictEqual(calls[0].body.highlightPreTag, PRE);
     assert.strictEqual(calls[0].body.highlightPostTag, POST);
   });
@@ -1030,7 +1030,7 @@ test('project and document search return the analyzer\'s highlights', async (t) 
 
     const { items } = await aiSearch.searchDocuments({ filter: null, keywords: 'flood' });
 
-    assert.strictEqual(calls[0].body.highlight, 'displayName,description');
+    assert.strictEqual(calls[0].body.highlight, 'displayName,description,displayNameTokens,descriptionTokens');
     assert.strictEqual(items[0].highlighted.displayName, '<mark>Flood</mark> Assessment');
   });
 

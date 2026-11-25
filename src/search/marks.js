@@ -19,16 +19,28 @@ function snippetFrom(hit) {
   return highlights.map(balanceFragment).join(' … ');
 }
 
+/** The `filename` tokenizer's split (azure/search/indexes), kept as a capture so `split` keeps both sides. */
+const TOKEN_SPLIT = /([A-Za-z0-9]+)/;
+const MARKED_SPAN = new RegExp(`${HL_PRE}([^${HL_PRE}${HL_POST}]*)${HL_POST}`, 'g');
+
 /**
  * Display markup for one selected field. Unlike `snippetFrom`, an unmatched field falls back to its
  * escaped value, so the caller binds one string and escaping happens once, here.
  */
 function markedField(hit, field) {
-  const fragments = (hit['@search.highlights'] || {})[field] || [];
+  const highlights = hit['@search.highlights'] || {};
+  const fragments = highlights[field] || [];
   if (fragments.length > 0) return fragments.map(balanceFragment).join(' … ');
 
   const raw = hit[field];
-  return raw === undefined || raw === null ? '' : escapeHtml(String(raw));
+  if (raw === undefined || raw === null) return '';
+  // A word en.microsoft drops (`mine`) matches only in the `<field>Tokens` copy. Its marked words
+  // mark the field's own text, so no copy text reaches the output.
+  const tokens = new Set((highlights[`${field}Tokens`] || []).flatMap(fragment =>
+    [...fragment.matchAll(MARKED_SPAN)].flatMap(([, span]) => span.toLowerCase().split(TOKEN_SPLIT))));
+  return String(raw).split(TOKEN_SPLIT)
+    .map((part, i) => (i % 2 === 1 && tokens.has(part.toLowerCase()) ? `<mark>${part}</mark>` : escapeHtml(part)))
+    .join('');
 }
 
 /**
