@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
-"""One pass over DEMI's PDF title work list: write each title into the stored PDF, or take it out.
-
-Holds no storage credential. For each row it leases the document from the DEMI API, reads the
-frozen backup through the GET link it is given, builds the new bytes, commits their length and
-hashes, writes them with one PUT through the link and headers the commit returns, then reports
-once the PUT link is dead (the API holds every report until then). The API checks the store and
-decides the outcome. Rows waiting to report hold no worker. The work list is the resume point, so a stopped
-run just runs again.
-
-Dry run is the default: it lists the rows and writes nothing. `--live` writes.
-
-    python3 pdf-title/run.py [--live] [--max-rows N] [--max-minutes M] [--timeout S] [--concurrency N]
-
-A live run first pages the API's sweep, which settles expired leases.
-
-Environment:
-    DEMI_API_URL   the API base that `/documents` hangs off, e.g. https://<host>/api
-    DEMI_API_KEY   DEMI key with the write role, sent as X-Api-Key to the API only
-"""
+"""One pass over DEMI's PDF title work list; holds no storage credential, the API hands out links.
+The work list is the resume point, so a stopped run just runs again."""
 
 import argparse
 import base64
@@ -286,6 +269,8 @@ def start(client, row, want=None):
     except Released as exc:
         return Done(doc_id, mode, "refused", str(exc))
     except Exception as exc:
+        if not isinstance(exc, Failed):
+            log.exception("id=%s mode=%s unexpected error", doc_id, mode)
         # The plain report has no skip flag: a passing failure must not mark the file skipped.
         failure = str(exc) if isinstance(exc, Failed) else f"{type(exc).__name__}: {exc}"
     if failure:

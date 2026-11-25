@@ -38,12 +38,8 @@ def _iso(epoch):
 
 
 class World:
-    """Fake DEMI API plus fake store. Follows the lease contract closely enough to judge the runner.
-
-    `faults[label]` is a list consumed one per request before normal handling: a `run.Response` is
-    returned as is, an exception is raised. Labels: pending, sweep, lease, commit, report, download,
-    upload. `now` is the clock both sides read; the runner's `time` is patched to it.
-    """
+    """Fake DEMI API and store. `faults[label]`: per request, a Response is returned or an exception
+    raised before normal handling. `now` is the clock both sides read."""
 
     def __init__(self):
         self.objects = {}
@@ -262,7 +258,7 @@ def test_title_mode_writes_original_plus_one_update_and_reports_titled(world):
 
 
 def test_commit_without_if_match_uploads_and_the_row_is_titled(world):
-    # The NRS store answers 412 to If-Match on old objects, so the commit no longer sends it.
+    # The NRS store answers 412 to If-Match on old objects, so the commit must not send it.
     original = _pdf()
     world.add("d1", original)
 
@@ -393,6 +389,30 @@ def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog
 
     assert outcomes == {"error": 1}
     assert "id=d1 mode=title result=error reason=RuntimeError: boom" in caplog.text
+
+
+def test_unexpected_error_in_a_row_logs_its_traceback_once(world, caplog, monkeypatch):
+    world.add("d1", _pdf())
+
+    def boom(*_):
+        raise TypeError("boom")
+    monkeypatch.setattr(run.titler, "set_title", boom)
+
+    run.run(_client(world), max_rows=10, live=True)
+
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert [r.exc_info[0] for r in tracebacks] == [TypeError]
+
+
+def test_expected_failure_in_a_row_is_reported_without_a_traceback(world, caplog):
+    world.add("d1", _pdf())
+    world.faults["download"] = [ConnectionResetError()] * run.ATTEMPTS
+
+    outcomes = run.run(_client(world), max_rows=10, live=True)
+
+    assert outcomes == {"error": 1}
+    assert json.loads(world.calls("report")[0]["body"])["reason"] == "download: ConnectionResetError"
+    assert [r for r in caplog.records if r.exc_info] == []
 
 
 def test_put_that_dies_mid_body_leaves_the_original(world):

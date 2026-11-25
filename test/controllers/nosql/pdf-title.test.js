@@ -287,13 +287,13 @@ test('pdf title lease API', async (t) => {
     }
   });
 
-  await t.test('the backup gate refusing stops the lease before any write', async (t) => {
+  await t.test('the backup gate refusing stops the lease before any backup and records why', async (t) => {
     const w = world(t, { gate: { ok: false, reason: 'no-backup' } });
     const res = await lease();
     assert.equal(res.status, 409);
     assert.equal(res.body.reason, 'no-backup');
     assert.equal(w.calls.copies.length, 0);
-    assert.equal(w.calls.patches.length, 0);
+    assert.deepEqual(Object.keys(w.row().pdfTitle.refused), ['reason', 'at']);
   });
 
   await t.test('a backup whose MD5 no longer matches parks the row for review', async (t) => {
@@ -523,7 +523,7 @@ test('pdf title lease API', async (t) => {
     assert.equal((await pending()).length, 1, 'offered again');
   });
 
-  await t.test('a failure reason in a plain report is logged with the release, never stored', async (t) => {
+  await t.test('a failure reason in a plain report below the cap is logged with the release, never stored', async (t) => {
     const released = async (reason) => {
       const w = world(t);
       const logged = t.mock.method(logger, 'info', () => {});
@@ -545,7 +545,7 @@ test('pdf title lease API', async (t) => {
     assert.ok(!('workerFailure' in await released('   ')), 'a blank reason is ignored');
   });
 
-  await t.test('a failure reason before commit is logged with the release, never stored', async (t) => {
+  await t.test('a failure reason before commit below the cap is logged with the release, never stored', async (t) => {
     const w = world(t);
     const logged = t.mock.method(logger, 'info', () => {});
     const leased = await lease();
@@ -1011,11 +1011,11 @@ test('pdf title lease API', async (t) => {
       assert.equal(w.row().pdfTitle.status, undefined);
     });
 
-    await t.test('a title clears the count of leases that ended with no report', async (t) => {
-      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 9 } }] });
+    await t.test('a title clears the counts of leases that ended with no report or a failure', async (t) => {
+      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 9, workerFailures: 9 } }] });
       await titled(w);
       assert.equal(w.row().pdfTitle.status, 'titled');
-      assert.equal(w.row().pdfTitle.releases, null);
+      assert.deepEqual([w.row().pdfTitle.releases, w.row().pdfTitle.workerFailures], [null, null]);
     });
 
     await t.test('listing has no side effects', async (t) => {

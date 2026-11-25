@@ -12,7 +12,7 @@ const cosmos = require('../../db/cosmos-nosql');
 const storage = require('../../storage');
 const backupCheck = require('../../helpers/backup-check');
 const {
-  isSealed, isFromEagle, ineligibleReason, modeFor, PENDING_WHERE, CLEAN_SAFE
+  isSealed, isFromEagle, ineligibleReason, modeFor, failureFields, refusalFields, isBackingOff, cleanReason, PENDING_WHERE, CLEAN_SAFE
 } = require('../../helpers/pdf-title');
 const { checkTail, refuse: refuseRead } = require('../../helpers/pdf-tail');
 const { readOriginal } = require('../../helpers/pdf-original');
@@ -92,12 +92,12 @@ function expectedNow(row) {
     : { length: original.length, sha256: original.sha256 };
 }
 
-/** The fields of the record that belong to this file, without lease state. A new key starts empty. */
+/** The fields of the record that belong to this file, without lease or refusal state. A new key starts empty. */
 function baseRecord(row) {
   const record = recordOf(row);
   if (!record || record.sourceKey !== row.s3Key) return { sourceKey: row.s3Key };
   // eslint-disable-next-line no-unused-vars
-  const { lease, inFlight, ...rest } = record;
+  const { lease, inFlight, refused, ...rest } = record;
   return rest;
 }
 
@@ -218,7 +218,7 @@ async function release(row, extra = {}) {
  */
 function skipFields(row, lease, report, workerFailure = null) {
   if (!report) {
-    if (workerFailure) return {};
+    if (workerFailure) return failureFields(recordOf(row), workerFailure);
     const releases = (recordOf(row).releases || 0) + 1;
     if (releases < MAX_SILENT_RELEASES) return { releases };
     logger.warn('[pdf-title] lease ended with no report too often; skipped', { id: row.id, releases });
@@ -329,6 +329,7 @@ async function finish(row, fields) {
     title: isRestore ? null : lease.title,
     skippedTitle: null,
     releases: null,
+    workerFailures: null,
     titledLength: isRestore ? null : inFlight.newLength,
     titledSha256: isRestore ? null : inFlight.newSha256
   });
@@ -338,12 +339,15 @@ async function finish(row, fields) {
 }
 
 /**
- * Release a lease that wrote nothing that stays. `noReport` is true when this release hit
- * MAX_SILENT_RELEASES; skipFields clears `releases` (null) only then.
+ * Release a lease that wrote nothing that stays. skipFields clears `releases` (null) only when this
+ * release hit MAX_SILENT_RELEASES, and `workerFailures` only when it parks the row.
  */
 async function endLease(row, lease, report, workerFailure) {
   const extra = skipFields(row, lease, report, workerFailure);
-  return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released', noReport: extra.releases === null };
+  const parked = extra.workerFailures === null;
+  if (parked) logger.error('[pdf-title] worker failed too often; needs review', { id: row.id, reason: extra.reason });
+  const outcome = parked ? 'needs-review' : (extra.reason ? 'skipped' : 'released');
+  return { row: await release(row, extra), outcome, noReport: extra.releases === null };
 }
 
 /**
@@ -434,7 +438,7 @@ async function workOf(rows) {
     .filter(({ row, mode }) => {
       const record = recordOf(row);
       if (!mode || !isFromEagle(row)) return false;
-      if (record && (record.lease || record.inFlight || record.status === 'needs-review')) return false;
+      if (record && (record.lease || record.inFlight || record.status === 'needs-review' || isBackingOff(record))) return false;
       return mode === 'restore' || !(Number(row.fileSize) > MAX_BYTES);
     });
   const shared = await sharedKeys(candidates.map(({ row }) => row.s3Key));
@@ -539,6 +543,13 @@ function leaseMode(row, requested) {
   return { mode };
 }
 
+/** 409 that records the refusal on the row, so the work list backs off (an md5-mismatch is parked). */
+async function refuseRecorded(res, row, reason) {
+  logger.warn('[pdf-title] lease refused and recorded', { id: row.id, reason });
+  await save(row, { ...baseRecord(row), ...refusalFields(reason, nowIso()) });
+  return refuse(res, 409, reason);
+}
+
 /**
  * POST /documents/:id/pdf-title/lease[?mode=restore] — checks, archive gate, lease, frozen backup,
  * GET link. 409 with a reason when the row may not be leased, 412 when another worker won the race.
@@ -563,7 +574,7 @@ async function lease(req, res) {
     const title = mode === 'title' ? pdfTitleFor(row) : null;
 
     const stat = await storage.statObject(row.s3Key);
-    if (!stat || !stat.etag) return refuse(res, 409, 'no-object');
+    if (!stat || !stat.etag) return refuseRecorded(res, row, 'no-object');
     const expected = expectedNow(row);
     if (expected && stat.size !== expected.length) {
       await save(row, { ...baseRecord(row), status: 'needs-review', reason: 'record-mismatch', at: nowIso() });
@@ -585,13 +596,7 @@ async function lease(req, res) {
       ? (original.etag ? await backupCheck.assertBackedUp(row.s3Key, { size: original.length, etag: original.etag })
         : { ok: false, reason: 'no-backup' })
       : await backupCheck.assertBackedUp(row.s3Key, { size: stat.size, etag: stat.etag });
-    if (!gate.ok) {
-      logger.warn('[pdf-title] lease refused by the backup gate', { id: row.id, reason: gate.reason });
-      if (gate.reason === 'md5-mismatch') {
-        await save(row, { ...baseRecord(row), status: 'needs-review', reason: gate.reason, at: nowIso() });
-      }
-      return refuse(res, 409, gate.reason);
-    }
+    if (!gate.ok) return refuseRecorded(res, row, gate.reason);
 
     // The wanted title rides on the lease: the record's own title names what the file holds.
     const leaseRecord = {
@@ -829,11 +834,6 @@ async function commit(req, res) {
     if (isPreconditionFailed(err)) return refuse(res, 412, 'lease-race');
     return serverError(res, err, '[pdf-title] commit failed');
   }
-}
-
-/** A worker's reason: short, printable, one line. */
-function cleanReason(reason, max = 200) {
-  return String(reason).replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 /**
