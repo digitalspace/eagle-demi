@@ -21,8 +21,7 @@ function code(source) {
   let out = '';
   let at = 0;
   for (const { range: [start, end] } of linter.getSourceCode().getAllComments()) {
-    // A block comment's line breaks stay, so code on either side does not join into one line.
-    out += source.slice(at, start) + source.slice(start, end).replace(/[^\n]/g, '');
+    out += source.slice(at, start);
     at = end;
   }
   return out + source.slice(at);
