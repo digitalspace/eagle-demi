@@ -12,6 +12,7 @@ const { logger } = require('../utils/logger');
 const { inClause, quote } = require('../helpers/access-odata');
 const { mapLimit } = require('../utils/worker-pool');
 const { HL_PRE, HL_POST, snippetFrom, markedField } = require('./marks');
+const { isAnalyzerStopword } = require('./stopwords');
 
 const API_VERSION = '2024-07-01';
 
@@ -272,24 +273,6 @@ const FUZZY_BOOST = 0.5;
  * Lowercased to plain terms, which the lowercasing analyzer still matches.
  */
 const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
-
-/**
- * Words the analyzer drops: a `~1` or `*` variant of one asks for a literal the index lacks, and
- * one such clause zeroes the AND. Errs wide: a wrong entry only costs one prefix expansion.
- */
-const ANALYZER_STOPWORDS = new Set([
-  // Measured on the live index: `searchChunks({ keywords: word, fuzzy: false })` counts 0.
-  'from', 'hers', 'herself', 'himself', 'itself', 'mine', 'myself', 'ours', 'ourselves', 'that',
-  'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself',
-  // Standard English stop set, inferred from en.microsoft; the Analyze API is 403 to the app.
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in', 'into', 'is', 'it',
-  'no', 'not', 'of', 'on', 'or', 'such', 'the', 'then', 'there', 'to', 'was', 'will'
-]);
-
-/** The one check every `~1` or `*` append goes through. */
-function isAnalyzerStopword(term) {
-  return ANALYZER_STOPWORDS.has(term.toLowerCase());
-}
 
 /**
  * `(term OR term~1)` per term, ANDed. The plain arm keeps stemming, which the fuzzy arm skips.
@@ -899,7 +882,7 @@ async function searchChunks(opts = {}) {
     semantic: true,
     // This `select` is what stops the API shipping whole chunks — see CHUNK_SELECT.
     select: CHUNK_SELECT,
-    highlight: 'content'
+    searchFields: 'content', highlight: 'content'
   });
 
   return {
