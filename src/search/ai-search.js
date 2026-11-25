@@ -956,6 +956,20 @@ async function searchProjects(opts = {}) {
   };
 }
 
+/** Every project id leg two matches, paged by id: relevance ties reorder between requests. */
+async function matchingProjectIds(opts, prefix) {
+  const rows = [];
+  let page;
+  do {
+    page = await runSearch(config().projectsIndex, {
+      keywords: opts.keywords, fuzzy: opts.fuzzy, prefix, filter: opts.projectFilter, select: 'id',
+      searchFields: LEG_TWO_SEARCH_FIELDS, orderby: 'id asc', top: SERVICE_MAX_TOP, skip: rows.length
+    });
+    rows.push(...page.value);
+  } while (page.value.length === SERVICE_MAX_TOP && rows.length < Math.min(page.count, MAX_SKIP));
+  return { ids: rows.map(p => String(p.id)).filter(Boolean), degraded: page.degraded };
+}
+
 /**
  * Two legs: direct metadata matches, then documents of projects whose name matches. Documents
  * carry no project name in the index, and without leg two most "Ajax" hits are lost.
@@ -970,8 +984,6 @@ async function searchDocuments(opts = {}) {
   // A count still runs both legs, since the total is their sum; one row each is the smallest page.
   const countOnly = opts.countOnly === true;
   const top = countOnly ? 1 : Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
-  const select = DOCUMENT_SELECT;
-  const searchFields = DOCUMENT_SEARCH_FIELDS;
   // Resolved once: leg two's exclusion clause must repeat leg one's query exactly, `*` included.
   const prefix = opts.prefix !== false;
 
@@ -979,8 +991,8 @@ async function searchDocuments(opts = {}) {
     ...opts,
     top,
     prefix,
-    searchFields,
-    select: countOnly ? 'id' : select,
+    searchFields: DOCUMENT_SEARCH_FIELDS,
+    select: countOnly ? 'id' : DOCUMENT_SELECT,
     ...(countOnly ? {} : { highlight: 'displayName,description' })
   });
 
@@ -992,29 +1004,19 @@ async function searchDocuments(opts = {}) {
   // Leg two runs on every page, since eagle-public pages by a total that counts its rows. Never with
   // no keyword: matching every project name would widen the document filter to the whole corpus.
   if (opts.projectFilter !== undefined && !opts.matchAll) {
-    const projects = await runSearch(config().projectsIndex, {
-      keywords: opts.keywords,
-      fuzzy: opts.fuzzy,
-      prefix,
-      filter: opts.projectFilter,
-      searchFields: LEG_TWO_SEARCH_FIELDS,
-      select: 'id',
-      top: MAX_PROJECT_FANOUT
-    });
+    const projects = await matchingProjectIds(opts, prefix);
     legs.push(projects);
-
-    const projectIds = projects.value.map(p => String(p.id)).filter(Boolean);
-    if (projectIds.length > 0) {
+    if (projects.ids.length > 0) {
       // The document ACL still applies. `not search.ismatch` with leg one's exact query makes the
       // legs disjoint, so paging is leg one then leg two with no repeats or gaps.
       const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, prefix);
-      const scope = `${inClause('projectId', projectIds)} and ` +
-        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
+      const scope = `${inClause('projectId', projects.ids)} and ` +
+        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${DOCUMENT_SEARCH_FIELDS}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
         // Only the rows the page still lacks; one when full, as the request is then for the count.
         top: Math.max(1, top - items.length),
-        select: countOnly ? 'id' : select,
+        select: countOnly ? 'id' : DOCUMENT_SELECT,
         orderby: opts.orderby,
         // Leg one owns positions 0..direct.count, so this offset is exact and stateless.
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
@@ -1183,9 +1185,6 @@ function isMissingIndex(err, index) {
   // "No index with the name 'activities' was found in the service" is the service's own wording.
   return message.includes('was not found') || Boolean(index) && message.includes(index);
 }
-
-/** Project ids beyond this add nothing: the document page is capped long before they matter. */
-const MAX_PROJECT_FANOUT = 25;
 
 /**
  * Remove one row from an index by key: indexers never see a delete, so nothing else will.
