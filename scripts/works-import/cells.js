@@ -94,6 +94,8 @@ function pick(row, columns, ref, flags) {
 }
 
 const blank = rec => Object.values(rec).every(v => v == null);
+// Days is a formula pre-filled in every slot, so a slot holding only Days is empty.
+const blankSlot = ({ days: _days, ...rest }) => blank(rest);
 
 function rangeFlags(source, rec, ref, flags) {
   for (const [start, end] of source.ranges || []) {
@@ -104,7 +106,7 @@ function rangeFlags(source, rec, ref, flags) {
 // Ids and slot numbers are pre-filled far below the data, so a nameless row only counts when it holds more.
 function unnamedWithData(base, row, slots, ref) {
   const { id: _id, name: _name, ...rest } = base;
-  return !blank(rest) || slots.some(columns => !blank(pick(row, columns, ref, [])));
+  return !blank(rest) || slots.some(columns => !blankSlot(pick(row, columns, ref, [])));
 }
 
 function readSheet(ws, source, file, out) {
@@ -131,7 +133,12 @@ function readSheet(ws, source, file, out) {
       const slotRef = { ...ref, slot: i + 1 };
       const slotFlags = [];
       const fields = pick(row, columns, slotRef, slotFlags);
-      if (blank(fields)) return;
+      if (blankSlot(fields)) return;
+      // Days over a =NOW() End Date counts only to the day the file was saved.
+      if (fields.days != null && slotFlags.some(f => f.field === 'endDate' && f.kind === 'nowFormula')) {
+        fields.days = null;
+        slotFlags.push({ ...slotRef, field: 'days', kind: 'nowFormula' });
+      }
       rangeFlags(source, fields, slotRef, slotFlags);
       flags.push(...slotFlags);
       out.records[source.key].push({ ref: slotRef, id: base.id, name: base.name, ...fields });

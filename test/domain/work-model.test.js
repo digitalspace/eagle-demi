@@ -11,6 +11,7 @@ const { childIdOf, inEffect, newWorkId, sourceKeyOf, summaryOf, transitionDateOf
 const SHEET_A = 'sheet-00000000-0000-4000-8000-00000000000a';
 const work = (fields) => ({ id: SHEET_A, source: 'sheet', projectId: 'project-alpha', workTypeCode: 'amendment', ...fields });
 const rulesOf = (result) => (result.errors || []).map(error => error.rule);
+const SHEET_DAYS = Object.freeze({ kind: 'suspension', startDate: '2010-01-01', endDate: '2010-01-31', days: 31, daysSource: 'sheet' });
 
 test('work-model re-exports every override name, so callers import one module', () => {
   for (const name of ['OVERRIDE_MARKER_ID', 'OVERRIDE_TYPES', 'TRACK_WORK_TYPE_CODES', 'hiddenByOverride', 'matchEvents',
@@ -164,6 +165,24 @@ test('validateWork content', async (t) => {
     assert.deepStrictEqual(rulesOf(validateWork(doc)), ['days']);
   });
 
+  await t.test('a sheet work keeps the sheet\'s own days over its date span', () => {
+    assert.strictEqual(validateWork(work({ phases: [{ interruptions: [SHEET_DAYS] }] })).ok, true);
+  });
+
+  await t.test('a days source on a Track work, or other than sheet, is refused', () => {
+    const track = { id: 'track-12', projectId: '12', phases: [{ interruptions: [SHEET_DAYS] }] };
+    assert.deepStrictEqual(rulesOf(validateWork(track)), ['days-source']);
+    const other = work({ phases: [{ interruptions: [{ ...SHEET_DAYS, daysSource: 'track' }] }] });
+    assert.deepStrictEqual(rulesOf(validateWork(other)), ['days-source']);
+  });
+
+  await t.test('sheet days must be a whole number of at least 0', () => {
+    const withDays = (days) => rulesOf(validateWork(work({ phases: [{ interruptions: [{ ...SHEET_DAYS, days }] }] })));
+    assert.deepStrictEqual(withDays(-1), ['days']);
+    assert.deepStrictEqual(withDays(4.5), ['days']);
+    assert.deepStrictEqual(withDays('31'), ['days']);
+  });
+
   await t.test('validator errors carry no value', () => {
     const planted = 'PLANTED';
     const doc = {
@@ -204,6 +223,10 @@ test('summaryOf', async (t) => {
   await t.test('suspension days = end minus start', () => {
     assert.strictEqual(summaryOf(base).suspendedDays, 30);
     assert.strictEqual(summaryOf(base).extensionDays, 10);
+  });
+
+  await t.test('a sheet days suspension counts by its days, not its dates', () => {
+    assert.strictEqual(summaryOf({ ...base, phases: [{ interruptions: [SHEET_DAYS] }] }).suspendedDays, 31);
   });
 
   await t.test('effort is elapsed minus suspended; phase days add up the phases', () => {

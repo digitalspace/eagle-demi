@@ -10,7 +10,7 @@ const under = (band, cols) => cols.map(([col, field, header, type = T]) => [col,
 const blocks = (from, count, band, columns) => ({ from, count, band: s => `${band} ${pad(s)}`, columns });
 const ID_NAME = [...under('ID', [['A', 'id', 'ID', 'id']]), ...under('Project Information', [['B', 'name', 'Name']])];
 const INTERRUPTION = [[0, null, 'No.'], [1, 'type', 'Type'], [2, 'appliedTo', 'Applied To'],
-  [3, 'startDate', 'Start Date', D], [4, 'endDate', 'End Date', D], [5, null, 'Days']];
+  [3, 'startDate', 'Start Date', D], [4, 'endDate', 'End Date', D], [5, 'days', 'Days']];
 const START_END = [['startDate', 'endDate']];
 const MAIN = { bandRow: 3, headerRow: 4 };
 
@@ -53,6 +53,7 @@ const SOURCES = [
       ...under('Scope (C)', [['F', 's11Order', 's.11/14 Order', D]]),
       ...under('AIR (D)', [['H', 'airAccepted', 'AIR Accepted', D]]),
       ...under('Evaluation (F)', [['N', 'start30', 'Start (30)', D]]),
+      ...under('Extra Time (G)', [['O', 'startExtra', 'Start Extra', D]]),
       ...under('Review (H)', [['Q', 'start180', 'Start (180)', D]]),
       ...under('Referral (I)', [['S', 'start45', 'Start (45)', D]]),
       ...under('Decision (J)', [['U', 'decisionDate', 'Date', D], ['V', 'decision', 'Decision']])] },

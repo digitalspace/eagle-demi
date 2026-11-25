@@ -394,6 +394,53 @@ test('suspension outside its phase lands by date', () => {
   assert.deepStrictEqual(reasons(result, 'noPhase'), []);
 });
 
+const extension = (fields) => ({
+  ref: ref('Extensions', 1), id: 101, type: 'Extension s.24(4)', appliedTo: 'Evaluation', startDate: '2006-01-05', endDate: '2006-02-18', ...fields
+});
+const extended = (fields) => {
+  const result = run({ projects: [register({ start30: '2006-01-01' })], extensions: [extension(fields)] });
+  const [one] = assessments(result).flatMap(work => work.phases.flatMap(phase => phase.interruptions));
+  return { result, one, listed: result.report.filter(entry => ['daysDiffer', 'badDays'].includes(entry.reason)) };
+};
+
+test('an extension whose Days differ from its dates keeps the sheet Days, is listed daysDiffer, and its work loads', () => {
+  const { result, one, listed } = extended({ days: 45 });
+  assert.deepStrictEqual([one.days, one.daysSource], [45, 'sheet']);
+  assert.deepStrictEqual(listed.map(entry => [entry.reason, entry.days, entry.dateDays]), [['daysDiffer', 45, 44]]);
+  assert.deepStrictEqual([assessments(result).length, reasons(result, 'invalid')], [1, []]);
+});
+
+test('Days equal to the dates or blank store end minus start; Days 4.5 does too and is listed badDays', () => {
+  for (const [days, reasonList] of [[44, []], [null, []], [4.5, ['badDays']]]) {
+    const { one, listed } = extended({ days });
+    assert.deepStrictEqual([one.days, Object.hasOwn(one, 'daysSource'), listed.map(entry => entry.reason)], [44, false, reasonList], `Days ${days}`);
+  }
+});
+
+test('an extension with no end date keeps the sheet Days without a daysDiffer entry', () => {
+  const { one, listed } = extended({ endDate: null, days: 30 });
+  assert.deepStrictEqual([one.days, one.daysSource, listed], [30, 'sheet', []]);
+});
+
+const extraTimeline = [{ ref: ref('2002'), name: 'Sample Mine', start30: '2005-01-01', startExtra: '2005-01-31', start180: '2005-03-01' }];
+const withExtra = (records) => run({ projects: [register({ intakeDate: '2004-06-01', determinationDate: '2004-09-01' })], timeline2002: extraTimeline, ...records });
+const suspended = (slot, appliedTo, startDate) => ({ ref: ref('Suspensions', slot), id: 101, type: 'Suspension s.24(2)', appliedTo, startDate, endDate: '2005-02-25' });
+
+test('Start Extra from Timelines makes an Extra Time phase and is not listed timelineDiffers', () => {
+  const result = withExtra({});
+  assert.deepStrictEqual(assessments(result)[0].phases.slice(2).map(phase => [phase.name, phase.startDate, phase.endDate]),
+    [['Evaluation', '2005-01-01', '2005-01-31'], ['Extra Time', '2005-01-31', '2005-03-01'], ['Application Review', '2005-03-01', '2008-05-01']]);
+  assert.deepStrictEqual(reasons(result, 'timelineDiffers').map(entry => entry.field), ['start30', 'start180']);
+});
+
+test('suspensions dated inside Extra Time land on it, one applied to Evaluation listed placedByDate naming Evaluation', () => {
+  const result = withExtra({ suspensions: [suspended(1, null, '2005-02-10'), suspended(2, 'Evaluation', '2005-02-15')] });
+  const holders = assessments(result)[0].phases.filter(phase => phase.interruptions.length);
+  assert.deepStrictEqual(holders.map(phase => [phase.name, phase.interruptions.map(one => one.startDate)]), [['Extra Time', ['2005-02-10', '2005-02-15']]]);
+  assert.deepStrictEqual(reasons(result, 'placedByDate').map(entry => [entry.ref.slot, entry.phase, entry.named]),
+    [[1, 'Extra Time', undefined], [2, 'Extra Time', 'Evaluation']]);
+});
+
 test('an Other interruption takes its kind from the tab it was read on', () => {
   const result = run({ projects: [register({ start180: '2006-01-01' })],
     extensions: [{ ref: ref('Extensions', 1), id: 101, type: 'Other', appliedTo: 'Review', startDate: '2006-02-01', endDate: '2006-03-01' }] });

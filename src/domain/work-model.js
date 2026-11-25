@@ -121,9 +121,18 @@ function transitionErrors(doc, errors) {
   }
 }
 
-function interruptionErrors(interruption, path, errors) {
+function interruptionErrors(interruption, path, workSource, errors) {
   itemErrors(interruption, path, ['startDate', 'endDate'], errors);
   if (!INTERRUPTION_KINDS.includes(interruption.kind)) errors.push({ path: `${path}.kind`, rule: 'kind' });
+  // Only a sheet work may keep the sheet's own Days count over its date span.
+  if (given(interruption.daysSource)) {
+    if (interruption.daysSource !== 'sheet' || workSource !== 'sheet') {
+      errors.push({ path: `${path}.daysSource`, rule: 'days-source' });
+    } else if (!Number.isInteger(interruption.days) || interruption.days < 0) {
+      errors.push({ path: `${path}.days`, rule: 'days' });
+    }
+    return;
+  }
   const days = interruptionSpanOf(interruption, {});
   if (given(interruption.days) && days !== null && interruption.days !== days) errors.push({ path: `${path}.days`, rule: 'days' });
 }
@@ -152,7 +161,7 @@ function workErrors(doc) {
       checkId(milestone, path);
     });
     eachChild(phase, 'interruptions', at, errors, (interruption, path) => {
-      interruptionErrors(interruption, path, errors);
+      interruptionErrors(interruption, path, doc.source, errors);
       checkId(interruption, path);
     });
   });
@@ -200,7 +209,8 @@ function summaryOf(work) {
   const range = workRangeOf(work);
   const phases = phasesOf(work);
   const interruptions = phases.flatMap(phase => childrenOf(phase, 'interruptions'));
-  const daysOf = (kind) => totalOf(interruptions.filter(x => x.kind === kind).map(x => interruptionSpanOf(x, range)));
+  const spanOfInterruption = (x) => (x.daysSource === 'sheet' ? x.days : interruptionSpanOf(x, range));
+  const daysOf = (kind) => totalOf(interruptions.filter(x => x.kind === kind).map(spanOfInterruption));
   const elapsedDays = spanOf(range.start, range.end);
   const suspendedDays = daysOf('suspension');
   const decided = dayOf(work.decisionDate);

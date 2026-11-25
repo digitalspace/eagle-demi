@@ -87,6 +87,48 @@ test('2002 Evaluation numberOfDays 30, legislated true', () => {
   ]);
 });
 
+const EXTRA_ROW = { start30: '2005-01-01', start180: '2005-03-01' };
+const spansOf = (fields) => {
+  const { works, listed } = worksOf(register({ ...EXTRA_ROW, ...fields }));
+  const phases = works[0].phases.filter(phase => phase.name !== 'Pre-EA')
+    .map(phase => [phase.name, phase.startDate, phase.endDate, phase.numberOfDays, phase.legislated]);
+  return { phases, outOfOrder: reasonsOf(listed, 'outOfOrderDate').map(one => one.field), work: works[0] };
+};
+const BLANK_EXTRA = [['Evaluation', '2005-01-01', '2005-03-01', 30, true], ['Application Review', '2005-03-01', '2008-05-01', 180, true]];
+
+test('Start Extra on or after Start (30) ends Evaluation and starts an Extra Time phase with no limit', () => {
+  for (const startExtra of ['2005-01-31', '2005-01-01']) {
+    const { phases, outOfOrder, work } = spansOf({ startExtra });
+    assert.deepStrictEqual(phases, [['Evaluation', '2005-01-01', startExtra, 30, true],
+      ['Extra Time', startExtra, '2005-03-01', undefined, undefined], ['Application Review', '2005-03-01', '2008-05-01', 180, true]],
+    `startExtra ${startExtra}`);
+    assert.deepStrictEqual(outOfOrder, []);
+    assert.ok(validateWork(work).ok);
+  }
+});
+
+test('Start Extra after Start (180) is dropped alone and listed; Review keeps its start milestone', () => {
+  const { phases, outOfOrder, work } = spansOf({ startExtra: '2005-03-15' });
+  assert.deepStrictEqual([phases, outOfOrder], [BLANK_EXTRA, ['startExtra']]);
+  assert.ok(codesOf(work.phases.find(phase => phase.name === 'Application Review')).includes('review-start'));
+});
+
+test('Start Extra on Start (180), before Start (30) or blank gives no Extra Time; only the early one is listed', () => {
+  for (const [startExtra, listed] of [['2005-03-01', []], ['2004-12-15', ['startExtra']], [null, []]]) {
+    const { phases, outOfOrder } = spansOf({ startExtra });
+    assert.deepStrictEqual([phases, outOfOrder], [BLANK_EXTRA, listed], `startExtra ${startExtra}`);
+  }
+});
+
+test('with no Start (180), Extra Time runs to Start (45); a Start Extra after Start (45) is listed', () => {
+  const noReview = { start180: null, start45: '2005-04-01' };
+  const { phases } = spansOf({ ...noReview, startExtra: '2005-01-31' });
+  assert.deepStrictEqual(phases.map(([name, start, end]) => [name, start, end]), [['Evaluation', '2005-01-01', '2005-01-31'],
+    ['Extra Time', '2005-01-31', '2005-04-01'], ['Referral', '2005-04-01', '2008-05-01']]);
+  const late = spansOf({ ...noReview, startExtra: '2005-04-15' });
+  assert.deepStrictEqual([late.phases.map(([name]) => name), late.outOfOrder], [['Evaluation', 'Referral'], ['startExtra']]);
+});
+
 test('F.A.R. Yes gives a Further Assessment phase, last in order, with no dates', () => {
   const phases = phasesOf({ start45: '2007-08-01', far: 'Yes' });
   const last = phases.at(-1);

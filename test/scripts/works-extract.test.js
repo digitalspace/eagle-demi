@@ -42,12 +42,15 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   assert.deepEqual([fourth.substantialStartStatus, fourth.substantialStartDate, fourth.substantialStartFlag],
     ['Official Decision', '2010-06-01', 'Yes']);
   assert.equal(records.amendments.find(r => r.id === 45 && r.ref.slot === 2).endDate, null);
-  assert.deepEqual(records.suspensions.map(r => [r.ref.slot, r.appliedTo, r.endDate]),
-    [[1, 'Review', null], [2, 'Evaluation', '1998-04-01'], [1, 'Evaluation', '2005-07-01']]);
-  assert.deepEqual(records.timeline2002.map(r => [r.name, r.decision, r.decisionDate]),
-    [[PROJECT_NAMES[2], 'Incomplete/Inactive', null]]);
+  assert.deepEqual(records.suspensions.map(r => [r.id, r.ref.slot, r.appliedTo, r.endDate, r.days]),
+    [[45, 1, 'Review', null, null], [45, 2, 'Evaluation', '1998-04-01', 32], [233, 1, 'Evaluation', '2005-07-01', 30]],
+    'Days is the cached cell value unless End Date is =NOW(); a slot holding only a Days formula is no record');
+  assert.deepEqual(records.extensions.map(r => r.days), [28]);
+  assert.deepEqual(records.timeline2002.map(r => [r.name, r.decision, r.decisionDate, r.startExtra]),
+    [[PROJECT_NAMES[2], 'Incomplete/Inactive', null, '2003-08-25']]);
 
   const kinds = flags.map(f => `${f.sheet}:${f.row}:${f.slot || 0}:${f.field}:${f.kind}`).sort();
+  // Suspensions row 7 has an id and a Days formula result only, so it raises no unnamedRow.
   assert.deepEqual(kinds, [
     'Amendments:31:0:id:badId',
     'Amendments:5:1:endDate:endBeforeStart',
@@ -69,6 +72,7 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
     'Projects:9:0:name:unnamedRow',
     'Section 13:31:0:id:badId',
     'Suspensions:31:0:id:badId',
+    'Suspensions:5:1:days:nowFormula',
     'Suspensions:5:1:endDate:nowFormula'
   ]);
   assert.deepEqual(counts, {
@@ -77,14 +81,24 @@ test('fixture rules: \'045\' reads as 45, \'---\' and \'n/a\' as null, sentinel 
   });
 });
 
-test('a block whose band label moved is refused before any row is read', async () => {
+async function relabelled(fileName, tab, cell, value) {
   const dir = copyOfSheets();
-  const file = path.join(dir, '03 - Project Suspension Data.xlsx');
+  const file = path.join(dir, fileName);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(file);
-  workbook.getWorksheet('Suspensions').getCell('E3').value = 'Suspension 02';
+  workbook.getWorksheet(tab).getCell(cell).value = value;
   await workbook.xlsx.writeFile(file);
+  return dir;
+}
+
+test('a block whose band label moved is refused before any row is read', async () => {
+  const dir = await relabelled('03 - Project Suspension Data.xlsx', 'Suspensions', 'E3', 'Suspension 02');
   await assert.rejects(readFolder(dir), /column E is not "Suspension 01" \/ "No\."/);
+});
+
+test('a 2002 tab whose column O is not Start Extra is refused', async () => {
+  const dir = await relabelled('Calculating Timelines for the 2002 Act.xlsx', '2002', 'O9', 'Days');
+  await assert.rejects(readFolder(dir), /column O is not "Extra Time \(G\)" \/ "Start Extra"/);
 });
 
 test('a filtered table and hidden rows leave every read value as it was', async () => {

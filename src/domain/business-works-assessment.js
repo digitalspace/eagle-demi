@@ -15,9 +15,10 @@ const LAST_SHEET_DAY = '2024-12-31';
 const UNKNOWN_FIELDS = Object.freeze(['intakeDate', 'determinationDate', 'decisionDate']);
 const WORK_SCHEMA_VERSION = 1;
 const PHASE_START = Object.freeze({
-  'Pre-EA': 'intakeDate', 'Pre-Application': 'determinationDate', Evaluation: 'start30',
+  'Pre-EA': 'intakeDate', 'Pre-Application': 'determinationDate', Evaluation: 'start30', 'Extra Time': 'startExtra',
   'Application Review': 'start180', Referral: 'start45'
 });
+const EXTRA_TIME = 'Extra Time';
 const LEGISLATED_DAYS_2002 = Object.freeze({ Evaluation: 30, 'Application Review': 180, Referral: 45 });
 // [milestone code, register field, phase, position, project block field it stands for]
 const MILESTONES = Object.freeze([
@@ -95,12 +96,29 @@ function decisionOf(ctx, label) {
   return state ? { workState: state.code } : { unknown: true };
 }
 
+/** Start Extra, kept only from Evaluation's start up to before the next kept start or the decision; listed otherwise, unless on that next day. */
+function extraStartOf(row, starts, decided, list) {
+  const when = datedOf(row, 'startExtra');
+  if (!when.day) return null;
+  const names = Object.keys(PHASE_START);
+  const next = names.slice(names.indexOf(EXTRA_TIME) + 1).map(name => starts.get(name)?.day).find(Boolean) || decided;
+  const from = starts.get('Evaluation')?.day;
+  if (from && from <= when.day && (!next || when.day < next)) return when;
+  if (!from || when.day !== next) list('outOfOrderDate', { field: 'startExtra' });
+  return null;
+}
+
 /** The start columns that make a phase; one before an earlier start or after the decision is dropped and listed. */
 function phaseStarts(row, list) {
   const decided = datedOf(row, 'decisionDate').day;
   const starts = new Map();
   let latest = null;
   for (const [name, field] of Object.entries(PHASE_START)) {
+    // Start Extra never moves `latest`, so it holds its place here and is settled after the walk.
+    if (name === EXTRA_TIME) {
+      starts.set(name, null);
+      continue;
+    }
     const when = datedOf(row, field);
     if (!when.day && !when.unknown) continue;
     if (when.day && ((latest && when.day < latest) || (decided && when.day > decided))) {
@@ -110,6 +128,9 @@ function phaseStarts(row, list) {
     latest = when.day || latest;
     starts.set(name, when);
   }
+  const extra = extraStartOf(row, starts, decided, list);
+  if (extra) starts.set(EXTRA_TIME, extra);
+  else starts.delete(EXTRA_TIME);
   return starts;
 }
 
