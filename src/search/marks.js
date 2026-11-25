@@ -1,7 +1,7 @@
 'use strict';
 
 // Highlights land inside untrusted PDF text the frontend renders as HTML. Control chars no
-// document can hold mark them; the whole fragment is escaped, then they become <mark>.
+// document can hold mark them; each piece is escaped, then marked ones become <mark>.
 const HL_PRE = '\u0001';
 const HL_POST = '\u0002';
 
@@ -15,13 +15,23 @@ function escapeHtml(text) {
 function snippetFrom(hit) {
   const highlights = (hit['@search.highlights'] && hit['@search.highlights'].content) || [];
   if (highlights.length === 0) return '';
-  // Balanced per fragment: a fragment cut can land inside a highlight and orphan a sentinel.
-  return highlights.map(balanceFragment).join(' … ');
+  return highlights.map(markFragment).join(' … ');
 }
 
 /** The `filename` tokenizer's split (azure/search/indexes), kept as a capture so `split` keeps both sides. */
 const TOKEN_SPLIT = /([A-Za-z0-9]+)/;
-const MARKED_SPAN = new RegExp(`${HL_PRE}([^${HL_PRE}${HL_POST}]*)${HL_POST}`, 'g');
+const SENTINEL_SPLIT = new RegExp(`([${HL_PRE}${HL_POST}])`);
+
+/**
+ * A fragment as `{ text, marked }` pieces. The service drops a marker at either fragment edge, so
+ * text before a leading closer is marked, and an opener marks to the next marker or the end.
+ */
+function readSpans(fragment) {
+  const parts = String(fragment).split(SENTINEL_SPLIT);
+  return parts.flatMap((text, i) => (i % 2 === 1 || text === ''
+    ? []
+    : [{ text, marked: i === 0 ? parts[1] === HL_POST : parts[i - 1] === HL_PRE }]));
+}
 
 /**
  * Display markup for one selected field. Unlike `snippetFrom`, an unmatched field falls back to its
@@ -30,32 +40,24 @@ const MARKED_SPAN = new RegExp(`${HL_PRE}([^${HL_PRE}${HL_POST}]*)${HL_POST}`, '
 function markedField(hit, field) {
   const highlights = hit['@search.highlights'] || {};
   const fragments = highlights[field] || [];
-  if (fragments.length > 0) return fragments.map(balanceFragment).join(' … ');
+  if (fragments.length > 0) return fragments.map(markFragment).join(' … ');
 
   const raw = hit[field];
   if (raw === undefined || raw === null) return '';
   // A word en.microsoft drops (`mine`) matches only in the `<field>Tokens` copy. Its marked words
   // mark the field's own text, so no copy text reaches the output.
   const tokens = new Set((highlights[`${field}Tokens`] || []).flatMap(fragment =>
-    [...fragment.matchAll(MARKED_SPAN)].flatMap(([, span]) => span.toLowerCase().split(TOKEN_SPLIT))));
+    readSpans(fragment).filter(span => span.marked).flatMap(span => span.text.toLowerCase().split(TOKEN_SPLIT))));
   return String(raw).split(TOKEN_SPLIT)
     .map((part, i) => (i % 2 === 1 && tokens.has(part.toLowerCase()) ? `<mark>${part}</mark>` : escapeHtml(part)))
     .join('');
 }
 
-/**
- * Escapes, then turns sentinels into balanced `<mark>` tags: an orphan closer is dropped and an
- * open mark is closed at the end, so an innerHTML snippet cannot break the layout around it.
- */
-function balanceFragment(fragment) {
-  let depth = 0;
-  let out = '';
-  for (const ch of escapeHtml(fragment)) {
-    if (ch === HL_PRE) { depth++; out += '<mark>'; }
-    else if (ch === HL_POST) { if (depth > 0) { depth--; out += '</mark>'; } }
-    else out += ch;
-  }
-  return out + '</mark>'.repeat(depth);
+/** Each piece escaped, marked pieces wrapped, so a fragment's tags always balance in innerHTML. */
+function markFragment(fragment) {
+  return readSpans(fragment)
+    .map(({ text, marked }) => (marked ? `<mark>${escapeHtml(text)}</mark>` : escapeHtml(text)))
+    .join('');
 }
 
 module.exports = { HL_PRE, HL_POST, snippetFrom, markedField };
