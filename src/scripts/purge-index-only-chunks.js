@@ -11,6 +11,7 @@ const documents = require('../repositories/documents');
 const chunks = require('../repositories/chunks');
 const aiSearch = require('../search/ai-search');
 const { systemAccess } = require('../helpers/access-sql');
+const { quote } = require('../helpers/access-odata');
 const { mapLimit } = require('../utils/worker-pool');
 const { logger } = require('../utils/logger');
 const {
@@ -86,7 +87,7 @@ function defaultAuditPath(mode, now) {
  * a full page that adds no key means the offset hit the service ceiling, which would loop forever.
  */
 async function listIndexRows(search, index, documentId) {
-  const filter = `documentId eq '${String(documentId).replace(/'/g, "''")}'`;
+  const filter = `documentId eq ${quote(documentId)}`;
   const pageRows = search.MAX_PAGE_ROWS;
   const rows = new Map();
   for (;;) {

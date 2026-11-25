@@ -37,12 +37,15 @@ function fakeDocuments(docs) {
   };
 }
 
-/** `cosmos` maps document id to its chunk ids; the index answers from `rows` minus deletes. */
-function fakeSearch(rows, { configured = true, onList = () => {} } = {}) {
+/**
+ * The index answers from `rows` minus deletes, one row per page so every listing pages. Keys in
+ * `failKeys` come back refused, as deleteDocuments reports a rejected batch.
+ */
+function fakeSearch(rows, { configured = true, onList = () => {}, failKeys = [] } = {}) {
   const state = { deleted: [] };
   return {
     state,
-    MAX_PAGE_ROWS: 500,
+    MAX_PAGE_ROWS: 1,
     config: () => ({ configured, index: 'chunks' }),
     async runSearch(index, opts) {
       const documentId = /^documentId eq '(.*)'$/.exec(opts.filter)[1];
@@ -51,14 +54,16 @@ function fakeSearch(rows, { configured = true, onList = () => {} } = {}) {
       return { value: mine.slice(opts.skip, opts.skip + opts.top) };
     },
     async deleteDocuments(keys) {
-      state.deleted.push(...keys);
-      return [];
+      state.deleted.push(...keys.filter(key => !failKeys.includes(key)));
+      return keys.filter(key => failKeys.includes(key));
     }
   };
 }
 
+/** `cosmos` maps document id to its chunk ids, or to an Error the read throws. */
 const fakeChunks = (cosmos) => ({
   async idsForDocument(access, documentId) {
+    if (cosmos[documentId] instanceof Error) throw cosmos[documentId];
     return cosmos[documentId] || [];
   }
 });
@@ -88,6 +93,8 @@ test('a dry run deletes nothing and writes a would-delete line per index-only ro
 
 test('a live run deletes only the listed keys whose chunk id the Cosmos read lacks', async () => {
   const opts = oneLeftover();
+  // A row with no chunk id cannot be judged, so it stays.
+  opts.search = fakeSearch([row('d1', 'c0'), row('d1', 'c1'), { id: 'key-blank', documentId: 'd1' }]);
   const audit = tmpFile('ndjson');
 
   await purge(['--live', '--max-delete', '10', '--audit', audit], opts);
@@ -134,7 +141,7 @@ test('--live without --max-delete refuses before any read', async () => {
   assert.deepStrictEqual(opts.search.state.deleted, []);
 });
 
-test('the delete ceiling stops before the document whose delete would pass it', async () => {
+test('the delete ceiling allows an exact fit and stops before the delete that would pass it', async () => {
   const opts = {
     documents: fakeDocuments([{ id: 'd1', projectId: P1 }, { id: 'd2', projectId: P1 }]),
     chunks: fakeChunks({ d1: ['c9'], d2: ['c8'] }),
@@ -142,7 +149,8 @@ test('the delete ceiling stops before the document whose delete would pass it', 
     cosmosReady: true
   };
 
-  const summary = await purge(['--live', '--max-delete', '3', '--audit', tmpFile('ndjson')], opts);
+  // Two documents of 2 rows under a ceiling of 2: the first fills it exactly, the second stops.
+  const summary = await purge(['--live', '--max-delete', '2', '--audit', tmpFile('ndjson')], opts);
 
   assert.strictEqual(opts.search.state.deleted.length, 2);
   assert.strictEqual(summary.stop, 'max-delete');
@@ -192,4 +200,20 @@ test('a live run refuses a state file a dry run wrote', async () => {
       oneLeftover()),
     /another mode/
   );
+});
+
+test('a partition with a failed delete or an unjudged document is walked again on resume', async () => {
+  const state = tmpFile('json');
+  const opts = () => ({
+    documents: fakeDocuments([{ id: 'd1', projectId: P1 }, { id: 'd2', projectId: P2 }]),
+    chunks: fakeChunks({ d1: ['c1'], d2: new Error('throttled') }),
+    search: fakeSearch([row('d1', 'c0'), row('d2', 'c2', P2)], { failKeys: ['key-c0'] }),
+    cosmosReady: true
+  });
+  const args = ['--live', '--max-delete', '10', '--state', state, '--audit', tmpFile('ndjson')];
+
+  await purge(args, opts());
+  const second = await purge(args, opts());
+
+  assert.strictEqual(second.resumed, 1);
 });
