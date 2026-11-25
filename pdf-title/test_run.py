@@ -389,19 +389,43 @@ def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog
 
     assert outcomes == {"error": 1}
     assert "id=d1 mode=title result=error reason=RuntimeError: boom" in caplog.text
+    assert [r.getMessage().splitlines()[-1] for r in _tracebacks(caplog)] == ["RuntimeError: boom"]
 
 
-def test_unexpected_error_in_a_row_logs_its_traceback_once(world, caplog, monkeypatch):
+def _tracebacks(caplog):
+    return [r for r in caplog.records if "Traceback (most recent call last)" in r.getMessage()]
+
+
+def test_unexpected_error_in_a_row_logs_its_traceback_once_on_the_main_thread(world, caplog, monkeypatch):
     world.add("d1", _pdf())
 
     def boom(*_):
         raise TypeError("boom")
     monkeypatch.setattr(run.titler, "set_title", boom)
 
-    run.run(_client(world), max_rows=10, live=True)
+    run.run(_client(world), max_rows=10, live=True, concurrency=2)
 
-    tracebacks = [r for r in caplog.records if r.exc_info]
-    assert [r.exc_info[0] for r in tracebacks] == [TypeError]
+    (record,) = _tracebacks(caplog)
+    assert record.threadName == "MainThread"
+    assert record.getMessage().startswith("id=d1 mode=title unexpected error")
+    assert record.getMessage().splitlines()[-1] == "TypeError: boom"
+
+
+def test_unexpected_error_in_a_single_row_logs_its_traceback_once(world, caplog, monkeypatch):
+    _id_env(world, monkeypatch)
+    original = _pdf()
+    world.add("d1", _titled(original).data, mode="restore",
+              original={"length": len(original), "sha256": _sha(original)})
+
+    def boom(*_):
+        raise TypeError("boom")
+    monkeypatch.setattr(run, "restore", boom)
+
+    assert restore_cli.main(["--id", "d1", "--live"]) == 1
+
+    (record,) = _tracebacks(caplog)
+    assert record.threadName == "MainThread"
+    assert record.getMessage().splitlines()[-1] == "TypeError: boom"
 
 
 def test_expected_failure_in_a_row_is_reported_without_a_traceback(world, caplog):
@@ -412,7 +436,7 @@ def test_expected_failure_in_a_row_is_reported_without_a_traceback(world, caplog
 
     assert outcomes == {"error": 1}
     assert json.loads(world.calls("report")[0]["body"])["reason"] == "download: ConnectionResetError"
-    assert [r for r in caplog.records if r.exc_info] == []
+    assert _tracebacks(caplog) == []
 
 
 def test_put_that_dies_mid_body_leaves_the_original(world):
