@@ -145,7 +145,7 @@ async function sheetWorksSummaryOf(rows) {
 }
 
 const WORKPLAN_KEYS = ['workId', 'source', 'title', 'workTypeCode', 'workType', 'actYear', 'workState', 'isActive',
-  'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome', 'transitionOut', 'undated',
+  'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome', 'outcomeFrom', 'transitionOut', 'undated',
   'shownAfterFlip', 'untilTrack', 'replaces'];
 const PHASE_KEYS = ['name', 'stage', 'order', 'startDate', 'endDate', 'numberOfDays', 'legislated', 'isCompleted',
   'isSuspended', 'suspendedDate', 'undated'];
@@ -220,13 +220,15 @@ const sheetPhaseFieldsOf = (phase) => ({
   suspendedDays: sheetDaysOf(phase.interruptions, 'suspension')
 });
 
-/** `work` in the Workplans shape; `doc` is its stored document, read for what the public shape leaves out. */
-function workplanOf(projectId, projectName, work, doc) {
+/**
+ * `work` in the Workplans shape after `project` (`projectId`, `projectName`, `eagleId`); `doc` is its stored
+ * document, read for what the public shape leaves out.
+ */
+function workplanOf(project, work, doc) {
   const track = work.source === 'track';
   const storedByTrackId = new Map(listOf(doc?.phases).map(phase => [phase.trackPhaseId, phase]));
   return {
-    projectId,
-    projectName,
+    ...project,
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
     ...sheetDocFieldsOf(track ? null : doc),
@@ -242,16 +244,30 @@ function workplanOf(projectId, projectName, work, doc) {
 }
 
 /**
- * Every live work, Track and sheet, of each of `rows` in the slim Workplans shape, sorted by `projectId`.
- * Staff only; reads no WORKS_READ_SOURCES, so the public read cannot change through it.
+ * The outcome of a sheet work with none, taken from the Track works it replaces when they agree on exactly one,
+ * with `outcomeFrom: 'track'`; otherwise the work's own outcome and `outcomeFrom: null`.
+ */
+function outcomeWithTwins(work, workById) {
+  const own = { outcome: work.outcome, outcomeFrom: null };
+  if (work.source !== 'sheet' || work.outcome != null) return own;
+  const twins = new Set(work.replaces.map(twin => workById.get(twin.workId)?.outcome).filter(outcome => outcome != null));
+  return twins.size === 1 ? { outcome: [...twins][0], outcomeFrom: 'track' } : own;
+}
+
+/**
+ * Every shown work, Track and sheet, of each of `rows` in the slim Workplans shape, sorted by `projectId`. Track works
+ * the sheet override hides are left out; stored works are not changed. Staff only; reads no WORKS_READ_SOURCES.
  */
 async function workplansOf(rows) {
   if (!rows.length) return [];
   const catalog = await catalogOf();
   return (await storedAcross(rows)).sort(byProjectId).flatMap(({ row, projectId, stored, marker }) => {
     const storedById = new Map(stored.map(doc => [doc.id, doc]));
-    return markedWorksFrom(stored, marker, row, catalog).works
-      .map(work => workplanOf(projectId, row.name ?? null, work, storedById.get(work.workId)));
+    const project = { projectId, projectName: row.name ?? null, eagleId: row.eagleId ?? null };
+    const marked = markedWorksFrom(stored, marker, row, catalog).works;
+    const workById = new Map(marked.map(work => [work.workId, work]));
+    return marked.filter(work => work.shownAfterFlip)
+      .map(work => workplanOf(project, { ...work, ...outcomeWithTwins(work, workById) }, storedById.get(work.workId)));
   });
 }
 

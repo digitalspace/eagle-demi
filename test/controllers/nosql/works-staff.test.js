@@ -154,6 +154,9 @@ const MARKER = {
   trackAlive: [{ trackWorkId: 'track-9003', sourceKey: '412:alive:1' }], untilTrack: [], pairedTrackWorkIds: [TRACK_WORK.id, 'track-9003'],
   batchId: 'batch-1', provenance: {}, schemaVersion: 1
 };
+// Active, with no Track work hidden, so both works stay in the workplans response.
+const NO_HIDING_MARKER = { ...MARKER, hidden: [], trackAlive: [], pairedTrackWorkIds: [] };
+const EAGLE_ID = 'eagle-412';
 
 async function callSheet(t, user, { id = ROW.id } = {}) {
   const read = t.mock.method(projects, 'getById', async () => structuredClone(ROW));
@@ -231,12 +234,12 @@ test('sheet-works returns only sheet works, with no staff entries, marker detail
 });
 
 // Project 999 has sheet works the caller's projects read does not return.
-async function callSummary(t, user, { handler = getSheetWorksSummary, track = TRACK_WORK, sheet = SHEET_WORK } = {}) {
+async function callSummary(t, user, { handler = getSheetWorksSummary, track = TRACK_WORK, sheet = SHEET_WORK, marker = MARKER } = {}) {
   const stored = [track, { ...sheet, actYear: 1996 }, { ...SHEET_WORK, projectId: '999', actYear: 2002 }];
   const reads = [t.mock.method(works, 'liveProjectIds', async () => ['412', '999', '412']),
-    t.mock.method(projects, 'listByIds', async () => [{ id: ROW.id, name: ROW.name }])];
+    t.mock.method(projects, 'listByIds', async () => [{ id: ROW.id, name: ROW.name, eagleId: EAGLE_ID }])];
   t.mock.method(works, 'listForReadAcross', async (ids) => structuredClone(stored.filter(work => ids.includes(work.projectId))));
-  t.mock.method(works, 'getEach', async (ids) => [structuredClone(MARKER)].filter(marker => ids.includes(marker.projectId)));
+  t.mock.method(works, 'getEach', async (ids) => [structuredClone(marker)].filter(m => ids.includes(m.projectId)));
   t.mock.method(phaseCatalog, 'load', async () => ({}));
   const res = mockRes();
   await handler({ params: {}, query: {}, user }, res);
@@ -271,7 +274,30 @@ test('sheet-works summary gives counts only, for the projects the caller may rea
 const milestone = (eventType, actualDate, numberOfDays, anticipatedDate = null) =>
   ({ eventType, actualDate, anticipatedDate, numberOfDays });
 
-test('workplans gives every work of the projects the caller may read, Track rows never replacing', async (t) => {
+test('workplans leaves out the Track work the sheet override hides, which the sheet work still names', async (t) => {
+  const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans });
+  assert.deepStrictEqual(projectReads, [[resolveAccess({ user: STAFF }), ['412', '999']]]);
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.works.map(work => [work.workId, work.shownAfterFlip]), [[SHEET_WORK.id, true]]);
+  assert.strictEqual(res.body.works[0].replaces[0].workId, TRACK_WORK.id);
+});
+
+test('a sheet work with no outcome takes its hidden Track twin\'s, marked from Track, and keeps its own dates', async (t) => {
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans,
+    track: { ...TRACK_WORK, outcome: 'Amendment Granted' }, sheet: { ...SHEET_WORK, startDate: '1998-06-01' } });
+  const [sheet] = res.body.works;
+  assert.deepStrictEqual([sheet.outcome, sheet.outcomeFrom, sheet.startDate, sheet.decisionDate],
+    ['Amendment Granted', 'track', '1998-06-01', SHEET_WORK.decisionDate]);
+});
+
+test('a sheet work with its own outcome keeps it over its Track twin\'s', async (t) => {
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans,
+    track: { ...TRACK_WORK, outcome: 'Amendment Granted' }, sheet: { ...SHEET_WORK, outcome: 'Amendment Refused' } });
+  const [sheet] = res.body.works;
+  assert.deepStrictEqual([sheet.outcome, sheet.outcomeFrom], ['Amendment Refused', null]);
+});
+
+test('workplans gives every shown work with its project\'s Eagle id, Track rows never replacing', async (t) => {
   const done = {
     trackName: 'Early Engagement', startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184, sortOrder: 2,
     legislated: 1, isCompleted: true, isSuspended: false, suspendedDate: null, trackPhaseId: 55, interruptions: [],
@@ -288,17 +314,15 @@ test('workplans gives every work of the projects the caller may read, Track rows
     sortOrder: 1, isCompleted: true,
     interruptions: [{ kind: 'extension', days: 20 }, { kind: 'extension', days: 10 }, { kind: 'suspension', days: null }]
   };
-  const { res, projectReads } = await callSummary(t, STAFF, { handler: getWorkplans,
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans, marker: NO_HIDING_MARKER,
     track: { ...TRACK_WORK, ...SHEET_INFO, currentWorkPhaseId: 56, phases: [done, open] }, sheet: { ...SHEET_WORK, phases: [sheetPhase] } });
-  assert.deepStrictEqual(projectReads, [[resolveAccess({ user: STAFF }), ['412', '999']]]);
   assert.strictEqual(res.statusCode, 200);
-  assert.deepStrictEqual(res.body.works.map(work => [work.projectId, work.workId, work.source]),
-    [['412', TRACK_WORK.id, 'track'], ['412', SHEET_WORK.id, 'sheet']]);
+  assert.deepStrictEqual(res.body.works.map(work => [work.projectId, work.eagleId, work.workId, work.source]),
+    [['412', EAGLE_ID, TRACK_WORK.id, 'track'], ['412', EAGLE_ID, SHEET_WORK.id, 'sheet']]);
   const [track, sheet] = res.body.works;
-  assert.deepStrictEqual([track.shownAfterFlip, track.untilTrack, track.replaces], [false, false, []]);
-  assert.deepStrictEqual(sheet.replaces.map(work => work.workId), [TRACK_WORK.id]);
-  assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'workId', 'source', 'title', 'workTypeCode',
-    'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome',
+  assert.deepStrictEqual([track.shownAfterFlip, track.untilTrack, track.replaces], [true, false, []]);
+  assert.deepStrictEqual(Object.keys(track), ['projectId', 'projectName', 'eagleId', 'workId', 'source', 'title', 'workTypeCode',
+    'workType', 'actYear', 'workState', 'isActive', 'startDate', 'decisionDate', 'anticipatedDecisionDate', 'outcome', 'outcomeFrom',
     'transitionOut', 'undated', 'shownAfterFlip', 'untilTrack', 'replaces', 'decisionEventDate', 'certificateKind', 'complexityCode',
     'transitionIn', 'phases', 'milestones']);
   assert.deepStrictEqual([track.decisionEventDate, sheet.decisionEventDate], ['2025-06-01', null]);
@@ -325,7 +349,7 @@ test('workplans rows carry each work\'s milestones with a kind', async (t) => {
     sheetMilestone('order-variation'), sheetMilestone('decision', { outcome: 'Approved' }), sheetMilestone('act-transition'),
     sheetMilestone('intake')];
   const phaseWith = milestones => ({ trackPhaseId: 55, startDate: '2024-03-01', interruptions: [], milestones });
-  const { res } = await callSummary(t, STAFF, { handler: getWorkplans,
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans, marker: NO_HIDING_MARKER,
     track: { ...TRACK_WORK, phases: [phaseWith(trackEvents)] }, sheet: { ...SHEET_WORK, phases: [phaseWith(sheetMilestones)] } });
   assert.deepStrictEqual(res.body.works.map(work => work.milestones?.length), [trackEvents.length, sheetMilestones.length]);
   const [track, sheet] = res.body.works;
@@ -343,7 +367,8 @@ test('workplans reads every project past the first id batch', async (t) => {
   const ids = Array.from({ length: ID_BATCH * 2 + 1 }, (_, i) => String(1000 + i));
   t.mock.method(works, 'liveProjectIds', async () => ids);
   t.mock.method(projects, 'listByIds', async (access, batch) => batch.map(id => ({ id, name: `Project ${id}` })));
-  t.mock.method(works, 'listForReadAcross', async (batch) => batch.map(projectId => ({ ...SHEET_WORK, projectId })));
+  // An assessment, so no override marker is needed to show it.
+  t.mock.method(works, 'listForReadAcross', async (batch) => batch.map(projectId => ({ ...SHEET_WORK, projectId, workTypeCode: 'assessment' })));
   t.mock.method(works, 'getEach', async () => []);
   t.mock.method(phaseCatalog, 'load', async () => ({}));
   const res = mockRes();
