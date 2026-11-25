@@ -60,7 +60,7 @@ function fakeIndex(opts = {}) {
       // As in the real client: unconfigured or failed is incomplete, and strict turns that into a throw.
       const incomplete = !configured || opts.failFor === documentId;
       if (incomplete && deleteOpts.strict) {
-        throw Object.assign(new Error('index boom'), { code: 'INDEX_DELETE_INCOMPLETE' });
+        throw Object.assign(new Error('index boom'), { code: 'INDEX_DELETE_INCOMPLETE', deleted: 2 });
       }
       if (incomplete) return 0;
       state.deleted.push(documentId);
@@ -186,6 +186,8 @@ test('with search configured, a failed index delete leaves Cosmos and the flags 
   assert.deepStrictEqual(chunks.state.removed, ['d1', 'd3']);
   assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd3']);
   assert.deepStrictEqual(summary.failures.map(f => [f.id, f.stage]), [['d2', 'index']]);
+  // 3 each for d1 and d3, plus the 2 rows d2's delete removed before it gave up.
+  assert.strictEqual(summary.indexEntriesRemoved, 8);
 });
 
 test('with search not configured, a live run still purges Cosmos and clears the flags', async () => {

@@ -47,6 +47,11 @@ const CLEARED_EXTRACTION = {
   pageCount: null
 };
 
+/** Index rows a strict delete removed before it gave up; any other error removed none. */
+function indexRowsDeletedBefore(err) {
+  return err.code === 'INDEX_DELETE_INCOMPLETE' ? err.deleted : 0;
+}
+
 /** Yield matching documents a page at a time, by continuation token: Cosmos has no cheap offset. */
 async function* pageAll(repo, access, opts) {
   let continuationToken;
@@ -125,6 +130,7 @@ async function purge(argv = [], opts = {}) {
       } catch (err) {
         // Leave the flags alone: a document whose chunks are still present must not be advertised
         // as unextracted, or re-ingest would reconcile against chunks nobody knows are there.
+        summary.indexEntriesRemoved += indexRowsDeletedBefore(err);
         summary.failures.push({ id: doc.id, stage, message: err.message });
         continue;
       }
