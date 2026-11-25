@@ -14,6 +14,7 @@ import os
 import random
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +44,8 @@ FAILED = {"error", "needs-review", "tail-refused", "sweep-failed", "sweep-needs-
 # The API logs a failed write's reason up to this length.
 REPORT_REASON_MAX = 300
 TIME_BOUND_IN_WINDOW = "run time bound reached inside the PUT window; the sweep settles it"
+TRACE_LINES = 20
+TRACE_MAX = 4096
 
 
 class Failed(Exception):
@@ -209,14 +212,21 @@ def _write(client, path, query, lease):
     return due, None
 
 
-def log_row(doc_id, mode, result, reason=None):
+def log_row(doc_id, mode, result, reason=None, trace=None):
+    if trace:
+        log.error("id=%s mode=%s unexpected error\n%s", doc_id, mode, trace)
     log.info("id=%s mode=%s result=%s reason=%s", doc_id, mode, result, reason or "-")
     return result
 
 
+def _trace():
+    """The current exception's traceback, cut to its last lines so one crash cannot flood the logs."""
+    return "".join(traceback.format_exc().splitlines(keepends=True)[-TRACE_LINES:])[-TRACE_MAX:]
+
+
 # A row's result line. Workers return it and the main thread logs it: the Functions host drops
 # log records made on pool threads.
-Done = namedtuple("Done", "doc_id mode result reason")
+Done = namedtuple("Done", "doc_id mode result reason trace", defaults=(None,))
 
 
 def _epoch(iso):
@@ -237,9 +247,10 @@ class Waiting:
     failure: str
     due: float
     rescheduled: bool = False
+    trace: str = None
 
     def line(self, result, *parts):
-        return Done(self.doc_id, self.mode, result, "; ".join(filter(None, [self.failure, *parts])))
+        return Done(self.doc_id, self.mode, result, "; ".join(filter(None, [self.failure, *parts])), self.trace)
 
 
 def start(client, row, want=None):
@@ -259,7 +270,7 @@ def start(client, row, want=None):
     except (ValueError, KeyError, TypeError) as exc:
         return Done(doc_id, mode, "error", f"lease: unreadable answer ({type(exc).__name__})")
 
-    report, failure, due = {"leaseId": lease_id}, None, time.time()
+    report, failure, due, trace = {"leaseId": lease_id}, None, time.time(), None
     try:
         if want and mode != want:
             raise Failed(f"lease came back in {mode} mode, wanted {want}")
@@ -268,14 +279,14 @@ def start(client, row, want=None):
         report = {"leaseId": lease_id, "skipped": True, "reason": str(skip)[:200]}
     except Released as exc:
         return Done(doc_id, mode, "refused", str(exc))
-    except Exception as exc:
-        if not isinstance(exc, Failed):
-            log.exception("id=%s mode=%s unexpected error", doc_id, mode)
+    except Failed as exc:
         # The plain report has no skip flag: a passing failure must not mark the file skipped.
-        failure = str(exc) if isinstance(exc, Failed) else f"{type(exc).__name__}: {exc}"
+        failure = str(exc)
+    except Exception as exc:
+        failure, trace = f"{type(exc).__name__}: {exc}", _trace()
     if failure:
         report["reason"] = failure[:REPORT_REASON_MAX]
-    return Waiting(doc_id, mode, path, query, report, failure, due)
+    return Waiting(doc_id, mode, path, query, report, failure, due, trace=trace)
 
 
 def finish(client, waiting):
@@ -371,7 +382,7 @@ def _drive(client, rows, concurrency, deadline):
                 try:
                     result = future.result()
                 except Exception as exc:
-                    result = Done(doc_id, mode, "error", f"{type(exc).__name__}: {exc}")
+                    result = Done(doc_id, mode, "error", f"{type(exc).__name__}: {exc}", _trace())
                 if isinstance(result, Waiting):
                     if not _past(result.due, deadline):
                         heapq.heappush(held, (result.due, next(order), result))
