@@ -524,9 +524,10 @@ correct", the new column stays null on all ~1.1M rows, and the run is green thro
 
 **The order across a release.** The PUTs go in before the app that writes the field is deployed,
 in both environments. On test the PR gate (`.github/workflows/pr.yaml`, "Search Schema Change")
-probes the test indexes with the branch's definitions and wants `Search-Schema: applied test` in
-the PR body before the merge, which is the staging deploy. On prod the deploy's schema probe checks
-the live index against the tag's definitions and fails when the field is missing.
+probes the test indexes and reads `Search-Schema: applied test` from the current PR body.
+
+On prod the deploy's schema probe checks the live index against the tag's definitions and fails
+when the field is missing.
 
 `scripts/demi-devbox.sh apply` is the one command for the PUTs. It runs `git pull --ff-only` in the
 devbox checkout and writes what that checkout holds, in this order:
@@ -556,8 +557,8 @@ On test, before the merge:
    fetch list first, or `--track` refuses it.
 
 2. `scripts/demi-devbox.sh apply --env test --only chunks --datasources demi-chunks-ds --no-wait`
-3. add `Search-Schema: applied test` to the PR body, merge (CI deploys staging), then put the
-   devbox back on `main`:
+3. add `Search-Schema: applied test` to the PR body, rerun the failed "Search Schema Change" job,
+   merge (CI deploys staging), then put the devbox back on `main`:
 
    ```bash
    scripts/demi-devbox.sh run --env test -- \

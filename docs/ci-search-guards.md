@@ -90,8 +90,9 @@ Search-Schema: applied test
 ```
 
 That line is the author's statement that they ran `scripts/demi-devbox.sh apply --env test` before
-asking for review. Production is still widened by hand at release time; the pre-deploy gate above
-is what makes forgetting it visible.
+asking for review. Apply to test, add the line, then rerun the failed job ("Re-run failed jobs"):
+the job reads the current description from the GitHub API, so no new push is needed. Production is
+still widened by hand at release time; the pre-deploy gate above is what makes forgetting it visible.
 
 ## Settings
 
