@@ -47,6 +47,11 @@ const CLEARED_EXTRACTION = {
   pageCount: null
 };
 
+/** Index rows a strict delete removed before it gave up; any other error removed none. */
+function indexRowsDeletedBefore(err) {
+  return err.code === 'INDEX_DELETE_INCOMPLETE' ? err.deleted : 0;
+}
+
 /** Yield matching documents a page at a time, by continuation token: Cosmos has no cheap offset. */
 async function* pageAll(repo, access, opts) {
   let continuationToken;
@@ -70,6 +75,8 @@ async function purge(argv = [], opts = {}) {
   // systemAccess() is required: a scoped context would delete only the chunks it can see and
   // orphan the rest while the document reads as unextracted.
   const access = systemAccess();
+  // Without search configured there is no index to clear, so local runs still purge Cosmos.
+  const strict = index.config().configured;
 
   const summary = {
     mode: args.live ? 'live' : 'dry-run',
@@ -109,7 +116,12 @@ async function purge(argv = [], opts = {}) {
         continue;
       }
 
+      let stage = 'index';
       try {
+        // Index first: surplus is worked out from Cosmos ids, so index rows outliving their Cosmos
+        // chunks are never found again.
+        summary.indexEntriesRemoved += await index.deleteChunksForDocument(doc.id, { strict });
+        stage = 'chunks';
         const result = await chunksRepo.removeForDocument(access, doc.id);
         summary.chunksRemoved += result.succeeded || 0;
         if (result.failed) {
@@ -118,7 +130,8 @@ async function purge(argv = [], opts = {}) {
       } catch (err) {
         // Leave the flags alone: a document whose chunks are still present must not be advertised
         // as unextracted, or re-ingest would reconcile against chunks nobody knows are there.
-        summary.failures.push({ id: doc.id, stage: 'chunks', message: err.message });
+        summary.indexEntriesRemoved += indexRowsDeletedBefore(err);
+        summary.failures.push({ id: doc.id, stage, message: err.message });
         continue;
       }
 
@@ -126,12 +139,7 @@ async function purge(argv = [], opts = {}) {
         await documentsRepo.patchExtraction(doc.id, doc.projectId, CLEARED_EXTRACTION);
       } catch (err) {
         summary.failures.push({ id: doc.id, stage: 'flags', message: err.message });
-        continue;
       }
-
-      // Best-effort: deleteChunksForDocument logs and returns 0. Nothing else removes index rows,
-      // so a failure here leaves searchable text until the purge is re-run.
-      summary.indexEntriesRemoved += await index.deleteChunksForDocument(doc.id);
     }
 
     console.log(
