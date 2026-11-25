@@ -14,6 +14,8 @@ export interface AppConfig {
   APPINSIGHTS_CONNECTION_STRING?: string;
   /** eagle-notify's base: the `/notify-api` dev proxy path locally, its own origin when deployed. */
   NOTIFY_API_LOCATION?: string;
+  /** eagle-admin's base, `https://<host>/admin`. Empty or unset means no link to eagle-admin. */
+  EAGLE_ADMIN_URL?: string;
   [key: string]: unknown;
 }
 
