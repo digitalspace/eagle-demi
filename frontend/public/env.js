@@ -1,9 +1,7 @@
 (function (window) {
   window.__env = window.__env || {};
 
-  // ==========================================================================
-  // STANDALONE DEMI DEMO LOCAL DEVELOPMENT CONFIGURATION
-  // ==========================================================================
+  // Local development configuration.
 
   // Local dev: false, so env.js is the whole config. /api/config would hand back the Azure
   // API_LOCATION and every call would leave the dev proxy and hit CORS.
