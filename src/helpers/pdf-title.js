@@ -2,7 +2,7 @@
 
 /**
  * Which rows get their public name written into the stored PDF's title, and when the `pdfTitle`
- * record says that work is done or must be undone. Pure reads of the row; no store access.
+ * record says that work is done, must be undone or must wait. Pure functions of the row; no store access.
  */
 
 const { pdfTitleFor } = require('./file-name');
@@ -14,6 +14,11 @@ const EAGLE_ID = /^[0-9a-f]{24}$/;
 // Printable ASCII, single inner spaces: pdfTitleFor returns such a name unchanged (file-name.test.js).
 // `\z`, not `$`: the store's PCRE `$` also matches before a final newline.
 const CLEAN_SAFE = '^[!-~]+( [!-~]+)*\\z';
+
+/** Worker-reported failures before a row is parked for review. Kept apart from silent releases, which end as a skip. */
+const MAX_WORKER_FAILURES = 10;
+/** A gate refusal waits for an operator's backup rerun; the row is tried again a day later with no other step. */
+const REFUSAL_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Drops in the store only rows whose record already holds today's title, a name pdfTitleFor would
@@ -94,7 +99,29 @@ function modeFor(row) {
   return null;
 }
 
+/** A worker's reason: short, printable, one line. */
+function cleanReason(reason, max = 200) {
+  return String(reason).replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/** Fields for a lease the worker reported as failed: counted, then parked for review at the cap. */
+function failureFields(record, failure) {
+  const workerFailures = ((record && record.workerFailures) || 0) + 1;
+  if (workerFailures < MAX_WORKER_FAILURES) return { workerFailures };
+  return { status: 'needs-review', reason: `worker-failure: ${failure}`, workerFailures: null };
+}
+
+/** Fields for a lease the gate refused. An md5-mismatch means the archive holds other bytes: a person decides. */
+function refusalFields(reason, at) {
+  return reason === 'md5-mismatch' ? { status: 'needs-review', reason, at } : { refused: { reason, at } };
+}
+
+/** Refused less than REFUSAL_BACKOFF_MS ago. */
+function isBackingOff(record, now = Date.now()) {
+  return Boolean(record && record.refused) && now - Date.parse(record.refused.at) < REFUSAL_BACKOFF_MS;
+}
+
 module.exports = {
   isPdf, isEligible, isCurrent, needsRestore, isSealed, isFromEagle, ineligibleReason, modeFor,
-  PENDING_WHERE, CLEAN_SAFE
+  cleanReason, failureFields, refusalFields, isBackingOff, PENDING_WHERE, CLEAN_SAFE, MAX_WORKER_FAILURES, REFUSAL_BACKOFF_MS
 };
