@@ -959,15 +959,15 @@ async function searchProjects(opts = {}) {
 /** Every project id leg two matches, paged by id: relevance ties reorder between requests. */
 async function matchingProjectIds(opts, prefix) {
   const rows = [];
-  let page;
+  const pages = []; // newest first
   do {
-    page = await runSearch(config().projectsIndex, {
+    pages.unshift(await runSearch(config().projectsIndex, {
       keywords: opts.keywords, fuzzy: opts.fuzzy, prefix, filter: opts.projectFilter, select: 'id',
       searchFields: LEG_TWO_SEARCH_FIELDS, orderby: 'id asc', top: SERVICE_MAX_TOP, skip: rows.length
-    });
-    rows.push(...page.value);
-  } while (page.value.length === SERVICE_MAX_TOP && rows.length < Math.min(page.count, MAX_SKIP));
-  return { ids: rows.map(p => String(p.id)).filter(Boolean), degraded: page.degraded };
+    }));
+    rows.push(...pages[0].value);
+  } while (pages[0].value.length === SERVICE_MAX_TOP && rows.length < Math.min(pages[0].count, MAX_SKIP));
+  return { ids: rows.map(p => String(p.id)).filter(Boolean), degraded: mergeDegraded(pages) };
 }
 
 /**

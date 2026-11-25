@@ -31,10 +31,16 @@ const scopedIds = calls => scopeOf(calls.find(c => c.body.search === '*').body.f
 
 // Relevance order shifts with each request's offset, as tied scores can on the service; only
 // `orderby: 'id asc'` is stable. Documents answer by their `search.in` project scope.
-function serve(t) {
+function serve(t, firstProjectsAnswer = null) {
+  let pending = firstProjectsAnswer;
   let calls;
   calls = captureFetch(t, (i) => {
     const { url, body } = calls[i];
+    if (pending && url.includes('/indexes/projects/')) {
+      const answer = pending;
+      pending = null;
+      return answer;
+    }
     let rows;
     if (url.includes('/indexes/projects/')) {
       const visible = body.filter.includes('staff') ? [...STAFF_ONLY_IDS, ...PROJECT_IDS] : PROJECT_IDS;
@@ -85,3 +91,17 @@ test('staff, who see more projects, never get a smaller document total than anon
 
     assert.strictEqual(staff.count, anon.count);
   });
+
+// Only the first projects request is refused, so the mark must survive a clean later page.
+test('a projects page narrowed by a missing field is reported on the document answer', async (t) => {
+  t.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
+  const unknownTags = {
+    ok: false, status: 400,
+    json: { error: { message: "Unknown field 'tags' in search field list.\r\nParameter name: searchFields" } }
+  };
+  const calls = serve(t, unknownTags);
+  const res = await search(ANON_PROJECTS);
+
+  assert.ok(projectCalls(calls).length > 2, 'the premise: a refused request, its retry, then a later page');
+  assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
+});
