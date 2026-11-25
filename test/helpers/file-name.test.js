@@ -34,6 +34,13 @@ test('pdfTitleFor', async (t) => {
     assert.equal(pdfTitleFor({ ...DOC, displayName: 'Site\u0007C ‮Report' }), 'Site C Report');
   });
 
+  // The work-list query skips rows whose stored title equals such a name (controllers/nosql/pdf-title.js).
+  await t.test('returns printable ASCII with single inner spaces unchanged', () => {
+    const printable = Array.from({ length: 0x7e - 0x21 + 1 }, (_, i) => String.fromCharCode(0x21 + i));
+    assert.equal(pdfTitleFor({ ...DOC, displayName: printable.join('') }), printable.join(''));
+    assert.equal(pdfTitleFor({ ...DOC, displayName: printable.join(' ') }), printable.join(' '));
+  });
+
   await t.test('is null when the name is blank', () => {
     assert.equal(pdfTitleFor({ ...DOC, displayName: ' \n ' }), null);
   });

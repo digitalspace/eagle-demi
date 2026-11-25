@@ -88,7 +88,7 @@ test('every document write site stamps the natural-sort key', async (t) => {
 });
 
 // The PDF title worker treats a Mongo ObjectId `id` as proof Eagle set the row's key
-// (controllers/nosql/pdf-title.js `isFromEagle`), so no caller-reachable create may take one.
+// (helpers/pdf-title.js `isFromEagle`), so no caller-reachable create may take one.
 test('every caller-reachable document create mints its own id', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const EAGLE_LIKE = '5f1d7a3c9b2e4d6f8a0b1c2d';
