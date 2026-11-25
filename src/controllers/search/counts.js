@@ -12,7 +12,7 @@ const commentPeriodsRepo = require('../../repositories/comment-periods');
 const notificationsRepo = require('../../repositories/notifications');
 const updatesRepo = require('../../repositories/updates');
 const { keywordText } = require('./params');
-const { withoutDialHidden } = require('./project-fields');
+const { withoutDialHidden } = require('../../search/project-dials');
 const { periodKeywords, periodListFilters } = require('./periods');
 const { warnKeywordFallback } = require('./keyword-index');
 

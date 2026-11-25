@@ -12,9 +12,8 @@ const ROUTE_PARTS = ['routes-track.js'].map(name => path.join(path.dirname(ROUTE
 
 /** Strip comments so a gate named only in prose cannot satisfy an assertion about code. */
 function code(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  // One pass, leftmost match first: a `/*` inside a line comment must not open a block comment.
+  return source.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, (match, before) => before ?? '');
 }
 
 /**

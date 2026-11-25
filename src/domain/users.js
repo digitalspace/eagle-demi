@@ -12,7 +12,8 @@ const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, readWith, actorOf, auditFor, notWritable, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
-const { storedRead } = require('../controllers/nosql/user');
+const { eagleBaseAcl } = require('../seed/transform');
+const { underDeleteCeiling } = require('./eagle-push');
 
 /** eagle-api lets only this organization's users read public (user.js:39,92). */
 const PUBLIC_ORG_NAME = 'Environmental Assessment Office';
@@ -114,6 +115,11 @@ async function create(ctx, input) {
   });
 }
 
+/** The `read` the mirror stores for an Eagle user doc. */
+function storedRead(doc) {
+  return underDeleteCeiling(eagleBaseAcl(doc.read), doc);
+}
+
 /** The read a DEMI write starts from: an Eagle row's own read under the mirror rule, else the stored one. */
 function takeoverBase(row) {
   const eagle = row.sourceSystem !== 'demi' && row.sources && row.sources.eagle;
@@ -175,4 +181,4 @@ async function update(ctx, id, changes) {
   return written;
 }
 
-module.exports = { create, update };
+module.exports = { create, update, storedRead };

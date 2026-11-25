@@ -8,6 +8,7 @@ const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
+const { withoutDialHidden } = require('../search/project-dials');
 const { documentsAcl } = require('../search/document-query');
 const chunkQuery = require('../search/chunk-query');
 const groupChunks = require('../search/group-chunks');
@@ -18,7 +19,6 @@ const {
   labelWithProjectNames,
   staffProjectFields,
   staffFieldsByProjectId,
-  withoutDialHidden,
   redactIndexProject,
   indexActiveWork,
   wireSector

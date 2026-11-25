@@ -5,8 +5,6 @@ const { levelOf } = require('../../vis/level');
 const { EAGLE_STAFF_FIELDS } = require('../../merge/project');
 const { dialsForIndex } = require('../../vis/catalog/index-projects-renames');
 const eagleQuery = require('../../search/eagle-query');
-const { andOData } = require('../../search/native-index');
-const { dialExclusion } = require('../../search/project-dials');
 const { normalizeSubType } = require('../../search/sub-type');
 const projectsRepo = require('../../repositories/projects');
 const { byStoredId } = require('./cosmos-rows');
@@ -64,12 +62,6 @@ async function staffFieldsByProjectId(access, ids) {
   return new Map(rows.map(row => [String(row.id), staffProjectFields(row)]));
 }
 
-/** `filter` less the projects whose own dial hides from this caller a column the read sorts, filters or searches on. */
-async function withoutDialHidden(access, filter, fields, keywords, searchedColumns) {
-  const hidden = await dialExclusion(access, fields, keywords ? searchedColumns : undefined);
-  return hidden ? andOData(filter, hidden) : filter;
-}
-
 /**
  * One `projects` INDEX hit, redacted for this caller. The dials arrive as a JSON string; a malformed
  * one fails closed to no dials, every field at its `defaultVis`.
@@ -112,7 +104,6 @@ module.exports = {
   labelWithProjectNames,
   staffProjectFields,
   staffFieldsByProjectId,
-  withoutDialHidden,
   redactIndexProject,
   indexActiveWork,
   wireSector

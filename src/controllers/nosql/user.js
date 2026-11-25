@@ -6,9 +6,10 @@
  */
 
 const users = require('../../repositories/users');
-const { eagleBaseAcl, refId } = require('../../seed/transform');
+const { refId } = require('../../seed/transform');
 const { pushHandler } = require('./eagle-mirror');
-const { upsertKeepingDemiRows, underDeleteCeiling } = require('../../domain/eagle-push');
+const { upsertKeepingDemiRows } = require('../../domain/eagle-push');
+const { storedRead } = require('../../domain/users');
 const { listHandler, getHandler } = require('./mirror-reads');
 
 const LABEL = 'User Controller';
@@ -53,11 +54,6 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
-/** The `read` the mirror stores for an Eagle user doc. */
-function storedRead(doc) {
-  return underDeleteCeiling(eagleBaseAcl(doc.read), doc);
-}
-
 /** @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}|{status: 'conflict'}>} */
 function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
   const doc = withoutSecrets(rawDoc);
@@ -67,7 +63,6 @@ function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
-exports.storedRead = storedRead;
 
 exports.upsertFromEagle = pushHandler({
   label: LABEL, action: 'user.push', targetType: 'user', mirror: mirrorFromEagle,

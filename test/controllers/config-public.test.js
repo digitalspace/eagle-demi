@@ -13,6 +13,7 @@ const path = require('node:path');
 const apiKeys = require('../../src/repositories/api-keys');
 const configRepository = require('../../src/repositories/config');
 const configController = require('../../src/controllers/config');
+const { PUBLIC_KEYS } = require('../../src/domain/public-config');
 const { generateKey } = require('../../src/helpers/api-key');
 const { environmentName } = require('../../src/config');
 const { forgetCachedKey } = require('../../src/helpers/auth');
@@ -57,7 +58,7 @@ test('public config controller', async (t) => {
     assert.ok(!('id' in res.body));
     assert.ok(!('_rid' in res.body));
     for (const key of Object.keys(res.body)) {
-      assert.ok(configController.PUBLIC_KEYS.includes(key), `${key} is not in PUBLIC_KEYS`);
+      assert.ok(PUBLIC_KEYS.includes(key), `${key} is not in PUBLIC_KEYS`);
     }
   });
 
@@ -140,7 +141,7 @@ test('the documented payload is the served one', () => {
     .filter(Boolean)
     .map((m) => m[1]);
 
-  assert.deepEqual(documented.sort(), [...configController.PUBLIC_KEYS].sort());
+  assert.deepEqual(documented.sort(), [...PUBLIC_KEYS].sort());
 });
 
 test('public config over the dispatcher', async (t) => {

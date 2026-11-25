@@ -3,6 +3,7 @@
 const projects = require('../repositories/projects');
 const { inClause } = require('../helpers/access-odata');
 const { storedFieldsOf } = require('../vis/catalog/index-projects-renames');
+const { andOData } = require('./native-index');
 
 /**
  * `not search.in(id, ...)` over the projects whose own dial hides, from this caller, a projects index
@@ -14,4 +15,10 @@ async function dialExclusion(access, indexFields, searchedColumns) {
   return hidden.length ? `not ${inClause('id', hidden)}` : null;
 }
 
-module.exports = { dialExclusion };
+/** `filter` less the projects whose own dial hides from this caller a column the read sorts, filters or searches on. */
+async function withoutDialHidden(access, filter, fields, keywords, searchedColumns) {
+  const hidden = await dialExclusion(access, fields, keywords ? searchedColumns : undefined);
+  return hidden ? andOData(filter, hidden) : filter;
+}
+
+module.exports = { dialExclusion, withoutDialHidden };

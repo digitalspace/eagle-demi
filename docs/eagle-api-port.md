@@ -58,7 +58,7 @@ Business rules measured 2026-10-14 against eagle-api `origin/develop` and eagle-
 | F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | done (530bf0cc); no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` gone; `login` kept (eagle-admin local login when Keycloak is off) |
 | R2 | Retire in eagle-api: per object | the write methods listed under "Retire in eagle-api" | the object's Flip live on test (retire tag: live on prod) | - | todo |
-| R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
+| R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle`; drop the two `scripts/` layering exemptions | the kind's Flip live on prod | - | todo |
 
 Deployed state (measured 2026-11-05): eagle-admin v2.5.42 (PRs 1000 to 1013) runs on test, and prod runs v2.5.32. The staging API workflow deployed eagle-demi 0f260317, which holds every DEMI half above, to test. A flip is live on test when both halves run there.
 
@@ -99,6 +99,8 @@ Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind
    Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
 
 The Eagle-shaped controllers `controllers/nosql/project.js` and `controllers/nosql/document.js` keep their handlers and their own `res` answers. Their write rules live in the domain: `project-compose.js`, `project-rows.js`, `project-cascade.js` and `project-push.js` for projects, `documents.js` and `document-ingest.js` for documents. Neither controller imports `db/*`, and the layering test fails if a moved rule is defined in either one again.
+
+Only files under `src/controllers/` and `src/http/` import a controller. A rule that a script, a timer or a domain module needs lives in `src/domain/`, as `update-announce.js`, `public-config.js` and `users.js` `storedRead` do.
 
 Push stamping that every mirror controller shares lives in `domain/eagle-push.js`.
 
