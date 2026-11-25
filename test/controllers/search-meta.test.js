@@ -399,11 +399,11 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
       const { out, res } = capture();
       await searchController.search(anonymous({
-        dataset: 'DocumentChunk', keywords: 'river', 'and[milestone]': 'm1'
+        dataset: 'DocumentChunk', keywords: 'river', 'and[milestone]': 'm1', 'and[type]': ''
       }), res);
 
       assert.match(search.mock.calls[0].arguments[0].filter, /\(search\.in\(milestoneId, 'm1', ','\) or milestoneId eq null\)/);
-      assert.deepStrictEqual(out.body[0].searchResults.map(row => row.documentId), ['d1']);
+      assert.deepStrictEqual(out.body[0].searchResults.map(row => row.documentId), ['d1'], 'an empty and[type] is no filter');
       assert.strictEqual(out.body[0].count, 39, 'the index count less the removed row');
       assert.deepStrictEqual(out.body[0].meta[0].degraded, { reasons: ['chunk-parent-fields-unstamped'] },
         'the reason, never the number: the route is anonymous and the count is a backfill statistic');

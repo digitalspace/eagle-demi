@@ -98,21 +98,19 @@ async function recoverChunkFilters(query, dropped, access) {
  */
 async function recoverChunkFacets(query, dropped, access, liveFacets) {
   const { scope, recovered, capped } = await recoverChunkFilters(query, dropped, access);
-  const keys = liveFacets.unavailable.filter(key => dropped.includes(key) && !recovered.includes(key));
-  if (!keys.length) return { scope, handled: recovered, capped, checks: [] };
-
+  const unscoped = liveFacets.unavailable.filter(key => dropped.includes(key) && !recovered.includes(key));
   const params = Array.from(eagleQuery.andParams(query));
-  const checks = keys.map(key => [eagleQuery.DOCUMENT_FACETS[key],
-    params.filter(([name]) => name === key).flatMap(([, value]) => eagleQuery.valuesOf(value))]);
+  const valuesFor = key => params.filter(([name]) => name === key).flatMap(([, value]) => eagleQuery.valuesOf(value));
+  // An empty value is no filter and not dropped, as `buildFilter` reads it where the chunks index answers.
+  const keys = unscoped.filter(key => valuesFor(key).length);
+  const handled = [...recovered, ...unscoped];
+  if (!keys.length) return { scope, handled, capped, checks: [] };
+
+  const checks = keys.map(key => [eagleQuery.DOCUMENT_FACETS[key], valuesFor(key)]);
   const reasons = chunkQuery.facetReasons(liveFacets);
   logger.warn('[search] facet filter checked on parent documents: the documents index could not scope it',
     { keys, reasons, capped });
-  return {
-    scope: andOData(scope, ...chunkQuery.parentCheckClauses(liveFacets, checks)),
-    handled: [...recovered, ...keys],
-    capped,
-    checks
-  };
+  return { scope: andOData(scope, ...chunkQuery.parentCheckClauses(liveFacets, checks)), handled, capped, checks };
 }
 
 /**
