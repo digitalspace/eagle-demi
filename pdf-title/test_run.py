@@ -404,6 +404,17 @@ def test_unexpected_error_in_a_row_logs_its_traceback_once(world, caplog, monkey
     assert [r.exc_info[0] for r in tracebacks] == [TypeError]
 
 
+def test_expected_failure_in_a_row_is_reported_without_a_traceback(world, caplog):
+    world.add("d1", _pdf())
+    world.faults["download"] = [ConnectionResetError()] * run.ATTEMPTS
+
+    outcomes = run.run(_client(world), max_rows=10, live=True)
+
+    assert outcomes == {"error": 1}
+    assert json.loads(world.calls("report")[0]["body"])["reason"] == "download: ConnectionResetError"
+    assert [r for r in caplog.records if r.exc_info] == []
+
+
 def test_put_that_dies_mid_body_leaves_the_original(world):
     original = _pdf()
     world.add("d1", original)
