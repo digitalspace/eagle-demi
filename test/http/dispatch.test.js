@@ -80,10 +80,10 @@ test('a short link redirects with no-store, never a cached 301', async (t) => {
 test('an uncredentialed call to a guarded route is 401 and never reaches the handler', async (t) => {
   let reached = false;
   t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
-
+  // A 413 here would mean the body was weighed, and so buffered, before the guards ran.
   const res = await call('/api/documents', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'content-length': String(11 * 1024 * 1024) },
     body: { string: '{}' }
   });
 
@@ -245,17 +245,6 @@ test('a JSON body with no content-length is cut off at the 10 MB limit', async (
 
   assert.strictEqual(res.status, 413);
   assert.strictEqual(reached, false);
-});
-
-test('an anonymous caller gets its 401 before any body is read', async () => {
-  // A 413 here would mean the body was weighed, and so buffered, before the guards ran.
-  const res = await call('/api/documents', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'content-length': String(11 * 1024 * 1024) },
-    body: { string: '{}' }
-  });
-
-  assert.strictEqual(res.status, 401);
 });
 
 test('a client that drops mid-body is a 400, not a logged 500', async (t) => {
@@ -656,6 +645,17 @@ test('edge gate', async (t) => {
     assert.strictEqual(lines.length, 1);
     assert.strictEqual(lines[0].arguments[1].reason, 'no-gateway');
     assert.ok(!JSON.stringify(lines[0].arguments).includes(EDGE['x-edge-secret']));
+  });
+
+  await t.test('log keeps a verified direct caller off the gate warn and on the request line', async (t) => {
+    config.edgeGate = 'log';
+    const warn = t.mock.method(logger, 'warn');
+    const info = t.mock.method(logger, 'info', () => {});
+    t.mock.method(documentController, 'getDocuments', (req, res) => res.json({}));
+    assert.strictEqual((await call('/api/documents', { headers: AUTHED })).status, 200);
+    assert.strictEqual(gateWarnings(warn).length, 0);
+    const line = info.mock.calls.map(c => c.arguments[1]).find(meta => meta && meta.evt === 'request');
+    assert.deepStrictEqual([line.edgeGate, line.principal], ['no-gateway', 'internal-service']);
   });
 
   await t.test('log stays quiet for a request that came through the edge', async (t) => {

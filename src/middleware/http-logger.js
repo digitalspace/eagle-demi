@@ -2,6 +2,10 @@
 
 const { logger } = require('../utils/logger');
 const { callerIp } = require('../utils/caller-ip');
+const config = require('../config');
+
+/** Fixed text so one KQL `has` filter finds every line; the variable parts go in path and reason. */
+const EDGE_GATE_MESSAGE = '[demi-api] edge gate: request did not come through Front Door';
 
 // A bulk-download job id is a bearer capability and a suggest query a per-keystroke prefix, so this
 // request line omits both; the Functions host's own request telemetry is not covered here.
@@ -46,6 +50,11 @@ function logRequest(req, res, durationMs) {
   };
   if (req.user && req.user.keyId) meta.keyId = req.user.keyId;
   if (req.user && req.user.azp) meta.client = req.user.azp;
+  if (req.edgeGate) meta.edgeGate = req.edgeGate;
+  // A caller the guards verified is already named here; enforce mode answered 403 and needs no warn.
+  if (req.edgeGate && config.edgeGate === 'log' && !req.user) {
+    logger.warn(EDGE_GATE_MESSAGE, { evt: 'edge-gate', path: meta.path, reason: req.edgeGate });
+  }
 
   // `evt` is set on every branch, so failed requests land in the same panel as successful ones.
   // A usage report that silently dropped failures would overstate how well the API is working.
