@@ -97,6 +97,18 @@ test('marks from the token copies', async (t) => {
     assert.strictEqual(items[0].highlighted.name, '<mark>&lt;Gold</mark>&gt; River Power');
   });
 
+  await t.test('a marker with no text beside it at a fragment edge leaves no empty mark', async (tt) => {
+    captureFetch(tt, answer({
+      id: 'p1',
+      name: 'Gold River',
+      '@search.highlights': { name: [`${POST}Gold River ${PRE}`] }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'gold' });
+
+    assert.strictEqual(items[0].highlighted.name, 'Gold River ');
+  });
+
   // An index the copies have not reached yet must still serve the page, not 400 on the highlight.
   await t.test('a documents index without the copies retries with neither in the highlight', async (tt) => {
     tt.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
