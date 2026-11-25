@@ -5,15 +5,26 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { Linter } = require('eslint');
 
 const ROUTER_PATH = path.join(__dirname, '..', '..', 'src', 'http', 'routes.js');
 // Route files `routes.js` spreads in; their entries are part of the one table.
 const ROUTE_PARTS = ['routes-track.js'].map(name => path.join(path.dirname(ROUTER_PATH), name));
 
-/** Strip comments so a gate named only in prose cannot satisfy an assertion about code. */
+const linter = new Linter();
+
+/** Strip comments so a gate named only in prose cannot satisfy an assertion about code. Throws if `source` does not parse. */
 function code(source) {
-  // One pass, leftmost match first: a `/*` inside a line comment must not open a block comment.
-  return source.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, (match, before) => before ?? '');
+  const fatal = linter.verify(source, { languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' } })
+    .find(message => message.fatal);
+  if (fatal) throw new SyntaxError(`code(): ${fatal.message} at ${fatal.line}:${fatal.column}`);
+  let out = '';
+  let at = 0;
+  for (const { range: [start, end] } of linter.getSourceCode().getAllComments()) {
+    out += source.slice(at, start);
+    at = end;
+  }
+  return out + source.slice(at);
 }
 
 /**
@@ -23,8 +34,9 @@ function code(source) {
  *   what a `\bauthMiddleware\b` test asserts against.
  */
 function routeChains(source) {
-  const read = () => [ROUTER_PATH, ...ROUTE_PARTS].map(file => fs.readFileSync(file, 'utf8')).join('\n');
-  const table = code(source === undefined ? read() : source);
+  // Each file is parsed alone: joined, their shared top-level `const` names would not parse.
+  const read = () => [ROUTER_PATH, ...ROUTE_PARTS].map(file => code(fs.readFileSync(file, 'utf8'))).join('\n');
+  const table = source === undefined ? read() : code(source);
   return [...table.matchAll(/method:\s*'(\w+)',\s*path:\s*'([^']+)',\s*guards:\s*\[([^\]]*)\]/g)]
     .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
 }
