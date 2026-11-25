@@ -761,8 +761,9 @@ paths:
           required: false
           description: >-
             `documents` only, so it needs `kind=documents`. `true` also counts the documents of
-            projects whose name, proponent or tags match `q`, as `/api/documents` does with
-            `projectNames=true`. With another kind, or no `kind`, it is a 400.
+            projects whose name, display name, proponent or tags match `q`, as `/api/documents`
+            does with `projectNames=true`. Name and tags are also matched word by word, so a word
+            such as `mine` still matches there. With another kind, or no `kind`, it is a 400.
           schema:
             type: string
             enum: ['true']
@@ -2848,11 +2849,12 @@ paths:
           in: query
           required: false
           description: >-
-            `true` also returns the documents of projects whose name, proponent or tags match `q`,
-            among the projects the caller may read. They come after every direct match, in the list's
-            order, and `x-total-count` counts both. Their own fields did not match, so their
-            `highlighted` parts hold the plain field. No effect without `q`. Any other value, or the
-            name given twice, is a 400.
+            `true` also returns the documents of projects whose name, display name, proponent or
+            tags match `q`, among the projects the caller may read. Name and tags are also matched
+            word by word, so a word such as `mine` still matches there. They come after every direct
+            match, in the list's order, and `x-total-count` counts both. Their own fields did not
+            match, so their `highlighted` parts hold the plain field. No effect without `q`. Any
+            other value, or the name given twice, is a 400.
           schema:
             type: string
             enum: ['true']
