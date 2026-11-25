@@ -527,7 +527,7 @@ async function runSearch(index, opts = {}) {
     value.push(...rows);
   }
 
-  return { value, count, degraded };
+  return { value, count, degraded, searchFields: body.searchFields };
 }
 
 /**
@@ -546,10 +546,10 @@ function missingPropertyFrom(err) {
 const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
 
 /**
- * One column under two analyzers that a stale index lacks together, so the single retry drops
- * both. Other `<field>Tokens` pairs drop alone.
+ * Pairs a stale index lacks together (one column under two analyzers, or two copies added at once),
+ * so the single retry drops both. Other `<field>Tokens` fields drop alone.
  */
-const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']]);
+const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['displayNameTokens', 'descriptionTokens']].flatMap(([a, b]) => [[a, b], [b, a]]));
 
 const DROPPABLE_LISTS = ['select', 'searchFields', 'highlight', 'orderby'];
 
@@ -1007,11 +1007,11 @@ async function searchDocuments(opts = {}) {
     const projects = await matchingProjectIds(opts, prefix);
     legs.push(projects);
     if (projects.ids.length > 0) {
-      // The document ACL still applies. `not search.ismatch` with leg one's exact query makes the
-      // legs disjoint, so paging is leg one then leg two with no repeats or gaps.
+      // The document ACL still applies. `not search.ismatch` with leg one's exact query and the fields
+      // it was sent with (less any the retry dropped) makes the legs disjoint, so paging has no repeats or gaps.
       const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, prefix);
       const scope = `${inClause('projectId', projects.ids)} and ` +
-        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${DOCUMENT_SEARCH_FIELDS}', 'full', 'any')`;
+        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${direct.searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
         // Only the rows the page still lacks; one when full, as the request is then for the count.
