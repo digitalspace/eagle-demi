@@ -7,17 +7,17 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { resourceBlock } = require('../helpers/bicep-resource');
+const { resourceBlock, withoutLineComments } = require('../helpers/bicep-resource');
 
 const ROOT = path.join(__dirname, '..', '..');
-const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
-const MODULE = read('azure', 'modules', 'document-intake.bicep');
-const MAIN = read('azure', 'main.bicep');
-const API_MODULE = read('azure', 'modules', 'api-function-flex.bicep');
-const TEST_PARAMS = read('azure', 'main.test.bicepparam');
-const PROD_PARAMS = read('azure', 'main.prod.bicepparam');
-const DEPLOY = read('scripts', 'deploy-infra.sh');
-const COSMOS_MODULE = read('azure', 'modules', 'cosmos-nosql.bicep');
+const read = (file, marker) => withoutLineComments(fs.readFileSync(path.join(ROOT, file), 'utf8'), marker);
+const MODULE = read('azure/modules/document-intake.bicep');
+const MAIN = read('azure/main.bicep');
+const API_MODULE = read('azure/modules/api-function-flex.bicep');
+const TEST_PARAMS = read('azure/main.test.bicepparam');
+const PROD_PARAMS = read('azure/main.prod.bicepparam');
+const DEPLOY = read('scripts/deploy-infra.sh', '#');
+const COSMOS_MODULE = read('azure/modules/cosmos-nosql.bicep');
 const BLOBS = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs';
 
 const DEFENDER = resourceBlock(MODULE, 'defenderForStorage');

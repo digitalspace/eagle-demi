@@ -6,26 +6,32 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('node:crypto');
 
-const ROOT = path.join(__dirname, '..', '..');
-const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
-const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
-const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
-const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
-const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
-const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
-const AVAILABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'availability.bicep'), 'utf8');
-const SEARCH_CONTROLLER = fs.readFileSync(path.join(ROOT, 'src', 'controllers', 'search.js'), 'utf8');
-const ROUTES = fs.readFileSync(path.join(ROOT, 'src', 'http', 'routes.js'), 'utf8');
-const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
-const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
-const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
-const PDF_TITLE_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'pdf-title-worker.bicep'), 'utf8');
-const ROTATOR_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'secret-rotator.bicep'), 'utf8');
-const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
-const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-search.prod.bicepparam'), 'utf8');
-
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 const { cosmosContainer } = require('../helpers/cosmos-bicep');
+const { withoutLineComments } = require('../helpers/bicep-resource');
+const { code } = require('../helpers/router-source');
+
+const ROOT = path.join(__dirname, '..', '..');
+const readRaw = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const readCode = (file, marker) => withoutLineComments(readRaw(file), marker);
+const MAIN = readCode('azure/main.bicep');
+const API_MODULE = readCode('azure/modules/api-function-flex.bicep');
+const TEST_PARAMS = readCode('azure/main.test.bicepparam');
+const PROD_PARAMS = readCode('azure/main.prod.bicepparam');
+const SEARCH_EXISTING = readCode('azure/modules/search-existing.bicep');
+const OBSERVABILITY = readCode('azure/modules/observability.bicep');
+const AVAILABILITY = readCode('azure/modules/availability.bicep');
+const SEARCH_CONTROLLER = code(readRaw('src/controllers/search.js'));
+const ROUTES = code(readRaw('src/http/routes.js'));
+const APIM_MODULE = readCode('azure/modules/apim.bicep');
+const DEVBOX_MODULE = readCode('azure/modules/devbox.bicep');
+// The cloud-init hashes pin exact bytes, comments in the span included.
+const DEVBOX_MODULE_RAW = readRaw('azure/modules/devbox.bicep');
+const KEY_VAULT = readCode('azure/modules/key-vault.bicep');
+const PDF_TITLE_MODULE = readCode('azure/modules/pdf-title-worker.bicep');
+const ROTATOR_MODULE = readCode('azure/modules/secret-rotator.bicep');
+const DEPLOY = readCode('scripts/deploy-infra.sh', '#');
+const AI_SEARCH_PROD_PARAMS = readCode('azure/ai-search.prod.bicepparam');
 
 // Two ways for the probe to stay green through a real outage; `az bicep build` sees a URL string
 // either way.
@@ -208,7 +214,7 @@ test('the devbox lists only the identity we own', () => {
 // customData is immutable once the VM exists, so even a comment edit inside the template fails the
 // apply. Pinned so the edit fails here instead.
 test('the devbox cloud-init text is frozen', () => {
-  const block = /var cloudInitTemplate = '''\n([\s\S]*?)\n'''\n/.exec(DEVBOX_MODULE);
+  const block = /var cloudInitTemplate = '''\n([\s\S]*?)\n'''\n/.exec(DEVBOX_MODULE_RAW);
   assert.ok(block, 'devbox.bicep must declare cloudInitTemplate as a multi-line string');
 
   const hash = crypto.createHash('sha256').update(block[1]).digest('hex');
@@ -221,8 +227,7 @@ test('the devbox cloud-init text is frozen', () => {
 // customData also moves when a substituted default or a replace() in the chain changes, with the
 // template byte-identical. The span covers every param feeding that chain.
 test('the devbox cloud-init inputs are frozen', () => {
-  const span = /^param adminUsername string[\s\S]*?^var cloudInit = replace\([\s\S]*?^\)$/m
-    .exec(DEVBOX_MODULE);
+  const span = /^param adminUsername string[\s\S]*?^var cloudInit = replace\([\s\S]*?^\)$/m.exec(DEVBOX_MODULE_RAW);
   assert.ok(span, 'devbox.bicep must declare adminUsername above the cloudInit substitution chain');
 
   const hash = crypto.createHash('sha256').update(span[0]).digest('hex');
@@ -291,7 +296,7 @@ test('the Entra SSH params stay outside the frozen cloud-init span', () => {
 });
 
 test('the API storage account declares the container managed devbox runs write to', () => {
-  const script = fs.readFileSync(path.join(ROOT, 'scripts', 'demi-devbox.sh'), 'utf8');
+  const script = readCode('scripts/demi-devbox.sh', '#');
   const name = /^OUT_CONTAINER='([^']+)'$/m.exec(script);
   assert.ok(name, 'scripts/demi-devbox.sh must set OUT_CONTAINER');
   const escaped = name[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -320,7 +325,7 @@ test('every vault mails the action group when a secret nears expiry', () => {
   assert.match(sub[1], /actionGroups: \[ actionGroupId \]/);
 
   // Both modules build the name from the vault name, under different identifiers.
-  const sync = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'secret-sync.bicep'), 'utf8');
+  const sync = readCode('azure/modules/secret-sync.bicep');
   const existingBlock = /^resource vaultTopic 'Microsoft\.EventGrid\/systemTopics@[^']+' existing = (if \(.*\) )?\{\n([\s\S]*?)\n\}/m.exec(sync);
   assert.ok(existingBlock, 'a vault takes one system topic; secret-sync.bicep must reuse the one key-vault.bicep declares');
   assert.strictEqual(existingBlock[1], undefined, 'the existing vaultTopic reference must be unconditional');
@@ -807,8 +812,7 @@ for (const { name, param, lineOf, fatal, span, why } of [
     name: 'demi-track-teams', param: 'syncTeamsSchedule',
     lineOf: async () => ({
       line: require('../../src/scripts/sync-track-teams').summaryLine({ mode: 'live', failures: 1 }),
-      fatalLine: /'(\[track-teams\] nightly run failed)'/.exec(
-        fs.readFileSync(path.join(ROOT, 'api', 'index.js'), 'utf8'))?.[1] || '',
+      fatalLine: /'(\[track-teams\] nightly run failed)'/.exec(code(readRaw('api/index.js')))?.[1] || '',
     }),
     fatal: 'nightly run failed',
     span: '26h', why: 'the sync runs once a day, so 26h is one run plus slack for a late one',
@@ -1367,12 +1371,8 @@ test('both APIM APIs expose wildcard operations over every method', () => {
 
 // Every `<call>.<level>` message in `sources` (default: `logger` under the request path), rendered as
 // the runtime renders it: interpolations stand in as `x`, concatenated literals are rejoined.
-const LOG_SOURCES = ['controllers', 'search'].flatMap((dir) => {
-  const base = path.join(ROOT, 'src', dir);
-  return fs.readdirSync(base, { recursive: true })
-    .filter(f => f.endsWith('.js'))
-    .map(f => ({ file: path.join('src', dir, f), source: fs.readFileSync(path.join(base, f), 'utf8') }));
-});
+const LOG_SOURCES = ['controllers', 'search'].flatMap(dir => fs.readdirSync(path.join(ROOT, 'src', dir), { recursive: true })
+  .filter(f => f.endsWith('.js')).map(f => path.join('src', dir, f)).map(file => ({ file, source: code(readRaw(file)) })));
 
 const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/;
 
@@ -1502,7 +1502,7 @@ test('the search 5xx rule matches the paths the search routes are mounted at', (
 const ROTATOR_DIR = path.join(ROOT, 'src', 'secret-rotator');
 const ROTATOR_SOURCES = fs.readdirSync(ROTATOR_DIR, { recursive: true })
   .filter(f => f.endsWith('.js') && !f.includes('node_modules'))
-  .map(f => ({ file: path.join('src', 'secret-rotator', f), source: fs.readFileSync(path.join(ROTATOR_DIR, f), 'utf8') }));
+  .map(f => ({ file: path.join('src', 'secret-rotator', f), source: code(readRaw(path.join('src', 'secret-rotator', f))) }));
 const ROTATOR_TAG = /^const TAG = '([^']+)';$/m.exec(
   ROTATOR_SOURCES.find(s => path.relative(ROTATOR_DIR, path.join(ROOT, s.file)) === 'rotate.js')?.source ?? '')?.[1];
 // `\b(?:log|logger)` takes the `log.`, `s.log.` and `ctx.log.` forms in rotate.js and covers
@@ -1658,7 +1658,7 @@ const moduleBlock = (modulePath) => MAIN.split(/^module /m).find(b => b.includes
 // main.bicep composes the app's BUDGET_NAME instead of reading the module output, which is empty in
 // an application-only run; the two literals must stay equal.
 test('main.bicep builds the same budget name cost-budget.bicep creates', () => {
-  const COST_BUDGET = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cost-budget.bicep'), 'utf8');
+  const COST_BUDGET = readCode('azure/modules/cost-budget.bicep');
   const literal = (src) => (/^var budgetName = ('[^']+')$/m.exec(src) || [])[1];
   assert.ok(literal(COST_BUDGET), 'cost-budget.bicep must name its budget with a budgetName var');
   assert.strictEqual(literal(MAIN), literal(COST_BUDGET),
@@ -1739,7 +1739,7 @@ test('every foundation lookup names what the owning module declares', () => {
   };
 
   for (const [symbol, type, moduleFile] of LOOKUPS) {
-    const moduleText = fs.readFileSync(path.join(ROOT, 'azure', 'modules', moduleFile), 'utf8');
+    const moduleText = readCode(path.join('azure', 'modules', moduleFile));
 
     const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = (?:if \\([^)]*\\) )?\\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
     assert.ok(lookup, `main.bicep must declare the ${symbol} lookup`);

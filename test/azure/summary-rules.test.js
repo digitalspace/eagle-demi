@@ -36,16 +36,17 @@ function queryColumns(query) {
 }
 
 function tableColumns(tableName) {
-  const block = blocks.find(b => b.includes('tables@') && vars[(/name: (\w+)/.exec(b) || [])[1]] === tableName);
+  const block = blocks.find(b => b.includes('tables@') && vars[(/^\s+name: (\w+)$/m.exec(b) || [])[1]] === tableName);
   assert.ok(block, `no declared table ${tableName}`);
-  return [...block.matchAll(/\{ name: '(\w+)', type: '(\w+)' \}/g)]
+  return [...block.matchAll(/^\s*\{ name: '(\w+)', type: '(\w+)' \}$/gm)]
     .filter(m => m[1] !== 'TimeGenerated').map(m => `${m[1]}:${m[2]}`).sort();
 }
 
+// Line-anchored, so a commented-out `// query: ...` above the real line is never picked.
 const rules = blocks.filter(b => b.includes('summaryLogs@')).map(b => ({
-  name: /name: '([^']+)'/.exec(b)[1],
-  query: /query: '([^']+)'/.exec(b)[1],
-  table: vars[/destinationTable: (\w+)/.exec(b)[1]]
+  name: /^\s+name: '([^']+)'$/m.exec(b)[1],
+  query: /^\s+query: '([^']+)'$/m.exec(b)[1],
+  table: vars[/^\s+destinationTable: (\w+)$/m.exec(b)[1]]
 }));
 
 test('summary rules write the columns and types their tables declare', async (t) => {

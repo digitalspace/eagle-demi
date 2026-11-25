@@ -7,12 +7,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { resourceBlock } = require('../helpers/bicep-resource');
+const { resourceBlock, withoutLineComments } = require('../helpers/bicep-resource');
 
-const MODULE = fs.readFileSync(
+const MODULE = withoutLineComments(fs.readFileSync(
   path.join(__dirname, '..', '..', 'azure', 'modules', 'api-function-flex.bicep'),
   'utf8',
-);
+));
 
 test('works-import is a private container on the API storage account', () => {
   const container = resourceBlock(MODULE, 'worksImportContainer');
