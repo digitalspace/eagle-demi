@@ -121,14 +121,11 @@ param trustedProxyIps = ''
 // Off until test has run `log`, then `enforce`, with no unknown caller left.
 param edgeGate = ''
 
-// Edge ban timer (api/index.js `edgeBan`). Shadow on prod for the 7-day soak (decision 2026-10-09:
-// test has no scraper traffic). Shadow reads the eagle-logs-prod access log and writes Cosmos
-// `edgeBans` rows only; it never writes the Front Door rule. Write mode and block mode wait for
-// the soak result. edgeLogWorkspaceId = the eagle-logs-prod workspace customerId. edgeBanRuleId =
-// the rulesdemidocs/banauto rule on eagle-edge-prod; that rule does not exist until eagle-edge
-// deploys the ban rules to prod, so this is the id it will have, not a live resource. The timer
-// only reads it in write mode.
-param edgeBanMode = 'shadow'
+// Edge ban timer (api/index.js `edgeBan`), write mode. Each hourly run reads the eagle-logs-prod
+// access log, keeps ban rows in Cosmos, and writes the unexpired addresses into the
+// rulesdemidocs/banauto rule on eagle-edge-prod, which redirects them to /blocked.html.
+// edgeLogWorkspaceId = the eagle-logs-prod workspace customerId; edgeBanRuleId = that banauto rule.
+param edgeBanMode = 'write'
 param edgeLogWorkspaceId = 'c63b7683-1773-4610-97b7-6326b860e9f0'
 param edgeBanRuleId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesdemidocs/rules/banauto'
 
