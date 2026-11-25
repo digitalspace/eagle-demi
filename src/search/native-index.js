@@ -21,7 +21,9 @@ const { logger } = require('../utils/logger');
 const ID_PAGE = aiSearch.SERVICE_MAX_TOP;
 
 // A `<field>Tokens` column is its field again under the filename analyzer (data sources).
-const TOKEN_TWINS = Object.freeze({ nameTokens: 'name', fileNameTokens: 'documentFileName' });
+const TOKEN_TWINS = Object.freeze({
+  nameTokens: 'name', fileNameTokens: 'documentFileName', displayNameTokens: 'displayName', descriptionTokens: 'description'
+});
 
 /** The stored fields behind an index's `searchFields` list. */
 function searchedOf(searchFields) {

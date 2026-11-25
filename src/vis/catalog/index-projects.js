@@ -36,6 +36,8 @@ module.exports = {
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   // Searchable copy of `name`, never retrievable — classified because a dial on `name` maps here.
   nameTokens: { defaultVis: 4, maxVis: 4 },
+  // The same for `description`, which a dial on `description` maps to.
+  descriptionTokens: { defaultVis: 4, maxVis: 4 },
   // Searchable join of the label columns above, never retrievable; it cannot outrank its sources.
   searchLabels: { defaultVis: 4, maxVis: 4 },
   // The stored `tags`, searchable and never retrievable; `tagsTokens` is them under `filename`.

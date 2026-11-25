@@ -49,13 +49,13 @@ const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read'
  * analyzer, which keeps words like "mine" that `en.microsoft` drops as stopwords.
  */
 const PROJECT_SEARCH_FIELDS =
-  'name,displayName,description,proponent,nameTokens,searchLabels,tags,tagsTokens';
+  'name,displayName,description,proponent,nameTokens,descriptionTokens,searchLabels,tags,tagsTokens';
 
 /** What leg two of a document keyword search matches a project on: the names it goes by, never its description. */
 const LEG_TWO_SEARCH_FIELDS = 'name,displayName,proponent,nameTokens,tags,tagsTokens';
 
 /** One copy for compat and native: compat's leg-two exclusion clause must complement exactly these. */
-const DOCUMENT_SEARCH_FIELDS = 'displayName,documentFileName,description,fileNameTokens';
+const DOCUMENT_SEARCH_FIELDS = 'displayName,documentFileName,description,fileNameTokens,displayNameTokens,descriptionTokens';
 
 /**
  * These indexes only say which rows match; the rows are read back from Cosmos, so their

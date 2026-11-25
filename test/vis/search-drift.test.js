@@ -140,6 +140,6 @@ test('every rename maps a real stored field onto a real index field', () => {
   // The two ends of the translation the map exists for, plus the passthrough and the drop.
   assert.deepStrictEqual(
     dialsForIndex({ proponentName: 2, description: 2, complianceLead: 2 }),
-    { proponent: 2, description: 2 },
+    { proponent: 2, description: 2, descriptionTokens: 2 },
     'renamed keys translate, same-named keys pass through, index-less keys are dropped');
 });

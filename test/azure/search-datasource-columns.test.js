@@ -329,6 +329,27 @@ test('the projects nameTokens field is declared and sourced as intended', () => 
   assert.ok(idx.tokenizers.some(t => t.name === 'filename_tokenizer'));
 });
 
+// The same stopword fix for the description and the document display name. Not retrievable, so no
+// hit carries the copy even if a `select` ever names it.
+test('the description and display name copies are declared and sourced as intended', () => {
+  const { PROJECT_SEARCH_FIELDS, DOCUMENT_SEARCH_FIELDS } = require('../../src/search/ai-search');
+  const [projects, projectsDs] = PAIRS[1];
+  const copies = [
+    [projects, projectsDs, PROJECT_SEARCH_FIELDS, 'descriptionTokens', 'description'],
+    [index, datasource, DOCUMENT_SEARCH_FIELDS, 'displayNameTokens', 'displayName'],
+    [index, datasource, DOCUMENT_SEARCH_FIELDS, 'descriptionTokens', 'description']
+  ];
+
+  for (const [idx, ds, searched, name, source] of copies) {
+    const field = idx.fields.find(f => f.name === name);
+    assert.ok(field, `the ${idx.name} index must declare ${name}`);
+    assert.deepStrictEqual([field.type, field.analyzer, field.searchable, field.retrievable],
+      ['Edm.String', 'filename', true, false], `${idx.name}.${name}`);
+    assert.strictEqual(projectedColumns(ds.container.query).get(name), source);
+    assert.ok(searched.split(',').includes(name), `${name} is indexed but no keyword search reads it`);
+  }
+});
+
 // `eagle-query` reads these flags from the committed JSON; a wrong flag silently drops the key
 // into `meta.dropped` and serves an unfiltered page.
 test('the fields the search page sorts and filters on carry the flags that make them usable', () => {
@@ -414,7 +435,7 @@ test('documentIndexRow copies every plain column the SELECT names, and builds ev
 });
 
 // Any change to one of these expressions must be mirrored in documentIndexRow before this passes.
-test('the computed columns are the four documentIndexRow reproduces', () => {
+test('the computed columns are the six documentIndexRow reproduces', () => {
   const computed = Object.fromEntries([...SELECTED].filter(([name, expr]) => name !== expr));
   const dial = (f, l) => `(NOT IS_DEFINED(c.vis.${f}) OR (IS_INTEGER(c.vis.${f}) AND c.vis.${f} >= ${l}))`;
   const level = l => `(${['displayName', 'documentFileName', 'description'].map(f => dial(f, l)).join(' AND ')})`;
@@ -422,6 +443,8 @@ test('the computed columns are the four documentIndexRow reproduces', () => {
 
   assert.deepStrictEqual(computed, {
     fileNameTokens: 'documentFileName',
+    displayNameTokens: 'displayName',
+    descriptionTokens: 'description',
     documentAuthorSort: 'LOWER(c.documentAuthor)',
     searchVis,
     isDeleted: '(IS_BOOL(c.isDeleted) AND c.isDeleted = true)'
@@ -445,7 +468,7 @@ test('documentIndexRow isDeleted is true only for a stored boolean true', () => 
 test('documentIndexRow leaves out what the SELECT would not project', () => {
   const built = documentIndexRow({ id: 'd1', description: null, documentAuthor: 7 });
 
-  assert.deepStrictEqual(Object.keys(built), ['id', 'description', 'searchVis', 'isDeleted']);
+  assert.deepStrictEqual(Object.keys(built), ['id', 'description', 'descriptionTokens', 'searchVis', 'isDeleted']);
 });
 
 test('documentIndexRow lowers an ASCII author and leaves any other to the indexer', () => {
