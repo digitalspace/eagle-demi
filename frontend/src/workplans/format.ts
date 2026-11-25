@@ -23,7 +23,7 @@ export function weekOf(iso: string): string {
 /** "1,234". */
 export const count = (n: number) => n.toLocaleString('en-CA');
 
-/** "1 work", "3 works". */
-export function plural(n: number, one: string): string {
-  return `${count(n)} ${n === 1 ? one : `${one}s`}`;
+/** "1 work", "3 works"; `many` for a word that does not add "s" ("2 entries"). */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${count(n)} ${n === 1 ? one : many}`;
 }

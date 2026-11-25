@@ -27,7 +27,8 @@ export const SCREENS = [
   { path: '/project-details', h1: 'Project details', text: '1996 Act (1)' },
   // `text` comes only from a panel's own fixture, so a panel reading the wrong id fails here.
   { path: '/project-details/901', h1: 'Sample Alpha Transmission Line', text: '1996 Act (1)' },
-  { path: '/workplans', h1: 'Workplans', text: 'Sample Beta Quarry - Amendment' },
+  { path: '/workplans', h1: 'Workplans', text: 'Sample Beta Quarry' },
+  { path: '/workplans/901', h1: 'Sample Alpha Transmission Line' },
   { path: '/workplans?view=pipeline', h1: 'Workplans', text: 'Proponent time' },
   { path: '/workplans?view=lookahead', h1: 'Workplans', text: '90 days' },
   { path: '/notify', h1: 'eagle-notify' },
@@ -84,8 +85,9 @@ export const FITS = [
     panel: '.panel--scroll',
     panelFrom: 1280
   },
-  // The timeline and the pipeline columns scroll inside their own views, so only the page and <main> are measured.
+  // The Act timelines, the record chart and the pipeline columns scroll inside their own views, so only the page and <main> are measured.
   { path: '/workplans', h1: 'Workplans' },
+  { path: '/workplans/901?act=1996', h1: 'Sample Alpha Transmission Line' },
   { path: '/workplans?view=pipeline', h1: 'Workplans' },
   { path: '/workplans?view=lookahead', h1: 'Workplans' }
 ];
@@ -253,83 +255,30 @@ async function checkJump(context, base, timeout) {
   return reasons;
 }
 
-/** Reasons a timeline Days cell that wraps to two lines ("311 d, suspended") spills out of its row. */
-async function checkDays(context, base, timeout) {
-  const reasons = [];
-  const page = await context.newPage();
-  try {
-    await page.clock.setFixedTime(FIXTURE_TODAY);
-    await page.goto(new URL('/workplans?view=timeline', base).toString(), { waitUntil: 'domcontentloaded' });
-    await page.locator('li.timeline__row .timeline__days').first().waitFor({ timeout });
-    // The spill comes from BC Sans metrics, so measure only once the real font is in.
-    const cells = await page.evaluate(async () => {
-      await document.fonts.ready;
-      const font = [...document.fonts].some((face) => face.family.replace(/"/g, '') === 'BC Sans' && face.status === 'loaded');
-      return [...document.querySelectorAll('li.timeline__row .timeline__days')].map((cell) => {
-        const range = document.createRange();
-        range.selectNodeContents(cell);
-        const row = cell.closest('li.timeline__row');
-        const pad = getComputedStyle(row);
-        return {
-          font,
-          text: cell.textContent.trim(),
-          lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
-          scroll: cell.scrollHeight,
-          client: cell.clientHeight,
-          height: cell.getBoundingClientRect().height,
-          row: row.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom)
-        };
-      });
-    });
-    if (cells.length && !cells[0].font) reasons.push('BC Sans never loaded, so the cells were measured in a fallback font');
-    const wrapped = cells.filter((cell) => cell.lines === 2);
-    if (!wrapped.length) {
-      reasons.push(
-        `no Days cell wraps to two lines (${cells.map((cell) => `"${cell.text}"`).join(', ')}): frontend/parity/fixtures/workplans.json must keep an open suspended work`
-      );
-    }
-    for (const cell of wrapped) {
-      if (cell.scroll > cell.client) reasons.push(`"${cell.text}" content is ${cell.scroll}px in a ${cell.client}px cell`);
-      if (cell.height > cell.row) reasons.push(`"${cell.text}" cell is ${cell.height}px in a ${cell.row}px row`);
-    }
-  } catch (e) {
-    reasons.push(String(e.message ?? e));
-  } finally {
-    await page.close();
-  }
-  return reasons;
-}
+const ACT_IDS = ['act-2018', 'act-2002', 'act-1996'];
 
-const ACT_NAMES = ['2018 Act', '2002 Act', '1996 Act'];
-
-/** Reasons the timeline fails to open one panel per Act, newest first, dash approximate dates, or regroup a panel without widening the page. */
+/** Reasons the Overview fails to draw one open section per Act, newest first, with its jump link, or to fade in a start with no date. */
 async function checkActs(context, base, timeout) {
   const reasons = [];
   const page = await context.newPage();
   try {
     await page.clock.setFixedTime(FIXTURE_TODAY);
     await page.goto(new URL('/workplans', base).toString(), { waitUntil: 'domcontentloaded' });
-    await page.locator('.timeline__act-name').first().waitFor({ timeout });
-    const names = await page.locator('.timeline__act-name').allTextContents();
-    if (names.join() !== ACT_NAMES.join()) reasons.push(`Act panels are ${names.join(', ')}, want ${ACT_NAMES.join(', ')}`);
-    if (!(await page.getByRole('navigation', { name: 'Acts' }).isVisible())) reasons.push('no Acts jump strip');
-    for (const name of ACT_NAMES) {
-      if (!(await page.getByRole('region', { name: `${name} timeline` }).isVisible())) reasons.push(`${name} panel is not open`);
+    await page.locator('section.wp-ov-act').first().waitFor({ timeout });
+    const ids = await page.locator('section.wp-ov-act').evaluateAll((els) => els.map((el) => el.id));
+    if (ids.join() !== ACT_IDS.join()) reasons.push(`Act sections are ${ids.join(', ')}, want ${ACT_IDS.join(', ')}`);
+    const nav = page.getByRole('navigation', { name: 'Navigate the timeline' });
+    const jumps = await nav.getByRole('link', { name: /^\d{4} Act$/ }).allTextContents();
+    if (jumps.join() !== '2018 Act,2002 Act,1996 Act') reasons.push(`Jump to links are ${jumps.join(', ') || 'missing'}, want 2018, 2002, 1996`);
+    for (const year of [2018, 2002, 1996]) {
+      if (!(await page.getByRole('region', { name: new RegExp(`^${year} Act timeline, `) }).isVisible())) reasons.push(`${year} Act timeline is not open`);
     }
-    const edges = await page.locator('[class*="__bar--approx-"]').evaluateAll((els) => els.map((el) => `${el.classList[0]} ${getComputedStyle(el).borderLeftStyle}`));
-    const kinds = [...new Set(edges)].sort().join(', ');
-    if (kinds !== 'timeline__bar dashed, timeline__swatch dashed') reasons.push(`approximate-date edges are ${kinds || 'missing'}, want dashed bars and legend key`);
-    // The fixture's 1996 works are all assessments, so Work type folds their project blocks into one group.
-    const panel = page.getByRole('region', { name: '1996 Act timeline' });
-    const groups = () => panel.locator('.timeline__group-name').allTextContents();
-    const before = await groups();
-    await panel.getByRole('button', { name: 'Work type' }).click({ timeout });
-    const after = await groups();
-    if (after.join() !== 'Assessment' || before.includes('Assessment')) {
-      reasons.push(`1996 groups went from ${before.join(', ')} to ${after.join(', ')} on Group by Work type, want projects then Assessment`);
-    }
-    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    if (wide > 0) reasons.push(`page scrolls ${wide}px sideways after the switch`);
+    // The fixture's 1996 sheet works have phases with an end but no recorded start.
+    const leads = await page.locator('#act-1996 .wp-ov-mk.lead').evaluateAll((els) =>
+      els.map((el) => `${getComputedStyle(el).backgroundImage.startsWith('linear-gradient') ? 'fade' : 'flat'} ${getComputedStyle(el).borderLeftWidth}`)
+    );
+    const kinds = [...new Set(leads)].join(', ');
+    if (kinds !== 'fade 0px') reasons.push(`no-start lead-ins are ${kinds || 'missing'}, want a fade with no left border`);
   } catch (e) {
     reasons.push(String(e.message ?? e));
   } finally {
@@ -382,13 +331,12 @@ async function main() {
     }
   }
   report('/workplans?view=lookahead week bar jumps to its week', await checkJump(context, args.base, args.timeout));
-  report('/workplans?view=timeline two-line Days cells fit their row', await checkDays(context, args.base, args.timeout));
-  report('/workplans?view=timeline one timeline per Act', await checkActs(context, args.base, args.timeout));
+  report('/workplans one Overview section per Act', await checkActs(context, args.base, args.timeout));
 
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 days=1 acts=1 ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 acts=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }

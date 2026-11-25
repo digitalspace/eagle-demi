@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { ChipSelect } from './ChipSelect';
-import { STATUS_LABEL, type WorkRow, type WorkStatus } from './derive';
+import type { WorkRow } from './derive';
 import { plural } from './format';
 import { WORK_STATE_LABEL, type WorkState } from './work-state';
 import { workTypeName, workTypeOf } from './work-types';
@@ -12,11 +12,8 @@ export interface WorkFilters {
   state: WorkState | null;
   act: number | null;
   type: string | null;
-  status: WorkStatus | null;
   /** Current phase name; the List only. */
   phase: string | null;
-  /** Off: works the public read would hide (`shownAfterFlip` false) are left out. */
-  showHidden: boolean;
 }
 
 /** The view's own controls in the filter bar. `lead` goes first in the row, `chips` after Work type; `summary` replaces the "N works" count. */
@@ -34,28 +31,9 @@ export interface ViewProps {
   rows: WorkRow[];
   today: string;
   bar?: BarSlot;
-  /** Works per Act year that clearing Work state would show; the Timeline says how many an empty Act panel hides. */
-  actTotals?: Partial<Record<number, number>>;
-  /** Clears Work state, offered where filters hide a whole Act. */
-  onShowAllStates?: () => void;
 }
 
 const ACTS = [1996, 2002, 2018];
-// Closed and inactive come from Work state, so the two filters cannot contradict each other.
-const STATUSES = (Object.keys(STATUS_LABEL) as WorkStatus[]).filter((status) => status !== 'closed' && status !== 'inactive');
-
-function Chip({ pressed, onClick, children }: { pressed: boolean; onClick: () => void; children: string }) {
-  return (
-    <button type="button" className="wp-chip" aria-pressed={pressed} onClick={onClick}>
-      {children}
-      {pressed && (
-        <span className="wp-chip__clear" aria-hidden="true">
-          ×
-        </span>
-      )}
-    </button>
-  );
-}
 
 const byLabel = (a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label);
 
@@ -76,7 +54,7 @@ function useOptions(rows: WorkRow[], type: string | null, phase: string | null) 
 }
 
 /**
- * Search, Work state and the other filters over `rows`, plus the switch that brings back hidden works.
+ * Search, Work state and the other filters over `rows`.
  * `value` holds what this view applies; a change comes back as the fields that changed.
  */
 export function Filters({
@@ -84,7 +62,6 @@ export function Filters({
   value,
   onChange,
   states,
-  withStatus,
   withPhase,
   withPlaceholder,
   count,
@@ -97,7 +74,6 @@ export function Filters({
   onChange: (change: Partial<WorkFilters>) => void;
   /** Work state options; none hides the chip. */
   states: readonly WorkState[];
-  withStatus: boolean;
   withPhase: boolean;
   /** The disabled "+ Filter" stand-in for filters not built yet. */
   withPlaceholder: boolean;
@@ -139,21 +115,9 @@ export function Filters({
       />
       <ChipSelect label="Work type" options={types} value={value.type} onChange={(type) => onChange({ type })} clearable />
       {chips}
-      {withStatus && (
-        <ChipSelect
-          label="Status"
-          options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
-          value={value.status}
-          onChange={(status) => onChange({ status })}
-          clearable
-        />
-      )}
       {withPhase && (
         <ChipSelect label="Phase" options={phases} value={value.phase} onChange={(phase) => onChange({ phase })} clearable />
       )}
-      <Chip pressed={value.showHidden} onClick={() => onChange({ showHidden: !value.showHidden })}>
-        Show replaced and hidden
-      </Chip>
       {withPlaceholder && (
         <button type="button" className="wp-chip wp-chip--placeholder" disabled title="Not available yet">
           + Filter

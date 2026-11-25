@@ -51,7 +51,7 @@ export interface SheetWork {
   shownAfterFlip: boolean;
   /** Shown only while Track has no work of its own for this one. */
   untilTrack: boolean;
-  replaces: { workId: string; title: string | null }[];
+  replaces: { workId: string; title: string | null; startDate: string | null; decisionDate: string | null }[];
 }
 
 /** Never undefined: a `{}` body, which the e2e smoke sends for any path without a fixture, reads as no works. */
@@ -120,6 +120,11 @@ export interface WorkplanPhase extends SheetPhase {
   extensionDays: number | null;
   /** Days added by finished suspensions; null when a sheet interruption has no days. */
   suspendedDays: number | null;
+  /**
+   * True when `numberOfDays` is a time limit set in law, false when it is a planned length; null when not known.
+   * Optional so hand-built rows in tests may leave it out.
+   */
+  legislated?: boolean | null;
 }
 
 /** What a Workplans milestone marks; the API sets it, so the front end never reads Track event type ids. */
@@ -156,6 +161,10 @@ export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   certificateKind?: 'EAC' | 'PAC' | null;
   complexityCode?: 'pre-2014' | 'simple' | 'typical' | 'complex' | null;
   transitionIn?: { fromActYear: number | null; date: string | null } | null;
+  /** The project's Eagle id; null when Eagle has no such project. Optional, like `outcomeFrom`, so hand-built rows may leave it out. */
+  eagleId?: string | null;
+  /** 'track' when the outcome was taken from the hidden Track copy this work replaces, else null. */
+  outcomeFrom?: 'track' | null;
   phases: WorkplanPhase[];
   /** Every phase's milestones in one list. Missing reads as none: an older API leaves it out, and so may hand-built rows. */
   milestones?: WorkplanMilestone[];

@@ -1,0 +1,294 @@
+/* How each Record mark looks (`.wp-rec .*`: marks, key swatches, glyphs), and the Overview grid lines.
+   Where a mark sits and how big a span is stays in overview.css and record.css. */
+
+:root {
+  --wp-line-today: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  --wp-line-dec: var(--layout-border-width-medium) dashed var(--surface-color-border-dark);
+  --wp-line-move: var(--layout-border-width-large) solid var(--theme-primary-blue);
+  /* A background reference, not a row mark: wider and darker than the year grid, softer than any mark. */
+  --wp-line-act: var(--layout-border-width-medium) solid var(--theme-gray-70);
+}
+
+/* Lines */
+
+.wp-ov-gl,
+.wp-rec .wp-rec-gline {
+  border-left: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.wp-ov-gl.wp-ov-gl--q {
+  border-left-color: var(--theme-gray-20);
+}
+
+.wp-ov-gl.wp-ov-gl--today,
+.wp-rec .vline,
+.wp-rec .tick.today {
+  border-left: var(--wp-line-today);
+}
+
+.wp-ov-gl.wp-ov-gl--actin,
+.wp-ov-tk.wp-ov-tk--actin {
+  border-left: var(--wp-line-act);
+}
+
+.wp-rec .vline.dec,
+.wp-rec .tick.dec {
+  border-left: var(--wp-line-dec);
+}
+
+.wp-rec .vline.move,
+.wp-rec .tick.move {
+  border-left: var(--wp-line-move);
+}
+
+.wp-rec .tick.today.flip {
+  border-left: 0;
+  border-right: var(--wp-line-today);
+}
+
+.wp-rec .tick.dec.flip {
+  border-left: 0;
+  border-right: var(--wp-line-dec);
+}
+
+.wp-rec .tick.move.flip {
+  border-left: 0;
+  border-right: var(--wp-line-move);
+}
+
+/* Phase bars. `--pc` is the phase colour from chart-colours.ts. */
+
+.wp-rec .bar,
+.wp-rec .bar.openStart::before {
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-small);
+  background: color-mix(in srgb, var(--pc, var(--theme-gray-50)) 25%, var(--surface-color-background-white));
+  box-shadow: inset 0 -3px 0 var(--pc, transparent);
+}
+
+.wp-rec .bar.planned {
+  background: var(--surface-color-background-white);
+  border-style: dashed;
+  border-color: var(--surface-color-border-dark);
+}
+
+.wp-rec .bar.thin {
+  border-radius: 1px;
+  box-shadow: inset 0 -2px 0 var(--pc, transparent);
+}
+
+/* No recorded start: a hatched lead-in up to the known date. */
+.wp-rec .bar.openStart {
+  background: repeating-linear-gradient(135deg, var(--theme-gray-50) 0 3px, transparent 3px 7px);
+  border: var(--layout-border-width-small) dashed var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-small) 0 0 var(--layout-border-radius-small);
+  box-shadow: none;
+}
+
+.wp-rec .bar.cur {
+  border: var(--layout-border-width-medium) solid var(--surface-color-border-dark);
+}
+
+/* One-day work or zero-length phase: a diamond. */
+.wp-rec .bar.point {
+  width: 11px;
+  height: 11px;
+  transform: rotate(45deg);
+  border: var(--layout-border-width-medium) solid var(--theme-gray-110);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* No recorded end: an arrow at the bar end. */
+.wp-rec .bar.openEnd::before {
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 8px solid var(--theme-gray-90);
+}
+
+.wp-rec .bar.cutR {
+  border-right: var(--layout-border-width-medium) dashed var(--surface-color-border-dark);
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.wp-rec .bar.cutL {
+  border-left: var(--layout-border-width-medium) dashed var(--surface-color-border-dark);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Assessment under another Act. */
+.wp-rec .bar.ghostbar {
+  background: repeating-linear-gradient(90deg, var(--theme-gray-20) 0 6px, var(--theme-gray-40) 6px 7px);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Dates conflict, ends before it starts: a red line at the phase start. */
+.wp-rec .bar.reversed {
+  width: 4px;
+  min-width: 0;
+  background: var(--support-border-color-danger);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Time limit strips */
+
+.wp-rec .int.suspension,
+.wp-rec .g.sus,
+.wp-rec .wp-rec-kg.ss,
+.wp-rec .wp-rec-sbar .ss,
+.wp-rec .wp-rec-dbar.sus {
+  box-sizing: border-box;
+  background: var(--theme-gray-90);
+  border: var(--layout-border-width-small) solid var(--theme-gray-110);
+  border-radius: 1px;
+}
+
+.wp-rec .int.extension,
+.wp-rec .g.ext,
+.wp-rec .wp-rec-kg.se,
+.wp-rec .wp-rec-sbar .se,
+.wp-rec .wp-rec-dbar.ext {
+  box-sizing: border-box;
+  background: repeating-linear-gradient(45deg, var(--theme-blue-80) 0 2px, var(--theme-blue-30) 2px 4px);
+  border: var(--layout-border-width-small) solid var(--theme-blue-80);
+  border-radius: 1px;
+}
+
+.wp-rec .int.past {
+  background: repeating-linear-gradient(135deg, var(--support-border-color-danger) 0 2px, var(--support-surface-color-danger) 2px 5px);
+  border: var(--layout-border-width-small) solid var(--support-border-color-danger);
+  border-radius: 1px;
+}
+
+.wp-rec .olim {
+  background: var(--support-border-color-danger);
+  border: var(--layout-border-width-small) solid var(--support-border-color-danger);
+  border-radius: 1px;
+}
+
+/* Extension on one date */
+.wp-rec .xpt {
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--theme-blue-80);
+  border: var(--layout-border-width-small) solid var(--theme-blue-100);
+}
+
+/* Events */
+
+/* Decision: a stem with a head whose fill is the state. Filled: decided. Hollow: planned. Yellow with "!": planned date passed.
+   The 2 px stem has a 1 px white edge each side and the head a white halo, so both read over any phase colour. */
+.wp-rec .dflag {
+  width: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-color-background-white) 1px,
+    var(--theme-gray-110) 1px 3px,
+    var(--surface-color-background-white) 3px
+  );
+}
+
+.wp-rec .dflag::before,
+.wp-rec .msdue,
+.wp-rec .wp-rec-cpass::before {
+  box-sizing: border-box;
+  width: 14px;
+  height: 13px;
+  border: var(--layout-border-width-medium) solid var(--theme-gray-110);
+  background: var(--theme-gray-110);
+  box-shadow: 0 0 0 1px var(--surface-color-background-white);
+}
+
+.wp-rec .dflag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 1px;
+}
+
+.wp-rec .dflag.plan::before {
+  background: var(--surface-color-background-white);
+}
+
+/* Planned date passed: the planned head in the warning colour with a "!", on a decision stem, or alone for a milestone or phase end. */
+.wp-rec .dflag.due::before,
+.wp-rec .msdue,
+.wp-rec .wp-rec-cpass::before {
+  background: var(--support-border-color-warning);
+  font: var(--typography-bold-label);
+  line-height: 9px;
+  text-align: center;
+  color: var(--typography-color-primary);
+}
+
+.wp-rec .dflag.due::before,
+.wp-rec .msdue::before,
+.wp-rec .wp-rec-cpass::before {
+  content: '!';
+}
+
+.wp-rec .dia {
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: var(--surface-color-border-dark);
+}
+
+.wp-rec .dia.planned {
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-medium) solid var(--surface-color-border-dark);
+}
+
+.wp-rec .ring {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--layout-border-radius-circular);
+  border: var(--layout-border-width-medium) solid var(--theme-gray-80);
+  background: var(--surface-color-background-white);
+}
+
+.wp-rec .cp {
+  box-sizing: border-box;
+  background: var(--theme-blue-20);
+  border: var(--layout-border-width-small) solid var(--theme-blue-90);
+  border-radius: var(--layout-border-radius-small);
+}
+
+.wp-rec .miss {
+  width: 11px;
+  height: 11px;
+  border: var(--layout-border-width-medium) dashed var(--typography-color-secondary);
+  background: var(--surface-color-background-white);
+  border-radius: var(--layout-border-radius-small);
+}
+
+/* Hover and highlight */
+
+.wp-rec .mk[data-tip-on]:not(.hl),
+.wp-rec .dflag.mk[data-tip-on]:not(.hl)::before {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 1px;
+}
+
+/* Last, so it wins over the box-shadow of any mark kind above. */
+.wp-rec .mk.hl {
+  outline: 3px solid var(--surface-color-border-active);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px var(--surface-color-background-white), 0 0 0 10px var(--theme-blue-50);
+  z-index: 6;
+}
+
+.wp-rec .tick.mark.mk.hl {
+  background: var(--theme-blue-20);
+}

@@ -1,0 +1,545 @@
+/* Overview and Record controls follow the Search toolbar (search/grid/display-grid.css): 36 px, 2 px corners, grey-50 edge. */
+
+.wp-tgroup {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-tbtn {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-flow: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--layout-margin-xsmall);
+  min-height: 36px;
+  padding: var(--layout-padding-hair) var(--layout-padding-small);
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  background-color: var(--surface-color-background-white);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  white-space: normal;
+  cursor: pointer;
+}
+
+.wp-tbtn:hover {
+  background-color: var(--theme-gray-20);
+}
+
+/* The inset line doubles the link-colour border, so the on state reads by weight as well as colour. */
+.wp-tbtn[aria-checked='true'],
+.wp-tbtn[aria-pressed='true'] {
+  background-color: var(--theme-blue-10);
+  border-color: var(--typography-color-link);
+  box-shadow: inset 0 0 0 var(--layout-border-width-small) var(--typography-color-link);
+  color: var(--typography-color-link);
+}
+
+.wp-tbtn:is([aria-checked='true'], [aria-pressed='true']):hover {
+  background-color: var(--theme-blue-20);
+}
+
+.wp-tbtn:focus-visible,
+.wp-btn:focus-visible,
+.wp-dsel:focus-visible,
+.wp-field:has(> .wp-field__input:focus-visible) {
+  outline: var(--layout-border-width-medium) solid var(--typography-color-link);
+  outline-offset: 1px;
+}
+
+.wp-tbtn:active:hover {
+  background-color: var(--theme-gray-30);
+}
+
+.wp-tbtn:disabled,
+.wp-tbtn[aria-disabled='true'] {
+  border-color: var(--surface-color-border-default);
+  color: var(--typography-color-disabled);
+  cursor: not-allowed;
+}
+
+/* A count inside a toggle, such as "In progress 63". */
+.wp-qn {
+  margin-left: var(--layout-margin-xsmall);
+  font-weight: var(--typography-font-weights-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buttons, small size */
+
+.wp-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--layout-padding-small);
+  min-width: 24px;
+  min-height: 36px;
+  padding: 0 var(--layout-padding-small);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* :hover repeats the colour so an <a> (Jump to) keeps it over the global a:hover. */
+.wp-btn--secondary,
+.wp-btn--secondary:hover {
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  background-color: var(--theme-gray-white);
+  color: var(--typography-color-primary);
+}
+
+.wp-btn--secondary:hover {
+  background-color: var(--theme-gray-20);
+}
+
+/* The Search page's link buttons are 32 px high. */
+.wp-btn--link {
+  min-height: 32px;
+  padding: 0;
+  background: transparent;
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+.wp-btn--icon {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.wp-btn:disabled,
+.wp-btn[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+.wp-btn--secondary:is(:disabled, [aria-disabled='true']) {
+  background-color: var(--surface-color-secondary-button-disabled);
+  border-color: var(--surface-color-border-default);
+  color: var(--typography-color-disabled);
+}
+
+.wp-btn--link:is(:disabled, [aria-disabled='true']) {
+  color: var(--typography-color-disabled);
+}
+
+/* Text field with a search icon */
+
+.wp-field {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--layout-padding-small);
+  background: var(--theme-gray-white);
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  color: var(--typography-color-primary);
+}
+
+.wp-field__icon {
+  flex: none;
+  color: var(--typography-color-secondary);
+}
+
+.wp-field__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-field__input:focus {
+  outline: none;
+}
+
+.wp-field__input::placeholder {
+  color: var(--typography-color-secondary);
+}
+
+/* Native select */
+
+.wp-dsel {
+  box-sizing: border-box;
+  height: 36px;
+  max-width: 100%;
+  padding: 0 var(--layout-padding-small);
+  background: var(--theme-gray-white);
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+/* Tag: the app's .pill (styles/vendor/demi-admin.css) */
+
+.wp-tag {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 10px;
+  border: var(--layout-border-width-small) solid;
+  border-radius: var(--layout-border-radius-circular);
+  font: var(--typography-bold-label);
+  color: var(--typography-color-primary);
+  text-align: left;
+  overflow-wrap: break-word;
+}
+
+.wp-tag--grey {
+  background-color: var(--surface-color-background-light-gray);
+  border-color: var(--surface-color-border-default);
+}
+
+.wp-tag--blue {
+  background-color: var(--support-surface-color-info);
+  border-color: var(--surface-color-border-default);
+}
+
+.wp-tag--green {
+  background-color: var(--support-surface-color-success);
+  border-color: var(--support-border-color-success);
+}
+
+.wp-tag--yellow {
+  background-color: var(--support-surface-color-warning);
+  border-color: var(--support-border-color-warning);
+}
+
+.wp-tag--red {
+  background-color: var(--support-surface-color-danger);
+  border-color: var(--support-border-color-danger);
+}
+
+/* List box option, for the record picker */
+
+.wp-option {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  padding: var(--layout-padding-xsmall);
+  border-radius: var(--layout-border-radius-small);
+  cursor: pointer;
+}
+
+.wp-option:hover {
+  background-color: var(--theme-gray-20);
+}
+
+.wp-option[aria-selected='true'] {
+  background-color: var(--theme-gray-20);
+  box-shadow: inset 0 0 0 var(--layout-border-width-medium) var(--typography-color-link);
+}
+
+.wp-option__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--typography-color-primary);
+}
+
+.wp-option__label {
+  font: var(--typography-regular-small-body);
+}
+
+.wp-option--current .wp-option__label {
+  font: var(--typography-bold-small-body);
+}
+
+.wp-option__sub {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Mark tooltip: placed by MarkTip inside a positioned page box. */
+
+.wp-tip {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--layout-margin-small);
+  width: max-content;
+  max-width: min(320px, calc(100% - 32px));
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: var(--surface-shadow-medium);
+  font: var(--typography-regular-small-body);
+  line-height: var(--typography-line-heights-xxdense);
+  color: var(--typography-color-primary);
+  transform: translate(-50%, -100%);
+}
+
+.wp-tip--below {
+  transform: translate(-50%, 0);
+}
+
+.wp-tip[hidden] {
+  display: none;
+}
+
+.wp-tip__title {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  font: var(--typography-bold-small-body);
+}
+
+.wp-tip__label {
+  color: var(--typography-color-secondary);
+}
+
+.wp-tip__value {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* All marks */
+
+.wp-allmarks__button svg {
+  flex: none;
+  transition: transform 0.15s;
+}
+
+.wp-allmarks__button[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wp-allmarks__button svg {
+    transition: none;
+  }
+}
+
+.wp-allmarks__panel[hidden] {
+  display: none;
+}
+
+/* Overview key: round button 24 px in from the bottom right, panel above it; --wp-key-lift (OverviewKey) clears the footer.
+   z-index clears the sticky Act heads (8); the side nav (1900) and dialogs still cover it. */
+.wp-allmarks__float,
+.wp-allmarks__panel--floating {
+  --wp-key-inset: var(--layout-margin-large);
+  --wp-key-size: 48px;
+  position: fixed;
+  right: var(--wp-key-inset);
+  z-index: 20;
+}
+
+.wp-allmarks__float {
+  bottom: calc(var(--wp-key-inset) + var(--wp-key-lift, 0px));
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--wp-key-size);
+  height: var(--wp-key-size);
+  padding: 0;
+  border: none;
+  border-radius: var(--layout-border-radius-circular);
+  background-color: var(--surface-color-primary-button-default);
+  color: var(--typography-color-primary-invert);
+  box-shadow: var(--surface-shadow-medium);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wp-allmarks__float:hover {
+  background-color: var(--surface-color-primary-button-hover);
+}
+
+.wp-allmarks__float:active {
+  background-color: var(--surface-color-primary-pressed);
+}
+
+.wp-allmarks__float:focus-visible,
+.wp-allmarks__panel--floating:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+.wp-allmarks__panel--floating {
+  bottom: calc(var(--wp-key-inset) + var(--wp-key-size) + var(--layout-margin-small) + var(--wp-key-lift, 0px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-medium);
+  width: min(960px, calc(100vw - 2 * var(--layout-margin-medium)));
+  max-height: calc(
+    100dvh - var(--app-header-height, 0px) - var(--wp-key-inset) - var(--wp-key-size) - var(--layout-margin-small) -
+      var(--layout-margin-medium) - var(--wp-key-lift, 0px)
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--layout-padding-medium);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: var(--surface-shadow-large);
+  color: var(--typography-color-primary);
+}
+
+/* Where the panel takes the full width less 16 px a side, it centres instead of aligning to the button. */
+@media (max-width: 992px) {
+  .wp-allmarks__panel--floating {
+    right: var(--layout-margin-medium);
+  }
+}
+
+.wp-allmarks__head {
+  margin: 0;
+  font: var(--typography-bold-h6);
+}
+
+.wp-allmarks__panel--inline {
+  padding: var(--layout-padding-medium);
+  background: var(--surface-color-background-light-gray);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+}
+
+.wp-allmarks__panel--inline .wp-allmarks__groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: var(--layout-margin-medium) var(--layout-margin-large);
+}
+
+/* Columns on an inner box of auto height: on the scrolling panel itself, overflow would add columns sideways. */
+.wp-allmarks__panel--floating .wp-allmarks__groups {
+  columns: 3 240px;
+  column-gap: var(--layout-margin-large);
+}
+
+.wp-allmarks__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-allmarks__panel--floating .wp-allmarks__group {
+  display: block;
+  margin-bottom: var(--layout-margin-medium);
+}
+
+.wp-allmarks__panel--floating .wp-allmarks__title {
+  margin-bottom: var(--layout-margin-xsmall);
+  break-after: avoid;
+}
+
+.wp-allmarks__title {
+  margin: 0;
+  font: var(--typography-bold-small-body);
+}
+
+.wp-allmarks__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wp-allmarks__panel--inline .wp-allmarks__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-allmarks__item {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-allmarks__panel--floating .wp-allmarks__item {
+  break-inside: avoid;
+  margin-bottom: var(--layout-margin-xsmall);
+}
+
+.wp-allmarks__panel--inline .wp-allmarks__item {
+  gap: var(--layout-margin-small);
+}
+
+.wp-allmarks__swatch {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 24px;
+}
+
+/* Overview glyphs are drawn for the page's normal line height, not the token one the item sets. */
+.wp-allmarks__panel--floating .wp-allmarks__swatch {
+  line-height: var(--typography-line-heights-auto);
+}
+
+.wp-allmarks__panel--inline .wp-allmarks__swatch {
+  width: 32px;
+  height: 20px;
+}
+
+/* Time scale */
+
+.wp-timescale {
+  display: flex;
+  min-width: 0;
+}
+
+.wp-timescale--stacked {
+  flex: none;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-timescale--stacked .wp-timescale__label {
+  font: var(--typography-bold-small-body);
+  line-height: 20px;
+}
+
+.wp-timescale__controls {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  min-height: 36px;
+}
+
+.wp-timescale--inline {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small);
+}
+
+.wp-timescale--inline .wp-timescale__label {
+  font: var(--typography-bold-small-body);
+}
+
+.wp-timescale__year {
+  width: 6.5rem;
+}
+
+.wp-timescale__range {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  font-variant-numeric: tabular-nums;
+}

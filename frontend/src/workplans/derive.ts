@@ -25,6 +25,13 @@ export const STATUS_LABEL: Record<WorkStatus, string> = {
   closed: 'Closed',
 };
 
+/** Inactive and unknown works show their status in place of a day count, which would read as progress. */
+export const unmeasuredStatus = (row: WorkRow) =>
+  row.status === 'inactive' || row.status === 'unknown' ? STATUS_LABEL[row.status] : null;
+
+/** Days a suspended phase ran before the suspension: "311 d, suspended"; `inPhase` names the unit where no header does. */
+export const suspendedFigure = (days: number, inPhase = false) => `${days} d${inPhase ? ' in phase' : ''}, suspended`;
+
 /** Progress bar colour state: overdue, above 80 % of planned days, or neither. */
 export type BarState = 'overdue' | 'near-limit' | 'normal';
 
@@ -111,6 +118,7 @@ const COLUMN_BY_NAME = new Map<string, PipelineColumn>(
           'Application Review',
           'Effects Assessment',
           'Evaluation',
+          'Extra Time',
           'SubStart Assessment',
           'Further Assessment',
         ],
