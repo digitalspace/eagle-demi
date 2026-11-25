@@ -1,6 +1,6 @@
 import { isDecisionPhase, rowKey, type WorkRow } from './derive';
 import { phaseToneOf, type PhaseTone } from './phase-tone';
-import { dayNumber } from './timeline-scale';
+import { DAY_MS, dayNumber } from './phase-bounds';
 
 export type LookaheadWindow = '30d' | '90d' | '6m';
 
@@ -47,7 +47,6 @@ export interface Week {
   decisions: number;
 }
 
-const DAY_MS = 86_400_000;
 const isoOf = (day: number) => new Date(day * DAY_MS).toISOString().slice(0, 10);
 /** Day 0, 1 Jan 1970, was a Thursday. */
 const mondayOf = (day: number) => day - ((day + 3) % 7);

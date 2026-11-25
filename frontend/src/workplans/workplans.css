@@ -40,28 +40,9 @@
   gap: var(--layout-margin-small) var(--layout-margin-large);
 }
 
+/* The Search page h1 is the browser's 2em bold in the body colour; bold-h2 is that size as a token. */
 .wp-header h1 {
-  font: var(--typography-bold-h5);
-  color: var(--theme-primary-blue);
-}
-
-.wp-header .wp-segmented__options {
-  padding: 3px;
-  border-color: var(--surface-color-secondary-hover);
-  background: var(--surface-color-background-light-gray);
-}
-
-.wp-header .wp-segmented__option {
-  min-height: 30px;
-  padding: 0 var(--layout-padding-medium);
-  font: var(--typography-bold-small-body);
-}
-
-/* Four tabs fit a 390px screen only with the narrow padding. */
-@media (max-width: 40rem) {
-  .wp-header .wp-segmented__option {
-    padding: 0 var(--layout-padding-small);
-  }
+  font: var(--typography-bold-h2);
 }
 
 .wp-page > .screen-header,
@@ -83,20 +64,20 @@
   gap: var(--layout-margin-small);
 }
 
+/* The Search page's scope switch (search/unified-search.css), plus its focus ring. */
 .wp-segmented__options {
   display: flex;
   gap: 2px;
   padding: 2px;
-  border: var(--layout-border-width-small) solid var(--theme-gray-40);
-  border-radius: var(--layout-border-radius-large);
-  background: var(--surface-color-background-white);
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--theme-gray-20);
 }
 
 .wp-segmented__option {
-  min-height: 26px;
+  min-height: 28px;
   padding: 0 var(--layout-padding-small);
   border: none;
-  border-radius: var(--layout-border-radius-medium);
+  border-radius: var(--layout-border-radius-small);
   background: transparent;
   font: var(--typography-regular-label);
   color: var(--typography-color-secondary);
@@ -104,13 +85,56 @@
 }
 
 .wp-segmented__option[aria-pressed='true'] {
-  background: var(--theme-primary-blue);
+  background: var(--theme-gray-white);
+  box-shadow: var(--surface-shadow-small);
   font: var(--typography-bold-label);
-  color: var(--typography-color-primary-invert);
+  color: var(--typography-color-primary);
 }
 
-.wp-segmented__option:hover:not([aria-pressed='true']) {
-  background: var(--surface-color-secondary-hover);
+.wp-segmented__option:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--typography-color-link);
+  outline-offset: 1px;
+}
+
+/* The view switch: small toggle buttons in a grey tray, the pressed one a raised white segment. */
+.wp-header .wp-segmented__options {
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  min-height: 40px;
+  padding: var(--layout-padding-xsmall);
+  background: var(--surface-color-secondary-button-disabled);
+}
+
+.wp-header .wp-segmented__option {
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: var(--layout-padding-hair) var(--layout-padding-small);
+  border: var(--layout-border-width-small) solid transparent;
+  border-radius: var(--layout-border-radius-medium);
+  font: var(--typography-regular-small-body);
+  font-family: inherit;
+}
+
+.wp-header .wp-segmented__option[aria-pressed='true'] {
+  background: var(--surface-color-secondary-button-default);
+  border-color: var(--surface-color-secondary-button-default);
+  font: var(--typography-regular-small-body);
+  font-family: inherit;
+}
+
+.wp-header .wp-segmented__option:focus-visible {
+  outline-color: var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+@media (forced-colors: active) {
+  .wp-header .wp-segmented__option[aria-pressed='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
 }
 
 .wp-filters {
@@ -153,13 +177,6 @@
 
 .wp-chip[aria-pressed='true']:hover {
   background: var(--surface-color-primary-hover);
-}
-
-/* Today in the Timeline toolbar: an action, not a filter. */
-.wp-chip--accent {
-  border-color: var(--theme-blue-30);
-  font: var(--typography-bold-label);
-  color: var(--surface-color-border-active);
 }
 
 /* Design controls with nothing behind them yet; disabled, titled "Not available yet". */
@@ -266,7 +283,6 @@
 
 .wp-chip:focus-visible,
 .wp-search:focus-within,
-.wp-segmented__option:focus-visible,
 .wp-chip-select__clear:focus-visible,
 .wp-chip-select:has(.wp-chip-select__native:focus-visible) {
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);

@@ -3,10 +3,9 @@ import { flushSync } from 'react-dom';
 import { Link } from 'react-router';
 import { WorkPill } from '../screens/SheetWorksPanel';
 import { useNarrow } from '../shell/useNarrow';
-import { PIPELINE_COLUMNS, rowKey, toneOf, type PipelineColumn, type WorkRow } from './derive';
+import { PIPELINE_COLUMNS, rowKey, suspendedFigure, toneOf, unmeasuredStatus, type PipelineColumn, type WorkRow } from './derive';
 import type { ViewProps } from './Filters';
 import { count, plural, shortDate } from './format';
-import { suspendedFigure, unmeasuredStatus } from './timeline-rows';
 import './workplans.css';
 import './pipeline.css';
 

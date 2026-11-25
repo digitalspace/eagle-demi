@@ -43,12 +43,24 @@ test('test gets the test realm, not prod', () => {
   assert.match(content, /window\.__env\.ENVIRONMENT = 'test';/);
 });
 
-test('a renamed or missing key fails the deploy instead of passing silently', () => {
-  const { status, stderr } = pointAt('test',
-    { mutate: (s) => s.replace('window.__env.KEYCLOAK_URL', 'window.__env.KC_URL') });
-  assert.strictEqual(status, 1);
-  assert.match(stderr, /KEYCLOAK_URL/);
+test('each environment gets its own eagle-admin base, empty where it has no link', () => {
+  const expected = { dev: '', test: 'https://test.projects.eao.gov.bc.ca/admin', prod: '' };
+  for (const [env, url] of Object.entries(expected)) {
+    const { status, content } = pointAt(env,
+      { vars: { NOTIFY_API_LOCATION: 'https://notify-api.example.gov.bc.ca' } });
+    assert.strictEqual(status, 0, env);
+    assert.ok(content.includes(`window.__env.EAGLE_ADMIN_URL = '${url}';`), env);
+  }
 });
+
+for (const key of ['KEYCLOAK_URL', 'EAGLE_ADMIN_URL']) {
+  test(`a renamed or missing ${key} fails the deploy instead of passing silently`, () => {
+    const { status, stderr } = pointAt('test',
+      { mutate: (s) => s.replace(`window.__env.${key}`, 'window.__env.RENAMED') });
+    assert.strictEqual(status, 1);
+    assert.match(stderr, new RegExp(key));
+  });
+}
 
 test('prod refuses to guess a notify host it has no value for', () => {
   const { status, stderr } = pointAt('prod', { vars: { NOTIFY_API_LOCATION: '' } });

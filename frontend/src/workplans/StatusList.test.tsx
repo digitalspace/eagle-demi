@@ -13,7 +13,7 @@ import { StatusListView } from './StatusList';
 const TODAY = '2026-11-17';
 const ALPHA_1996 = 'Sample Alpha Transmission Line - Assessment (1996)';
 const ALPHA_2002 = 'Sample Alpha Transmission Line - Assessment (2002)';
-const TRACK_WORK = 'Sample Alpha Transmission Line - Substation Assessment';
+const TRACK_WORK = 'Sample Delta Pipeline - EAC Extension';
 
 afterEach(() => vi.unstubAllGlobals());
 

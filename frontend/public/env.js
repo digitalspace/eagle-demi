@@ -1,9 +1,7 @@
 (function (window) {
   window.__env = window.__env || {};
 
-  // ==========================================================================
-  // STANDALONE DEMI DEMO LOCAL DEVELOPMENT CONFIGURATION
-  // ==========================================================================
+  // Local development configuration.
 
   // Local dev: false, so env.js is the whole config. /api/config would hand back the Azure
   // API_LOCATION and every call would leave the dev proxy and hit CORS.
@@ -22,6 +20,9 @@
   window.__env.NOTIFY_API_LOCATION = '/notify-api';
   window.__env.DEV_NOTIFY_PROXY_TARGET = 'https://notify-api-test.azurewebsites.net';
   window.__env.USE_MOCK_DATA = false;
+
+  // eagle-admin, for links to a project's documents. Empty = no link; dev has no eagle-admin.
+  window.__env.EAGLE_ADMIN_URL = 'https://test.projects.eao.gov.bc.ca/admin';
 
   // Application Insights. Empty = no browser telemetry. Staging deploy rewrites this from the
   // APPINSIGHTS_CONNECTION_STRING_TEST repo variable; an empty variable keeps telemetry off.

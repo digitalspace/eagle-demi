@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import FIXTURE from '../../parity/fixtures/workplans.json';
 import { json } from '../test-http';
 import { withQueryClient } from '../test-query';
+import { stubResizeObserver } from '../workplans/__tests__/dom';
 import { Workplans } from './Workplans';
 
-const HIDDEN_TRACK_WORK = 'Sample Alpha Transmission Line - Substation Assessment';
 const OPEN_WORK = 'Sample Beta Quarry - Amendment';
 const OTHER_OPEN_WORK = 'Sample Alpha Transmission Line - Assessment';
 const CLOSED_1996_WORK = 'Sample Delta Pipeline - Assessment (1996)';
@@ -18,6 +18,7 @@ function renderAt(path: string, workplans: () => Response = () => json(FIXTURE))
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => (String(input).includes('/workplans') ? workplans() : json({}))),
   );
+  stubResizeObserver();
   render(
     withQueryClient(
       <MemoryRouter initialEntries={[path]}>
@@ -37,23 +38,10 @@ describe('Workplans', () => {
     expect(await screen.findByText('Workplans are served on dev and test only.')).toBeInTheDocument();
   });
 
-  it('leaves out works the public read hides until Show replaced and hidden is pressed', async () => {
-    const user = renderAt('/workplans');
+  it('opens the list with works in progress only', async () => {
+    renderAt('/workplans?view=list');
 
-    await screen.findByRole('region', { name: 'Timeline' });
-    expect(screen.queryByRole('link', { name: HIDDEN_TRACK_WORK })).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: 'Show replaced and hidden' }));
-    expect(screen.getByRole('link', { name: HIDDEN_TRACK_WORK })).toBeInTheDocument();
-  });
-
-  it('opens the timeline with every work state, and the list with works in progress', async () => {
-    const user = renderAt('/workplans');
-
-    await screen.findByRole('link', { name: CLOSED_1996_WORK });
-    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
-
-    await user.click(screen.getByRole('button', { name: 'List' }));
+    await screen.findByRole('link', { name: OPEN_WORK });
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('In progress');
     expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
   });
@@ -68,46 +56,21 @@ describe('Workplans', () => {
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveFocus();
   });
 
-  it('keeps a picked Work state when the view changes', async () => {
-    const user = renderAt('/workplans');
+  it('keeps a picked Work state through a trip to the Timeline', async () => {
+    const user = renderAt('/workplans?view=list');
 
     await screen.findByRole('link', { name: OPEN_WORK });
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
+    await user.click(screen.getByRole('button', { name: 'Timeline' }));
+    await screen.findByRole('search', { name: 'Search projects' });
     await user.click(screen.getByRole('button', { name: 'List' }));
 
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('Closed');
     expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
   });
 
-  it('the empty-Act note shows every work state', async () => {
-    const user = renderAt('/workplans');
-
-    await screen.findByRole('link', { name: CLOSED_1996_WORK });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
-    await user.click(screen.getByText('1996 Act', { selector: '.timeline__act-name' }));
-    const panel = screen.getByRole('region', { name: '1996 Act timeline' });
-    expect(panel).toHaveTextContent('3 works in this Act are hidden by the filters.');
-
-    await user.click(within(panel).getByRole('button', { name: 'Show every work state' }));
-    expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
-  });
-
-  it('offers no Show every work state where another filter hides the Act', async () => {
-    const works = FIXTURE.works.map((work) => (work.actYear === 1996 ? { ...work, shownAfterFlip: false } : work));
-    const user = renderAt('/workplans', () => json({ works }));
-
-    await screen.findByRole('link', { name: OPEN_WORK });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
-    await user.click(screen.getByText('1996 Act', { selector: '.timeline__act-name' }));
-    const panel = screen.getByRole('region', { name: '1996 Act timeline' });
-
-    expect(panel).toHaveTextContent('No works match these filters.');
-    expect(within(panel).queryByRole('button', { name: 'Show every work state' })).toBeNull();
-  });
-
   it('ignores Work state Closed on the pipeline, which never shows closed works', async () => {
-    const user = renderAt('/workplans');
+    const user = renderAt('/workplans?view=list');
 
     await screen.findByRole('link', { name: OPEN_WORK });
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
@@ -116,13 +79,14 @@ describe('Workplans', () => {
     expect(screen.getByRole('combobox', { name: 'Work state' })).toHaveDisplayValue('All');
     expect(screen.queryByRole('link', { name: CLOSED_1996_WORK })).toBeNull();
     expect(screen.getByRole('link', { name: OPEN_WORK })).toBeInTheDocument();
-    // Closed works stay out: with them the pipeline would count 13.
+    // Closed works stay out: with them the pipeline would count 15.
     expect(screen.getByText('6 works')).toBeInTheDocument();
   });
 
   it('offers only the work types Work state lets through', async () => {
-    const user = renderAt('/workplans');
+    const user = renderAt('/workplans?view=list');
     await screen.findByRole('link', { name: OPEN_WORK });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'Closed');
     const types = () => within(screen.getByRole('combobox', { name: 'Work type' })).queryByRole('option', { name: 'EAC extension' });
     expect(types()).toBeInTheDocument();
 
@@ -131,8 +95,9 @@ describe('Workplans', () => {
   });
 
   it('keeps a picked work type that Work state then rules out, so it can still be cleared', async () => {
-    const user = renderAt('/workplans');
+    const user = renderAt('/workplans?view=list');
     await screen.findByRole('link', { name: OPEN_WORK });
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work type' }), 'EAC extension');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Work state' }), 'In progress');
     expect(screen.queryByRole('link', { name: OPEN_WORK })).toBeNull();
@@ -142,9 +107,10 @@ describe('Workplans', () => {
   });
 
   it('narrows the works to one Act when it is picked', async () => {
-    const user = renderAt('/workplans');
+    const user = renderAt('/workplans?view=list');
 
     await screen.findByRole('link', { name: OPEN_WORK });
+    await user.click(screen.getByRole('button', { name: 'Clear Work state' }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Act' }), '1996');
 
     expect(screen.getByRole('link', { name: CLOSED_1996_WORK })).toBeInTheDocument();
@@ -162,7 +128,7 @@ describe('Workplans', () => {
   });
 
   it('narrows the works to those whose title, project or type holds the search text', async () => {
-    const user = renderAt('/workplans');
+    const user = renderAt('/workplans?view=list');
 
     await screen.findByRole('link', { name: OPEN_WORK });
     expect(screen.getByRole('link', { name: OTHER_OPEN_WORK })).toBeInTheDocument();
@@ -194,32 +160,21 @@ describe('Workplans', () => {
     expect(screen.queryByRole('combobox', { name: 'Work state' })).toBeNull();
   });
 
-  it.each([
-    ['List', () => screen.getByRole('link', { name: OPEN_WORK })],
-    ['Pipeline', () => within(screen.getByRole('region', { name: /^Review / })).getByRole('link', { name: OPEN_WORK })],
-    ['Lookahead', () => screen.getByRole('region', { name: 'Upcoming milestones' })],
-  ])('drops the Status filter in %s, and gives the timeline its status back', async (view, shownPart) => {
-    const user = renderAt('/workplans');
-
-    await screen.findByRole('region', { name: 'Timeline' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Overdue');
-    await user.click(screen.getByRole('button', { name: view }));
-
-    expect(screen.queryByRole('combobox', { name: 'Status' })).toBeNull();
-    expect(shownPart()).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Timeline' }));
-    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveDisplayValue('Overdue');
-  });
-
-  it('keeps the view in ?view=, opening the list from the link and the timeline from its button', async () => {
+  it('keeps the view in ?view=, opening the list from the link and the Overview from the Timeline button', async () => {
     const user = renderAt('/workplans?view=list');
 
     expect(await screen.findByRole('columnheader', { name: 'Current phase' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(screen.getByRole('button', { name: 'Timeline' }));
-    expect(screen.getByRole('region', { name: 'Timeline' })).toBeInTheDocument();
+    expect(screen.getByRole('search', { name: 'Search projects' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Current phase' })).toBeNull();
+  });
+
+  it('opens the Overview, not the shared filter bar, when no view is named', async () => {
+    renderAt('/workplans');
+
+    expect(await screen.findByRole('search', { name: 'Search projects' })).toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Search works' })).toBeNull();
   });
 });

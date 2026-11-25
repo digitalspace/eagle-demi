@@ -13,7 +13,10 @@ export interface DrawnPhase {
   approxEnd: boolean;
 }
 
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
+
+/** UTC day count of an ISO day or timestamp. */
+export const dayNumber = (iso: string) => Math.floor(Date.parse(iso.slice(0, 10)) / DAY_MS);
 
 export const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
 export const plusDays = (day: string, days: number) =>

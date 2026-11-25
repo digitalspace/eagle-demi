@@ -1,0 +1,1324 @@
+/* Record page (one project's works under one Act). Every rule sits under .wp-rec. */
+
+.wp-rec {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-medium);
+  min-width: 0;
+}
+
+.wp-rec :is(h1, h2, h3, h4, p) {
+  margin: 0;
+}
+
+/* Header */
+
+.wp-rec .wp-rec-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  padding-bottom: var(--layout-padding-small);
+  border-bottom: 4px solid var(--theme-primary-gold);
+}
+
+.wp-rec .wp-rec-head__bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-large);
+}
+
+.wp-rec .wp-rec-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  min-height: 32px;
+  padding-inline: 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+.wp-rec .wp-rec-back:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--typography-color-link);
+  outline-offset: 1px;
+}
+
+.wp-rec > .wp-rec-back {
+  align-self: flex-start;
+}
+
+.wp-rec .wp-rec-head__nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Previous and Next wrap as a pair: one row when it fits, else stacked at the same width. */
+.wp-rec .wp-rec-head__pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+}
+
+/* A project name longer than the phone row wraps inside its button. */
+.wp-rec .wp-rec-head__pager > .wp-btn {
+  flex: 1 1 auto;
+  padding-block: var(--layout-padding-xsmall);
+  white-space: normal;
+}
+
+.wp-rec .wp-rec-title {
+  font: var(--typography-bold-h2);
+}
+
+.wp-rec .wp-rec-sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The Record's "All marks" has no chevron, unlike the Overview's. */
+.wp-rec .wp-allmarks__button svg {
+  display: none;
+}
+
+.wp-rec .wp-rec-head__path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
+}
+
+.wp-rec .wp-rec-meta,
+.wp-rec .wp-rec-emeta {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Record picker */
+
+.wp-rec .wp-rec-cb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-cb__label {
+  font: var(--typography-bold-small-body);
+}
+
+.wp-rec .wp-rec-cb__field {
+  width: 16rem;
+}
+
+.wp-rec .wp-rec-cb__list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  box-sizing: border-box;
+  width: min(22rem, calc(100vw - 32px));
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--layout-padding-xsmall);
+  list-style: none;
+  background-color: var(--theme-gray-white);
+  border: var(--layout-border-width-small) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  box-shadow: var(--surface-shadow-medium);
+}
+
+.wp-rec .wp-rec-cb__list[hidden] {
+  display: none;
+}
+
+.wp-rec .wp-rec-cb__none {
+  padding: var(--layout-padding-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Act stepper */
+
+.wp-rec .wp-rec-stepper {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-rec .wp-rec-step {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  font: var(--typography-regular-small-body);
+}
+
+.wp-rec .wp-rec-step svg {
+  flex: none;
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-step__button,
+.wp-rec .wp-rec-step__current {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 0 var(--layout-padding-small);
+  border-radius: var(--layout-border-radius-medium);
+  font: var(--typography-regular-small-body);
+}
+
+.wp-rec .wp-rec-step__button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--typography-color-link);
+  cursor: pointer;
+}
+
+.wp-rec .wp-rec-step__button strong {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wp-rec .wp-rec-step__button:hover {
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .wp-rec-step__current {
+  border: 2px solid var(--surface-color-border-active);
+  background: var(--surface-color-background-light-blue);
+  color: var(--typography-color-primary);
+}
+
+.wp-rec .wp-rec-step__sub {
+  color: var(--typography-color-secondary);
+}
+
+/* Focus rings: the Search ring; the chart scroller and event rows keep their own. */
+
+.wp-rec .wp-rec-step__button:focus-visible,
+.wp-rec .wp-rec-step__current:focus-visible,
+.wp-rec .wp-rec-disc:focus-visible,
+.wp-rec .wp-rec-chglink:focus-visible,
+.wp-rec .wp-rec-lrow:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--typography-color-link);
+  outline-offset: 1px;
+}
+
+.wp-rec .wp-rec-dscroll:focus-visible,
+.wp-rec .wp-rec-esel:focus-visible {
+  outline: 2px solid var(--surface-color-border-active);
+  outline-offset: 2px;
+}
+
+/* Blocks */
+
+.wp-rec .wp-rec-blk {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  padding: var(--layout-padding-medium) var(--layout-padding-large);
+  background: var(--surface-color-background-white);
+  border: 1px solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+}
+
+.wp-rec .wp-rec-blk[aria-labelledby='tlc-title'] {
+  scroll-margin-top: var(--layout-margin-medium);
+}
+
+.wp-rec .wp-rec-bhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+}
+
+.wp-rec .wp-rec-bhead h2 {
+  font: var(--typography-bold-h5);
+}
+
+.wp-rec .wp-rec-ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+}
+
+.wp-rec .wp-rec-ctl__title {
+  margin-right: var(--layout-margin-small);
+  font: var(--typography-bold-h5);
+}
+
+/* Legend */
+
+.wp-rec .wp-rec-chartblk {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+}
+
+.wp-rec .wp-rec-legendrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
+}
+
+.wp-rec .wp-rec-legend {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
+}
+
+/* Items keep one line while they fit; one longer than the row wraps its label instead of pushing the page sideways. */
+.wp-rec .wp-rec-lg {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-rec .wp-rec-lg .wp-allmarks__button {
+  margin-left: var(--layout-margin-medium);
+}
+
+.wp-rec .wp-rec-kdraw {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 20px;
+}
+
+.wp-rec .wp-rec-kdraw .bar:not(.point) {
+  top: 2px;
+  height: 16px;
+}
+
+.wp-rec .wp-rec-kdraw .tick {
+  top: 0;
+  height: 20px;
+  padding: 0;
+}
+
+.wp-rec .wp-rec-kdraw .dflag {
+  top: 0;
+  height: 20px;
+}
+
+/* Axis */
+
+.wp-rec .wp-rec-chart {
+  position: relative;
+  min-width: 0;
+}
+
+.wp-rec .wp-rec-axisrow {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  background: var(--surface-color-background-white);
+  border-bottom: 1px solid var(--surface-color-border-medium);
+}
+
+.wp-rec .wp-rec-axlab {
+  flex: none;
+  width: 260px;
+  margin-right: var(--layout-margin-medium);
+  align-self: end;
+  padding-bottom: var(--layout-padding-xsmall);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-axclip {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 48px;
+  overflow: hidden;
+}
+
+.wp-rec .wp-rec-axtrack {
+  position: relative;
+  height: 48px;
+}
+
+.wp-rec .wp-rec-dscroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  container-type: inline-size;
+}
+
+.wp-rec .wp-rec-dinner {
+  position: relative;
+}
+
+/* Rows */
+
+.wp-rec .wp-rec-crow {
+  display: flex;
+  box-sizing: border-box;
+  min-height: 52px;
+  border-top: 1px solid var(--surface-color-border-default);
+  position: relative;
+}
+
+.wp-rec .wp-rec-crow.empty {
+  min-height: 32px;
+}
+
+.wp-rec .wp-rec-crow.sub .wp-rec-clabel {
+  padding-left: var(--layout-padding-large);
+}
+
+.wp-rec .wp-rec-crow.wp-rec-ghead {
+  min-height: 40px;
+  border-top: 2px solid var(--surface-color-border-medium);
+}
+
+.wp-rec .wp-rec-crow.wp-rec-ghead.first {
+  border-top: 0;
+}
+
+.wp-rec .wp-rec-crow.wp-rec-cnote {
+  min-height: 0;
+  border-top: 1px dashed var(--surface-color-border-default);
+}
+
+.wp-rec .wp-rec-clabel {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  flex: none;
+  width: 260px;
+  box-sizing: border-box;
+  margin-right: var(--layout-margin-medium);
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small) var(--layout-padding-xsmall) 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  background: var(--surface-color-background-white);
+}
+
+.wp-rec .wp-rec-cnote .wp-rec-clabel {
+  padding-left: var(--layout-padding-large);
+}
+
+.wp-rec .wp-rec-cl1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2px var(--layout-margin-small);
+  font: var(--typography-bold-small-body);
+}
+
+.wp-rec .wp-rec-cl1 .wp-tag {
+  white-space: normal;
+}
+
+.wp-rec .wp-rec-sname {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+}
+
+.wp-rec .wp-rec-sname .wp-rec-sw,
+.wp-rec .wp-rec-disc .wp-rec-sw {
+  margin-top: 4px;
+}
+
+.wp-rec .wp-rec-cl2 {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-rec .wp-rec-gtitle {
+  font: var(--typography-bold-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-rec .wp-rec-cwarn {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-danger);
+}
+
+.wp-rec .wp-rec-notep {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-disc {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  cursor: pointer;
+  text-align: left;
+}
+
+.wp-rec .wp-rec-disc .wp-rec-tt {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wp-rec .wp-rec-disc svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.wp-rec .wp-rec-sw {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--layout-border-radius-small);
+  flex: none;
+}
+
+/* A swatch drawn with a chart mark's classes fills the 12 px box, whatever the mark's own place and size. */
+.wp-rec .wp-rec-sw > span {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.wp-rec .wp-rec-sw > .none {
+  border: var(--layout-border-width-small) dashed var(--surface-color-border-dark);
+  border-radius: var(--layout-border-radius-small);
+}
+
+.wp-rec .wp-rec-ctrack {
+  position: relative;
+  flex: none;
+  min-height: 100%;
+}
+
+.wp-rec .wp-rec-tnote {
+  position: sticky;
+  left: calc(260px + var(--layout-margin-medium));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  box-sizing: border-box;
+  /* No wider than the visible track (100cqw = scroller), so the sticky note can stay right of the label column. */
+  max-width: calc(100cqw - 260px - var(--layout-margin-medium));
+  min-height: 100%;
+  padding-left: 4px;
+  vertical-align: top;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-tnote .wp-btn--link {
+  white-space: normal;
+}
+
+/* Keyboard focus: keep the item clear of the sticky axis row above and, for marks, the label column. */
+.wp-rec .wp-rec-dinner :is(a, button, [tabindex]) {
+  scroll-margin-top: calc(48px + 1px + var(--layout-margin-small));
+  scroll-margin-bottom: var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-ctrack :is(.mk, .wp-rec-backbtn) {
+  scroll-margin-left: calc(260px + 2 * var(--layout-margin-medium));
+  scroll-margin-right: var(--layout-margin-medium);
+}
+
+/* Marks; their look is in chart-marks.css. */
+
+.wp-rec .mk {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: default;
+  z-index: 2;
+}
+
+.wp-rec .mk::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+
+/* A bar cut at the chart's right edge grows its hit area leftwards, so it adds no sideways scroll. */
+.wp-rec .mk.cutR::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, -50%);
+}
+
+/* Turned back, so the one-day diamond's target is a 24 px square, not a diamond. */
+.wp-rec .mk.point::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.wp-rec .mk:focus-visible {
+  outline: 2px solid var(--surface-color-border-active);
+  outline-offset: 2px;
+  z-index: 4;
+}
+
+.wp-rec .mk:hover,
+.wp-rec .mk[data-tip-on] {
+  z-index: 4;
+}
+
+.wp-rec .wp-rec-crow.hlrow {
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .wp-rec-crow.hlrow .wp-rec-clabel {
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .bar {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 4px;
+  top: 14px;
+  height: 24px;
+  z-index: 1;
+}
+
+.wp-rec .bar.lbl {
+  overflow: hidden;
+  padding: 0 var(--layout-padding-small);
+  font: var(--typography-regular-small-body);
+  line-height: 20px;
+  white-space: nowrap;
+  color: var(--typography-color-primary);
+}
+
+/* The arrow sits past the bar end; a label is only drawn when it fits, so nothing spills. */
+.wp-rec .bar.openEnd {
+  overflow: visible;
+}
+
+.wp-rec .bar.openEnd::before {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  margin-top: -6px;
+}
+
+.wp-rec .bar.openEnd.cutR::before {
+  content: none;
+}
+
+/* The known end date, as the Overview draws a short phase bar after the lead-in. */
+.wp-rec .bar.openStart::before {
+  content: '';
+  position: absolute;
+  box-sizing: border-box;
+  top: -1px;
+  right: -1px;
+  bottom: -1px;
+  width: 4px;
+}
+
+.wp-rec .bar.openStart.ghostbar::before {
+  content: none;
+}
+
+.wp-rec .bar.point {
+  top: 20.5px;
+  min-width: 0;
+  margin-left: -5.5px;
+}
+
+.wp-rec .bar.reversed {
+  margin-left: -2px;
+}
+
+.wp-rec .int {
+  position: absolute;
+  height: 6px;
+  min-width: 4px;
+}
+
+.wp-rec .xpt,
+.wp-rec .g.xpt {
+  position: absolute;
+  margin-left: -5px;
+}
+
+.wp-rec .dia,
+.wp-rec .g.dia {
+  position: absolute;
+  top: 2px;
+  margin-left: -5px;
+}
+
+/* A milestone's "!" head, centred on its date. */
+.wp-rec .msdue,
+.wp-rec .g.msdue {
+  position: absolute;
+  top: 1px;
+  margin-left: -7px;
+}
+
+.wp-rec .ring,
+.wp-rec .g.ring {
+  position: absolute;
+  top: 2px;
+  margin-left: -5px;
+}
+
+.wp-rec .dflag,
+.wp-rec .g.dflag {
+  position: absolute;
+  top: 2px;
+  height: 36px;
+  margin-left: -2px;
+}
+
+.wp-rec .cp,
+.wp-rec .g.cp {
+  position: absolute;
+  top: 19px;
+  height: 14px;
+  min-width: 3px;
+}
+
+.wp-rec .olim {
+  position: absolute;
+  box-sizing: border-box;
+  top: 15px;
+  height: 10px;
+  min-width: 4px;
+  z-index: 3;
+}
+
+/* Grid and lines */
+
+.wp-rec .wp-rec-under,
+.wp-rec .wp-rec-over {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(260px + var(--layout-margin-medium));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wp-rec .wp-rec-gline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.wp-rec .vline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+/* Axis ticks and marks */
+
+.wp-rec .tick {
+  position: absolute;
+  top: 2px;
+  padding-left: 4px;
+  white-space: nowrap;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+  border-left: 1px solid var(--surface-color-border-medium);
+}
+
+.wp-rec .tick.q {
+  height: 10px;
+  padding: 0;
+}
+
+.wp-rec .tick.flip {
+  padding-left: 0;
+  padding-right: 4px;
+  border-left: 0;
+  border-right: 1px solid var(--surface-color-border-medium);
+  transform: translateX(-100%);
+}
+
+.wp-rec .tick.mark {
+  top: 22px;
+  min-height: 24px;
+  box-sizing: border-box;
+  padding-left: 6px;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+  z-index: 3;
+}
+
+.wp-rec .tick.mark.flip {
+  padding-left: 0;
+  padding-right: 6px;
+}
+
+.wp-rec .tick.mark.mk::after {
+  left: 0;
+  width: 100%;
+  transform: translate(0, -50%);
+}
+
+/* Glyphs: a mark drawn inline in a label, list or table */
+
+.wp-rec .wp-rec-gbox .g {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  margin: 0;
+  top: auto;
+  left: auto;
+}
+
+.wp-rec .wp-rec-gbox .g.ext,
+.wp-rec .wp-rec-gbox .g.sus {
+  width: 18px;
+  height: 6px;
+}
+
+.wp-rec .wp-rec-gbox .g.dia {
+  margin: 0 2px;
+}
+
+/* Room on the right for the head, so stem and head sit centred in the box. */
+.wp-rec .wp-rec-gbox .g.dflag {
+  height: 18px;
+  margin-right: 10px;
+}
+
+.wp-rec .wp-rec-gbox .g.cp {
+  width: 18px;
+  height: 12px;
+}
+
+.wp-rec .wp-rec-gbox .g.bar {
+  width: 16px;
+  height: 10px;
+  min-width: 0;
+}
+
+.wp-rec .wp-rec-gbox {
+  display: inline-flex;
+  width: 20px;
+  justify-content: center;
+  align-items: center;
+  flex: none;
+}
+
+.wp-rec .wp-rec-sthead {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  font: var(--typography-bold-body);
+}
+
+/* Row label lines */
+
+.wp-rec .wp-rec-cpass {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.wp-rec .wp-rec-cpass::before {
+  flex: none;
+}
+
+.wp-rec .wp-rec-cl3 {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-rec .wp-rec-chglink {
+  align-self: flex-start;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wp-rec .wp-rec-back:hover,
+.wp-rec .wp-rec-chglink:hover {
+  color: var(--surface-color-primary-hover);
+}
+
+/* Back to the list, beside the mark "Show on chart" went to; tops centre the 36 px button in the 52 px row and 48 px axis. */
+
+.wp-rec .wp-rec-backbtn {
+  position: absolute;
+  top: 8px;
+  z-index: 7;
+  margin-left: 14px;
+  white-space: nowrap;
+}
+
+.wp-rec .wp-rec-axtrack .wp-rec-backbtn {
+  top: 6px;
+}
+
+.wp-rec .wp-rec-backbtn.flip {
+  transform: translateX(-100%);
+  margin-left: -14px;
+}
+
+/* Time limit changes */
+
+.wp-rec .wp-rec-lstep {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  padding-top: var(--layout-padding-small);
+}
+
+.wp-rec .wp-rec-lstep + .wp-rec-lstep {
+  border-top: 1px solid var(--surface-color-border-default);
+  padding-top: var(--layout-padding-medium);
+}
+
+.wp-rec .wp-rec-lhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+}
+
+.wp-rec .wp-rec-lstep .wp-rec-sthead {
+  min-width: 220px;
+  scroll-margin-top: var(--layout-margin-large);
+}
+
+.wp-rec .wp-rec-lstep .wp-rec-sthead:focus {
+  outline: 2px solid var(--surface-color-border-active);
+  outline-offset: 4px;
+}
+
+.wp-rec .wp-rec-lsum {
+  flex: 1 1 0;
+  min-width: min(100%, 320px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
+  margin: 0;
+  padding: 0;
+}
+
+.wp-rec .wp-rec-lsum div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-rec .wp-rec-lsum dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-lsum dd {
+  margin: 0;
+  font: var(--typography-bold-small-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-rec .wp-rec-lsum dd.warn {
+  color: var(--typography-color-danger);
+}
+
+.wp-rec .wp-rec-kg {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 10px;
+  box-sizing: border-box;
+}
+
+.wp-rec .wp-rec-kg.sc {
+  border-bottom: 2px solid;
+}
+
+.wp-rec .wp-rec-kg.se {
+  height: 5px;
+}
+
+.wp-rec .wp-rec-kg.sl {
+  width: 0;
+  height: 14px;
+  border-left: 2px solid var(--surface-color-border-dark);
+}
+
+.wp-rec .wp-rec-kg.none {
+  display: none;
+}
+
+.wp-rec .wp-rec-sbar {
+  position: relative;
+  flex: none;
+  width: 180px;
+  height: 18px;
+}
+
+.wp-rec .wp-rec-sbar span {
+  position: absolute;
+}
+
+.wp-rec .wp-rec-sbar .sc {
+  top: 0;
+  height: 10px;
+  border-bottom: 2px solid;
+  box-sizing: border-box;
+  border-radius: 2px 0 0 2px;
+}
+
+.wp-rec .wp-rec-sbar .ss {
+  top: 0;
+  height: 10px;
+}
+
+.wp-rec .wp-rec-sbar .se {
+  top: 13px;
+  height: 5px;
+}
+
+.wp-rec .wp-rec-sbar .sl {
+  top: -2px;
+  height: 22px;
+  width: 0;
+  border-left: 2px solid var(--surface-color-border-dark);
+}
+
+.wp-rec .wp-rec-ltwrap {
+  overflow-x: auto;
+}
+
+.wp-rec .wp-rec-lt {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font: var(--typography-regular-small-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-rec .wp-rec-lt__change {
+  width: 260px;
+}
+
+.wp-rec .wp-rec-lt__section {
+  width: 120px;
+}
+
+.wp-rec .wp-rec-lt__date {
+  width: 110px;
+}
+
+.wp-rec .wp-rec-lt th {
+  text-align: left;
+  font: var(--typography-bold-small-body);
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small);
+  border-bottom: 2px solid var(--surface-color-border-medium);
+}
+
+.wp-rec .wp-rec-lt td {
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small);
+  border-bottom: 1px solid var(--surface-color-border-default);
+  vertical-align: top;
+}
+
+.wp-rec .wp-rec-lt tfoot :is(th, td) {
+  font: var(--typography-bold-small-body);
+  border-bottom: 0;
+  border-top: 2px solid var(--surface-color-border-medium);
+}
+
+.wp-rec .wp-rec-lt tfoot tr + tr :is(th, td) {
+  border-top: 0;
+}
+
+.wp-rec .wp-rec-lrow:hover,
+.wp-rec .wp-rec-lrow.hl {
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .wp-rec-kcell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-dcell {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-dnum {
+  flex: none;
+  width: 48px;
+  text-align: right;
+}
+
+.wp-rec .wp-rec-dbar {
+  flex: none;
+  height: 8px;
+  min-width: 3px;
+  border-radius: var(--layout-border-radius-small);
+}
+
+/* Events */
+
+.wp-rec .wp-rec-evhead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-evtools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-xlarge);
+}
+
+.wp-rec .wp-rec-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-small);
+}
+
+.wp-rec .wp-rec-cnt {
+  font-variant-numeric: tabular-nums;
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-evkey {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
+  font: var(--typography-regular-small-body);
+}
+
+.wp-rec .wp-rec-evkey li {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-rec .wp-rec-egrid {
+  columns: 2 520px;
+  column-gap: var(--layout-margin-xlarge);
+}
+
+.wp-rec .wp-rec-egrp {
+  break-inside: avoid;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+  padding-top: var(--layout-padding-small);
+}
+
+.wp-rec .wp-rec-emore {
+  align-self: flex-start;
+}
+
+.wp-rec .wp-rec-elist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wp-rec .wp-rec-erow {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--surface-color-border-default);
+}
+
+.wp-rec .wp-rec-esel {
+  cursor: pointer;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px 104px minmax(0, 1fr) 150px;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+  min-height: 32px;
+  margin: 0;
+  padding: 2px var(--layout-padding-small);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-rec .wp-rec-esel:hover,
+.wp-rec .wp-rec-erow.hl .wp-rec-esel {
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .wp-rec-erow.sel {
+  box-shadow: inset 4px 0 0 var(--surface-color-border-active);
+  background: var(--surface-color-background-light-blue);
+}
+
+.wp-rec .wp-rec-erow.dec .wp-rec-en {
+  font: var(--typography-bold-small-body);
+}
+
+.wp-rec .wp-rec-eact {
+  display: flex;
+  padding: 0 var(--layout-padding-small) var(--layout-padding-small)
+    calc(18px + 104px + 2 * var(--layout-margin-medium) + var(--layout-padding-small));
+}
+
+.wp-rec .wp-rec-ed {
+  display: flex;
+  flex-direction: column;
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-el {
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-egap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-gbar {
+  flex: none;
+  height: 4px;
+  border-radius: var(--layout-border-radius-small);
+  background: var(--theme-gray-50);
+}
+
+.wp-rec .wp-rec-gbar--key {
+  width: 24px;
+}
+
+.wp-rec .wp-rec-ehid {
+  margin: 0;
+  padding: 2px var(--layout-padding-small);
+  border-top: 1px solid var(--surface-color-border-default);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-ecount {
+  margin-left: var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Notes on this record */
+
+.wp-rec .wp-rec-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-rec .wp-rec-note {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  padding-left: var(--layout-padding-small);
+  border-left: 2px solid var(--surface-color-border-default);
+}
+
+.wp-rec .wp-rec-note--warn {
+  color: var(--typography-color-danger);
+  border-left-color: var(--support-border-color-danger);
+  font: var(--typography-bold-small-body);
+}
+
+.wp-rec .wp-rec-note--pass {
+  border-left: 4px solid var(--support-border-color-warning);
+  font: var(--typography-bold-small-body);
+}
+
+@media (max-width: 720px) {
+  .wp-rec .wp-rec-esel {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .wp-rec .wp-rec-egap {
+    grid-column: 2;
+  }
+
+  .wp-rec .wp-rec-eact {
+    padding-left: calc(20px + var(--layout-margin-small) + var(--layout-padding-small));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wp-rec .mk {
+    transition: box-shadow 120ms ease-out;
+  }
+}

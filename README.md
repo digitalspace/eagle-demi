@@ -763,11 +763,19 @@ Project details picker shows the counts as badges with a filter.
 
 ### Workplans route
 
-`GET /api/workplans` returns `{ works: [...] }`: every live work, Track and sheet, of every project the
-caller may read, sorted by `projectId`. Each row holds the project's `projectId` and `projectName`, the
-work's id, source, title, type, Act, state, dates, `outcome` and `transitionOut`, plus `shownAfterFlip`,
-`untilTrack` and `replaces` as on the sheet works route. Each row also carries `decisionEventDate`,
-`certificateKind`, `complexityCode` and `transitionIn` (sheet works only, null on Track works).
+`GET /api/workplans` returns `{ works: [...] }`: every shown work, Track and sheet, of every project the
+caller may read, sorted by `projectId`. Track works the sheet override hides are left out, so
+`shownAfterFlip` is always true; the sheet work that replaces one lists it in `replaces`. The route
+changes no stored work.
+
+Each row holds the project's `projectId`, `projectName` and `eagleId` (null when the project has none),
+and the work's id, source, title, type, Act, state, dates, `outcome`, `outcomeFrom` and `transitionOut`.
+It also carries `shownAfterFlip`, `untilTrack` and `replaces` as on the sheet works route. Each row
+carries `decisionEventDate` (Track works only) and `certificateKind`, `complexityCode` and
+`transitionIn` (sheet works only); the other source gets null.
+
+A sheet work with no `outcome` takes the Track outcome only if the Track works it replaces carry exactly one distinct outcome. With none, or with two or more different ones, it stays null.
+A filled row has `outcomeFrom: 'track'` and keeps the sheet's dates; every other row has `outcomeFrom: null`.
 
 Each of a row's `phases` carries `interruptions` (with `typeCode`), `isCurrent`, `suspendedDate`,
 `extensionDays` and `suspendedDays`. The row's `milestones` lists the work's milestones with a `kind`

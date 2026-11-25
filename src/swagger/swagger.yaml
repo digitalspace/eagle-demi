@@ -1848,14 +1848,18 @@ paths:
 
   /api/workplans:
     get:
-      summary: List every live work of every readable project
+      summary: List every shown work of every readable project
       description: >-
-        Every live work, Track and sheet, of each project the caller can read, as one flat list
-        sorted by `projectId`. A project with no live work does not appear. Each row has the work's
-        dates, state and phases, and carries the project's id and name. A row has `shownAfterFlip`,
-        `untilTrack` and `replaces` with the same meaning as on `/api/projects/{id}/sheet-works`;
-        on a Track work `shownAfterFlip` is false when a shown sheet work replaces it, `untilTrack`
-        is false and `replaces` is empty. The route does not read `WORKS_READ_SOURCES` and does not
+        Every shown work, Track and sheet, of each project the caller can read, as one flat list
+        sorted by `projectId`. A project with no shown work does not appear. Track works the sheet
+        override hides are left out, so `shownAfterFlip` is always true; the sheet work that
+        replaces one lists it in `replaces`. No stored work changes. Each row has the work's dates,
+        state and phases, and carries the project's id, name and Eagle id. A row has `untilTrack`
+        and `replaces` with the same meaning as on `/api/projects/{id}/sheet-works`; on a Track
+        work `untilTrack` is false and `replaces` is empty. A sheet work with no `outcome` takes the
+        outcome of the Track works it replaces when they carry exactly one distinct outcome, and
+        says so in `outcomeFrom`. With none, or with two or more different outcomes, `outcome` stays
+        null. The route does not read `WORKS_READ_SOURCES` and does not
         change what the public project read returns. Routed only when `ENVIRONMENT` is `dev` or
         `test`; unset reads as `dev`. Elsewhere every caller gets the router's 404. The edge read
         allowlist does not include this path, so it also answers 404 on the public host. Needs the
@@ -1884,6 +1888,10 @@ paths:
                         projectName:
                           type: string
                           nullable: true
+                        eagleId:
+                          type: string
+                          nullable: true
+                          description: The project's Eagle id, the `project._id` eagle-api accepts; null when it has none.
                         workId:
                           type: string
                         source:
@@ -1925,6 +1933,14 @@ paths:
                         outcome:
                           type: string
                           nullable: true
+                        outcomeFrom:
+                          type: string
+                          nullable: true
+                          enum: [track, null]
+                          description: >-
+                            `track` when a sheet work with no outcome took it from the Track works it
+                            replaces, which carry exactly one distinct outcome; the row keeps the
+                            sheet's dates. Null on every other row.
                         transitionOut:
                           type: object
                           nullable: true
@@ -1933,7 +1949,8 @@ paths:
                           $ref: '#/components/schemas/WorkUndated'
                         shownAfterFlip:
                           type: boolean
-                          description: A read with `WORKS_READ_SOURCES` `track,sheet` shows this work.
+                          enum: [true]
+                          description: Always true here; works a read with `WORKS_READ_SOURCES` `track,sheet` hides are left out.
                         untilTrack:
                           type: boolean
                           description: The work shows only until a matching Track work is stored.

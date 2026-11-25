@@ -14,6 +14,8 @@ export interface AppConfig {
   APPINSIGHTS_CONNECTION_STRING?: string;
   /** eagle-notify's base: the `/notify-api` dev proxy path locally, its own origin when deployed. */
   NOTIFY_API_LOCATION?: string;
+  /** eagle-admin's base, `https://<host>/admin`. Empty or unset means no link to eagle-admin. */
+  EAGLE_ADMIN_URL?: string;
   [key: string]: unknown;
 }
 
@@ -26,12 +28,8 @@ declare global {
 let configuration: AppConfig = {};
 
 /**
- * Read the two config documents and merge them under window.__env.
- *
- * The public document is the feature-flag mirror the public site boots on. It is unauthenticated
- * and carries no API location, so it is read whichever way this app is configured, and it sits
- * under window.__env: a key this app sets for itself still wins. A failed read leaves the values
- * already in place rather than taking the app down.
+ * Merge window.__env over the public config document (always read; it carries no API location) and
+ * /api/config over both. A failed read keeps the values already in place.
  */
 export async function initConfig(): Promise<AppConfig> {
   configuration = { ...(window.__env ?? {}) };

@@ -1,0 +1,1005 @@
+/* Workplans Overview: all works by Act, one row per project and Act. */
+
+/* Page: grows so the shell's main scrolls it; its width is the breakpoint's container. */
+.wp-page--overview {
+  container: wp-overview / inline-size;
+  gap: var(--layout-margin-small);
+  height: auto;
+}
+
+/* The sticky bar covers --wp-ov-bar-h of main; row names and Act sections add their own margin below it. */
+.app__main:has(.wp-page--overview) {
+  --wp-ov-bar-h: 80px;
+  scroll-padding-top: var(--wp-ov-bar-h);
+}
+
+/* Sticky tops are measured inside main's top padding (Shell's --layout-padding-large); this pins them at main's edge. */
+.wp-ov {
+  --wp-ov-pin: calc(-1 * var(--layout-padding-large));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+  /* With main's 24 px padding, clears the floating key button (48 px, 24 px in) under the last row. */
+  padding-bottom: var(--layout-margin-huge);
+  /* Line height stays at normal; the app shell's taller one would add height to every line. */
+  line-height: var(--typography-line-heights-auto);
+}
+
+/* Browsers give form controls their own font; the page's BC Sans should carry into them. */
+.wp-ov :where(button, input, select, textarea) {
+  font-family: inherit;
+}
+
+.wp-ov-lead {
+  margin: 0 0 var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* Search and filter bands */
+
+.wp-ov-tools {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-bottom: none;
+  border-radius: var(--layout-border-radius-medium) var(--layout-border-radius-medium) 0 0;
+}
+
+.wp-ov-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--layout-margin-medium) var(--layout-margin-large);
+  padding: var(--layout-padding-medium);
+}
+
+.wp-ov-band.wp-ov-band--filt {
+  border-top: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.wp-ov-fld {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+  min-width: 0;
+}
+
+.wp-ov-fld.wp-ov-fld--find {
+  flex: 1 1 20rem;
+}
+
+.wp-ov-fld.wp-ov-fld--pick {
+  flex: 0 1 15rem;
+  min-width: 11rem;
+}
+
+.wp-ov-fld .wp-dsel {
+  width: 100%;
+}
+
+/* The State control's label and group lay out as the field's own label and control. */
+.wp-ov-fld > .wp-segmented {
+  display: contents;
+}
+
+.wp-ov-band > .wp-ov-fld > :last-child,
+.wp-ov-band > .wp-ov-fld > .wp-segmented > :last-child {
+  margin-block: auto;
+}
+
+.wp-ov-fgrp {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--layout-margin-small);
+}
+
+.wp-ov-tlab,
+.wp-ov-fld .wp-segmented__label,
+.wp-ov-vbar .wp-timescale__label {
+  font: var(--typography-regular-small-body);
+  font-family: inherit;
+  color: var(--typography-color-primary);
+}
+
+/* Controls: medium (40 px) field, selects and buttons; small toggles in a grey tray. */
+.wp-ov .wp-field {
+  height: 40px;
+  padding: 0 var(--layout-padding-small) 0 var(--layout-padding-medium);
+  background: var(--surface-color-forms-default);
+  border-color: var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+}
+
+.wp-ov .wp-field:hover,
+.wp-ov .wp-dsel:hover {
+  border-color: var(--surface-color-border-dark);
+}
+
+.wp-ov .wp-field:focus-within {
+  border-color: var(--surface-color-border-active);
+}
+
+.wp-ov .wp-field__input {
+  font: var(--typography-regular-body);
+  font-family: inherit;
+}
+
+.wp-ov .wp-field__input::placeholder {
+  color: var(--typography-color-placeholder);
+}
+
+.wp-ov .wp-dsel {
+  height: 40px;
+  background: var(--surface-color-forms-default);
+  border-color: var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  font: var(--typography-regular-body);
+  font-family: inherit;
+  line-height: normal;
+  cursor: pointer;
+}
+
+.wp-ov .wp-btn {
+  min-height: 40px;
+  padding: 0 var(--layout-padding-medium);
+  border-radius: var(--layout-border-radius-medium);
+  font: var(--typography-regular-body);
+  font-family: inherit;
+  line-height: 1.25;
+}
+
+.wp-ov .wp-btn--secondary,
+.wp-ov .wp-btn--secondary:hover {
+  border-color: var(--surface-color-border-dark);
+  background-color: var(--surface-color-secondary-button-default);
+}
+
+.wp-ov .wp-btn--secondary:hover {
+  background-color: var(--surface-color-secondary-button-hover);
+}
+
+.wp-ov .wp-btn--secondary:is(:disabled, [aria-disabled='true']) {
+  background-color: var(--surface-color-secondary-button-disabled);
+  border-color: var(--surface-color-border-default);
+}
+
+.wp-ov .wp-btn--icon {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+}
+
+.wp-ov .wp-tgroup {
+  min-height: 40px;
+  padding: var(--layout-padding-xsmall);
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--surface-color-secondary-button-disabled);
+}
+
+.wp-ov .wp-tbtn {
+  min-height: 32px;
+  border-color: transparent;
+  border-radius: var(--layout-border-radius-medium);
+  background-color: transparent;
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.wp-ov .wp-tbtn:hover {
+  background-color: var(--surface-color-secondary-pressed);
+  border-color: var(--surface-color-border-medium);
+  color: var(--typography-color-primary);
+}
+
+/* Pressed is a raised white segment: fill, edge shadow and darker text together, not colour alone. */
+.wp-ov .wp-tbtn:is([aria-checked='true'], [aria-pressed='true']),
+.wp-ov .wp-tbtn:is([aria-checked='true'], [aria-pressed='true']):hover {
+  background-color: var(--surface-color-secondary-button-default);
+  border-color: var(--surface-color-secondary-button-default);
+  box-shadow: var(--surface-shadow-small);
+  color: var(--typography-color-primary);
+}
+
+.wp-ov .wp-tbtn:is([aria-checked='true'], [aria-pressed='true']):hover {
+  border-color: var(--surface-color-border-medium);
+}
+
+.wp-ov :is(.wp-tbtn, .wp-btn, .wp-dsel):focus-visible,
+.wp-ov .wp-field:has(> .wp-field__input:focus-visible) {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+/* High contrast themes drop the shadow and fills; the pressed segment takes the system highlight instead. */
+@media (forced-colors: active) {
+  .wp-ov .wp-tbtn:is([aria-checked='true'], [aria-pressed='true']) {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
+
+/* Checkbox in the B.C. Design System look: 16 px box, 2 px corners, primary fill with a white tick when checked. */
+.wp-ov-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  font: var(--typography-regular-small-body);
+  font-family: inherit;
+  color: var(--typography-color-primary);
+  cursor: pointer;
+}
+
+.wp-ov-check input {
+  appearance: none;
+  box-sizing: border-box;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-small);
+  background: var(--surface-color-forms-default) no-repeat center / 12px 12px;
+  cursor: pointer;
+}
+
+.wp-ov-check:hover input {
+  border-color: var(--surface-color-border-dark);
+}
+
+.wp-ov-check input:checked {
+  border-color: var(--surface-color-primary-default);
+  background-color: var(--surface-color-primary-default);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-5'/%3E%3C/svg%3E");
+}
+
+.wp-ov-check input:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+/* High contrast themes repaint the box and drop the tick; the native control keeps its state visible. */
+@media (forced-colors: active) {
+  .wp-ov-check input {
+    appearance: auto;
+  }
+}
+
+/* Sticky bar: Navigate the timeline */
+
+.wp-ov-vbar {
+  position: sticky;
+  top: var(--wp-ov-pin);
+  z-index: 8;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-items: flex-end;
+  gap: var(--layout-margin-large);
+  height: var(--wp-ov-bar-h);
+  margin-top: calc(-1 * var(--layout-margin-small));
+  /* 7 px, not 8: the 20 px label and a 40 px control fill the 80 px bar exactly. */
+  padding: calc(var(--layout-padding-small) - 1px) var(--layout-padding-medium);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-top-color: var(--theme-gray-30);
+  border-bottom-color: var(--surface-color-border-medium);
+  border-radius: 0 0 var(--layout-border-radius-medium) var(--layout-border-radius-medium);
+}
+
+.wp-ov-vbar > .wp-ov-fld {
+  flex: none;
+}
+
+.wp-ov-vsep {
+  flex: none;
+  align-self: stretch;
+  width: 0;
+  margin: var(--layout-margin-xsmall) 0;
+  border-left: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.wp-ov-vbar .wp-ov-tlab {
+  line-height: 20px;
+}
+
+.wp-ov-vbar .wp-ov-fgrp {
+  flex-wrap: nowrap;
+  min-height: 36px;
+}
+
+.wp-ov-flash {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  line-height: 1.25;
+  font-size: var(--typography-font-size-small-body);
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--typography-color-primary);
+}
+
+.wp-ov-vbar .wp-ov-flash {
+  align-self: center;
+}
+
+.wp-ov-flash:empty {
+  display: none;
+}
+
+/* Act section and its sticky head */
+
+.wp-ov-act {
+  margin-top: var(--layout-margin-small);
+  scroll-margin-top: 8px;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+}
+
+.wp-ov-shead {
+  position: sticky;
+  top: calc(var(--wp-ov-pin) + var(--wp-ov-bar-h));
+  z-index: 7;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  column-gap: 16px;
+  align-items: center;
+  padding: 0 var(--layout-padding-medium);
+  background: var(--surface-color-background-white);
+  border-radius: var(--layout-border-radius-medium) var(--layout-border-radius-medium) 0 0;
+}
+
+.wp-ov-shead.wp-ov-shead--on {
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+}
+
+/* The title sits in the name column's place, left of the axis and scroll window. */
+.wp-ov-acthead {
+  grid-column: 1;
+  padding: var(--layout-padding-small) 0;
+}
+
+.wp-ov-shr {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.wp-ov-acthead h2 {
+  margin: 0;
+  font-size: var(--typography-font-size-h4);
+  font-weight: var(--typography-font-weights-bold);
+  line-height: 34px;
+}
+
+.wp-ov-actbtn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  cursor: pointer;
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--theme-primary-blue);
+  border-bottom: var(--layout-border-width-medium) solid var(--theme-primary-gold);
+}
+
+.wp-ov-actbtn:hover {
+  color: var(--theme-blue-100);
+}
+
+.wp-ov-actbtn:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+.wp-ov-actbtn svg {
+  flex: none;
+  transition: transform 0.15s;
+}
+
+.wp-ov-actbtn[aria-expanded='false'] svg {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wp-ov-actbtn svg {
+    transition: none;
+  }
+}
+
+/* Axis */
+
+.wp-ov-axis {
+  display: block;
+}
+
+.wp-ov-axv {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.wp-ov-axv::-webkit-scrollbar {
+  display: none;
+}
+
+.wp-ov-axt {
+  position: relative;
+  width: calc(max(640px, 100%) * var(--span, 1));
+  height: 44px;
+}
+
+/* Plot layers: the track less an empty end of --wp-ov-edge each side, so marks and labels on the first and last dates show whole.
+   The scroll window strip sets its own ends inline, as that edge scaled to the strip. */
+.wp-ov-axp,
+.wp-ov-trp,
+.wp-ov-sw-plot {
+  position: absolute;
+  inset: 0 var(--wp-ov-edge, 0px);
+}
+
+.wp-ov-sw-plot {
+  pointer-events: none;
+}
+
+.wp-ov-tk {
+  position: absolute;
+  bottom: 0;
+  height: 8px;
+  border-left: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+}
+
+.wp-ov-tk.wp-ov-tk--minor {
+  height: 4px;
+  border-left-color: var(--theme-gray-50);
+}
+
+/* The Act line runs the full axis height into its rows line; its label hangs off its top. */
+.wp-ov-tk.wp-ov-tk--actin {
+  top: 0;
+  height: auto;
+}
+
+.wp-ov-tkl {
+  position: absolute;
+  bottom: 10px;
+  padding-left: 3px;
+  font-size: var(--typography-font-size-small-body);
+  line-height: 1;
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: var(--surface-color-background-white);
+}
+
+.wp-ov-tkl.wp-ov-tkl--upper {
+  bottom: 26px;
+  padding-left: 5px;
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--typography-color-secondary);
+  background: none;
+}
+
+.wp-ov-tkl.wp-ov-tkl--yr {
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--typography-color-primary);
+}
+
+.wp-ov-tkl.wp-ov-tkl--today {
+  bottom: 26px;
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--surface-color-border-active);
+}
+
+/* Scroll window: the Act's whole axis under the axis, a box over the part in view; always drawn. */
+
+.wp-ov-sw {
+  display: block;
+  padding: var(--layout-padding-xsmall) 0;
+  user-select: none;
+}
+
+/* The strip's edge is border-medium so it reads at 3:1 on the white head; the old gray-40 line did not. */
+.wp-ov-sw-strip {
+  position: relative;
+  height: 16px;
+  margin: var(--layout-margin-xsmall) 0;
+  border-radius: var(--layout-border-radius-small);
+  background: var(--theme-gray-20);
+  box-shadow: inset 0 0 0 var(--layout-border-width-small) var(--surface-color-border-medium);
+  cursor: pointer;
+}
+
+/* A 24 px tall tap target over the 16 px strip. */
+.wp-ov-sw-strip::before {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
+}
+
+.wp-ov-sw-year {
+  position: absolute;
+  top: 4px;
+  height: 8px;
+  border-left: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  pointer-events: none;
+}
+
+.wp-ov-sw-today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  pointer-events: none;
+}
+
+.wp-ov-sw-window {
+  position: absolute;
+  z-index: 1;
+  top: -4px;
+  bottom: -4px;
+  box-sizing: border-box;
+  min-width: 8px;
+  border: var(--layout-border-width-medium) solid var(--theme-primary-blue);
+  border-radius: var(--layout-border-radius-medium);
+  background: color-mix(in srgb, var(--theme-primary-blue) 12%, transparent);
+  box-shadow: var(--surface-shadow-small);
+  cursor: grab;
+  touch-action: none;
+}
+
+.wp-ov-sw-window:hover,
+.wp-ov-sw-window:active {
+  background: color-mix(in srgb, var(--theme-primary-blue) 22%, transparent);
+}
+
+/* Hit area at least 24px each way, however small the box gets at a deep zoom. */
+.wp-ov-sw-window::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  width: max(100% + 4px, 24px);
+  transform: translateX(-50%);
+}
+
+/* Grip: three short lines in the middle say the box can be dragged. */
+.wp-ov-sw-window::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  background: repeating-linear-gradient(90deg, var(--theme-primary-blue) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+
+.wp-ov-sw-window:active {
+  cursor: grabbing;
+}
+
+/* At the whole range the box fills the strip and has nowhere to go. */
+.wp-ov-sw-strip[data-whole],
+.wp-ov-sw-strip[data-whole] .wp-ov-sw-window {
+  cursor: default;
+}
+
+.wp-ov-sw-strip[data-whole] .wp-ov-sw-window::after {
+  display: none;
+}
+
+.wp-ov-sw-window:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+}
+
+/* Rows box: only it scrolls sideways; the track is --span times the visible width. */
+
+.wp-ov-tlx {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  container-type: inline-size;
+  isolation: isolate;
+}
+
+.wp-ov-tlx::-webkit-scrollbar {
+  display: none;
+}
+
+.wp-ov-tlx:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: -2px;
+}
+
+.wp-ov-rows {
+  --vis: max(640px, calc(100cqw - 368px));
+  position: relative;
+  overflow: clip;
+  display: flex;
+  flex-direction: column;
+  width: calc(368px + var(--vis) * var(--span, 1));
+}
+
+.wp-ov-ovl {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(352px + var(--wp-ov-edge, 0px));
+  z-index: 1;
+  width: calc(var(--vis) * var(--span, 1) - 2 * var(--wp-ov-edge, 0px));
+  pointer-events: none;
+}
+
+.wp-ov-ovl.wp-ov-ovl--hi {
+  z-index: 3;
+}
+
+/* Grid lines; key swatches draw the same lines with the raw classes. */
+.wp-ov-gl {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  width: 0;
+}
+
+.wp-ov-gl.wp-ov-gl--today {
+  z-index: 3;
+}
+
+/* Row */
+
+.wp-ov-rw {
+  position: relative;
+}
+
+.wp-ov-row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 320px calc(var(--vis) * var(--span, 1));
+  gap: 16px;
+  width: 100%;
+  min-height: 72px;
+  padding: var(--layout-padding-xsmall) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-30);
+  cursor: pointer;
+  color: var(--typography-color-primary);
+  text-align: left;
+  background: var(--surface-color-background-white);
+}
+
+.wp-ov-rw:nth-of-type(even) .wp-ov-row {
+  background: var(--surface-color-background-light-gray);
+}
+
+.wp-ov-rw .wp-ov-row:hover,
+.wp-ov-row:has(.wp-ov-nm:focus-visible) {
+  background: var(--theme-blue-10);
+}
+
+.wp-ov [data-cut] {
+  visibility: hidden;
+}
+
+/* Name cell, sticky left; its side strips hide marks scrolled under the gutter.
+   It reaches over the row's padding and bottom border too, so no grid line shows between names. */
+
+.wp-ov-nc {
+  --wp-ov-nc-pb: var(--layout-padding-xsmall);
+  --wp-ov-nc-bb: var(--layout-border-width-small);
+  position: sticky;
+  left: var(--layout-padding-medium);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  min-width: 0;
+  margin: calc(-1 * var(--layout-padding-xsmall)) 0 calc(-1 * (var(--wp-ov-nc-pb) + var(--wp-ov-nc-bb)));
+  padding: var(--layout-padding-xsmall) 0 var(--wp-ov-nc-pb);
+  border-bottom: var(--wp-ov-nc-bb) solid var(--theme-gray-30);
+  background: inherit;
+}
+
+.wp-ov-nc::before,
+.wp-ov-nc::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: calc(-1 * var(--wp-ov-nc-bb));
+  width: var(--layout-padding-medium);
+  border-bottom: var(--wp-ov-nc-bb) solid var(--theme-gray-30);
+  background: inherit;
+}
+
+.wp-ov-nc::before {
+  right: 100%;
+}
+
+.wp-ov-nc::after {
+  left: 100%;
+  border-right: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.wp-ov-nc > * {
+  max-width: 100%;
+}
+
+.wp-ov-nc:has(.wp-ov-nm:focus-visible) {
+  z-index: 8;
+}
+
+/* Inline flow, so the ID follows the last word of a name that wraps. */
+.wp-ov-l1 {
+  display: block;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+/* On top of main's --wp-ov-bar-h scroll padding: clear of the bar and the Act head. */
+.wp-ov-nm {
+  display: inline;
+  scroll-margin-top: 134px;
+  font-size: var(--typography-font-size-body);
+  font-weight: var(--typography-font-weights-bold);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wp-ov-nm:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 0;
+}
+
+.wp-ov-row:hover .wp-ov-nm {
+  color: var(--theme-blue-100);
+}
+
+.wp-ov-pid {
+  margin-left: var(--layout-margin-small);
+  white-space: nowrap;
+  font-size: var(--typography-font-size-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-ov-st {
+  display: block;
+  min-width: 0;
+  font-size: var(--typography-font-size-small-body);
+  line-height: 1.25;
+  color: var(--typography-color-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Line 2: work type in bold, a dot, then where it stands. */
+.wp-ov-wk {
+  font-weight: var(--typography-font-weights-bold);
+}
+
+.wp-ov-sep {
+  color: var(--typography-color-secondary);
+}
+
+/* Acts line: "Acts: 2002, 2018", this Act bold, the others links to the same project's row there. */
+.wp-ov-acts {
+  display: block;
+  font: var(--typography-regular-small-body);
+  font-family: inherit;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.wp-ov-actsl {
+  color: var(--typography-color-secondary);
+}
+
+.wp-ov-actn {
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-ov-actn.wp-ov-actn--on {
+  font-weight: var(--typography-font-weights-bold);
+  color: var(--typography-color-primary);
+}
+
+a.wp-ov-actn {
+  color: var(--typography-color-link);
+  text-underline-offset: 2px;
+}
+
+a.wp-ov-actn:hover {
+  color: var(--theme-blue-100);
+}
+
+a.wp-ov-actn:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: var(--layout-margin-hair);
+  border-radius: var(--layout-border-radius-small);
+}
+
+/* Alert tags: every one shown, wrapping onto more lines rather than hiding any. */
+.wp-ov-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-xsmall) var(--layout-padding-small);
+  min-width: 0;
+  margin-top: 2px;
+}
+
+/* B.C. Design System Tag, rectangular, xsmall. */
+.wp-ov-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  max-width: 100%;
+  min-height: var(--layout-padding-medium);
+  padding: var(--layout-padding-hair) var(--layout-padding-small);
+  border-radius: var(--layout-border-radius-small);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  background: var(--surface-color-background-white);
+  font: var(--typography-regular-label);
+  font-family: inherit;
+  color: var(--typography-color-primary);
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.wp-ov-chip.wp-ov-chip--warn {
+  background: var(--support-surface-color-warning);
+  border-color: var(--support-border-color-warning);
+}
+
+.wp-ov-chip.wp-ov-chip--err {
+  background: var(--support-surface-color-danger);
+  border-color: var(--support-border-color-danger);
+}
+
+/* Full name, shown while the name link has keyboard focus. */
+.wp-ov-fulln {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% - 4px - var(--wp-ov-nc-pb));
+  z-index: 9;
+  box-sizing: border-box;
+  max-width: min(560px, calc(100% - 32px));
+  padding: var(--layout-padding-xsmall) var(--layout-padding-small);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-dark);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: var(--surface-shadow-medium);
+  font-size: var(--typography-font-size-small-body);
+  line-height: var(--typography-line-heights-xxdense);
+  white-space: normal;
+  pointer-events: none;
+}
+
+.wp-ov-fulln b {
+  display: block;
+}
+
+.wp-ov-nc:has(.wp-ov-nm:focus-visible) .wp-ov-fulln {
+  display: block;
+}
+
+/* Track */
+
+/* Off-screen tracks skip rendering; on the row it would lift the grid over the marks and the name cell.
+   z-index 2 keeps the grid under the marks; the clip margin keeps the end arrow and hit areas. Height is set inline per row. */
+.wp-ov-tr {
+  position: relative;
+  z-index: 2;
+  display: block;
+  align-self: start;
+  content-visibility: auto;
+  overflow-clip-margin: 16px;
+}
+
+.wp-ov-empty {
+  margin: 0;
+  padding: var(--layout-padding-medium);
+  font-size: var(--typography-font-size-body);
+}
+
+/* A 1199 px viewport rule as content width: the bar stops sticking and wraps, the Act head pins at 0. */
+@container wp-overview (max-width: 1135px) {
+  .wp-ov-vbar {
+    position: static;
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .wp-ov-vbar .wp-ov-fgrp,
+  .wp-ov-vbar .wp-timescale__controls {
+    flex-wrap: wrap;
+  }
+
+  .wp-ov-vsep {
+    display: none;
+  }
+
+  .wp-ov-shead {
+    top: var(--wp-ov-pin);
+  }
+
+  /* Each control group may shrink to the bar's width, so its own buttons wrap instead of pushing main sideways. */
+  .wp-ov-vbar > .wp-ov-fld,
+  .wp-ov-vbar > .wp-timescale {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+}
+
+/* Narrow: the 320 px name column would cover the whole card, so names go above each track. The rows box reaches 336 px left of
+   the card, clipped, which keeps the 368 px name inset the scroll maths use while the card shows only track, 16 px in each side. */
+@container wp-overview (max-width: 699px) {
+  .wp-ov-act {
+    overflow-x: clip;
+  }
+
+  .wp-ov-act:has(.wp-ov-tlx:focus-visible) {
+    outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+    outline-offset: var(--layout-margin-hair);
+  }
+
+  .wp-ov-tlx {
+    margin-left: calc(32px - 368px);
+  }
+
+  .wp-ov-tlx:focus-visible {
+    outline: none;
+  }
+
+  .wp-ov-row {
+    grid-template-rows: auto auto;
+    row-gap: var(--layout-margin-xsmall);
+  }
+
+  /* left: the card's inner edge plus its 16 px gutter, in the shifted box; width: the card less both gutters. */
+  /* The name cell and its gutter strips also cover the gap above the track, so lines start at the track. */
+  .wp-ov-nc {
+    --wp-ov-nc-pb: var(--layout-margin-xsmall);
+    --wp-ov-nc-bb: 0px;
+    grid-row: 1;
+    grid-column: 2;
+    left: calc(368px - 16px);
+    width: calc(100cqw - 368px);
+  }
+
+  .wp-ov-nc::before,
+  .wp-ov-nc::after {
+    border: 0;
+  }
+
+  .wp-ov-tr {
+    grid-row: 2;
+    grid-column: 2;
+  }
+
+  /* The title goes above the axis and scroll window, which take the card less its gutters, the width of the track the rows show. */
+  .wp-ov-shead {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wp-ov-shr {
+    grid-column: 1;
+  }
+}

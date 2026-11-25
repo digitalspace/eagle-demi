@@ -32,10 +32,14 @@ esac
 ENV_NAME="$1"
 ENV_JS="${2:-frontend/public/env.js}"
 
+# EAGLE_ADMIN_URL '' = no document links. Dev has no eagle-admin app.
 case "$ENV_NAME" in
-  dev)  KEYCLOAK_URL='https://dev.loginproxy.gov.bc.ca/auth';  NOTIFY_DEFAULT='https://notify-api-test.azurewebsites.net' ;;
-  test) KEYCLOAK_URL='https://test.loginproxy.gov.bc.ca/auth'; NOTIFY_DEFAULT='https://notify-api-test.azurewebsites.net' ;;
-  prod) KEYCLOAK_URL='https://loginproxy.gov.bc.ca/auth';      NOTIFY_DEFAULT='' ;;
+  dev)  KEYCLOAK_URL='https://dev.loginproxy.gov.bc.ca/auth';  NOTIFY_DEFAULT='https://notify-api-test.azurewebsites.net'
+        EAGLE_ADMIN_URL='' ;;
+  test) KEYCLOAK_URL='https://test.loginproxy.gov.bc.ca/auth'; NOTIFY_DEFAULT='https://notify-api-test.azurewebsites.net'
+        EAGLE_ADMIN_URL='https://test.projects.eao.gov.bc.ca/admin' ;;
+  prod) KEYCLOAK_URL='https://loginproxy.gov.bc.ca/auth';      NOTIFY_DEFAULT=''
+        EAGLE_ADMIN_URL='' ;;
   *) echo "unknown environment '$ENV_NAME' — expected dev, test or prod" >&2; exit 1 ;;
 esac
 
@@ -60,6 +64,7 @@ set_key() {
 set_key ENVIRONMENT "'${ENV_NAME}'"
 set_key KEYCLOAK_URL "'${KEYCLOAK_URL}'"
 set_key NOTIFY_API_LOCATION "'${NOTIFY}'"
+set_key EAGLE_ADMIN_URL "'${EAGLE_ADMIN_URL}'"
 set_key configEndpoint 'true'
 set_key APPINSIGHTS_CONNECTION_STRING "'${APPINSIGHTS_CONNECTION_STRING:-}'"
 
