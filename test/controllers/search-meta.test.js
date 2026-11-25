@@ -187,12 +187,12 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   const chunk = { chunkId: 'd1::p1::c0', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'x' };
-  const stubChunkSearch = (tt, onFilter) => {
-    tt.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'A' }]));
+  const stubChunkSearch = (tt, onFilter, docs = [{ id: 'd1', displayName: 'A' }], count = 1) => {
+    tt.mock.method(documentsRepo, 'listByIds', async () => docs);
     tt.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
-    tt.mock.method(aiSearch, 'searchChunks', async (opts) => {
+    return tt.mock.method(aiSearch, 'searchChunks', async (opts) => {
       if (onFilter) onFilter(opts.filter);
-      return { count: 1, items: [chunk] };
+      return { count, items: docs.map(d => ({ ...chunk, chunkId: `${d.id}::p1::c0`, documentId: d.id })) };
     });
   };
   const stubStatus = (tt, status) =>
@@ -218,7 +218,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     }), res);
 
     assert.strictEqual(out.status, undefined, 'the page must still answer 200');
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type']);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined);
     assert.ok(!/typeId/.test(chunkFilter),
       `the clause the live index cannot answer was still sent: ${chunkFilter}`);
     // Its own reason: this state clears only when an operator applies the index definition, and
@@ -387,27 +387,27 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
         'a filter answered correctly through another index is not a degraded page');
     });
 
-  await t.test('the mark is for the recovery that ran out of room, not for the backfill',
+  await t.test('a recovery out of room checks the facet on each parent and marks the short page',
     async (tt) => {
-      // Marked only when the scope is mid-backfill AND the documents-index recovery is over the
-      // scope cap, so the page really is short.
-      stubChunkSearch(tt);
+      // Mid-backfill AND over the scope cap: the chunk query keeps never-stamped (null) rows and the
+      // parent check removes those outside the facet, so the page really is short.
+      const search = stubChunkSearch(tt, null,
+        [{ id: 'd1', displayName: 'A', milestoneId: 'm1' }, { id: 'd2', displayName: 'B', milestoneId: 'm2' }], 40);
       carriedButBehind(tt);
       tt.mock.method(aiSearch, 'documentIdsMatching', async () =>
         ({ ids: [], total: 4000, withinCap: false }));
 
       const { out, res } = capture();
       await searchController.search(anonymous({
-        dataset: 'DocumentChunk', keywords: 'river', 'and[milestone]': 'm1'
+        dataset: 'DocumentChunk', keywords: 'river', 'and[milestone]': 'm1', 'and[type]': ''
       }), res);
 
-      assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-unstamped']);
-      // The reason, never the number: the route is anonymous and the count is an internal
-      // backfill statistic.
-      assert.deepStrictEqual(Object.keys(out.body[0].meta[0].degraded), ['reasons'],
-        `no count may reach the caller: ${JSON.stringify(out.body[0].meta[0].degraded)}`);
-      assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['milestone'],
-        'and the key it could not answer is named');
+      assert.match(search.mock.calls[0].arguments[0].filter, /\(search\.in\(milestoneId, 'm1', ','\) or milestoneId eq null\)/);
+      assert.deepStrictEqual(out.body[0].searchResults.map(row => row.documentId), ['d1'], 'an empty and[type] is no filter');
+      assert.strictEqual(out.body[0].count, 39, 'the index count less the removed row');
+      assert.deepStrictEqual(out.body[0].meta[0].degraded, { reasons: ['chunk-parent-fields-unstamped'] },
+        'the reason, never the number: the route is anonymous and the count is a backfill statistic');
+      assert.strictEqual(out.body[0].meta[0].dropped, undefined, 'the parent check answered the key');
     });
 
   await t.test('a backfill state the service could not report is not a stamped one', async (tt) => {
@@ -459,7 +459,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
       assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-unknown'],
         'an unanswered count may not be reported as a measured backlog');
-      assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['milestone']);
+      assert.strictEqual(out.body[0].meta[0].dropped, undefined);
     });
 
   await t.test('a probe shape the service never promised does not 502 the tab', async (tt) => {
@@ -478,7 +478,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
 
     assert.strictEqual(out.status, undefined, 'the page must still answer 200');
     assert.ok(!/milestoneId/.test(chunkFilter), chunkFilter);
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['milestone']);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined);
   });
 
   await t.test('a finished backfill leaves the page unmarked', async (tt) => {
@@ -530,7 +530,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
     assert.ok(!/typeId/.test(chunkFilter),
       `a clause the probe could not vouch for was sent anyway: ${chunkFilter}`);
     assert.strictEqual(out.status, undefined, 'the page must still answer 200');
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type']);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined);
   });
 
   await t.test('a probe that could not run leaves the facet to the documents index', async (tt) => {
@@ -601,7 +601,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
       }), res);
 
       assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-unknown']);
-      assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type']);
+      assert.strictEqual(out.body[0].meta[0].dropped, undefined);
     });
 
   await t.test('a probe that only got partway keeps the fields it did settle', async (tt) => {
@@ -632,7 +632,7 @@ test('the LIVE chunks index decides what a facet filter can do', async (t) => {
       `the settled facet must still be sent, got: ${chunkFilter}`);
     assert.ok(!/typeId/.test(chunkFilter),
       `the unsettled facet was sent anyway: ${chunkFilter}`);
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type']);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined);
     // The page is short by the one facet the recovery could not absorb, and the caller is told
     // which kind of short it is — the settled facet beside it does not make the page whole.
     assert.deepStrictEqual(out.body[0].meta[0].degraded.reasons, ['chunk-parent-fields-unknown']);

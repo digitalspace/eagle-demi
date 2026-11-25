@@ -308,22 +308,24 @@ paths:
             failed — except for the visibility fields, which stay a 502. On DocumentChunk,
             `meta[0].degraded.reasons` may also carry any of `chunk-parent-fields-unstamped`,
             `chunk-parent-fields-unknown` and `chunk-parent-fields-missing`, more than one at a
-            time. All three mean the document-facet filter was NOT applied: the key is named in
-            `meta[0].dropped.filter`, the chunk query carries no clause for it, and the results are
-            unfiltered on that facet.
+            time. All three mean the documents index could not scope the document-facet filter, so
+            it was checked on each row's parent document instead: a row whose parent holds none of
+            the asked values is removed after the index read. A page can then hold fewer rows than
+            asked, and the total is an upper bound.
             `chunk-parent-fields-unstamped` is the measured case — some chunks the caller can see
             have not been stamped with their parent's ids at the current revision, so a clause over
             those columns would answer zero rows rather than fewer.
             `chunk-parent-fields-unknown` is the unanswered one — a live-index probe or the stamp
-            count could not be read, so the filter is withheld on a question rather than on an
-            answer, and it clears as soon as the service replies.
+            count could not be read, so the chunk query sends no clause for that column on a
+            question rather than on an answer, and it clears as soon as the service replies.
             `chunk-parent-fields-missing` is the settled one — the live chunks index does not carry
             that column at all, which is a deployment whose index definition has not been applied
             yet. It does not clear by waiting. No reason carries a count: how many rows an index
             holds is not answered under the caller's own access predicate, so it is not answered at
             all. A facet key the live chunks index cannot filter on is resolved through the
-            documents index instead, and is named in `meta[0].dropped.filter`, with a reason
-            attached, only when that resolution is over the document cap.
+            documents index first; the parent check and a reason come in only when that resolution
+            is over the document cap. `meta[0].dropped.filter` names only keys that neither index
+            nor the parent check can answer.
 
 
             A DocumentChunk row carries `pageNumber` and `pageNumbered`. `pageNumbered` is true

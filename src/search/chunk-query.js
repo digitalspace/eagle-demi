@@ -10,6 +10,7 @@ const chunksRepo = require('../repositories/chunks');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
+const { inClause } = require('../helpers/access-odata');
 const { logger } = require('../utils/logger');
 
 // What clears each: the backfill finishing, the service answering, the index definition applied.
@@ -169,9 +170,31 @@ async function gateChunksByParent(access, items, count) {
   };
 }
 
+/** The chunk clauses for facet columns `checkParents` answers; `checks` holds `[column, values]` pairs. */
+function parentCheckClauses(live, checks) {
+  // Only the backlog blocks these columns, and a never-stamped chunk carries null in all of them, so
+  // the clause keeps every chunk the row check may admit. A column the index lacks fails the request.
+  if (!live.unstampedScope || live.missingColumn || live.unknownScope) return [];
+  return checks.map(([column, values]) => `${inClause(column, values)} or ${column} eq null`);
+}
+
+/** Keeps a gated chunk only if its parent, as this caller may read it, holds an asked value of each checked column. */
+function checkParents(gated, checks) {
+  if (!checks.length) return gated;
+  const visible = gated.visible.filter((chunk) => {
+    const parent = gated.docById.get(String(chunk.documentId));
+    return checks.every(([column, values]) => parent[column] != null && values.includes(String(parent[column])));
+  });
+  // An upper bound, as the gate's own count is for withheld parents.
+  const removed = gated.visible.length - visible.length;
+  return { ...gated, visible, count: Math.max(gated.count - removed, visible.length) };
+}
+
 module.exports = {
   liveFacetColumns,
   facetReasons,
   resetStaleChunkScopeCache,
-  gateChunksByParent
+  gateChunksByParent,
+  parentCheckClauses,
+  checkParents
 };

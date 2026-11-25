@@ -7,6 +7,7 @@ const { inClause } = require('../../helpers/access-odata');
 const aiSearch = require('../../search/ai-search');
 const eagleQuery = require('../../search/eagle-query');
 const { documentsAcl } = require('../../search/document-query');
+const { andOData } = require('../../search/native-index');
 const chunkQuery = require('../../search/chunk-query');
 const projectsRepo = require('../../repositories/projects');
 const { EAGLE_OBJECT_ID } = projectsRepo;
@@ -92,6 +93,27 @@ async function recoverChunkFilters(query, dropped, access) {
 }
 
 /**
+ * `recoverChunkFilters`, then a parent-row check for each facet it could not scope, as native
+ * passages does. `handled`: the dropped keys either one answers.
+ */
+async function recoverChunkFacets(query, dropped, access, liveFacets) {
+  const { scope, recovered, capped } = await recoverChunkFilters(query, dropped, access);
+  const unscoped = liveFacets.unavailable.filter(key => dropped.includes(key) && !recovered.includes(key));
+  const params = Array.from(eagleQuery.andParams(query));
+  const valuesFor = key => params.filter(([name]) => name === key).flatMap(([, value]) => eagleQuery.valuesOf(value));
+  // An empty value is no filter and not dropped, as `buildFilter` reads it where the chunks index answers.
+  const keys = unscoped.filter(key => valuesFor(key).length);
+  const handled = [...recovered, ...unscoped];
+  if (!keys.length) return { scope, handled, capped, checks: [] };
+
+  const checks = keys.map(key => [eagleQuery.DOCUMENT_FACETS[key], valuesFor(key)]);
+  const reasons = chunkQuery.facetReasons(liveFacets);
+  logger.warn('[search] facet filter checked on parent documents: the documents index could not scope it',
+    { keys, reasons, capped });
+  return { scope: andOData(scope, ...chunkQuery.parentCheckClauses(liveFacets, checks)), handled, capped, checks };
+}
+
+/**
  * The facet WIRE KEYS this request sent that the live chunks index cannot answer. They go to
  * `buildFilter` as inexpressible, so the documents-index recovery can still answer them.
  */
@@ -119,6 +141,7 @@ function documentIdScope(raw) {
 module.exports = {
   resolveProjectFilter,
   recoverChunkFilters,
+  recoverChunkFacets,
   liveChunkFacets,
   documentIdScope
 };
