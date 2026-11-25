@@ -13,6 +13,7 @@ const aiSearch = require('../../src/search/ai-search');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { TIER } = require('../../src/helpers/access-sql');
 const { projectedColumns } = require('../helpers/search-datasource');
+const { captureFetch, stubToken } = require('../helpers/capture-fetch');
 
 // Built by the same `filterFor` the controller uses, not a literal: a hand-written copy would
 // drift from what ships once `filterFor` changes shape.
@@ -20,41 +21,6 @@ const ANONYMOUS_ACL = filterFor(
   { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] }
 ).filter;
 
-/** Replace global.fetch. A real credential lookup in CI would hang rather than fail. */
-function captureFetch(t, responder) {
-  const calls = [];
-  const originalFetch = global.fetch;
-
-  global.fetch = async (url, init) => {
-    calls.push({ url, init, body: init && init.body ? JSON.parse(init.body) : null });
-    const result = responder(calls.length - 1);
-    // `throws` models a transport-level failure — the shape a request timeout arrives in, which is
-    // an exception from the abort signal rather than any HTTP status.
-    if (result.throws) throw result.throws;
-    return {
-      ok: result.ok !== false,
-      status: result.status || 200,
-      // Retry-After is read off the real Headers API, so the stub has to answer `get()` rather
-      // than expose a plain object.
-      headers: { get: (name) => (result.headers || {})[String(name).toLowerCase()] ?? null },
-      json: async () => result.json || {},
-      text: async () => JSON.stringify(result.json || {})
-    };
-  };
-
-  t.after(() => { global.fetch = originalFetch; });
-  return calls;
-}
-
-// The credential is only constructed on a cache miss, so seeding a live token keeps every test
-// off the network. Mirrors what DefaultAzureCredential would have returned.
-function stubToken() {
-  const { DefaultAzureCredential } = require('@azure/identity');
-  DefaultAzureCredential.prototype.getToken = async () => ({
-    token: 'test-token',
-    expiresOnTimestamp: Date.now() + 60 * 60 * 1000
-  });
-}
 stubToken();
 
 // An empty answer would claim "no matches" and render empty lists under a 200. The controller

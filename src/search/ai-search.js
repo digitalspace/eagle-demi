@@ -11,19 +11,9 @@ const { logger } = require('../utils/logger');
 // about how an id list is written.
 const { inClause, quote } = require('../helpers/access-odata');
 const { mapLimit } = require('../utils/worker-pool');
+const { HL_PRE, HL_POST, snippetFrom, markedField } = require('./marks');
 
 const API_VERSION = '2024-07-01';
-
-// Highlights land inside untrusted PDF text the frontend renders as HTML. Control chars no
-// document can hold mark them; the whole fragment is escaped, then they become <mark>.
-const HL_PRE = '\u0001';
-const HL_POST = '\u0002';
-
-const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-
-function escapeHtml(text) {
-  return String(text).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
-}
 
 /** Beyond this the query grows without adding recall; BM25 is already dominated by the rest. */
 const MAX_TERMS = 16;
@@ -886,41 +876,6 @@ async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   return { ids, total, withinCap };
 }
 
-/** Escape first, mark second. '' without highlights: chunk `content` is never selected. */
-function snippetFrom(hit) {
-  const highlights = (hit['@search.highlights'] && hit['@search.highlights'].content) || [];
-  if (highlights.length === 0) return '';
-  // Balanced per fragment: a fragment cut can land inside a highlight and orphan a sentinel.
-  return highlights.map(balanceFragment).join(' … ');
-}
-
-/**
- * Display markup for one selected field. Unlike `snippetFrom`, an unmatched field falls back to its
- * escaped value, so the caller binds one string and escaping happens once, here.
- */
-function markedField(hit, field) {
-  const fragments = (hit['@search.highlights'] || {})[field] || [];
-  if (fragments.length > 0) return fragments.map(balanceFragment).join(' … ');
-
-  const raw = hit[field];
-  return raw === undefined || raw === null ? '' : escapeHtml(String(raw));
-}
-
-/**
- * Escapes, then turns sentinels into balanced `<mark>` tags: an orphan closer is dropped and an
- * open mark is closed at the end, so an innerHTML snippet cannot break the layout around it.
- */
-function balanceFragment(fragment) {
-  let depth = 0;
-  let out = '';
-  for (const ch of escapeHtml(fragment)) {
-    if (ch === HL_PRE) { depth++; out += '<mark>'; }
-    else if (ch === HL_POST) { if (depth > 0) { depth--; out += '</mark>'; } }
-    else out += ch;
-  }
-  return out + '</mark>'.repeat(depth);
-}
-
 /**
  * Ranked chunk search, with the caller's visibility filter applied BY THE SERVICE.
  *
@@ -1001,6 +956,20 @@ async function searchProjects(opts = {}) {
   };
 }
 
+/** Every project id leg two matches, paged by id: relevance ties reorder between requests. */
+async function matchingProjectIds(opts, prefix) {
+  const rows = [];
+  const pages = []; // newest first
+  do {
+    pages.unshift(await runSearch(config().projectsIndex, {
+      keywords: opts.keywords, fuzzy: opts.fuzzy, prefix, filter: opts.projectFilter, select: 'id',
+      searchFields: LEG_TWO_SEARCH_FIELDS, orderby: 'id asc', top: SERVICE_MAX_TOP, skip: rows.length
+    }));
+    rows.push(...pages[0].value);
+  } while (pages[0].value.length === SERVICE_MAX_TOP && rows.length < Math.min(pages[0].count, MAX_SKIP));
+  return { ids: rows.map(p => String(p.id)).filter(Boolean), degraded: mergeDegraded(pages) };
+}
+
 /**
  * Two legs: direct metadata matches, then documents of projects whose name matches. Documents
  * carry no project name in the index, and without leg two most "Ajax" hits are lost.
@@ -1015,8 +984,6 @@ async function searchDocuments(opts = {}) {
   // A count still runs both legs, since the total is their sum; one row each is the smallest page.
   const countOnly = opts.countOnly === true;
   const top = countOnly ? 1 : Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
-  const select = DOCUMENT_SELECT;
-  const searchFields = DOCUMENT_SEARCH_FIELDS;
   // Resolved once: leg two's exclusion clause must repeat leg one's query exactly, `*` included.
   const prefix = opts.prefix !== false;
 
@@ -1024,8 +991,8 @@ async function searchDocuments(opts = {}) {
     ...opts,
     top,
     prefix,
-    searchFields,
-    select: countOnly ? 'id' : select,
+    searchFields: DOCUMENT_SEARCH_FIELDS,
+    select: countOnly ? 'id' : DOCUMENT_SELECT,
     ...(countOnly ? {} : { highlight: 'displayName,description' })
   });
 
@@ -1037,29 +1004,19 @@ async function searchDocuments(opts = {}) {
   // Leg two runs on every page, since eagle-public pages by a total that counts its rows. Never with
   // no keyword: matching every project name would widen the document filter to the whole corpus.
   if (opts.projectFilter !== undefined && !opts.matchAll) {
-    const projects = await runSearch(config().projectsIndex, {
-      keywords: opts.keywords,
-      fuzzy: opts.fuzzy,
-      prefix,
-      filter: opts.projectFilter,
-      searchFields: LEG_TWO_SEARCH_FIELDS,
-      select: 'id',
-      top: MAX_PROJECT_FANOUT
-    });
+    const projects = await matchingProjectIds(opts, prefix);
     legs.push(projects);
-
-    const projectIds = projects.value.map(p => String(p.id)).filter(Boolean);
-    if (projectIds.length > 0) {
+    if (projects.ids.length > 0) {
       // The document ACL still applies. `not search.ismatch` with leg one's exact query makes the
       // legs disjoint, so paging is leg one then leg two with no repeats or gaps.
       const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, prefix);
-      const scope = `${inClause('projectId', projectIds)} and ` +
-        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
+      const scope = `${inClause('projectId', projects.ids)} and ` +
+        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${DOCUMENT_SEARCH_FIELDS}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
         // Only the rows the page still lacks; one when full, as the request is then for the count.
         top: Math.max(1, top - items.length),
-        select: countOnly ? 'id' : select,
+        select: countOnly ? 'id' : DOCUMENT_SELECT,
         orderby: opts.orderby,
         // Leg one owns positions 0..direct.count, so this offset is exact and stateless.
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
@@ -1228,9 +1185,6 @@ function isMissingIndex(err, index) {
   // "No index with the name 'activities' was found in the service" is the service's own wording.
   return message.includes('was not found') || Boolean(index) && message.includes(index);
 }
-
-/** Project ids beyond this add nothing: the document page is capped long before they matter. */
-const MAX_PROJECT_FANOUT = 25;
 
 /**
  * Remove one row from an index by key: indexers never see a delete, so nothing else will.
@@ -1618,7 +1572,6 @@ module.exports = {
   // For `search/eagle-query.js`: one copy of the Lucene escaping.
   buildContainsQuery,
   snippetFrom,
-  escapeHtml,
   HL_PRE,
   HL_POST
 };
