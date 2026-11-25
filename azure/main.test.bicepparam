@@ -194,11 +194,11 @@ param trustedProxyIps = ''
 // `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'request' property edgeGate).
 param edgeGate = 'log'
 
-// Edge ban timer (api/index.js `edgeBan`), in shadow for the soak on test. edgeLogWorkspaceId = the
+// Edge ban timer (api/index.js `edgeBan`), in write mode on test. edgeLogWorkspaceId = the
 // eagle-logs-test workspace, edgeBanRuleId = the rulesdemidocs/banauto rule. The policy is set by hand
 // from the devbox with `az keyvault secret set --vault-name demi-kv-test --name edge-ban-policy --file <policy.json>`;
 // it is named in optionalSecretNames above.
-param edgeBanMode = 'shadow'
+param edgeBanMode = 'write'
 param edgeLogWorkspaceId = '0012cdde-c428-4b7f-9bcb-8e55ec9c35c7'
 param edgeBanRuleId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemidocs/rules/banauto'
 
