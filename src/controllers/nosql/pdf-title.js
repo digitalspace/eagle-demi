@@ -11,18 +11,17 @@ const documents = require('../../repositories/documents');
 const cosmos = require('../../db/cosmos-nosql');
 const storage = require('../../storage');
 const backupCheck = require('../../helpers/backup-check');
-const { isPdf, isEligible, isCurrent, needsRestore } = require('../../helpers/pdf-title');
+const {
+  isSealed, isFromEagle, ineligibleReason, modeFor, PENDING_WHERE, CLEAN_SAFE
+} = require('../../helpers/pdf-title');
 const { checkTail, refuse: refuseRead } = require('../../helpers/pdf-tail');
 const { readOriginal } = require('../../helpers/pdf-original');
 const { pdfTitleFor } = require('../../helpers/file-name');
-const { levelOfRead, isDemiSeal } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 
 const LEASE_MS = 10 * 60 * 1000;
-// A Mongo ObjectId as `String(_id)` writes it: 24 lowercase hex characters.
-const EAGLE_ID = /^[0-9a-f]{24}$/;
 const BACKUP_GET_SECONDS = 300;
 const PUT_SECONDS = 120;
 /** Commit needs this much lease left beyond the PUT link, so the link dies before the lease does. */
@@ -35,6 +34,9 @@ const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_GROWTH = 256 * 1024;
 const PAGE_DEFAULT = 100;
 const PAGE_MAX = 500;
+/** One work-list call reads store pages until one has work, within these, so the worker's 60 s timeout holds. */
+const PENDING_MAX_FETCHES = 100;
+const PENDING_MAX_MS = 20 * 1000;
 const SWEEP_DEFAULT = 5;
 const SWEEP_MAX = 20;
 /**
@@ -101,37 +103,6 @@ function baseRecord(row) {
 
 function isLive(lease, now = Date.now()) {
   return Boolean(lease) && Date.parse(lease.expiresAt) > now;
-}
-
-/** Sealed by DEMI or by Eagle (level 0): its bytes are never handed to the worker unasked. */
-function isSealed(row) {
-  return isDemiSeal(row) || levelOfRead(row.read) === 0;
-}
-
-/**
- * Seed and Eagle push write `id` as the Mongo ObjectId, while every caller-reachable create uses
- * `crypto.randomUUID()` and no update can change `id`, so a 24-hex id means Eagle set the key.
- */
-function isFromEagle(row) {
-  return EAGLE_ID.test(String(row.id));
-}
-
-/** Why a row may not be titled, or null when it may. Size and shared key need the store and a query. */
-function ineligibleReason(row) {
-  if (isSealed(row)) return 'sealed';
-  if (!isPdf(row)) return 'not-pdf';
-  if (!row.s3Key) return 'no-file';
-  if (levelOfRead(row.read) !== 4) return 'not-public';
-  if (pdfTitleFor(row) === null) return 'no-public-name';
-  return isEligible(row) ? null : 'not-eligible';
-}
-
-/** `title` when the row wants a title written, `restore` when its title must come out, else null. */
-function modeFor(row) {
-  if (isSealed(row)) return null;
-  if (needsRestore(row)) return 'restore';
-  if (isEligible(row) && !isCurrent(row)) return 'title';
-  return null;
 }
 
 function partitionOf(row) {
@@ -454,37 +425,51 @@ async function queryPage(req, res, spec, limit) {
   }
 }
 
+const PENDING_QUERY = `SELECT ${LIST_FIELDS.map(f => `c.${f}`).join(', ')} FROM c ${PENDING_WHERE}`;
+
+/** The rows of one store page the worker should act on now. */
+async function workOf(rows) {
+  const candidates = rows
+    .map(row => ({ row, mode: modeFor(row) }))
+    .filter(({ row, mode }) => {
+      const record = recordOf(row);
+      if (!mode || !isFromEagle(row)) return false;
+      if (record && (record.lease || record.inFlight || record.status === 'needs-review')) return false;
+      return mode === 'restore' || !(Number(row.fileSize) > MAX_BYTES);
+    });
+  const shared = await sharedKeys(candidates.map(({ row }) => row.s3Key));
+  return candidates
+    .filter(({ row }) => !shared.has(row.s3Key))
+    .map(({ row, mode }) => ({
+      id: row.id, projectId: row.projectId, mode, title: mode === 'title' ? pdfTitleFor(row) : null
+    }));
+}
+
 /**
- * GET /documents/pdf-title/pending. A cross-partition page may be short or empty while more rows
- * exist: follow `continuation` until it is null.
+ * GET /documents/pdf-title/pending. Empty store pages are skipped here, but a call that runs out of
+ * budget returns no items with a continuation: follow it until it is null.
  */
 async function listPending(req, res) {
   if (unsupportedBackend(res)) return undefined;
   try {
+    const started = Date.now();
     const limit = pageLimit(req.query && req.query.limit, PAGE_DEFAULT, PAGE_MAX);
-    const page = await queryPage(req, res, {
-      query: `SELECT ${LIST_FIELDS.map(f => `c.${f}`).join(', ')} FROM c ` +
-        "WHERE IS_DEFINED(c.s3Key) AND (ARRAY_CONTAINS(c.read, 'public') OR c.pdfTitle.status = 'titled')",
-      parameters: []
-    }, limit);
+    const spec = { query: PENDING_QUERY, parameters: [{ name: '@cleanSafe', value: CLEAN_SAFE }] };
+    let page = await queryPage(req, res, spec, limit);
     if (!page) return undefined;
+    let fetches = 1;
+    let scanned = page.items.length;
+    let items = await workOf(page.items);
+    while (items.length === 0 && page.continuationToken && fetches < PENDING_MAX_FETCHES &&
+        Date.now() - started < PENDING_MAX_MS) {
+      page = await cosmos.query(documents.CONTAINER, spec,
+        { maxItemCount: limit, continuationToken: page.continuationToken });
+      fetches += 1;
+      scanned += page.items.length;
+      items = await workOf(page.items);
+    }
 
-    const candidates = page.items
-      .map(row => ({ row, mode: modeFor(row) }))
-      .filter(({ row, mode }) => {
-        const record = recordOf(row);
-        if (!mode || !isFromEagle(row)) return false;
-        if (record && (record.lease || record.inFlight || record.status === 'needs-review')) return false;
-        return mode === 'restore' || !(Number(row.fileSize) > MAX_BYTES);
-      });
-    const shared = await sharedKeys(candidates.map(({ row }) => row.s3Key));
-    const items = candidates
-      .filter(({ row }) => !shared.has(row.s3Key))
-      .map(({ row, mode }) => ({
-        id: row.id, projectId: row.projectId, mode, title: mode === 'title' ? pdfTitleFor(row) : null
-      }));
-
-    logger.info('[pdf-title] work list', { scanned: page.items.length, pending: items.length });
+    logger.info('[pdf-title] work list', { scanned, pending: items.length, fetches });
     return res.json({ items, continuation: page.continuationToken || null });
   } catch (err) {
     return serverError(res, err, '[pdf-title] work list failed');
@@ -884,4 +869,4 @@ async function report(req, res) {
   }
 }
 
-module.exports = { listPending, sweep, lease, commit, report, MAX_BYTES, MAX_GROWTH };
+module.exports = { listPending, sweep, lease, commit, report, MAX_BYTES, MAX_GROWTH, PENDING_MAX_FETCHES };

@@ -191,7 +191,7 @@ param trustedProxyIps = ''
 
 // eagle-edge stamps the vault's `edge-secret` (optionalSecretNames); the rotator below rotates both.
 
-// `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'edge-gate').
+// `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'request' property edgeGate).
 param edgeGate = 'log'
 
 // Edge ban timer (api/index.js `edgeBan`), in shadow for the soak on test. edgeLogWorkspaceId = the

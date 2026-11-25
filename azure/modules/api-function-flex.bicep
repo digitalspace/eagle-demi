@@ -138,7 +138,7 @@ param trustedProxyIps string = ''
 @description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference, and it is also passed plain as EDGE_SECRET_URI. Empty ignores the header.')
 param edgeSecretUri string = ''
 
-@description('EDGE_GATE for src/http/router.js: empty off, log serves and writes one warn line per request that skipped Front Door, enforce answers 403.')
+@description('EDGE_GATE for src/http/router.js: empty off, log serves, tags each request line that skipped Front Door with `edgeGate`, and warns only when the API did not verify the caller; enforce answers 403.')
 @allowed(['', 'log', 'enforce'])
 param edgeGate string = ''
 

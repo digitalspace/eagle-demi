@@ -3737,8 +3737,9 @@ paths:
         out again because the public name is now withheld (`mode: restore`). Reads only. Rows that
         are sealed (DEMI or Eagle), not public, not a PDF, not from Eagle (`id` is not a
         24-character lowercase hex Mongo ObjectId), over 256 MiB by `fileSize`, sharing their
-        `s3Key` with another row, leased, or under review are left out. A cross-partition page can be short or empty while more rows
-        exist: follow `continuation` until it is null. Callers: the PDF title worker principal
+        `s3Key` with another row, leased, or under review are left out. Store pages with no work are
+        skipped on the server, but a call that runs out of time or fetches answers with no items and
+        a `continuation`: follow `continuation` until it is null. Callers: the PDF title worker principal
         only (`DEMI_PDF_TITLE_WORKER_PRINCIPALS`; no default). Configuration rule: no principal may
         be on both that list and `DEMI_EAGLE_MIRROR_PRINCIPALS`, or one key can both mirror Eagle
         data and rewrite stored PDFs.
@@ -3749,7 +3750,9 @@ paths:
         - name: limit
           in: query
           required: false
-          description: Rows scanned per page, 1 to 500. Default 100.
+          description: >-
+            Rows read per store fetch, 1 to 500. Default 100. One call may make several fetches.
+            The page returned can hold fewer items than this, or none.
           schema:
             type: integer
         - name: continuation

@@ -209,7 +209,7 @@ function authenticate(req, onSuccess, onFailure) {
           logger.warn(`[demi-api] APIM subscription '${subscription}' has no registry row; refused.`);
           return onFailure(401, 'Unauthorized. Unknown API Management subscription.');
         }
-        logger.info(`[demi-api] Authenticated ${user.preferred_username} via APIM (${subscription})`);
+        logger.debug(`[demi-api] Authenticated ${user.preferred_username} via APIM (${subscription})`);
         return onSuccess(user);
       })
       .catch(lookupFailed('APIM subscription', onFailure));
@@ -236,7 +236,7 @@ function authenticate(req, onSuccess, onFailure) {
         if (!user) {
           return onFailure(401, 'Unauthorized. Invalid, expired or revoked API key.');
         }
-        logger.info(`[demi-api] Authenticated ${user.preferred_username} (key ${user.keyId})`);
+        logger.debug(`[demi-api] Authenticated ${user.preferred_username} (key ${user.keyId})`);
         return onSuccess(user);
       })
       .catch(lookupFailed('API key', onFailure));
@@ -298,7 +298,7 @@ function authenticate(req, onSuccess, onFailure) {
         return onFailure(401, 'Unauthorized. Client is not permitted to call this API.');
       }
 
-      logger.info(`[demi-api] Authenticated ${decoded.preferred_username || 'token'} (client ${azp || 'unknown'})`);
+      logger.debug(`[demi-api] Authenticated ${decoded.preferred_username || 'token'} (client ${azp || 'unknown'})`);
       return onSuccess(decoded);
     });
     return;
