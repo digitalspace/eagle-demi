@@ -239,7 +239,11 @@ async function walkPartition(run, partition) {
   const rows = partition === NULL_PARTITION
     ? await run.documentsRepo.projectedRowsWithNoProject(run.access, DOCUMENT_FIELDS)
     : await run.documentsRepo.projectedRowsForProject(run.access, partition, DOCUMENT_FIELDS);
-  const todo = run.removeIds ? rows.filter(doc => run.removeIds.has(String(doc.id))) : rows;
+  let todo = rows;
+  if (run.removeIds) {
+    todo = rows.filter(doc => run.removeIds.has(String(doc.id)));
+    for (const doc of todo) run.matchedIds.add(String(doc.id));
+  }
   await mapLimit(todo, CONCURRENCY, doc => walkDocument(run, counters, partition, doc));
   return counters;
 }
@@ -253,6 +257,19 @@ function readRemoveIds(args) {
   // An empty filter would walk nothing and report a clean corpus.
   if (ids.length === 0) throw new Error(`[purge-index-only] ${args.removeNoLive} lists no document id`);
   return new Set(ids);
+}
+
+/** A partly matched list is reported only: a `--project` run walks one partition of the ids. */
+function reportUnmatched(summary, run) {
+  // A stopped walk has not reached every listed id yet.
+  if (!run.removeIds || run.stop) return;
+  summary.unmatchedRemoveIds = [...run.removeIds].filter(id => !run.matchedIds.has(id));
+  if (summary.unmatchedRemoveIds.length === 0) return;
+  logger.warn(`[purge-index-only] ${summary.unmatchedRemoveIds.length} --remove-no-live ids matched ` +
+    `no document: ${summary.unmatchedRemoveIds.join(', ')}`);
+  if (run.matchedIds.size === 0) {
+    throw new Error(`[purge-index-only] no --remove-no-live id matched a document; check ${run.args.removeNoLive}`);
+  }
 }
 
 /**
@@ -274,7 +291,7 @@ async function purge(argv = [], opts = {}) {
   const run = {
     args, mode, search, auditPath, access: systemAccess(), index: search.config().index,
     documentsRepo: opts.documents || documents, chunksRepo: opts.chunks || chunks,
-    removeIds, reserved: 0, stop: null
+    removeIds, matchedIds: new Set(), reserved: 0, stop: null
   };
   const partitions = await partitionsFor(args, run.documentsRepo, run.access);
   const todo = partitions.filter(p => !(p in walked));
@@ -302,6 +319,7 @@ async function purge(argv = [], opts = {}) {
   for (const counters of Object.values(walked)) addCounters(summary.total, counters);
   summary.stop = run.stop;
   logger.info(summaryLine(summary));
+  reportUnmatched(summary, run);
   return summary;
 }
 

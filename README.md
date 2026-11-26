@@ -269,7 +269,7 @@ counts in `textless` only, as a listed document with chunk count 0 does once its
 | `--project ID` | Walks one partition. |
 | `--state FILE` | Saves each walked partition; the same file resumes the walk. Use one file per mode. |
 | `--max-minutes M` | Stops at a partition boundary with exit 1. |
-| `--remove-no-live FILE` | One document id per line, the `--keep-ids` format. Walks only those documents, and deletes their index-only rows even with no Cosmos chunk. Refuses an empty list and `--state`. |
+| `--remove-no-live FILE` | One document id per line, the `--keep-ids` format. Walks only those documents, and deletes their index-only rows even with no Cosmos chunk. Refuses an empty list and `--state`. A finished walk logs listed ids that match no document and returns them in `unmatchedRemoveIds`. It exits 1 when no listed id matches. |
 | `--audit FILE` | NDJSON, one `{documentId, chunkId, key, projectId, pageNumber, action}` line per row. `action` is `would-delete`, `deleted`, `failed`, `kept-no-live` or `cosmos-only`. An `extracted-no-chunks` line is `{documentId, projectId, contentPageCount, indexRows, action}`. Default `/home/demi/chunks-index-only-<date>/<mode>-<time>.ndjson`. |
 
 A re-seed **carries extraction state forward**. A Cosmos upsert replaces the item, so the seeder

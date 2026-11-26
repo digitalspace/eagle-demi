@@ -284,6 +284,17 @@ test('--remove-no-live refuses an empty list and a state file', async () => {
   );
 });
 
+test('listed ids that match no document are reported, and a list matching none fails', async () => {
+  const summary = await purge(['--remove-no-live', idFile('d1\nd9\n'), '--audit', tmpFile('ndjson')],
+    oneLeftover());
+
+  assert.deepStrictEqual(summary.unmatchedRemoveIds, ['d9']);
+  await assert.rejects(
+    purge(['--remove-no-live', idFile('d9\n'), '--audit', tmpFile('ndjson')], oneLeftover()),
+    /no --remove-no-live id matched a document/
+  );
+});
+
 test('a run stopped by --max-minutes resumes from its state file at the next partition', async () => {
   const state = tmpFile('json');
   const opts = () => {
