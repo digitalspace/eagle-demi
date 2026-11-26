@@ -468,6 +468,22 @@ test('reset-and-run-indexers', async (t) => {
     assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared/);
   });
 
+  await t.test('a retry waits out every scheduled tick, not only the first it saw', async () => {
+    // Tick B starts as tick A ends. Resetting while B runs fails the drain after the reset.
+    const kept = { ...FRESH, initialTrackingState: KEPT };
+    const tickA = { status: 'success', startTime: '2026-09-08T20:10:00Z', itemsProcessed: 0, itemsFailed: 0 };
+    const tickB = { ...tickA, startTime: '2026-09-08T20:20:00Z' };
+    const aRunning = { lastResult: { ...tickA, status: 'inProgress' }, executionHistory: [STALE] };
+    const bRunning = { lastResult: { ...tickB, status: 'inProgress' }, executionHistory: [tickA, STALE] };
+    const bDone = { lastResult: tickB, executionHistory: [tickB, tickA, STALE] };
+    const svc = service({
+      history: [STALE, STALE, kept, aRunning, aRunning, bRunning, bRunning, bDone, bDone, FRESH]
+    });
+    const r = await drive(svc);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared/);
+  });
+
   await t.test('each retry waits longer than the one before it', async () => {
     // The log line says 20s and 40s whatever the script actually sleeps, and the wait is the whole
     // fix: a reset that did not take in 5 s needs longer, not another try at the same length.

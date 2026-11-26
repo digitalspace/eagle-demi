@@ -62,10 +62,10 @@ function pickRun(list, resetAt, pinnedStart) {
   return after[after.length - 1] || {};
 }
 
-// Watch pins the first run it sees in progress, so a tick that starts after that run ends is not
-// reported in its place.
-function pinFor(e, resetAt, stamp, pinnedStart) {
-  if (pinnedStart !== null || !afterReset(e, resetAt, stamp)) return pinnedStart;
+// Watch pins the first run it sees in progress, so a tick after it is not reported in its place.
+// A drain pins nothing: it waits until no execution runs, however many ticks that takes.
+function pinFor(e, resetAt, stamp, pinnedStart, drain) {
+  if (drain || pinnedStart !== null || !afterReset(e, resetAt, stamp)) return pinnedStart;
   return resetAt || e.status === 'inProgress' ? startedAt(e) : null;
 }
 
@@ -142,7 +142,7 @@ async function resetAndRun(opts) {
     }
   }
 
-  async function waitForRun(name, resetAt) {
+  async function waitForRun(name, resetAt, drain) {
     let tick = 0;
     let last;
     let pinnedStart = null;
@@ -155,7 +155,7 @@ async function resetAndRun(opts) {
       // newest execution; only the verdict is pinned to the run that was asked for.
       last = runsOnly(list)[0] || {};
       const e = pickRun(list, resetAt, pinnedStart);
-      pinnedStart = pinFor(e, resetAt, stamp, pinnedStart);
+      pinnedStart = pinFor(e, resetAt, stamp, pinnedStart, drain);
       // run-command output truncates at 4 KB, so poll lines are thinned.
       if (tick % pollEvery === 0) {
         log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
@@ -184,7 +184,7 @@ async function resetAndRun(opts) {
         // A scheduled tick can start on top of the run a retry is about to replace. Resetting into
         // it is what DEMI_BUSY refuses on the first attempt, so wait it out here too.
         if (attempt > 1 && (await status(name)).status === 'inProgress') {
-          const drain = await waitForRun(name, 0);
+          const drain = await waitForRun(name, 0, true);
           if (!drain.done) {
             done = null;
             last = drain.last;
