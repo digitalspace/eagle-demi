@@ -26,6 +26,10 @@ const CONCURRENCY = 2;
 
 const INDEX_SELECT = 'id,chunkId,documentId,projectId,pageNumber';
 
+const DOCUMENT_FIELDS = [
+  'contentExtracted', 'contentExtractionError', 'contentPageCount', 'isDeleted', 'chunkPurgeFailedAt'
+];
+
 const VALUE_FLAGS = {
   '--max-delete': 'maxDelete',
   '--max-minutes': 'maxMinutes',
@@ -36,7 +40,8 @@ const VALUE_FLAGS = {
 
 const COUNTERS = [
   'documents', 'indexRows', 'wouldDelete', 'deleted', 'failed', 'keptNoLiveRows',
-  'keptNoLiveDocuments', 'cosmosOnly', 'cosmosOnlyDocuments', 'failedDocuments'
+  'keptNoLiveDocuments', 'cosmosOnly', 'cosmosOnlyDocuments', 'extractedNoChunksDocuments',
+  'textlessDocuments', 'failedDocuments'
 ];
 
 function parseArgs(argv) {
@@ -131,7 +136,26 @@ async function deleteRows(run, counters, rows) {
   return rows.map(row => auditLine(row, failed.has(String(row.id)) ? 'failed' : 'deleted'));
 }
 
-async function judgeDocument(run, counters, partition, documentId) {
+/**
+ * Marked extracted, no error, no Cosmos chunk. A textless ingest leaves that by design, with chunk
+ * count 0 and no index rows; any other such document is a defect to re-extract.
+ */
+function judgeExtraction(counters, doc, projectId, indexRows) {
+  if (doc.contentExtracted !== true || doc.contentExtractionError || doc.isDeleted === true ||
+    doc.chunkPurgeFailedAt) return [];
+  const contentPageCount = Number(doc.contentPageCount) || 0;
+  if (contentPageCount === 0 && indexRows === 0) {
+    counters.textlessDocuments++;
+    return [];
+  }
+  counters.extractedNoChunksDocuments++;
+  return [JSON.stringify({
+    documentId: String(doc.id), projectId, contentPageCount, indexRows, action: 'extracted-no-chunks'
+  })];
+}
+
+async function judgeDocument(run, counters, partition, doc) {
+  const documentId = String(doc.id);
   const listed = await listIndexRows(run.search, run.index, documentId);
   // Read after the listing and right before the delete, so a chunk written meanwhile is kept.
   const live = new Set((await run.chunksRepo.idsForDocument(run.access, documentId)).map(String));
@@ -145,6 +169,7 @@ async function judgeDocument(run, counters, partition, documentId) {
     .map(chunkId => auditLine({ documentId, chunkId, projectId }, 'cosmos-only'));
   counters.cosmosOnly += lines.length;
   if (lines.length) counters.cosmosOnlyDocuments++;
+  if (live.size === 0) lines.push(...judgeExtraction(counters, doc, projectId, listed.length));
 
   // A row with no chunk id cannot be judged, so it is kept.
   const indexOnly = listed.filter(row => row.chunkId && !live.has(String(row.chunkId)));
@@ -162,14 +187,14 @@ async function judgeDocument(run, counters, partition, documentId) {
   return lines.concat(await deleteRows(run, counters, indexOnly));
 }
 
-async function walkDocument(run, counters, partition, documentId) {
+async function walkDocument(run, counters, partition, doc) {
   if (run.stop) return;
   try {
-    const lines = await judgeDocument(run, counters, partition, documentId);
+    const lines = await judgeDocument(run, counters, partition, doc);
     if (lines.length) fs.appendFileSync(run.auditPath, lines.join('\n') + '\n');
   } catch (err) {
     counters.failedDocuments++;
-    logger.error(`[purge-index-only] document ${documentId}: ${err.message}`,
+    logger.error(`[purge-index-only] document ${doc.id}: ${err.message}`,
       { error: err.message, stack: err.stack });
   }
 }
@@ -190,7 +215,8 @@ function summaryLine(summary) {
     `wouldDelete ${o.wouldDelete}, deleted ${o.deleted}, failed ${o.failed}, ` +
     `keptNoLiveChunks ${o.keptNoLiveRows} rows in ${o.keptNoLiveDocuments} documents, ` +
     `cosmosOnly ${o.cosmosOnly} in ${o.cosmosOnlyDocuments} documents, ` +
-    `failedDocuments ${o.failedDocuments}`;
+    `extractedNoChunks ${o.extractedNoChunksDocuments} documents, ` +
+    `textless ${o.textlessDocuments} documents, failedDocuments ${o.failedDocuments}`;
   return `[purge-index-only] ${summary.mode}: ${summary.partitions} partitions walked, ` +
     `${summary.resumed} resumed; this run: ${c(summary.run)}; checkpointed total: ` +
     `${c(summary.total)}; stop ${summary.stop || 'none'}; audit ${summary.auditPath}`;
@@ -208,9 +234,9 @@ function loadWalked(args, mode) {
 async function walkPartition(run, partition) {
   const counters = newCounters(run.mode);
   const rows = partition === NULL_PARTITION
-    ? await run.documentsRepo.parentFieldRowsWithNoProject(run.access)
-    : await run.documentsRepo.projectedRowsForProject(run.access, partition, []);
-  await mapLimit(rows, CONCURRENCY, doc => walkDocument(run, counters, partition, String(doc.id)));
+    ? await run.documentsRepo.projectedRowsWithNoProject(run.access, DOCUMENT_FIELDS)
+    : await run.documentsRepo.projectedRowsForProject(run.access, partition, DOCUMENT_FIELDS);
+  await mapLimit(rows, CONCURRENCY, doc => walkDocument(run, counters, partition, doc));
   return counters;
 }
 

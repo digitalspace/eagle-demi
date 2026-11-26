@@ -823,7 +823,7 @@ module.exports = {
   setAclForProject,
   extractionRowsForProject,
   parentFieldRowsForProject,
-  projectedRowsForProject,
+  projectedRowsForProject, projectedRowsWithNoProject,
   parentFieldRowsWithNoProject,
   listSeededIds,
   countSeededIds,
