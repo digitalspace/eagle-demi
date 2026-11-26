@@ -23,16 +23,19 @@ const P2 = '5cf00c03a266b7e1877504a2';
 const row = (documentId, chunkId, projectId = P1) =>
   ({ id: `key-${chunkId}`, chunkId, documentId, projectId, pageNumber: 0 });
 
+/** Rows carry `id` and only the fields asked for, as the Cosmos projection does. */
 function fakeDocuments(docs) {
+  const project = (rows, fields) =>
+    rows.map(d => Object.fromEntries(['id', ...fields].filter(f => f in d).map(f => [f, d[f]])));
   return {
     async listDistinctProjectIds() {
-      return [...new Set(docs.map(d => d.projectId))];
+      return [...new Set(docs.filter(d => d.projectId != null).map(d => d.projectId))];
     },
-    async projectedRowsForProject(access, projectId) {
-      return docs.filter(d => d.projectId === projectId).map(d => ({ id: d.id }));
+    async projectedRowsForProject(access, projectId, fields) {
+      return project(docs.filter(d => d.projectId === projectId), fields);
     },
-    async parentFieldRowsWithNoProject() {
-      return [];
+    async projectedRowsWithNoProject(access, fields) {
+      return project(docs.filter(d => d.projectId == null), fields);
     }
   };
 }
@@ -68,13 +71,17 @@ const fakeChunks = (cosmos) => ({
   }
 });
 
-const auditActions = (file) => fs.readFileSync(file, 'utf8').trim().split('\n')
-  .map(line => JSON.parse(line)).map(line => `${line.key}:${line.action}`);
+const auditLines = (file) => fs.readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+
+const auditActions = (file) => auditLines(file).map(line => `${line.key ?? line.documentId}:${line.action}`);
+
+const extracted = (id, contentPageCount, extra = {}) =>
+  ({ id, projectId: P1, contentExtracted: true, contentExtractionError: null, contentPageCount, ...extra });
 
 /** One document whose newer chunking `c1` is live and whose old `c0` row is left in the index. */
 function oneLeftover() {
   return {
-    documents: fakeDocuments([{ id: 'd1', projectId: P1 }]),
+    documents: fakeDocuments([extracted('d1', 1)]),
     chunks: fakeChunks({ d1: ['c1'] }),
     search: fakeSearch([row('d1', 'c0'), row('d1', 'c1')]),
     cosmosReady: true
@@ -118,9 +125,10 @@ test('a chunk written after the index listing is kept, because Cosmos is read af
   assert.deepStrictEqual(opts.search.state.deleted, []);
 });
 
-test('a document with no Cosmos chunk keeps all its index rows', async () => {
+test('a document with no Cosmos chunk keeps all its index rows and is reported', async () => {
   const opts = {
-    documents: fakeDocuments([{ id: 'd1', projectId: P1 }]),
+    // A chunk count of 0 still counts as a defect when index rows show the document had text.
+    documents: fakeDocuments([extracted('d1', 0)]),
     chunks: fakeChunks({}),
     search: fakeSearch([row('d1', 'c0'), row('d1', 'c1')]),
     cosmosReady: true
@@ -131,7 +139,60 @@ test('a document with no Cosmos chunk keeps all its index rows', async () => {
 
   assert.deepStrictEqual(opts.search.state.deleted, []);
   assert.strictEqual(summary.run.keptNoLiveRows, 2);
-  assert.deepStrictEqual(auditActions(audit), ['key-c0:kept-no-live', 'key-c1:kept-no-live']);
+  assert.strictEqual(summary.run.extractedNoChunksDocuments, 1);
+  assert.deepStrictEqual(auditActions(audit),
+    ['d1:extracted-no-chunks', 'key-c0:kept-no-live', 'key-c1:kept-no-live']);
+});
+
+test('an extracted document with no chunk is reported unless it had no text', async () => {
+  const opts = {
+    documents: fakeDocuments([extracted('d1', 3), extracted('d2', 0)]),
+    chunks: fakeChunks({}),
+    search: fakeSearch([]),
+    cosmosReady: true
+  };
+  const audit = tmpFile('ndjson');
+
+  const summary = await purge(['--audit', audit], opts);
+
+  assert.strictEqual(summary.run.extractedNoChunksDocuments, 1);
+  assert.strictEqual(summary.run.textlessDocuments, 1);
+  assert.deepStrictEqual(auditLines(audit), [{
+    documentId: 'd1', projectId: P1, contentPageCount: 3, indexRows: 0, action: 'extracted-no-chunks'
+  }]);
+});
+
+test('a failed, deleted or half-purged document with no chunk is in neither counter', async () => {
+  const opts = {
+    documents: fakeDocuments([
+      extracted('d1', 3, { contentExtractionError: 'host failed' }),
+      extracted('d2', 3, { isDeleted: true }),
+      extracted('d3', 3, { chunkPurgeFailedAt: '2026-11-01T00:00:00Z' })
+    ]),
+    chunks: fakeChunks({}),
+    search: fakeSearch([]),
+    cosmosReady: true
+  };
+
+  const summary = await purge(['--audit', tmpFile('ndjson')], opts);
+
+  assert.strictEqual(summary.run.extractedNoChunksDocuments, 0);
+  assert.strictEqual(summary.run.textlessDocuments, 0);
+});
+
+test('a document with no project is judged with its extraction fields', async () => {
+  const opts = {
+    documents: fakeDocuments([extracted('d1', 3, { projectId: null })]),
+    chunks: fakeChunks({}),
+    search: fakeSearch([]),
+    cosmosReady: true
+  };
+  const audit = tmpFile('ndjson');
+
+  const summary = await purge(['--audit', audit], opts);
+
+  assert.strictEqual(summary.run.extractedNoChunksDocuments, 1);
+  assert.deepStrictEqual(auditLines(audit).map(l => [l.documentId, l.projectId]), [['d1', null]]);
 });
 
 test('--live without --max-delete refuses before any read', async () => {
