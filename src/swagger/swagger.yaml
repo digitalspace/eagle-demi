@@ -575,7 +575,7 @@ paths:
 
   /api/config:
     get:
-      summary: DEMI admin console runtime configuration
+      summary: DEMI frontend runtime configuration
       description: >-
         Unauthenticated, and everything it answers is public — never add a secret. The app settings
         of the running container, overlaid with the `OVERRIDABLE_KEYS` the `config` document
@@ -584,7 +584,7 @@ paths:
         from the deploy package and the document cannot override it.
       responses:
         '200':
-          description: The admin console's configuration. Always answered.
+          description: The DEMI frontend's configuration. Always answered.
           content:
             application/json:
               schema:

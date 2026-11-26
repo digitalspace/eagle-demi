@@ -80,7 +80,7 @@ html, body {
   overflow-wrap: anywhere;
 }
 
-/* Kept here since demi-admin's app.css dropped both; the map, overlays and access model still use them. */
+/* vendor/demi-admin.css has neither; the map, overlays and access model still use them. */
 .pill--caps {
   letter-spacing: 0.06em;
   text-transform: uppercase;

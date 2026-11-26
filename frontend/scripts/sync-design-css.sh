@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Copy eagle.css, components.css and demi-admin's app.css into src/styles/vendor.
+# Copy eagle.css and components.css from eagle-design-kit into src/styles/vendor.
 # --check compares instead of copying and exits 1 when they differ.
-# Modelled on eagle-demi-admin/scripts/sync-design-kit.sh (extra source + rename, same shape).
+# vendor/demi-admin.css has no upstream any more: it is edited here, never synced.
 set -euo pipefail
 
 usage() {
   cat <<'USAGE'
 Usage: sync-design-css.sh [--check]
 
-Copies eagle.css and components.css from the eagle-design-kit checkout, and
-app.css from the eagle-demi-admin checkout (as demi-admin.css), into
+Copies eagle.css and components.css from the eagle-design-kit checkout into
 src/styles/vendor/. With --check it only compares and exits 1 on a difference.
 
 Environment:
   EAGLE_DESIGN_KIT   path to the eagle-design-kit checkout (default ../eagle-design-kit)
-  EAGLE_DEMI_ADMIN    path to the eagle-demi-admin checkout (default ../eagle-demi-admin)
 USAGE
 }
 
@@ -26,28 +24,22 @@ case "${1:-}" in
   *) usage >&2; exit 2 ;;
 esac
 
-# frontend/ is a subdir of the eagle-demi repo, unlike eagle-demi-admin where
-# scripts/ sits at repo root — so siblings are two levels up, not one.
+# frontend/ is a subdir of the eagle-demi repo, so siblings are two levels up, not one.
 app="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$app/.." && pwd)"
 kit="${EAGLE_DESIGN_KIT:-$repo_root/../eagle-design-kit}"
-admin="${EAGLE_DEMI_ADMIN:-$repo_root/../eagle-demi-admin}"
 dest="$app/src/styles/vendor"
 
 # CI checks out only this repo, so siblings never exist there. --check is a
 # local dev convenience in that case, not a gate: skip clean instead of
 # failing a build that has no way to satisfy the check.
-if $check && { [ ! -d "$kit" ] || [ ! -d "$admin" ]; }; then
-  echo "sibling repos not present (EAGLE_DESIGN_KIT/EAGLE_DEMI_ADMIN) — skipping check"
+if $check && [ ! -d "$kit" ]; then
+  echo "sibling repo not present (EAGLE_DESIGN_KIT) — skipping check"
   exit 0
 fi
 
 if [ ! -d "$kit" ]; then
   echo "design kit not found at $kit (set EAGLE_DESIGN_KIT)" >&2
-  exit 1
-fi
-if [ ! -d "$admin" ]; then
-  echo "demi-admin not found at $admin (set EAGLE_DEMI_ADMIN)" >&2
   exit 1
 fi
 
@@ -72,7 +64,6 @@ sync_one() {
 
 sync_one "$kit/eagle.css" eagle.css
 sync_one "$kit/components.css" components.css
-sync_one "$admin/src/styles/app.css" demi-admin.css
 
 $check && [ $status -eq 0 ] && echo "design css in sync"
 exit $status

@@ -429,13 +429,6 @@ param analyticsDcrImmutableId string = ''
 @description('Workspace GUID of analytics-logs-<env>, from the eagle-analytics `analyticsWorkspaceCustomerId` output. Empty keeps GET /admin/audit reading DemiAudit_CL alone.')
 param analyticsWorkspaceCustomerId string = ''
 
-// Derived from frontendHostNames so the AFD hosts are not listed twice; only the admin app queries.
-// Never localhost in prod. Zero origins, not the environment name, disarms apim.bicep's bearer policies.
-var analyticsAdminOrigins = concat(
-  map(filter(frontendHostNames, host => startsWith(host, 'demi-admin')), host => 'https://${host}'),
-  environmentName == 'prod' ? [] : [ 'http://localhost:4200' ]
-)
-
 // The dev-access VM. Off by default: it is a per-environment opt-in, and an environment without the
 // subnet gets nothing rather than a half-built one.
 @description('Deploy the dev-access VM that replaces the App Service SSH tunnel.')
@@ -965,7 +958,6 @@ module apim './modules/apim.bicep' = if (deployFoundation && deployApim && !empt
     // through a lookup var — there is no run that deploys one without the other.
     analyticsSharedHeaderSecretUri: keyVault!.outputs.analyticsSharedHeaderSecretUri
     analyticsAuditHeaderSecretUri: keyVault!.outputs.analyticsAuditHeaderSecretUri
-    analyticsBrowserOrigins: analyticsAdminOrigins
   }
 }
 

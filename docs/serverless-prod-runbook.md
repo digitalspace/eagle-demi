@@ -3,8 +3,7 @@
 Brings prod to the test architecture: Front Door > API Management > Functions Flex Consumption >
 Cosmos serverless. Test rollout completed 2026-09-01.
 
-Prod scope is smaller than test: no DEMI staff UI runs on prod. The DEMI admin console is test
-only. The consumers here are eagle-public's `/demi-search` (via the OpenShift rproxy) and
+Prod scope is smaller than test: no DEMI staff UI runs on prod. The consumers here are eagle-public's `/demi-search` (via the OpenShift rproxy) and
 eagle-api's mirror push.
 
 ## Gate: none — prod is the canary

@@ -65,7 +65,7 @@ Deployed state (measured 2026-11-05): eagle-admin v2.5.42 (PRs 1000 to 1013) run
 ### Decisions
 
 1. CACUser search dataset: dropped, because it has no caller and members live in eagle-notify. `parity-map.js` marks it dropped.
-2. Materialized-view status: kept until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes the call.
+2. Materialized-view status: no caller. The DEMI admin app was its only caller and is retired.
 3. Jobs: no port until a caller appears.
 4. Inspections: the inspection mirror lines in `routes.js` stay as a frozen import path, with no Dark slice.
 5. CAC member store: eagle-notify is the member store and never hard-deletes. Members sign up in eagle-notify, and DEMI holds no member store.
@@ -767,11 +767,11 @@ Callers to move: eagle-public `robots.txt` on `develop` and `react` (slice 10b).
 
 ### Materialized view status
 
-Status: todo
+Status: no caller.
 
-eagle-demi-admin `src/api/eagle.ts` calls eagle-api `/materialized-views/status`. DEMI has nothing, and `parity-map.js` marks it internal to Eagle.
+The retired DEMI admin app was the only caller of eagle-api `/materialized-views/status`. DEMI has nothing, and `parity-map.js` marks it internal to Eagle.
 
-Target: keep the eagle-api call until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes it.
+Target: none. EPIC.centre 2 (planned) replaces the admin app.
 
 ### Jobs (bulk export)
 
@@ -796,7 +796,7 @@ Status: todo
 eagle-admin v2.5.42 calls eagle-api for these writes, which DEMI already serves. Move them with their objects, or as one task:
 - Document create, update, delete, publish, unpublish, feature, unfeature (`document.service.ts`).
 - Document fetch URLs built from eagle-api in `document.service.ts`, used in `update-images.ts`, `update-image-picker.component.ts`, `project-documents.component.ts` and `project-notification-documents.component.ts`.
-- eagle-demi-admin `src/api/eagle.ts` shows the eagle-api report URL. DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
+- DataBC pulls the eagle-api report CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
 
 Document feature: eagle-api caps featured documents at `MAX_FEATURE_DOCS = 5` (`constants.js`) and refuses with a 403 (`document.js`). The cap is a business rule, so DEMI enforces it from config in the document PUT and answers 409.
 

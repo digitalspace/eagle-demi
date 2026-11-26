@@ -77,7 +77,7 @@ const routes = [
   // No guards by design: the visitor holds nothing yet and the body's password is the only
   // credential. The gateway cannot throttle it on this tier; see controllers/gate.js.
   { method: 'post', path: '/gate', guards: [], load: () => gateController().postGate },
-  // Anonymous gets the public tier. `strict`: a rejected Bearer must 401 so the admin console
+  // Anonymous gets the public tier. `strict`: a rejected Bearer must 401 so the DEMI frontend
   // refreshes instead of reading itself as public.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => meController().getMe },
   // Authenticated though it reads no container: the answer discloses the whole field catalog and

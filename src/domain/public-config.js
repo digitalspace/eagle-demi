@@ -2,8 +2,8 @@
 
 const { logger } = require('../utils/logger');
 
-// Served to anonymous callers: add only public values. Kept apart from OVERRIDABLE_KEYS so an admin
-// console key never turns public; eagle-api's PUBLIC_KEYS minus KEYCLOAK_*, CENTRE_API_URL, ANALYTICS_API_URL.
+// Served to anonymous callers: add only public values. Kept apart from OVERRIDABLE_KEYS so a DEMI
+// frontend key never turns public; eagle-api's PUBLIC_KEYS minus KEYCLOAK_*, CENTRE_API_URL, ANALYTICS_API_URL.
 const PUBLIC_KEYS = [
   'ENVIRONMENT',
   'BANNER_COLOUR',
