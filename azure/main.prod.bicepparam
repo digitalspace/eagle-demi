@@ -137,15 +137,9 @@ param rotatorEdgeRuleIds = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/
 param rotatorProbeDemiUrl = 'https://projects.eao.gov.bc.ca/demi/api/health/trust'
 param rotatorProbeAnalyticsUrl = 'https://projects.eao.gov.bc.ca/analytics/events'
 
-// The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
-// so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
-// same-origin through Front Door. The one entry is the DEMI admin console's Front Door endpoint on
-// eagle-edge-prod, read from eagle-edge's edgeEndpointHostNames output, never composed. main.bicep
-// also filters this list down to demi-admin hosts for the analytics allowlist.
-param frontendHostNames = [
-  // DEMI admin console prod endpoint on eagle-edge-prod, created 2026-09-08.
-  'demi-admin-prod-hfgebphjbucqd5bt.a01.azurefd.net'
-]
+// Empty on purpose: prod has no browser frontend that calls the API cross-origin. eagle-public is
+// same-origin through Front Door, and the DEMI admin console runs on test only.
+param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
 param deployApim = true
