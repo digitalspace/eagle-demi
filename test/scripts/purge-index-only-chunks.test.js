@@ -228,6 +228,62 @@ test('a live run refuses when search is not configured', async () => {
   );
 });
 
+const idFile = (text) => {
+  const file = tmpFile('txt');
+  fs.writeFileSync(file, text);
+  return file;
+};
+
+test('a listed document with no Cosmos chunk has its rows deleted and no other document is judged',
+  async () => {
+    const opts = {
+      documents: fakeDocuments([
+        { id: 'd1', projectId: P1 }, { id: 'd2', projectId: P1 }, { id: 'd3', projectId: P1 }
+      ]),
+      chunks: fakeChunks({ d3: ['c1'] }),
+      search: fakeSearch([row('d1', 'a0'), row('d1', 'a1'), row('d2', 'b0'), row('d3', 'c0'), row('d3', 'c1')]),
+      cosmosReady: true
+    };
+    const ids = idFile('d1\n');
+    const dryAudit = tmpFile('ndjson');
+
+    await purge(['--remove-no-live', ids, '--audit', dryAudit], opts);
+    const summary = await purge(
+      ['--live', '--max-delete', '10', '--remove-no-live', ids, '--audit', tmpFile('ndjson')], opts);
+
+    assert.deepStrictEqual(auditActions(dryAudit), ['key-a0:would-delete', 'key-a1:would-delete']);
+    assert.deepStrictEqual(opts.search.state.deleted, ['key-a0', 'key-a1']);
+    assert.strictEqual(summary.run.documents, 1);
+  });
+
+test('a listed document\'s delete stops at --max-delete', async () => {
+  const opts = {
+    documents: fakeDocuments([{ id: 'd1', projectId: P1 }]),
+    chunks: fakeChunks({}),
+    search: fakeSearch([row('d1', 'c0'), row('d1', 'c1')]),
+    cosmosReady: true
+  };
+
+  const summary = await purge(['--live', '--max-delete', '1', '--remove-no-live', idFile('d1'),
+    '--audit', tmpFile('ndjson')], opts);
+
+  assert.deepStrictEqual(opts.search.state.deleted, []);
+  assert.strictEqual(summary.stop, 'max-delete');
+  assert.strictEqual(exitCodeFor(summary), 1);
+});
+
+test('--remove-no-live refuses an empty list and a state file', async () => {
+  await assert.rejects(
+    purge(['--remove-no-live', idFile('# none yet\n\n'), '--audit', tmpFile('ndjson')], oneLeftover()),
+    /lists no document id/
+  );
+  await assert.rejects(
+    purge(['--remove-no-live', idFile('d1'), '--state', tmpFile('json'), '--audit', tmpFile('ndjson')],
+      oneLeftover()),
+    /--remove-no-live cannot be used with --state/
+  );
+});
+
 test('a run stopped by --max-minutes resumes from its state file at the next partition', async () => {
   const state = tmpFile('json');
   const opts = () => {

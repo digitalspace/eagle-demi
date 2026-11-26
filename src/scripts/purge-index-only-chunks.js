@@ -14,12 +14,13 @@ const { systemAccess } = require('../helpers/access-sql');
 const { quote } = require('../helpers/access-odata');
 const { mapLimit } = require('../utils/worker-pool');
 const { logger } = require('../utils/logger');
+const { readKeepIds } = require('../utils/keep-ids');
 const {
   loadState, saveState, partitionsFor, NULL_PARTITION
 } = require('./backfill-chunk-parent-fields');
 
 const USAGE = 'usage: purge-index-only-chunks.js [--live --max-delete N] [--project ID] ' +
-  '[--state FILE] [--max-minutes M] [--audit FILE]';
+  '[--state FILE] [--max-minutes M] [--audit FILE] [--remove-no-live FILE]';
 
 // Kept low: the serverless account is shared with the live API.
 const CONCURRENCY = 2;
@@ -35,7 +36,8 @@ const VALUE_FLAGS = {
   '--max-minutes': 'maxMinutes',
   '--project': 'project',
   '--state': 'state',
-  '--audit': 'audit'
+  '--audit': 'audit',
+  '--remove-no-live': 'removeNoLive'
 };
 
 const COUNTERS = [
@@ -46,7 +48,8 @@ const COUNTERS = [
 
 function parseArgs(argv) {
   const args = {
-    live: false, maxDelete: null, maxMinutes: null, project: null, state: null, audit: null
+    live: false, maxDelete: null, maxMinutes: null, project: null, state: null, audit: null,
+    removeNoLive: null
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -54,9 +57,9 @@ function parseArgs(argv) {
     else if (VALUE_FLAGS[a]) args[VALUE_FLAGS[a]] = String(argv[++i] ?? '');
     else throw new Error(`[purge-index-only] unknown argument: ${a}. ${USAGE}`);
   }
-  for (const flag of ['project', 'state', 'audit']) {
+  for (const flag of ['--project', '--state', '--audit', '--remove-no-live']) {
     // An empty `--project` would walk the no-project partition and report success.
-    if (args[flag] === '') throw new Error(`[purge-index-only] --${flag} needs a value. ${USAGE}`);
+    if (args[VALUE_FLAGS[flag]] === '') throw new Error(`[purge-index-only] ${flag} needs a value. ${USAGE}`);
   }
   if (args.maxDelete !== null) {
     args.maxDelete = Number(args.maxDelete);
@@ -175,7 +178,7 @@ async function judgeDocument(run, counters, partition, doc) {
   const indexOnly = listed.filter(row => row.chunkId && !live.has(String(row.chunkId)));
   if (indexOnly.length === 0) return lines;
   // These rows are the only searchable text the document has until it is re-extracted.
-  if (live.size === 0) {
+  if (live.size === 0 && !run.removeIds?.has(documentId)) {
     counters.keptNoLiveRows += indexOnly.length;
     counters.keptNoLiveDocuments++;
     return lines.concat(indexOnly.map(row => auditLine(row, 'kept-no-live')));
@@ -236,8 +239,20 @@ async function walkPartition(run, partition) {
   const rows = partition === NULL_PARTITION
     ? await run.documentsRepo.projectedRowsWithNoProject(run.access, DOCUMENT_FIELDS)
     : await run.documentsRepo.projectedRowsForProject(run.access, partition, DOCUMENT_FIELDS);
-  await mapLimit(rows, CONCURRENCY, doc => walkDocument(run, counters, partition, doc));
+  const todo = run.removeIds ? rows.filter(doc => run.removeIds.has(String(doc.id))) : rows;
+  await mapLimit(todo, CONCURRENCY, doc => walkDocument(run, counters, partition, doc));
   return counters;
+}
+
+/** The `--remove-no-live` ids, or null without the flag. */
+function readRemoveIds(args) {
+  if (args.removeNoLive === null) return null;
+  // A filtered run's checkpoints would make a later whole-corpus resume skip those partitions.
+  if (args.state) throw new Error('[purge-index-only] --remove-no-live cannot be used with --state');
+  const ids = readKeepIds(args.removeNoLive);
+  // An empty filter would walk nothing and report a clean corpus.
+  if (ids.length === 0) throw new Error(`[purge-index-only] ${args.removeNoLive} lists no document id`);
+  return new Set(ids);
 }
 
 /**
@@ -246,6 +261,7 @@ async function walkPartition(run, partition) {
  */
 async function purge(argv = [], opts = {}) {
   const args = parseArgs(argv);
+  const removeIds = readRemoveIds(args);
   const search = opts.search || aiSearch;
   assertConfigured(search, opts);
   const mode = args.live ? 'live' : 'dry-run';
@@ -258,7 +274,7 @@ async function purge(argv = [], opts = {}) {
   const run = {
     args, mode, search, auditPath, access: systemAccess(), index: search.config().index,
     documentsRepo: opts.documents || documents, chunksRepo: opts.chunks || chunks,
-    reserved: 0, stop: null
+    removeIds, reserved: 0, stop: null
   };
   const partitions = await partitionsFor(args, run.documentsRepo, run.access);
   const todo = partitions.filter(p => !(p in walked));
