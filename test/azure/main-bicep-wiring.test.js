@@ -505,22 +505,16 @@ test('the analytics read routes allow the admin origins and the Authorization he
     'main.bicep must derive the origins rather than take them as a parameter');
   assert.match(MAIN, /filter\(frontendHostNames, host => startsWith\(host, 'demi-admin'\)\)/,
     'the admin app is the only frontend that builds a query');
-  // Unconditionally appended, this would sit alongside the real admin host below and give a
-  // developer's machine the same standing as the deployed prod frontend.
+  // Unconditionally appended, this would give a developer's machine a bearer-carrying origin on prod.
   assert.match(MAIN, /environmentName == 'prod' \? \[\] : \[ 'http:\/\/localhost:4200' \]/,
     'localhost is a developer origin and must never be appended in prod');
 
-  // Prod now has one DEMI frontend, the admin console on eagle-edge-prod. Its origin list holds
-  // exactly that host and nothing else — no eagle-public entry, no leftover eagle-search host.
+  // The admin console runs on test only, and eagle-public is same-origin through Front Door, so prod
+  // has no browser origin. Declared explicitly so a stray host shows up in review, not in a default.
   const frontendMatch = /^param frontendHostNames = \[([\s\S]*?)\]$/m.exec(PROD_PARAMS);
   assert.ok(frontendMatch, 'prod must declare frontendHostNames explicitly');
-  const prodFrontendHosts = [...frontendMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
-  assert.strictEqual(prodFrontendHosts.length, 1,
-    'prod has exactly one DEMI frontend, the admin console — a second entry is undocumented');
-  assert.match(prodFrontendHosts[0], /^demi-admin-/,
-    'the one prod frontend host is the DEMI admin console');
-  assert.match(prodFrontendHosts[0], /\.azurefd\.net$/,
-    'the admin console is served from Front Door, not composed by hand');
+  assert.strictEqual(frontendMatch[1].trim(), '',
+    'prod has no DEMI browser frontend; the admin console is test only');
 
   assert.match(MAIN, /^\s+analyticsBrowserOrigins: analyticsAdminOrigins$/m,
     'declared but unwired means every browser request is refused at the gateway');

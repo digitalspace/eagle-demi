@@ -62,6 +62,14 @@ test('an origin outside the list is refused', async () => {
   });
 });
 
+test('an empty CORS_ORIGIN refuses every origin, localhost included', async () => {
+  // Prod sets it to '' on purpose: it has no browser frontend, so the unset-fallback must not apply.
+  await withRouter('', async (dispatch) => {
+    assert.strictEqual(await allowOriginFor(dispatch, LOCAL_DEV), null);
+    assert.strictEqual(await allowOriginFor(dispatch, FRONT_DOOR), null);
+  });
+});
+
 test('CORS_ORIGIN of "*" allows any origin', async () => {
   await withRouter('*', async (dispatch) => {
     assert.strictEqual(await allowOriginFor(dispatch, 'https://anything.example'), 'https://anything.example');

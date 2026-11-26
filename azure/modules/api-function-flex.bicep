@@ -196,7 +196,7 @@ param budgetName string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
-@description('Frontend hostnames (no scheme) allowed to call this API, as browser origins. An ARRAY because a cutover has two. Empty leaves CORS_ORIGIN unset, which is fail-closed.')
+@description('Frontend hostnames (no scheme) allowed to call this API, as browser origins. An ARRAY because a cutover has two. Empty sets CORS_ORIGIN to an empty string, which allows no browser origin.')
 param frontendHostNames array = []
 
 @description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance.')
@@ -1188,7 +1188,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           value: ssoAudience
         }
         // Comma-separated, which is what the CORS guard splits on. An empty array joins to '',
-        // which falls back to localhost only — no browser origin, rather than any browser origin.
+        // which the guard reads as no browser origin.
         {
           name: 'CORS_ORIGIN'
           value: join(map(frontendHostNames, h => 'https://${h}'), ',')

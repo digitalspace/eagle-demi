@@ -50,17 +50,17 @@ const SECURITY_HEADERS = Object.freeze({
   'x-xss-protection': '0'
 });
 
-// CORS_ORIGIN is a comma-separated allowlist, set by api-function-flex.bicep. The fallback is narrow,
-// not '*', so a missing setting removes access rather than the check.
+// CORS_ORIGIN is a comma-separated allowlist from api-function-flex.bicep; empty means no browser
+// origin. Only an unset variable (local dev) falls back to localhost, never to '*'.
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:4200'];
 
-const corsOriginEnv = (process.env.CORS_ORIGIN || '').trim();
+const corsOriginUnset = process.env.CORS_ORIGIN === undefined;
+const corsOriginEnv = (process.env.CORS_ORIGIN ?? '').trim();
 const allowAnyOrigin = corsOriginEnv === '*';
-const allowedOrigins = corsOriginEnv && !allowAnyOrigin
-  ? corsOriginEnv.split(',').map(o => o.trim()).filter(Boolean)
-  : DEFAULT_ALLOWED_ORIGINS;
+const allowedOrigins = corsOriginUnset
+  ? DEFAULT_ALLOWED_ORIGINS : corsOriginEnv.split(',').map(o => o.trim()).filter(Boolean);
 
-if (!corsOriginEnv) {
+if (corsOriginUnset) {
   logger.warn(
     `CORS_ORIGIN is not set — falling back to the default DEMI frontend allowlist ` +
     `(${allowedOrigins.join(', ')}). Set it explicitly per environment.`
