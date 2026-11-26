@@ -1735,9 +1735,9 @@ without revisiting that grant. A missing grant fails the first step of
    is present"*, and neither deployment reports a problem. **List the new origin first, publish
    second, drop the old origin last.**
 
-   An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset,
-   `src/http/router.js` falls back to an allowlist holding only `http://localhost:4200`, and the frontend's first XHR
-   fails loudly rather than silently reflecting any origin.
+   An empty array sets `CORS_ORIGIN` to an empty string, which allows no browser origin. Prod uses
+   it because no DEMI frontend calls the prod API cross-origin. Only an unset `CORS_ORIGIN`, as in
+   local dev, falls back to `http://localhost:4200`.
 
 3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**
    Nothing fails loudly enough to point at this step. `registry-state.service.ts` derives both
