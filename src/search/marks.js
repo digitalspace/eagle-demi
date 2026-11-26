@@ -13,11 +13,11 @@ function escapeHtml(text) {
 
 /**
  * Escape first, mark second. '' without highlights: chunk `content` is never selected. The copy
- * goes first: only a stop-word query asks for it, and `content` can never mark the stop word.
+ * only stands in for a hit with no `content` fragment: it has no stemmer and marks every stop word.
  */
 function snippetFrom(hit) {
   const all = hit['@search.highlights'] || {};
-  const highlights = all.contentTokens || all.content || [];
+  const highlights = all.content || all.contentTokens || [];
   if (highlights.length === 0) return '';
   return highlights.map(markFragment).join(' … ');
 }

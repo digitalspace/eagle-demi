@@ -208,8 +208,8 @@ live index offline to add one.
 
 `searchChunks` searches and highlights the copy only when a query term is in `ANALYZER_STOPWORDS`
 (`src/search/stopwords.js`). Every other passage query searches `content` alone, so its ids, totals
-and order match an index without the copy. The passage snippet uses the copy's fragments when a hit
-has them, because `content` never marks the stop word.
+and order match an index without the copy. The passage snippet uses the copy's fragments only for a
+hit with no `content` fragment, because the copy has no stemmer.
 
 Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected on
 `api-version=2024-07-01` (keep `stored: true`), and adding an analyzer or tokenizer to a live index

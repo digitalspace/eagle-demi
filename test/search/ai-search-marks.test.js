@@ -134,17 +134,18 @@ test('marks from the token copies', async (t) => {
     assert.strictEqual(items[0].snippet, 'Tailings from the &lt;<mark>mine</mark>&gt; site');
   });
 
-  await t.test("a passage's contentTokens fragments win over its content ones", async (tt) => {
+  // The copy has no stemmer: preferring it would mark `of` and lose the `studies` match on `study`.
+  await t.test("a passage's content fragments win over its contentTokens ones", async (tt) => {
     captureFetch(tt, answer({
       chunkId: 'c1',
       '@search.highlights': {
-        content: [`the mine ${PRE}water${POST}`],
-        contentTokens: [`the ${PRE}mine${POST} ${PRE}water${POST}`]
+        content: [`impacts of the ${PRE}studies${POST}`],
+        contentTokens: [`impacts ${PRE}of${POST} the studies`]
       }
     }));
 
-    const { items } = await aiSearch.searchChunks({ filter: null, keywords: 'mine water' });
+    const { items } = await aiSearch.searchChunks({ filter: null, keywords: 'impacts of study' });
 
-    assert.strictEqual(items[0].snippet, 'the <mark>mine</mark> <mark>water</mark>');
+    assert.strictEqual(items[0].snippet, 'impacts of the <mark>studies</mark>');
   });
 });
