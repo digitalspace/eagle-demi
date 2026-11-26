@@ -143,8 +143,6 @@ param eagleEngageMilestone = '5e152bc0ee4d476b56fa2175'
 // composed.
 param frontendHostNames = [
   'demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net'
-  // eagle-demi-admin's Front Door endpoint, read from eagle-edge's edgeEndpointHostNames output.
-  'demi-admin-test-hbf7cfh7ggfhf4gf.a02.azurefd.net'
 ]
 //
 // Object id (not app id) of the demi-cicd-test user-assigned identity. Without it the identity gets
@@ -176,7 +174,7 @@ param contactEmails = [
 param linkBaseUrl = 'https://test.projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
-// The frontend and admin console are the same client — this file sets no keycloakClientId, so the API
+// The frontend signs in as eagle-admin-console — this file sets no keycloakClientId, so the API
 // takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
 // eagle-agent-test is the service-account client the test agent uses to call the API.
 param allowedClients = 'eagle-admin-console,eagle-agent-test'

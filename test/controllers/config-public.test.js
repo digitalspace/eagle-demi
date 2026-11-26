@@ -161,7 +161,7 @@ test('public config over the dispatcher', async (t) => {
       }
 
       // The route table is matched with anchored regexes, so the longer path must not have eaten
-      // the shorter one — /config still answers the admin console's payload.
+      // the shorter one — /config still answers the DEMI frontend's payload.
       const base = await call('/api/config');
       assert.equal(base.status, 200);
       const baseBody = await base.json();

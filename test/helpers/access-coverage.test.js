@@ -45,7 +45,7 @@ const UNGATED = {
   'config.js':
     'Two documents, served to anonymous callers by GET /api/config and GET /api/config/public, so ' +
     'there is no tier that may read only part of either and nothing to filter. What bounds each ' +
-    "payload is the controller's explicit key allowlist — OVERRIDABLE_KEYS for the admin console, " +
+    "payload is the controller's explicit key allowlist — OVERRIDABLE_KEYS for the DEMI frontend, " +
     'PUBLIC_KEYS for the public site — not a permission field. A key added to a document is not ' +
     'published until it is added to the matching list too.',
   'cache.js':

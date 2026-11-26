@@ -216,7 +216,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 
 **Decisions with no slice yet (decided 2026-10-14):**
 - **CACUser search dataset.** Dropped. No caller: git grep on eagle-admin origin/develop finds none, and members live in eagle-notify. Slice T marks it dropped.
-- **Materialized-view status.** Kept until DataBC moves to DEMI `/reports`; then a small eagle-demi-admin slice removes the call. eagle-demi-admin uses it only for BCGW export freshness (`src/api/eagle.ts:24-33`; screens `DataExport.tsx`, `Uptime.tsx`).
+- **Materialized-view status.** No caller. Its only caller was the DEMI admin app, which is retired; it read the status for BCGW export freshness. EPIC.centre 2 (planned) replaces that app.
 - **Jobs.** No port until a caller appears. No caller today.
 - **Inspections.** The mirror lines `routes.js:252-254` stay as a frozen import path, with no Dark slice. eagle-api keeps no inspection write (`inspection.js:10` is the only handler), and `demiPush.inspection` has no live caller.
 - **Topic and vc.** Dropped 2026-10-14.

@@ -33,9 +33,6 @@ param analyticsSharedHeaderSecretUri string = ''
 @description('Key Vault URI of the second credential POST /audit demands, which eagle-analytics deploys as AUDIT_SHARED_HEADER_VALUE. A DIFFERENT secret from the one above on purpose: the write path is rotatable on its own, and a leaked ingest header must not buy an audit write.')
 param analyticsAuditHeaderSecretUri string = ''
 
-@description('Browser origins, scheme included, allowed on the analytics read routes. Named rather than `*` because those requests carry a Keycloak bearer; ingest stays open to any origin. Empty deploys no CORS policy on those routes, so no browser reaches them at all — fail closed.')
-param analyticsBrowserOrigins array = []
-
 var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
@@ -360,44 +357,6 @@ resource analyticsBearerOperationResources 'Microsoft.ApiManagement/service/apis
     displayName: '${operation.method} ${operation.urlTemplate}'
     method: operation.method
     urlTemplate: operation.urlTemplate
-  }
-}]
-
-// Bicep multi-line strings take no interpolation, hence the placeholder replaced below.
-var analyticsOriginElements = join(map(analyticsBrowserOrigins, origin => '        <origin>${origin}</origin>'), '\n')
-
-// CORS only: the shared header comes from API scope through <base />.
-var analyticsBearerCorsPolicy = replace('''<policies>
-  <inbound>
-    <base />
-    <cors allow-credentials="false">
-      <allowed-origins>
-__ORIGINS__
-      </allowed-origins>
-      <allowed-methods>
-        <method>GET</method>
-        <method>POST</method>
-        <method>PUT</method>
-        <method>DELETE</method>
-        <method>OPTIONS</method>
-      </allowed-methods>
-      <allowed-headers>
-        <header>Authorization</header>
-        <header>Content-Type</header>
-      </allowed-headers>
-    </cors>
-  </inbound>
-  <backend><base /></backend>
-  <outbound><base /></outbound>
-  <on-error><base /></on-error>
-</policies>''', '__ORIGINS__', analyticsOriginElements)
-
-resource analyticsBearerOperationPolicies 'Microsoft.ApiManagement/service/apis/operations/policies@2024-05-01' = [for (operation, index) in analyticsBearerOperations: if (analyticsDeployed && !empty(analyticsBrowserOrigins)) {
-  parent: analyticsBearerOperationResources[index]
-  name: 'policy'
-  properties: {
-    format: 'rawxml'
-    value: analyticsBearerCorsPolicy
   }
 }]
 

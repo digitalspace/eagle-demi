@@ -456,7 +456,7 @@ test('the audit stream name is decided by the same gate as the audit DCR endpoin
     'a half-set pair must read as OFF, not as a rule with no id');
 });
 
-// A browser cannot hold a key, so a keyed read route 401s the admin screens, and an anonymous
+// A browser cannot hold a key, so a keyed read route 401s any browser app, and an anonymous
 // `/audit` opens a write path to anyone.
 test('the analytics read routes are anonymous and only /audit takes a key', () => {
   const blocks = APIM_MODULE.split(/^resource /m);
@@ -479,45 +479,22 @@ test('the analytics read routes are anonymous and only /audit takes a key', () =
   }
 });
 
-// The read routes carry a bearer, so their CORS list is named rather than `*`, and the browser cannot
-// send that header at all unless it is allowed by name. Neither is visible in a what-if diff.
-test('the analytics read routes allow the admin origins and the Authorization header', () => {
-  const policy = /var analyticsBearerCorsPolicy = replace\('''([\s\S]*?)''',/.exec(APIM_MODULE);
-  assert.ok(policy, 'apim.bicep must build a CORS policy for the bearer operations');
+// The read routes carry a Keycloak bearer, so a wildcard origin is never right for them. With no
+// browser app calling them they have no CORS at all, which refuses every browser: fail closed.
+test('only the anonymous ingest route allows any browser origin', () => {
+  const wildcard = /<origin>\*<\/origin>/g;
+  assert.strictEqual((APIM_MODULE.match(wildcard) ?? []).length, 1,
+    'a wildcard origin anywhere else would reach the bearer read routes or the DEMI API');
+  const events = APIM_MODULE.split(/^resource /m).find((b) => b.startsWith('analyticsEventsPolicy '));
+  assert.match(events, wildcard, 'the one wildcard belongs to POST /events');
+});
 
-  assert.match(policy[1], /<header>Authorization<\/header>/,
-    'without this the browser cannot send the token the app authorises on');
-  assert.match(policy[1], /<header>Content-Type<\/header>/);
-  for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
-    assert.match(policy[1], new RegExp(`<method>${method}</method>`), `${method} must be allowed`);
-  }
-  assert.doesNotMatch(policy[1], /<origin>\*<\/origin>/,
-    'a wildcard origin is the wrong answer for a request carrying a bearer');
-  assert.match(policy[1], /^__ORIGINS__$/m, 'the origins are substituted in, one element each');
-
-  // Empty list, no policy: an <allowed-origins> with no child is invalid XML and APIM rejects the PUT.
-  assert.match(APIM_MODULE,
-    /resource analyticsBearerOperationPolicies [^\n]*\[for \(operation, index\) in analyticsBearerOperations: if \(analyticsDeployed && !empty\(analyticsBrowserOrigins\)\) \{/,
-    'the policy must be gated on there being at least one origin');
-
-  // Built from frontendHostNames, not listed a second time: those hostnames carry a deploy-time hash.
-  assert.match(MAIN, /^var analyticsAdminOrigins = concat\($/m,
-    'main.bicep must derive the origins rather than take them as a parameter');
-  assert.match(MAIN, /filter\(frontendHostNames, host => startsWith\(host, 'demi-admin'\)\)/,
-    'the admin app is the only frontend that builds a query');
-  // Unconditionally appended, this would give a developer's machine a bearer-carrying origin on prod.
-  assert.match(MAIN, /environmentName == 'prod' \? \[\] : \[ 'http:\/\/localhost:4200' \]/,
-    'localhost is a developer origin and must never be appended in prod');
-
-  // The admin console runs on test only, and eagle-public is same-origin through Front Door, so prod
-  // has no browser origin. Declared explicitly so a stray host shows up in review, not in a default.
+// eagle-public is same-origin through Front Door, so prod has no browser origin. Declared explicitly
+// so a stray host shows up in review, not in a default.
+test('prod lists no browser frontend host', () => {
   const frontendMatch = /^param frontendHostNames = \[([\s\S]*?)\]$/m.exec(PROD_PARAMS);
   assert.ok(frontendMatch, 'prod must declare frontendHostNames explicitly');
-  assert.strictEqual(frontendMatch[1].trim(), '',
-    'prod has no DEMI browser frontend; the admin console is test only');
-
-  assert.match(MAIN, /^\s+analyticsBrowserOrigins: analyticsAdminOrigins$/m,
-    'declared but unwired means every browser request is refused at the gateway');
+  assert.strictEqual(frontendMatch[1].trim(), '', 'prod has no DEMI browser frontend');
 });
 
 // A typo here passes lint and `az bicep build-params`, and only throws in config.js at the next app

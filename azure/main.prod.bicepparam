@@ -138,7 +138,7 @@ param rotatorProbeDemiUrl = 'https://projects.eao.gov.bc.ca/demi/api/health/trus
 param rotatorProbeAnalyticsUrl = 'https://projects.eao.gov.bc.ca/analytics/events'
 
 // Empty on purpose: prod has no browser frontend that calls the API cross-origin. eagle-public is
-// same-origin through Front Door, and the DEMI admin console runs on test only.
+// same-origin through Front Door.
 param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
