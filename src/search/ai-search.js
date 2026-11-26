@@ -876,13 +876,13 @@ async function searchChunks(opts = {}) {
     return { items: [], count: 0 };
   }
 
+  // A stop word matches only in the standard.lucene copy. Any other query searches `content` alone,
+  // so its ids, totals and order stay those of an index without the copy.
+  const fields = tokenize(opts.keywords).some(isAnalyzerStopword) ? 'content,contentTokens' : 'content';
   const { value, count, degraded } = await runSearch(index, {
     ...opts,
     // Only the chunk index declares a semantic configuration; asking for one elsewhere is a 400.
-    semantic: true,
-    // This `select` is what stops the API shipping whole chunks — see CHUNK_SELECT.
-    select: CHUNK_SELECT,
-    searchFields: 'content', highlight: 'content'
+    semantic: true, select: CHUNK_SELECT, searchFields: fields, highlight: fields
   });
 
   return {

@@ -11,9 +11,13 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 }
 
-/** Escape first, mark second. '' without highlights: chunk `content` is never selected. */
+/**
+ * Escape first, mark second. '' without highlights: chunk `content` is never selected. The copy
+ * goes first: only a stop-word query asks for it, and `content` can never mark the stop word.
+ */
 function snippetFrom(hit) {
-  const highlights = (hit['@search.highlights'] && hit['@search.highlights'].content) || [];
+  const all = hit['@search.highlights'] || {};
+  const highlights = all.contentTokens || all.content || [];
   if (highlights.length === 0) return '';
   return highlights.map(markFragment).join(' … ');
 }

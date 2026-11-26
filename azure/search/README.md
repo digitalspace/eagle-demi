@@ -201,6 +201,16 @@ alternative is dropping and refilling 60,578 rows. `nameTokens` on `projects` is
 the same reason, carrying `c.name`: every searchable projects field is `en.microsoft`, so
 `keywords=mine` matched none of the projects named "... Mine".
 
+`contentTokens` on `chunks` copies `c.content` under the built-in `standard.lucene` analyzer, which
+keeps stop words such as `mine`. A built-in analyzer needs no definition, so the PUT only adds a
+field. The apply script refuses an `analyzers` change on a serving index, and the service takes a
+live index offline to add one.
+
+`searchChunks` searches and highlights the copy only when a query term is in `ANALYZER_STOPWORDS`
+(`src/search/stopwords.js`). Every other passage query searches `content` alone, so its ids, totals
+and order match an index without the copy. The passage snippet uses the copy's fragments when a hit
+has them, because `content` never marks the stop word.
+
 Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected on
 `api-version=2024-07-01` (keep `stored: true`), and adding an analyzer or tokenizer to a live index
 is refused without `allowIndexDowntime=true` on the PUT — a few seconds offline, so do it, but only
@@ -835,8 +845,8 @@ if either is missing.
 ## The semantic configuration
 
 `chunks.json` carries `chunks-semantic`, with `content` as the sole
-`prioritizedContentFields` entry — there is no title or keywords field to prioritise, because
-`content` is the only searchable field in the index. The other two indexes have no semantic
+`prioritizedContentFields` entry — there is no title or keywords field to prioritise. `contentTokens`
+is left out: it repeats `content` and is not retrievable. The other two indexes have no semantic
 configuration and must not be sent one: naming a configuration that does not exist is a 400.
 
 Adding it was a **no-rebuild** change. `retrievable` and semantic configurations are the two named

@@ -121,4 +121,30 @@ test('marks from the token copies', async (t) => {
 
     assert.strictEqual(calls[1].body.highlight, 'displayName,description');
   });
+
+  // `content` never marks a stop word, so a passage matched through the copy must show the copy.
+  await t.test('a passage matched only through contentTokens has a marked snippet', async (tt) => {
+    captureFetch(tt, answer({
+      chunkId: 'c1',
+      '@search.highlights': { contentTokens: [`Tailings from the <${PRE}mine${POST}> site`] }
+    }));
+
+    const { items } = await aiSearch.searchChunks({ filter: null, keywords: 'mine' });
+
+    assert.strictEqual(items[0].snippet, 'Tailings from the &lt;<mark>mine</mark>&gt; site');
+  });
+
+  await t.test("a passage's contentTokens fragments win over its content ones", async (tt) => {
+    captureFetch(tt, answer({
+      chunkId: 'c1',
+      '@search.highlights': {
+        content: [`the mine ${PRE}water${POST}`],
+        contentTokens: [`the ${PRE}mine${POST} ${PRE}water${POST}`]
+      }
+    }));
+
+    const { items } = await aiSearch.searchChunks({ filter: null, keywords: 'mine water' });
+
+    assert.strictEqual(items[0].snippet, 'the <mark>mine</mark> <mark>water</mark>');
+  });
 });
