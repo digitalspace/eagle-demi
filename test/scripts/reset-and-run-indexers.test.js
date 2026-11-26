@@ -24,6 +24,11 @@ const FRESH = {
   itemsFailed: 0,
   initialTrackingState: CLEARED
 };
+// FRESH while it runs. The live service lists a running execution only in `lastResult`, and it
+// needs its own startTime: lastResult that shares one with a history entry is that entry.
+const LIVE = { status: 'inProgress', startTime: FRESH.startTime, itemsProcessed: 120 };
+const runningOnly = { lastResult: LIVE, executionHistory: [STALE] };
+const finished = { lastResult: FRESH, executionHistory: [FRESH, STALE] };
 
 /**
  * A search service that answers status reads from a script, one entry per call, repeating the last.
@@ -37,11 +42,13 @@ function service({ history, reset = 204, run = [202] } = {}) {
     const [, name, kind] = url.match(/\/indexers\/([^/]+)\/([a-z]+)\?/);
     calls.push(`${init.method || 'GET'} ${name} ${kind}`);
     if (kind === 'status') {
-      // An entry may be an array when a poll has to see more than the newest execution.
+      // An entry may be an array when a poll has to see more than the newest execution, or a whole
+      // status body when it has to carry `lastResult`.
       const e = history[Math.min(i, history.length - 1)];
       i += 1;
       const list = Array.isArray(e) ? e : e ? [e] : [];
-      return { status: 200, json: async () => ({ executionHistory: list }) };
+      const body = e && e.executionHistory ? e : { executionHistory: list };
+      return { status: 200, json: async () => body };
     }
     if (kind === 'reset') return { status: reset, text: async () => 'reset body' };
     return { status: runCodes.length > 1 ? runCodes.shift() : runCodes[0], text: async () => 'run body' };
@@ -84,6 +91,21 @@ test('reset-and-run-indexers', async (t) => {
     assert.strictEqual(r.code, 1);
     assert.match(r.out, /DEMI_BUSY documents-indexer/);
     assert.ok(!r.calls.includes(`POST ${NAME} reset`), `no reset may be posted: ${r.calls.join(' | ')}`);
+  });
+
+  await t.test('refuses to reset an indexer whose running execution is only in lastResult', async () => {
+    // The clock is fixed, so a guard that misses the run would wait forever without a zero deadline.
+    const r = await drive(service({ history: [runningOnly] }), { timeoutMs: 0 });
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /DEMI_BUSY documents-indexer/);
+    assert.ok(!r.calls.includes(`POST ${NAME} reset`), `no reset may be posted: ${r.calls.join(' | ')}`);
+  });
+
+  await t.test('a reset run that shows first in lastResult is reported when it finishes', async () => {
+    const idle = { lastResult: STALE, executionHistory: [STALE] };
+    const r = await drive(service({ history: [idle, idle, runningOnly, finished] }));
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared/);
   });
 
   await t.test('waits for an execution that straddles the reset before asking for a run', async () => {
@@ -279,6 +301,34 @@ test('reset-and-run-indexers', async (t) => {
     assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=set/);
     assert.ok(!r.out.includes('DEMI_RESET_RETRY'), r.out);
     assert.ok(r.calls.every(c => c.startsWith('GET')), r.calls.join(' | '));
+  });
+
+  await t.test('watch mode waits for a run the service lists only in lastResult', async () => {
+    // Reading executionHistory alone reports the finished tick before it, with items=0.
+    const r = await drive(service({ history: [runningOnly, runningOnly, finished] }), { mode: 'watch' });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_RESULT')),
+      ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared'], r.out);
+    assert.ok(r.calls.every(c => c.startsWith('GET')), r.calls.join(' | '));
+  });
+
+  await t.test('watch reports the run it first saw running, not a scheduled tick after it', async () => {
+    // A tick can start within one poll of the run ending; watching the newest execution reports it.
+    const tickStart = '2026-09-08T22:00:00Z';
+    const tick = {
+      status: 'success', startTime: tickStart, itemsProcessed: 0, itemsFailed: 0, initialTrackingState: KEPT
+    };
+    const r = await drive(service({
+      history: [
+        runningOnly,
+        runningOnly,
+        { lastResult: { status: 'inProgress', startTime: tickStart }, executionHistory: [FRESH, STALE] },
+        { lastResult: tick, executionHistory: [tick, FRESH, STALE] }
+      ]
+    }), { mode: 'watch' });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_RESULT')),
+      ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared'], r.out);
   });
 
   await t.test('the timeout covers the whole call, not each indexer in turn', async () => {
