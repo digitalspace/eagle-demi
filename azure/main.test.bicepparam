@@ -26,7 +26,9 @@ param intakeUploadOrigins = [
 
 // ── Extraction job ────────────────────────────────────────────────────────────────────────────
 // snet-demi-extract-test (10.46.52.192/27) needs an NSG, delegation to Microsoft.App/environments
-// and the openshift-public-endpoint route table. The job deploys once the image digest is set.
+// and the openshift-public-endpoint route table. The job deploys once the image digest is set and
+// demi-kv-test holds extraction-job-api-key; deploy-infra.sh sets DEPLOY_EXTRACTION_JOB false without it.
+param deployExtractionJob = bool(readEnvironmentVariable('DEPLOY_EXTRACTION_JOB', 'true'))
 param extractionQueue = 'extract'
 param extractSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-demi-extract-test'
 param extractionJobImage = ''

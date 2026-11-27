@@ -100,6 +100,11 @@ done
 # a .bicepparam file, so an environment variable is the only way to pass the switch through.
 export DEPLOY_FOUNDATION
 
+# Set only by require_vault_secrets, never inherited: false when the vault lacks this key.
+EXTRACTION_JOB_KEY='extraction-job-api-key'
+DEPLOY_EXTRACTION_JOB='true'
+export DEPLOY_EXTRACTION_JOB
+
 # shellcheck source-path=SCRIPTDIR source=lib/azure-env.sh
 source "${REPO_ROOT}/scripts/lib/azure-env.sh"
 if ! demi_azure_env "$ENVIRONMENT"; then
@@ -273,6 +278,11 @@ require_vault_secrets() {
   for name in "${expected[@]}"; do
     if grep -qx -- "$name" <<<"$listed"; then
       echo -e "${GREEN}  ✓ ${name}${NC}"
+    elif [ "$name" = "$EXTRACTION_JOB_KEY" ]; then
+      # Only the job module reads this key, so its absence skips the job rather than the deploy.
+      DEPLOY_EXTRACTION_JOB='false'
+      echo -e "${YELLOW}  ! ${name} is not in ${VAULT} — skipping the extraction job module; every other module still deploys.${NC}"
+      echo -e "${YELLOW}    Set it from ${DEVBOX} (az keyvault secret set) and re-run to deploy the job.${NC}"
     else
       absent+=("$name")
     fi

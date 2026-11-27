@@ -15,12 +15,12 @@ const path = require('node:path');
 const SCRIPT = path.resolve(__dirname, '..', '..', 'scripts', 'deploy-infra.sh');
 
 // `STUB_VAULT_NAMES` is what the vault lists from the devbox; an empty `STUB_DEVBOX_RG` means no VM.
-// Every other call, the what-if included, succeeds silently.
+// The what-if echoes the job switch the template would read; every other call succeeds silently.
 const FAKE_AZ = `#!/usr/bin/env bash
 case "$1 $2" in
   'resource list') printf '%s\\n' "\${STUB_DEVBOX_RG-}" ;;
   'vm run-command') printf '%s\\n' "\${STUB_VAULT_NAMES-}" ;;
-  'deployment group') echo 'stub what-if: no changes' ;;
+  'deployment group') echo "stub what-if: DEPLOY_EXTRACTION_JOB=\${DEPLOY_EXTRACTION_JOB-unset}" ;;
 esac
 exit 0
 `;
@@ -109,6 +109,17 @@ test('deploy-infra.sh vault check', async (t) => {
       "the environment's own optional names must be checked too");
   });
 
+  await t.test('skips only the extraction job when its key is missing', async () => {
+    // Only the job module grants on this secret, so refusing the whole deploy for it would hold back
+    // every other module until the job image exists.
+    const r = run({ vaultNames: without('extraction-job-api-key'), env: { DEVBOX_SSH_PUBLIC_KEY: GOOD_KEY } });
+
+    assert.strictEqual(r.status, 0, 'the rest of the template still deploys');
+    assert.match(r.stdout, /DEPLOY_EXTRACTION_JOB=false/, 'the template is told to skip the job');
+    assert.match(r.stdout, /extraction-job-api-key is not in demi-kv-test — skipping the extraction job module/,
+      'and the skip is said, with the reason');
+  });
+
   await t.test('says the read failed, not that every secret is missing, on ForbiddenByConnection', async () => {
     // A caller outside the VNet gets this text, not an empty list; reporting it as missing secrets
     // would send the operator to re-set every value that is still there.
@@ -176,7 +187,7 @@ test('deploy-infra.sh devbox key check', async (t) => {
     const r = run({ env: { DEVBOX_SSH_PUBLIC_KEY: GOOD_KEY } });
 
     assert.strictEqual(r.status, 0, 'both guards pass, so the what-if runs and the script exits 0');
-    assert.match(r.stdout, /what-if/, 'the deployment step must actually be reached');
+    assert.match(r.stdout, /DEPLOY_EXTRACTION_JOB=true/, 'the deployment step is reached, with the job on');
     assert.match(r.stdout, /admin-api-key/, 'and each name the vault holds is reported as found');
   });
 });
