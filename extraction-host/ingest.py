@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""
-Phase 2 of the DEMI corpus backfill: replay out/*.md into Azure.
+"""Host phase 2: post out/*.md and .err to the API, then move them to sent/ (or dead/ on a 4xx).
 
-Completely separate from extraction. Run it whenever the API is up — during, after, or repeatedly.
-Nothing here touches the GPU, so extraction is never blocked by an Azure deploy or a Typesense
-resize, and nothing is lost if this is interrupted.
-
-The server does the chunking and copies read[] from the LIVE document, so markdown extracted days
-ago still lands with today's ACL. Chunk ids are deterministic and the route reconciles, so
-re-posting the same file is a no-op — which is what makes "just run it again" a valid recovery.
-
-Sent files move to sent/ so a rerun only does outstanding work. --resend replays everything.
+Re-posting is a no-op, so a rerun is a valid recovery. --resend replays everything.
 """
 
 import json
@@ -48,11 +39,7 @@ def record(**row):
 
 
 def park(path, dest):
-    """Move a posted file out of out/, taking its provenance sidecar with it.
-
-    The sidecar has to travel with the markdown or it is orphaned in out/ — harmless to a normal
-    run, which only globs .md and .err, but --resend would then move the markdown back without it
-    and the document would silently lose its provenance on the replay."""
+    """Move a posted file out of out/ with its sidecar, or --resend replays it without provenance."""
     path.rename(dest / path.name)
     sidecar = path.with_suffix(".json")
     if sidecar.exists():
@@ -72,9 +59,7 @@ def uploader():
         is_error = path.suffix == ".err"
         text = path.read_text()
         extraction = None
-        # Provenance sidecar written by worker.py. Optional by design: files converted before
-        # worker.py emitted it still post, they just carry no `extraction` — which is honest, the
-        # path really is unknown for them. The API sanitises this to a fixed whitelist.
+        # Optional: files converted before worker.py wrote the sidecar post with no `extraction`.
         prov = path.with_suffix(".json")
         if prov.exists():
             try:
@@ -90,9 +75,7 @@ def uploader():
             else:
                 r = post_markdown(doc_id, text, extraction)
             if r.status_code >= 400:
-                # Terminal for this document — 404 (deleted since extraction), 413 (markdown over
-                # the body limit), 400 (malformed). Retrying cannot change any of them, so park the
-                # file in dead/ instead of leaving it to be retried by every future rerun.
+                # 404, 413 and 400 are terminal: park in dead/ so reruns stop retrying it.
                 with _lock:
                     counts["failed"] += 1
                 log(f"  {doc_id}: HTTP {r.status_code} {r.text[:120]}")
