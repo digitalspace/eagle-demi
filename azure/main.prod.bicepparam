@@ -16,6 +16,14 @@ param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'fals
 // Off until the test rollout passes.
 param deployDocumentIntake = false
 param intakeCapGBPerMonth = 25
+param intakePrivateEndpointSubnetId = ''
+param intakeUploadOrigins = []
+
+// ── Extraction job ────────────────────────────────────────────────────────────────────────────
+// Off until the test rollout passes: no queue, no job, no extraction budget.
+param extractionQueue = ''
+param extractSubnetId = ''
+param extractionJobImage = ''
 
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at

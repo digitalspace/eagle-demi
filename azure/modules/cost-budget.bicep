@@ -7,7 +7,6 @@ param environmentName string
 @description('Monthly anomaly guard in CAD. Set above the measured run rate, not a multiple of it: this estate is mostly standing charges, so the headroom that matters is for a runaway indexer or a left-on resource, not for normal variance.')
 param budgetAmount int = 400
 
-
 @description('Email addresses to receive budget threshold alerts')
 param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
@@ -19,11 +18,26 @@ param startDate string = ''
 param nowMonth string = utcNow('yyyy-MM-01')
 var effectiveStartDate = empty(startDate) ? nowMonth : startDate
 
+@description('Budget name. Empty uses demi-budget-<env>, the whole-group budget the app reads as BUDGET_NAME.')
+param name string = ''
+
+@description('Resource ids the budget counts. Empty counts the whole resource group.')
+param resourceIds array = []
+
 var budgetName = 'demi-budget-${environmentName}'
 
 resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
-  name: budgetName
-  properties: {
+  name: empty(name) ? budgetName : name
+  // union, so the whole-group budget's body stays as it was: no filter key at all.
+  properties: union(empty(resourceIds) ? {} : {
+    filter: {
+      dimensions: {
+        name: 'ResourceId'
+        operator: 'In'
+        values: resourceIds
+      }
+    }
+  }, {
     category: 'Cost'
     amount: budgetAmount
     timeGrain: 'Monthly'
@@ -44,7 +58,7 @@ resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
         contactEmails: contactEmails
       }
     }
-  }
+  })
 }
 
 output budgetName string = costBudget.name
