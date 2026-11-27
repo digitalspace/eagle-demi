@@ -5,6 +5,7 @@ const chunks = require('../repositories/chunks');
 const { systemAccess } = require('../helpers/access-sql');
 const aiSearch = require('../search/ai-search');
 const { logger } = require('../utils/logger');
+const { auditEvent } = require('../utils/audit');
 const config = require('../config');
 
 /** Paths the router can take. Anything else is recorded as 'unknown' rather than trusted. */
@@ -80,6 +81,63 @@ function logIngestFailure(document, message) {
   logger.error(`[Document Controller] Chunk ingest failed: ${message}`, { documentId: document.id });
 }
 
+/** `req.is` is checked first: a bare TypeError here would 500 as if the database failed. */
+function ingestStreamed(req) {
+  return Boolean(typeof req.is === 'function' && req.is('application/x-ndjson'));
+}
+
+/**
+ * The one audit row of an ingest the route took up and did not finish. A fixed class, never the
+ * message: rows are kept seven years, and a thrown message can carry SDK response text.
+ */
+function auditIngestFailure(req, document, errorClass, status, err) {
+  if (!document) return;
+  const detail = { errorClass, status, streamed: ingestStreamed(req) };
+  if (errorClass === 'internal') {
+    detail.errorName = err && typeof err.name === 'string' ? err.name.slice(0, 60) : 'unknown';
+  }
+  auditEvent(req, {
+    action: 'document.ingest',
+    outcome: 'failure',
+    targetType: 'document',
+    targetId: document.id,
+    projectId: document.projectId,
+    detail
+  });
+}
+
+/**
+ * The 413 both ingest doors answer with once a document has more chunks than the cap. `stored` is
+ * appended to the recorded error only, and `fields` rides the same patch.
+ */
+async function recordOverCap(req, document, detail, { stored = '', fields = {} } = {}) {
+  logger.warn(`[Document Controller] ${CAP_REJECTED}`, {
+    documentId: document.id, limit: config.maxChunksPerDocument, ...detail
+  });
+  const message = capExceededMessage();
+  await tryRecordIngestFailure(document, stored ? `${message}; ${stored}` : message, fields);
+  auditIngestFailure(req, document, 'cap-exceeded', 413);
+  return message;
+}
+
+/** A 500 the host will retry: logged for the ingest-failure alert and counted by the guard. */
+async function recordWriteIncomplete(req, document, message) {
+  logIngestFailure(document, message);
+  await tryRecordIngestFailure(document, message);
+  auditIngestFailure(req, document, 'write-incomplete', 500);
+}
+
+/**
+ * A 503 for chunks the search index kept, when Cosmos wrote everything else. Not counted by the
+ * guard: an index outage says nothing about the document, and must not lock it out.
+ */
+function recordIndexDeleteIncomplete(req, document, detail) {
+  const message = `${INDEX_DELETE_INCOMPLETE} (${JSON.stringify(detail)})`;
+  logIngestFailure(document, message);
+  auditIngestFailure(req, document, 'index-delete-incomplete', 503);
+  return message;
+}
+
 /**
  * The success patch as two, since Cosmos caps a patch at ten operations. The done half goes last, so
  * a failed second patch leaves the document on the work list.
@@ -143,11 +201,14 @@ module.exports = {
   sanitizeExtraction,
   CAP_REJECTED,
   REPEATED_REJECTED,
-  INDEX_DELETE_INCOMPLETE,
   capExceededMessage,
   recentIngestFailures,
   tryRecordIngestFailure,
-  logIngestFailure,
+  ingestStreamed,
+  auditIngestFailure,
+  recordOverCap,
+  recordWriteIncomplete,
+  recordIndexDeleteIncomplete,
   recordIngested,
   removeOverCapChunks,
   parentStampedAt
