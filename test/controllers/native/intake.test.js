@@ -489,12 +489,11 @@ test('list: a row requested at level 1 is left out for a caller off the project 
   assert.deepStrictEqual(res.body.map(row => row.id), ['r1', 'r2']);
 });
 
-test('list: a listed upload carries only the eight answered fields', async (t) => {
+test('list: a listed upload carries only the seven answered fields', async (t) => {
   wire(t, { listed: LISTED });
   const res = await listAs(SYSADMIN, { projectId: '207' });
   assert.deepStrictEqual(res.body[1], {
     id: 'r2', displayName: 'Two', scanStatus: 'rejected', scanRejectReason: 'malicious', publishOnRelease: true,
-    publishRefused: null,
     createdAt: '2026-11-26T10:00:00.000Z', scannedAt: '2026-11-26T10:05:00.000Z'
   });
 });
