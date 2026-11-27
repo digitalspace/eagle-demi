@@ -334,6 +334,28 @@ test('a documentSource outside the four values is refused', async (t) => {
   assert.strictEqual(seen.rows.length, 0);
 });
 
+test('an unparseable date is refused, not stored as null', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { dateUploaded: 'last Tuesday' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /dateUploaded/);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a null date is stored as null', async (t) => {
+  const seen = wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { datePosted: null } })).statusCode, 201);
+  assert.strictEqual(seen.rows[0].row.datePosted, null);
+});
+
+test('a displayName of 255 characters is admitted and one of 256 is refused', async (t) => {
+  wire(t);
+  const at = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { displayName: 'x'.repeat(255) } });
+  const over = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { displayName: 'x'.repeat(256) } });
+  assert.strictEqual(at.statusCode, 201);
+  assert.strictEqual(over.statusCode, 400);
+});
+
 test('a List id that is not a string is refused', async (t) => {
   const seen = wire(t);
   const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { milestoneId: 5 } });
