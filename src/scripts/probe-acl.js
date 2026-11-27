@@ -14,6 +14,9 @@ const ADMIN = isKeyVaultReference(ADMIN_RAW) ? '' : ADMIN_RAW;
 // for its own control row before it can conclude anything.
 const INDEX_WAIT_MS = 8 * 60 * 1000;
 const INDEX_POLL_MS = 30 * 1000;
+// Planted rows go through intake, so each waits for Defender and the 5-minute intake sweep.
+const SCAN_WAIT_MS = 15 * 60 * 1000;
+const SCAN_POLL_MS = 30 * 1000;
 
 // MAX_IDS in helpers/native-query.js, copied: requiring it loads the Cosmos client this script
 // must not need. Also ANON_MAX_PAGE_SIZE, so one page holds a whole batch for the anonymous legs.
@@ -75,6 +78,76 @@ async function pointRead(key, id, projectId) {
   return r.status;
 }
 
+/**
+ * Plants each `{ projectId, label, publish }` through intake, then raises `publish` rows to level 4,
+ * which intake refuses. Each row joins `created` at once; `clean` is set when its scan clears.
+ */
+async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN_POLL_MS }) {
+  const planted = [];
+  for (const row of rows) {
+    const r = await api('/api/intake/uploads', {
+      key: ADMIN, method: 'POST', body: { projectId: row.projectId, fileName: `${term} ${row.label}.txt` }
+    });
+    if (r.status === 503) throw new Error('intake is off here; the probe plants through intake only');
+    if (r.status !== 201) throw new Error(`plant ${row.label}: HTTP ${r.status} ${r.text.slice(0, 200)}`);
+    const id = String(r.json.documentId);
+    const entry = { id, projectId: row.projectId, label: row.label, clean: false };
+    created.push(entry);
+    // A SAS link: no API key, and Azure refuses a PUT without the blob type.
+    const put = await fetch(r.json.uploadUrl, {
+      method: 'PUT',
+      headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/plain' },
+      body: `${term} ${row.label}\n`
+    });
+    if (put.status !== 201) throw new Error(`upload ${row.label}: HTTP ${put.status}`);
+    planted.push({ ...row, id, entry });
+  }
+
+  const deadline = Date.now() + waitMs;
+  let waiting = planted;
+  while (waiting.length > 0) {
+    const still = [];
+    for (const row of waiting) {
+      const r = await api(`/api/intake/uploads/${row.id}`, { key: ADMIN });
+      if (r.status !== 200) throw new Error(`scan status ${row.label}: HTTP ${r.status}`);
+      if (r.json.scanStatus === 'rejected') {
+        throw new Error(`scan rejected ${row.label}: ${r.json.scanRejectReason || 'no reason'}`);
+      }
+      if (r.json.scanStatus === 'clean') row.entry.clean = true;
+      else still.push(row);
+    }
+    waiting = still;
+    if (waiting.length === 0) break;
+    if (Date.now() >= deadline) {
+      throw new Error(`not clean within ${waitMs / 60000} min: ${waiting.map(w => w.label).join(', ')}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+
+  for (const row of planted.filter(p => p.publish)) {
+    const r = await api(`/api/documents/${row.id}/level?project=${encodeURIComponent(row.projectId)}`, {
+      key: ADMIN, method: 'PUT', body: { level: 4, confirm: true, reason: 'ACL probe public control row' }
+    });
+    if (r.status !== 200) throw new Error(`publish ${row.label}: HTTP ${r.status} ${r.text.slice(0, 200)}`);
+  }
+  for (const row of planted) console.log(`planted ${row.label} ${row.id} in ${row.projectId} (public=${row.publish})`);
+  return planted.map(p => p.id);
+}
+
+async function deletePlanted(created) {
+  for (const doc of created) {
+    // DELETE cannot reach an unscanned row; it has an empty read[] and the intake sweep rejects it.
+    if (!doc.clean) {
+      console.log(`  left ${doc.label} ${doc.id}: never cleared its scan, so no caller can read it`);
+      continue;
+    }
+    const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
+      { key: ADMIN, method: 'DELETE' });
+    // Asserted: two planted rows are public, and test search serves eagle-public.
+    cell(`deleted ${doc.label}`, 200, r.status);
+  }
+}
+
 async function main() {
   // A nonsense term, so a fallback that ignores keywords and returns the corpus head is visible as
   // a non-zero count rather than reading as a working search.
@@ -87,12 +160,7 @@ async function main() {
 
   const cleanup = async () => {
     console.log('\ncleanup');
-    for (const doc of created) {
-      const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
-        { key: ADMIN, method: 'DELETE' });
-      // Asserted: two planted rows are public, and test search serves eagle-public.
-      cell(`deleted ${doc.label}`, 200, r.status);
-    }
+    await deletePlanted(created);
     for (const k of keys) {
       const r = await api(`/api/admin/api-keys/${k.id}`, { key: ADMIN, method: 'DELETE' });
       console.log(`  key ${k.id}: HTTP ${r.status}`);
@@ -127,22 +195,12 @@ async function main() {
     const [projectA, projectB] = pool;
     console.log(`projects: A=${projectA} B=${projectB}\nterm: ${term}\n`);
 
-    // No hand-written ACL: resolveDocumentAcl derives read[] as for every upload.
-    const plant = async (projectId, label, isPublished) => {
-      const r = await api('/api/documents', {
-        key: ADMIN, method: 'POST',
-        body: { project: projectId, displayName: `${term} ${label}`, s3Key: `probe/${term}-${label}`, isPublished }
-      });
-      if (r.status !== 201) throw new Error(`plant ${label}: HTTP ${r.status} ${r.text.slice(0, 200)}`);
-      const id = String(r.json._id || r.json.id);
-      created.push({ id, projectId, label });
-      console.log(`planted ${label} ${id} in ${projectId} (isPublished=${r.json.isPublished})`);
-      return id;
-    };
-
-    const hidden = await plant(projectA, 'hidden', false);
-    const control = await plant(projectA, 'control', true);
-    const otherProject = await plant(projectB, 'other', true);
+    // Intake derives read[] at level 1, the hidden row; the two controls are raised to level 4.
+    const [hidden, control, otherProject] = await plant([
+      { projectId: projectA, label: 'hidden', publish: false },
+      { projectId: projectA, label: 'control', publish: true },
+      { projectId: projectB, label: 'other', publish: true }
+    ], { term, created });
 
     const mint = async (label, roles, projectScope) => {
       const r = await api('/api/admin/api-keys', {
@@ -247,4 +305,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { listSees };
+module.exports = { listSees, plant };
