@@ -63,8 +63,12 @@ const needsCreate = row => !row.eagleId || (isMintedNative(row) && !Number.isInt
 
 const isDeleted = row => row.isDeleted === true;
 
-/** A row DEMI owns that Eagle has not deleted; a row Eagle may not hold yet only while the native switch is on, and never deleted. */
-const wants = row => owned(row) && (!needsCreate(row) || (settings.eagle.nativeEnabled && !isDeleted(row)));
+/** A deleted row is never created, but one holding a minted id may have a copy from a create that landed unrecorded. */
+const narrowOnly = row => isDeleted(row) && needsCreate(row) && Boolean(row.eagleId);
+
+/** A row DEMI owns that Eagle has not deleted; one Eagle may not hold yet is created only while the native switch is on, never deleted. */
+const wants = row => owned(row) &&
+  (!needsCreate(row) || narrowOnly(row) || (settings.eagle.nativeEnabled && !isDeleted(row)));
 
 /** The level and feature state Eagle's copy should hold: a deleted row is neither public nor featured. */
 const targetOf = row => ({
@@ -98,7 +102,9 @@ async function claimSend(row, update) {
   return { claim, last };
 }
 
-const noDocument = (row, eagleId = row.eagleId) => new Error(`Eagle has no document ${eagleId} stored on row ${row.id}`);
+const NO_DOCUMENT = 'NO_EAGLE_DOCUMENT';
+const noDocument = (row, eagleId = row.eagleId) =>
+  Object.assign(new Error(`Eagle has no document ${eagleId} stored on row ${row.id}`), { code: NO_DOCUMENT });
 
 const pathOf = eagleId => `/document/${encodeURIComponent(eagleId)}`;
 
@@ -224,7 +230,8 @@ async function create(s, row, update) {
 async function send(row, { update }) {
   if (!owned(row)) return { status: 'skipped' };
   const s = requireSettings({ milestone: false });
-  if (needsCreate(row)) return isDeleted(row) ? { status: 'skipped' } : create(s, row, update);
+  const narrowing = narrowOnly(row);
+  if (needsCreate(row) && !narrowing) return isDeleted(row) ? { status: 'skipped' } : create(s, row, update);
   const eagleId = String(row.eagleId);
   const target = targetOf(row);
   const { published } = target;
@@ -243,6 +250,12 @@ async function send(row, { update }) {
     await moveState(s, eagleId, before, target, logFields);
     await endClaim(update, claim, 'sent', null, sentState(target, claimed.last));
   } catch (err) {
+    if (narrowing && err.code === NO_DOCUMENT) {
+      // Held, not skipped: a skip records the version as sent, and a row restored later would then never be created.
+      logger.info(`[sync-out eagle] deleted document ${row.id}: Eagle holds nothing under ${eagleId}, nothing to narrow`, logFields);
+      await endClaim(update, claim, 'held');
+      return { status: 'held' };
+    }
     logger.error(`[sync-out eagle] document ${row.id} not sent to Eagle ${eagleId}: ${err.message}`,
       { ...logFields, error: err.message });
     await endClaim(update, claim, 'failed').catch(releaseErr => logger.error('[sync-out eagle] claim not released',
