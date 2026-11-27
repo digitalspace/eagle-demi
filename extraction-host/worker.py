@@ -1,46 +1,8 @@
 #!/usr/bin/env python3
-"""
-Phase 1 of the DEMI corpus backfill: document -> markdown, entirely on local disk.
+"""Host extraction run: document -> markdown on local disk; ingest.py posts it later.
 
-This host is a disposable one-off tool, not part of DEMI's architecture. Delete this directory
-when the corpus is done.
-
-WHY THIS WRITES TO DISK INSTEAD OF POSTING
-    Extraction takes days; ingest takes hours. Posting each document as it converted welded the
-    two together, so every API deploy, restart or Typesense resize interrupted the GPU run. Now
-    conversion only ever writes out/<id>.md, and ingest.py replays that directory whenever Azure
-    is ready. Either side can be restarted without costing the other any work.
-
-    The one thing that still needs the API is the download URL: it is presigned with a 300s TTL,
-    so it cannot be fetched ahead of time, and fetching the bytes directly would mean putting
-    object-store credentials on this box. That call retries with backoff, so an API restart costs
-    seconds rather than a document.
-
-ROUTING — the reason this finishes in hours instead of days
-    Every PDF used to go through docling with do_ocr=True, so a digital PDF with a perfectly good
-    text layer was still pushed through RapidOCR. Measured over 403 probed documents, 89% carry a
-    usable text layer and 11% are scans, and the two populations separate cleanly: the text side
-    has a median 2,590 characters per page, the OCR side a median of 0. So each document is ROUTED
-    first:
-
-        route()        cheap pdfium probe: how much text does the file already contain?
-        extract_text() pdfium, CPU only, milliseconds, in a process pool
-        extract_ocr()  docling on CUDA, seconds to minutes, CONVERTERS at a time, page-batched
-
-    The router is deliberately biased toward OCR. Mis-routing a scan to the text path silently
-    drops the document out of a lexical index, which is far worse than spending GPU time on a
-    digital PDF — so it demands BOTH a healthy median AND that most sampled pages carry text, and
-    anything it cannot open or is unsure about goes to OCR. A text-path result that comes back
-    suspiciously empty is re-queued for OCR rather than accepted.
-
-    These three functions are the part worth keeping: moving this pipeline into Azure later is
-    re-hosting them, not rewriting the logic.
-
-RESUMABILITY
-    The work list is snapshotted once to worklist.json. A document is "done" when a .md or .err
-    exists for it in out/, sent/ or dead/ — no network call needed to work out where to resume.
-    All three matter: ingest.py MOVES files to sent/, so checking only out/ silently re-queued
-    everything already delivered. Kill it any time.
+Writing to disk decouples a days-long GPU run from API restarts. The work list is snapshotted to
+worklist.json; a document is done once a .md or .err exists in out/, sent/ or dead/.
 """
 
 import json
@@ -59,8 +21,7 @@ from extract_core import (
     provenance, real_chars, recycle_converter, stop, worklist_rows,
 )
 
-# Required for any real run — a missing key must fail here, not as a puzzling 401 an hour in.
-# --selfcheck touches no network, so it is the one mode that does not need it.
+# A missing key fails here, not as a 401 an hour in; --selfcheck needs no network.
 extract_core.set_key("" if "--selfcheck" in sys.argv else os.environ["DEMI_ADMIN_KEY"])
 BASE = Path(os.environ.get("WORK_DIR", "/root/gpu-extractor"))
 CACHE = BASE / "cache"
@@ -73,29 +34,22 @@ PROGRESS = BASE / "progress.jsonl"
 
 LIMIT = int(os.environ.get("LIMIT", "0")) or None          # 0 = whole corpus
 INFLIGHT = int(os.environ.get("INFLIGHT", "8"))
-# With ~98% of documents on the CPU path, the object store is now the slowest link (161.8 GB of
-# it), not the GPU. More downloaders, not more converters.
+# Most documents take the CPU path, so the object store is the slowest link, not the GPU.
 DOWNLOADERS = int(os.environ.get("DOWNLOADERS", "6"))
 TEXT_WORKERS = int(os.environ.get("TEXT_WORKERS", "6"))
-# Three docling converters OOM-killed this 16 GiB box (15.9 GB peak): docling holds page images
-# for the whole document, so RAM scales with page count, and three large PDFs at once is the worst
-# case. Two, plus the big-document lock below, stays under.
+# Three converters OOM the 16 GiB box: docling RAM follows page count. Two plus the big-document
+# lock stays under.
 CONVERTERS = int(os.environ.get("CONVERTERS", "2"))
-# Documents a pool child handles before it is replaced. Low, because a single large PDF is what
-# grows a child, not the count — and a spawn is cheap next to OCR.
+# Low: one large PDF is what grows a child, and a spawn is cheap next to OCR.
 POOL_RECYCLE = int(os.environ.get("POOL_RECYCLE", "25"))
 # Same idea for the docling converters in THIS process — see recycle_converter().
 OCR_RECYCLE = int(os.environ.get("OCR_RECYCLE", "25"))
-# Only one document this size converts at a time regardless of CONVERTERS. A 24 MB PDF took
-# 167 s and 200k characters on its own; several concurrently is what exhausted memory.
+# Only one document this size converts at a time, whatever CONVERTERS says.
 BIG_DOC_BYTES = int(os.environ.get("BIG_DOC_MB", "8")) * 1024 * 1024
-# 1000 is the API's effective cap (pageOptions clamps maxItemCount). At 100 the work-list
-# build made 606 requests and tripped DEMI's own 300/min rate limiter.
+# 1000 is the API's cap; smaller pages trip DEMI's 300/min rate limiter on the work-list build.
 PAGE_SIZE = int(os.environ.get("PAGE_SIZE", "1000"))
 
-# Consecutive runner faults before the run gives up. A crash that cannot be recovered would
-# otherwise walk the whole work list deferring every document — cheap per document, but it burns
-# the corpus and reports "0 failed" while converting nothing.
+# Consecutive runner faults before the run stops, rather than deferring the whole work list.
 MAX_CONSECUTIVE_DEFERS = int(os.environ.get("MAX_CONSECUTIVE_DEFERS", "25"))
 
 
@@ -184,12 +138,7 @@ def bump(key, n=1):
 
 
 def ensure_pool():
-    """Rebuild the process pool if it has broken.
-
-    A ProcessPoolExecutor never recovers on its own — once a child dies badly, `_broken` is set and
-    every future submit raises for the remaining life of the run. Without this the first crash
-    silently disables the text path for 57,000 documents, which is exactly what happened.
-    """
+    """Rebuild the process pool if it has broken: a broken ProcessPoolExecutor never recovers."""
     global _pool
     with _pool_lock:
         if not getattr(_pool, "_broken", None):
@@ -301,9 +250,7 @@ def pdf_worker():
             # A pool process that dies takes its task with it; the document is not at fault.
             log(f"  pdfium worker died on {doc_id}: {e} — routing to OCR")
             which, md, info = "ocr", None, {}
-            # Rebuild before the next document. Without this the pool stays broken and EVERY
-            # remaining document falls through to the GPU — the run still completes, at OCR speed
-            # for a corpus that is 98% digital PDFs.
+            # Without a rebuild every later document falls through to OCR.
             ensure_pool()
         if info.get("note"):
             log(f"  {doc_id}: {info['note']} — routing to OCR")
@@ -318,8 +265,7 @@ def pdf_worker():
 
         if which == "ocr":
             bump("ocr")
-            # Recorded even though no markdown was produced: this row is how the OCR share gets
-            # attributed to a threshold rather than assumed.
+            # Recorded so the OCR share can be traced to a threshold.
             record(id=doc_id, stage="probe", route="ocr", bytes=path.stat().st_size, **info)
             to_ocr.put((doc, path))
             continue
@@ -353,15 +299,13 @@ def ocr_worker():
                 bump("tiled")
             finish(doc_id, md, path, "ocr", t0, forced=forced, tiled=tiled)
         except Exception as e:                                    # noqa: BLE001
-            # THE 2026-07-30 CASCADE LIVED HERE. `split_pdf` runs in the shared pool, so a broken
-            # pool raised on every subsequent OCR document and this branch recorded each one as a
-            # failed DOCUMENT. Classify first: a runner fault leaves the document alone.
+            # Classify first: a broken pool raises on every later document, and recording each as
+            # failed would drop good documents for good.
             if is_runner_fault(e):
                 log(f"  runner fault on {doc_id}: {e} — deferring, document stays in the work list")
                 defer(doc_id, f"runner fault: {e}", "ocr")
                 ensure_pool()
-                # The converter is rebuilt too: a CUDA context that has faulted poisons every
-                # later conversion in this thread, and the failure would look like bad documents.
+                # A faulted CUDA context poisons every later conversion in this thread.
                 conv = recycle_converter(conv)
             else:
                 log(f"  convert failed {doc_id}: {e}")

@@ -1,6 +1,6 @@
-"""Checks for the runner-fault fix. Every one of these fails if the 2026-07-30 cascade could recur.
+"""Runner-fault, missing-source and tiling checks. Each fails if a fault could drop good documents.
 
-Run: DEMI_ADMIN_KEY=x python3 test_poolfix.py
+Run: DEMI_ADMIN_KEY=x WORK_DIR=<scratch dir> python3 test_poolfix.py
 """
 import os
 import shutil
@@ -80,9 +80,7 @@ def main():
     check("stopped at the threshold", worker.stop.is_set())
     worker.stop.clear()
 
-    # 2026-08-02: 5,445 documents were marked extracted-with-error and dropped out of the work list
-    # because the object store had no file for them. An unfetchable file is a third thing, neither
-    # a bad document nor a broken runner, and these checks pin that down.
+    # An unfetchable file is neither a bad document nor a broken runner; it must stay on the work list.
     print("source missing — an unfetchable file is not a document defect")
     # Own directory per fixture. Sharing one output path is how an earlier harness reported three
     # false failures and several false passes at once.
@@ -176,9 +174,7 @@ def main():
     check("and named in the engine string", "tiles" in tiled_prov["engine"])
     check("a normal conversion is not marked tiled", ocr["options"]["tiled"] is False)
 
-    # 2026-08-02: 2,039 documents converted to nothing but docling's `<!-- image -->` placeholder.
-    # Every length test in ocr_worker read those as a successful conversion, because the
-    # placeholder is 14 characters of markdown.
+    # A placeholder-only conversion is 14 characters, so a length test reads it as converted.
     print("textless detection — a placeholder is not text")
     check("placeholder-only markdown has no real characters",
           worker.real_chars("<!-- image -->") == 0)
@@ -199,9 +195,8 @@ def main():
     try:
         from PIL import Image
 
-        # tile_job is exercised on REAL files, not through a stand-in. It is the half that touches
-        # pdfium, and a fixture standing in for it is exactly how a parent-process render shipped
-        # and failed 552 documents.
+        # tile_job runs on real files: it is the half that touches pdfium, so a stand-in would hide
+        # a render moving into the parent.
         a, b = tmp / "a", tmp / "b"
         a.mkdir(); b.mkdir()
         png = tmp / "sheet.png"
@@ -222,10 +217,8 @@ def main():
         check("a long PDF stops at TILE_MAX_PAGES", len(tiles) == core.TILE_MAX_PAGES * G ** 2)
         check("and reports the truncation instead of hiding it", truncated is True)
 
-        # THE REGRESSION CHECK. Opening the PDF in the parent corrupts pdfium's global state, which
-        # docling's converter threads share: 552 of 623 documents failed with "PDFium: Data format
-        # error" on 2026-08-02 because convert_tiled rendered inline. The fix IS the pool submit,
-        # so that is the thing asserted — not the output, which looked fine either way.
+        # Rendering in the parent corrupts pdfium state docling shares, and the output looks fine
+        # either way, so the pool submit itself is what is asserted.
         submitted = []
 
         class FakePool:
