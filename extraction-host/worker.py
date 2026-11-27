@@ -18,7 +18,7 @@ import extract_core
 from extract_core import (
     API, TILE_GRID, UNSUPPORTED_EXTS, SourceMissing, api_get, build_converter, convert_ocr,
     decide, download, is_low_yield_text, is_runner_fault, log, new_pool, ocr_only, pdfium_job,
-    provenance, real_chars, recycle_converter, stop, worklist_rows,
+    provenance, real_chars, recycle_converter, stop, text_beats_ocr, worklist_rows,
 )
 
 # A missing key fails here, not as a 401 an hour in; --selfcheck needs no network.
@@ -255,19 +255,20 @@ def pdf_worker():
         if info.get("note"):
             log(f"  {doc_id}: {info['note']} — routing to OCR")
 
+        rerouted = None
         if which == "text":
             size = path.stat().st_size
-            if is_low_yield_text(md, size):
+            if is_low_yield_text(md, size, doc["ext"]):
                 log(f"  low yield {doc_id} ({real_chars(md)} real chars from {size // 1024} KB)"
                     " — re-routing to OCR")
                 bump("rerouted")
-                which = "ocr"
+                which, rerouted = "ocr", md
 
         if which == "ocr":
             bump("ocr")
             # Recorded so the OCR share can be traced to a threshold.
             record(id=doc_id, stage="probe", route="ocr", bytes=path.stat().st_size, **info)
-            to_ocr.put((doc, path))
+            to_ocr.put(({**doc, "rerouted_text": rerouted}, path))
             continue
 
         bump("text")
@@ -287,17 +288,22 @@ def ocr_worker():
             conv = recycle_converter(conv)
         doc, path = item
         doc_id = doc["id"]
+        rerouted = doc.get("rerouted_text")
         t0 = time.time()
         big = path.stat().st_size >= BIG_DOC_BYTES
         if big:
             _big_doc.acquire()
         try:
             md, forced, tiled = convert_ocr(conv, path, doc["ext"], _pool, doc_id)
-            if forced:
-                bump("forced")
-            if tiled:
-                bump("tiled")
-            finish(doc_id, md, path, "ocr", t0, forced=forced, tiled=tiled)
+            if text_beats_ocr(rerouted, md):
+                log(f"  OCR found less on {doc_id} ({real_chars(md)} real chars) — keeping the text result")
+                finish(doc_id, rerouted, path, "text", t0)
+            else:
+                if forced:
+                    bump("forced")
+                if tiled:
+                    bump("tiled")
+                finish(doc_id, md, path, "ocr", t0, forced=forced, tiled=tiled)
         except Exception as e:                                    # noqa: BLE001
             # Classify first: a broken pool raises on every later document, and recording each as
             # failed would drop good documents for good.
@@ -307,6 +313,9 @@ def ocr_worker():
                 ensure_pool()
                 # A faulted CUDA context poisons every later conversion in this thread.
                 conv = recycle_converter(conv)
+            elif text_beats_ocr(rerouted, None):
+                log(f"  convert failed {doc_id}: {e} — keeping the text result")
+                finish(doc_id, rerouted, path, "text", t0)
             else:
                 log(f"  convert failed {doc_id}: {e}")
                 fail(doc_id, f"docling failed: {e}", "ocr")

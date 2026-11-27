@@ -181,11 +181,38 @@ def test_refused_post_deletes_the_message(api, monkeypatch):
 
 
 def test_low_yield_text_is_rerouted_to_ocr(api, monkeypatch):
+    """A small scan whose text layer is blank: pypdfium2 returns only the page marker."""
     monkeypatch.setattr(core, "pdf_backend", lambda: PyPdfiumDocumentBackend)
-    monkeypatch.setattr(core, "LOW_YIELD_MIN_BYTES", 0)
     monkeypatch.setattr(core, "convert_ocr", lambda *a, **k: ("Scanned text.", False, False))
-    assert run(Queue(), Pool(("text", "x", {}))) == "ok"
+    assert run(Queue(), Pool(("text", "\f", {}))) == "ok"
     assert api.posts[0]["extraction"]["path"] == "ocr"
+
+
+def ocr_finds_less(*a, **k):
+    return "<!-- image -->", False, False
+
+
+def ocr_raises(*a, **k):
+    raise ValueError("Data format error")
+
+
+@pytest.mark.parametrize("convert_ocr", [ocr_finds_less, ocr_raises])
+def test_rerouted_text_is_kept_when_ocr_does_worse(api, monkeypatch, convert_ocr):
+    text = "Digital text. " * 4
+    monkeypatch.setattr(core, "LOW_YIELD_MIN_BYTES", 0)
+    monkeypatch.setattr(core, "convert_ocr", convert_ocr)
+    assert run(Queue(), Pool(("text", text, {}))) == "ok"
+    assert api.posts[0]["extraction"]["path"] == "text"
+    assert api.posts[0]["markdown"] == text
+
+
+def test_short_txt_is_not_sent_to_ocr(api, monkeypatch):
+    api.row["fileExt"] = "txt"
+    calls = []
+    monkeypatch.setattr(core, "convert_ocr", lambda *a, **k: calls.append(a) or ("OCR.", False, False))
+    assert run(Queue(), Pool(("text", "short", {}))) == "ok"
+    assert api.posts[0]["extraction"]["path"] == "text"
+    assert calls == []
 
 
 def test_pdfium_crash_converts_on_a_new_pool(api, monkeypatch):
