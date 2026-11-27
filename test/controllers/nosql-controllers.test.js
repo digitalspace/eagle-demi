@@ -2033,7 +2033,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   });
 });
 
-// `read` and `isPublished` in a PUT body would skip resolveDocumentAcl and the 409 that stops a
+// `read` and `isPublished` in a PUT body would skip the parent ceiling and the 409 that stops a
 // document being published under a private project.
 test('PUT bodies cannot hand-craft an ACL', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

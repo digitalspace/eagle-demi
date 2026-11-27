@@ -49,7 +49,7 @@ exports.createSealed = async (req, res) => {
     }
 
     const now = new Date().toISOString();
-    // Not resolveDocumentAcl: level 0 is narrower than any parent. In AI Search, `filterFor`
+    // Not capped by the parent: level 0 is narrower than any parent. In AI Search, `filterFor`
     // hides the row by the same exclusion.
     const saved = await documents.upsert({
       id: crypto.randomUUID(),
