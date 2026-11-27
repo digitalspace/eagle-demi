@@ -31,7 +31,7 @@ param intakeUploadOrigins = [
 param deployExtractionJob = bool(readEnvironmentVariable('DEPLOY_EXTRACTION_JOB', 'true'))
 param extractionQueue = 'extract'
 param extractSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-demi-extract-test'
-param extractionJobImage = ''
+param extractionJobImage = 'ghcr.io/digitalspace/eagle-demi/extraction-job@sha256:4624e6c7683087c7c4b79d0e7066354fa12e210523ebbcfc611992b16cf3552f'
 // 25 USD in the CAD billing currency. A new budget cannot start in a past month: a first deploy
 // after December 2026 sets this to its own month.
 param extractionBudgetAmount = 35
