@@ -129,6 +129,18 @@ test('a failed chunk ingest', async (t) => {
     assert.deepStrictEqual(rows[0].Detail, { errorClass: 'bad-request', status: 400, streamed: true });
   });
 
+  await t.test('a JSON ingest with no markdown string writes one failure row', async (t) => {
+    t.mock.method(documents, 'getById', async () => ({ ...DOC }));
+    t.mock.method(documents, 'patchExtraction', async () => ({}));
+
+    const res = await ingest({ body: { markdown: 42 } });
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].Outcome, 'failure');
+    assert.deepStrictEqual(rows[0].Detail, { errorClass: 'bad-request', status: 400, streamed: false });
+  });
+
   await t.test('an ingest refused for repeated failures writes no row', async (t) => {
     t.mock.method(documents, 'getById', async () => ({
       ...DOC, chunkIngestFailures: config.chunkIngestMaxFailures, chunkIngestFailedAt: new Date().toISOString()
