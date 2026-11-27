@@ -39,6 +39,7 @@ const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 const config = require('../../config');
 const syncOut = require('../../sync-out');
+const { enqueueExtraction } = require('../../extraction/enqueue');
 const { DOCUMENT, nextSyncVersion } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
 const {
@@ -955,6 +956,12 @@ function listLookupFrom(doc, labels) {
 
 const indexFieldsMoved = (from, saved) => JSON.stringify(documentIndexRow(from)) !== JSON.stringify(documentIndexRow(saved));
 
+/** Staff lists page in the index, so a new or changed row goes in now; a new file also goes to extraction. */
+async function afterPush(from, saved) {
+  if (!from || indexFieldsMoved(from, saved)) await indexDocumentsNow([saved]);
+  if (!from || from.s3Key !== saved.s3Key) await enqueueExtraction(saved, 'eagle');
+}
+
 /**
  * Receive one raw Eagle document pushed by eagle-api, through the seed's own transform. A delete
  * push narrows the row to level 2 and flags it rather than dropping it.
@@ -1078,9 +1085,7 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    // Staff lists page in the index, so a new or changed row goes in now, not at the indexer's next pass.
-    if (!from || indexFieldsMoved(from, saved)) await indexDocumentsNow([saved]);
-
+    await afterPush(from, saved);
     if (owed) await propagateParentFields(saved);
 
     return res.json({ id: saved.id, action: saved.isDeleted ? 'delete' : 'upsert' });

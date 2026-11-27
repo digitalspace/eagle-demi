@@ -1,7 +1,7 @@
 'use strict';
 
 // Staff lists page in the documents index, so an Eagle push writes its row there itself rather than
-// leaving it to the indexer's next run.
+// leaving it to the indexer's next run. A new file also goes on the extraction queue.
 
 process.env.NODE_ENV = 'test';
 
@@ -15,6 +15,7 @@ const documentController = require('../../../src/controllers/nosql/document');
 const {
   storedEagleProject, eagleDocument, documentReadForWriteFromGet, DOCUMENT_EAGLE_ID, STAFF, mockRes
 } = require('../../helpers/eagle-mirror-fixtures');
+const { setExtractionEnv, fakeQueueAndStore } = require('../../extraction/fakes');
 
 /** One stored document row, read back and written as Cosmos would, plus the index rows sent. */
 function wire(t) {
@@ -48,4 +49,27 @@ test('a delete that changes only isDeleted on a staff-level row still reaches th
 
   assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.read, row.isDeleted])),
     [[[['staff'], false]], [[['staff'], true]]]);
+});
+
+test('a push that creates a document queues it for extraction once', async (t) => {
+  setExtractionEnv(t);
+  wire(t);
+  const { sent } = fakeQueueAndStore(t);
+
+  await push(eagleDocument());
+
+  assert.deepStrictEqual(sent.map(m => [m.documentId, m.projectId, m.reason]), [[DOCUMENT_EAGLE_ID, '207', 'eagle']]);
+});
+
+test('a repeat push with the same file queues nothing more; a new file queues again', async (t) => {
+  setExtractionEnv(t);
+  wire(t);
+  const { sent } = fakeQueueAndStore(t);
+
+  await push(eagleDocument());
+  await push(eagleDocument({ displayName: 'Renamed' }));
+  assert.strictEqual(sent.length, 1, 'an unchanged file waits for the backlog sweep');
+
+  await push(eagleDocument({ internalURL: 'docs/application-v2.pdf' }));
+  assert.strictEqual(sent.length, 2);
 });
