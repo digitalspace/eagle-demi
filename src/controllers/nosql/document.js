@@ -26,7 +26,7 @@ const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { documentIndexRow, indexDocumentsNow } = require('../../search/document-query');
 const { purgeDocument } = require('../../helpers/purge');
-const { admitParent, refusalCode } = require('../../helpers/parent-admit');
+const { admitParent, parentOf, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { eaglePush, ignoreStalePush, pushConflict } = require('./eagle-mirror');
 const { isStalePush } = require('../../domain/eagle-push');
@@ -40,7 +40,7 @@ const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 const config = require('../../config');
 const syncOut = require('../../sync-out');
-const { DOCUMENT } = require('../../sync-out/kinds');
+const { DOCUMENT, nextSyncVersion } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
 const {
   resolveDocumentAcl, upsertGuarded, propagateParentFields, reStampParentFieldDrift, badParentFieldTypes
@@ -863,9 +863,7 @@ exports.updateDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
     const existing = await documents.getById(access, req.params.id, req.query.project);
-    if (!existing) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    if (!existing || existing.isDeleted === true) return res.status(404).json({ error: 'Document not found' });
 
     // The ACL keys and `isDeleted` change only through PUT /documents/:id/published or a push,
     // which enforce the parent. Cosmos keys are dropped so a GET body PUT back is not refused.
@@ -887,18 +885,10 @@ exports.updateDocument = async (req, res) => {
     // A field the caller cannot SEE they cannot set (docs/rbac-architecture.md §2 item 1).
     // `vis` is refused at every level: the dial map is policy, not content.
     const refused = refusedWriteKeys('documents', changes, access, existing);
-    if (refused.length) {
-      return res.status(400).json({
-        error: `Fields not writable by this caller: ${refused.join(', ')}`
-      });
-    }
+    if (refused.length) return res.status(400).json({ error: `Fields not writable by this caller: ${refused.join(', ')}` });
 
     const badTypes = badParentFieldTypes(changes);
-    if (badTypes.length) {
-      return res.status(400).json({
-        error: `Fields must be a List id string or null: ${badTypes.join(', ')}`
-      });
-    }
+    if (badTypes.length) return res.status(400).json({ error: `Fields must be a List id string or null: ${badTypes.join(', ')}` });
 
     if (changes.isFeatured !== undefined && typeof changes.isFeatured !== 'boolean') {
       return res.status(400).json({ error: 'isFeatured must be true or false' });
@@ -915,8 +905,8 @@ exports.updateDocument = async (req, res) => {
     }
 
     // Built per try: after a lost etag race the changes merge onto the revision that won, so the
-    // other writer's values are kept.
-    const buildRow = (current) => current && ({
+    // other writer's values are kept. A row deleted in between ends as `missing`.
+    const buildRow = (current) => current && current.isDeleted !== true && ({
       ...current,
       ...changes,
       id: current.id,
@@ -926,6 +916,7 @@ exports.updateDocument = async (req, res) => {
       // Recomputed from the MERGED name, so a rename moves the sort key with it and a row that
       // predates the key gains one on its next edit.
       displayNameSort: naturalSortKey(changes.displayName ?? current.displayName),
+      ...(ownedOutsideEagle(current) && { syncVersion: nextSyncVersion(current) }),
       updatedAt: new Date().toISOString()
     });
 
@@ -935,14 +926,10 @@ exports.updateDocument = async (req, res) => {
       existing,
       () => documents.getById(access, req.params.id, req.query.project),
       buildRow);
-    if (written.status === 'missing') {
-      // Deleted between the read and the write, so there is no row left to edit.
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    // `missing`: deleted between the read and the write, so there is no row left to edit.
+    if (written.status === 'missing') return res.status(404).json({ error: 'Document not found' });
     if (written.status === 'conflict') {
-      return res.status(409).json({
-        error: 'The document changed while this edit was being applied. Re-read it and retry.'
-      });
+      return res.status(409).json({ error: 'The document changed while this edit was being applied. Re-read it and retry.' });
     }
     // The revision the write actually landed against, which a retry makes a different row from the
     // one read at the top.
@@ -950,16 +937,10 @@ exports.updateDocument = async (req, res) => {
 
     // Field names only — see the same call in project.js for why the values do not go in.
     auditEvent(req, {
-      action: 'document.update',
-      targetType: 'document',
-      targetId: from.id,
-      projectId: from.projectId,
-      detail: {
-        fields: Object.keys(changes),
-        isPublishedFrom: from.isPublished,
-        isPublishedTo: saved.isPublished
-      }
+      action: 'document.update', targetType: 'document', targetId: from.id, projectId: from.projectId,
+      detail: { fields: Object.keys(changes), isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
     });
+    await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
 
     if (owed) await propagateParentFields(saved);
     if (changes.isFeatured !== undefined && changes.isFeatured !== (from.isFeatured === true)) {
@@ -973,6 +954,26 @@ exports.updateDocument = async (req, res) => {
     return serverError(res, err, 'document controller failed');
   }
 };
+
+/**
+ * Carry a document's new ACL to its index entry and its chunks; the 500 text when the chunks were
+ * not all patched. Surfaced, never swallowed: the operator would believe the document restricted.
+ */
+async function applyAcl(id, acl, indexFields) {
+  // Lists read the index, so without this the row stays listed under its old ACL until the next
+  // indexer pass. Best-effort: the Cosmos write has already landed.
+  await aiSearch.writeAcls(aiSearch.indexes().documents, [{ id, read: acl, ...indexFields }]);
+  // Chunks hold an ACL snapshot nothing else refreshes; patching also advances `_ts` for the indexer.
+  try {
+    const chunkAcl = await chunks.setAclForDocument(systemAccess(), id, acl);
+    if (!(chunkAcl.failed > 0)) return null;
+    logger.error('[Document Controller] chunk ACL patch partially failed', { documentId: id, ...chunkAcl });
+    return 'Document visibility changed, but its extracted text was not fully updated.';
+  } catch (aclErr) {
+    logger.error('[Document Controller] chunk ACL patch failed', { documentId: id, error: aclErr.message, stack: aclErr.stack });
+    return 'Document visibility changed, but its extracted text was not updated.';
+  }
+}
 
 // [status, error] when this caller may not pull a document back from level 4. Staff may, with their
 // own reason; the alias writes one for them, so through it the move stays sysadmin-only.
@@ -995,21 +996,19 @@ exports.setLevel = async (req, res) => {
     const { level, confirm, reason } = req.body || {};
 
     if (!Number.isInteger(level) || level < 1 || level > 4) {
-      return res.status(400).json({
-        error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.'
-      });
+      return res.status(400).json({ error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.' });
     }
     if (level === 4 && confirm !== true) return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
     if (level === 4 && !String(reason || '').trim()) return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
 
     const existing = await documents.getById(access, req.params.id, req.query.project);
-    if (!existing) return res.status(404).json({ error: 'Document not found' });
+    if (!existing || existing.isDeleted === true) return res.status(404).json({ error: 'Document not found' });
 
     const from = levelOfRead(existing.read);
-    const parentProject = await projects.getById(access, existing.projectId);
+    const parent = await parentOf(access, existing.projectId);
     // A document still cannot out-rank its parent, and an unreadable parent fails closed. Only a
     // widen is checked: an unreachable project must never block hiding a document.
-    if (level > from && level > (parentProject ? levelOfRead(parentProject.read) : 1)) {
+    if (level > from && level > (parent ? levelOfRead(parent.read) : 1)) {
       return res.status(409).json({ error: 'Cannot raise a document above the level of its project.' });
     }
 
@@ -1018,10 +1017,11 @@ exports.setLevel = async (req, res) => {
     const refusal = takedown ? takedownRefusal(req, access, reason) : null;
     if (refusal) return res.status(refusal[0]).json({ error: refusal[1] });
 
-    const published = level === 4;
     // DEMI does not keep Eagle's level for a document once it holds one, so only level 4 clears it.
-    const updated = await documents.setPublished(existing.id, existing.projectId, level,
-      { levelHeldAt: documents.levelHoldAfter(existing, level, null) });
+    const updated = await documents.setPublished(existing.id, existing.projectId, level, {
+      levelHeldAt: documents.levelHoldAfter(existing, level, null), raiseVersion: ownedOutsideEagle(existing), liveOnly: true
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
 
     // Before the chunk patch: the change is already applied by here, and the patch can return
     // 500.
@@ -1038,41 +1038,11 @@ exports.setLevel = async (req, res) => {
         reason: reason || ''
       }
     });
+    await syncOut.enqueueQuietly(updated, { kind: DOCUMENT });
 
-    const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
-      ? updated.read
-      : readForLevel(level);
-
-    // Document lists read the index, so without this the row stays listed under its old ACL until
-    // the next indexer pass. Best-effort: the Cosmos write has already landed.
-    await aiSearch.writeAcls(aiSearch.indexes().documents, [
-      { id: existing.id, read: acl, isPublished: published }
-    ]);
-
-    // Chunks hold an ACL snapshot nothing else refreshes; patching also advances `_ts` for the
-    // indexer. After the document patch, since the search gate covers over-permissive chunks.
-    try {
-      const chunkAcl = await chunks.setAclForDocument(systemAccess(), existing.id, acl);
-      if (chunkAcl.failed > 0) {
-        logger.error('[Document Controller] chunk ACL patch partially failed', {
-          documentId: existing.id, ...chunkAcl
-        });
-        return res.status(500).json({
-          success: false,
-          error: 'Document visibility changed, but its extracted text was not fully updated.'
-        });
-      }
-    } catch (aclErr) {
-      // Surfaced, never swallowed: a half-applied ACL is worse than a failed one, because the
-      // operator believes the document is restricted.
-      logger.error('[Document Controller] chunk ACL patch failed', {
-        documentId: existing.id, error: aclErr.message, stack: aclErr.stack
-      });
-      return res.status(500).json({
-        success: false,
-        error: 'Document visibility changed, but its extracted text was not updated.'
-      });
-    }
+    const acl = updated.read?.length ? updated.read : readForLevel(level);
+    const aclFailure = await applyAcl(existing.id, acl, { isPublished: level === 4 });
+    if (aclFailure) return res.status(500).json({ success: false, error: aclFailure });
 
     return res.json(redactForAccess('documents', updated, access));
   } catch (err) {
@@ -1307,13 +1277,18 @@ function ignoreSealedPush(req, res, current, pushedAt) {
   return res.json({ ok: true });
 }
 
+/**
+ * A user delete flags the row and narrows it to staff; the row, chunks and file stay, and sync-out
+ * narrows Eagle's copy. `?purge=true` is the sysadmin incident door (docs/takedown-runbook.md).
+ */
 exports.deleteDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
+    const purge = req.query.purge === 'true';
+    if (purge && !access.roles.includes('sysadmin')) return res.status(403).json({ error: 'Only sysadmin may purge a document.' });
     const existing = await documents.getById(access, req.params.id, req.query.project);
-    if (!existing) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    if (!existing || (!purge && existing.isDeleted === true)) return res.status(404).json({ error: 'Document not found' });
+    if (!purge) return await flagDeleted(req, res, existing, access);
 
     // Chunks and both index entries go with the row — nothing sweeps them later.
     const {
@@ -1322,45 +1297,28 @@ exports.deleteDocument = async (req, res) => {
     if (rowKept) {
       // Audited even though the row stays: some index entries may already be gone.
       auditEvent(req, {
-        action: 'document.delete',
-        outcome: 'failure',
-        targetType: 'document',
-        targetId: existing.id,
-        projectId: existing.projectId,
+        action: 'document.delete', outcome: 'failure', targetType: 'document', targetId: existing.id, projectId: existing.projectId,
         detail: { displayName: existing.displayName, removedChunks, removedFromSearch, removedChunksFromSearch, rowKept }
       });
       // The row stays as the handle a retried DELETE needs to find the chunks left behind.
       res.setHeader('Retry-After', '30');
       return res.status(503).json({
         error: 'Document not deleted: its search entries or chunks could not all be removed. Retry the delete.',
-        removedChunks,
-        removedFromSearch,
-        removedChunksFromSearch
+        removedChunks, removedFromSearch, removedChunksFromSearch
       });
     }
 
     // After the cleanup, so the row records what actually happened. The stored file is never
     // deleted by a request, and the row says so.
     auditEvent(req, {
-      action: 'document.delete',
-      targetType: 'document',
-      targetId: existing.id,
-      projectId: existing.projectId,
-      detail: {
-        displayName: existing.displayName,
-        removedChunks,
-        removedFromSearch,
-        removedChunksFromSearch,
-        storedFileRetained
-      }
+      action: 'document.delete', targetType: 'document', targetId: existing.id, projectId: existing.projectId,
+      detail: { displayName: existing.displayName, removedChunks, removedFromSearch, removedChunksFromSearch, storedFileRetained }
     });
 
     return res.json({
       message: 'Document deleted successfully',
       deleted: redactForAccess('documents', existing, access),
-      removedChunks,
-      removedChunksFromSearch,
-      removedFromSearch,
+      removedChunks, removedChunksFromSearch, removedFromSearch,
       // Stated in the response so it is obvious the file survives the record.
       storedFileRetained
     });
@@ -1368,6 +1326,34 @@ exports.deleteDocument = async (req, res) => {
     return serverError(res, err, 'document controller failed');
   }
 };
+
+/** The flag half of DELETE: Eagle-held rows answer 409, since eagle-api owns their delete. */
+async function flagDeleted(req, res, existing, access) {
+  if (!ownedOutsideEagle(existing)) {
+    return res.status(409).json({ error: `Document ${existing.id} is held in Eagle; delete it through eagle-api.` });
+  }
+  const written = await upsertGuarded(existing, () => documents.getById(access, existing.id, existing.projectId), (current) => {
+    if (!current || current.isDeleted === true) return null;
+    const now = new Date().toISOString();
+    const read = documents.constrainToProject(current.read, documents.DELETED_CEILING);
+    return {
+      ...current, isDeleted: true, read, ownRead: read, isPublished: read.includes('public'),
+      levelHeldAt: documents.levelHoldAfter(current, levelOfRead(read), null) ?? current.levelHeldAt,
+      deletedAt: now, deletedBy: req.user?.preferred_username || '', syncVersion: nextSyncVersion(current), updatedAt: now
+    };
+  });
+  if (written.status === 'missing') return res.status(404).json({ error: 'Document not found' });
+  if (written.status === 'conflict') return res.status(409).json({ error: 'The document changed while it was being deleted. Retry the delete.' });
+  const { saved } = written;
+  auditEvent(req, {
+    action: 'document.delete', targetType: 'document', targetId: saved.id, projectId: saved.projectId,
+    detail: { displayName: saved.displayName, flagged: true }
+  });
+  const aclFailure = await applyAcl(saved.id, saved.read, { isPublished: saved.isPublished, isDeleted: true });
+  await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
+  if (aclFailure) return res.status(500).json({ success: false, error: aclFailure });
+  return res.json({ message: 'Document deleted', deleted: redactForAccess('documents', saved, access) });
+}
 
 /** Chunks per bulk call on the streaming path; bounds peak memory to about half a megabyte. */
 const STREAM_BATCH_CHUNKS = 200;

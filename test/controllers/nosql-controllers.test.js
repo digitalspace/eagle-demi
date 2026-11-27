@@ -51,6 +51,7 @@ function eachPatchFits() {
 // `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
 const STAFF_USER = { realm_access: { roles: ['staff'] } };
+const PURGE = { params: { id: 'd1' }, query: { purge: 'true' }, user: ADMIN_USER };
 
 
 test('nosql project controller', async (t) => {
@@ -907,25 +908,24 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
       resolveDocumentAcl({ isPublished: true }), { read: ['team'], published: false });
   });
 
-  await t.test('delete removes the record but NEVER the stored file', async () => {
+  await t.test('a sysadmin purge removes the record but NEVER the stored file', async () => {
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
     t.mock.method(documents, 'getById', async () => ({
       id: 'd1', projectId: '207', s3Key: 'etl/thing.pdf'
     }));
-    let deleted = false;
-    t.mock.method(documents, 'deleteById', async () => { deleted = true; return true; });
+    const deleteById = t.mock.method(documents, 'deleteById', async () => true);
 
     const res = mockRes();
-    await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+    await documentController.deleteDocument(PURGE, res);
 
-    assert.ok(deleted, 'the record is genuinely removed, not just flagged');
+    assert.strictEqual(deleteById.mock.callCount(), 1, 'the purge removes the record, it does not flag it');
     assert.strictEqual(res.body.storedFileRetained, true,
       'no request path may destroy a source document — orphans are reaped by an audited job');
     assert.strictEqual(res.body.removedFromSearch, 1);
   });
 
-  await t.test('delete clears the index before Cosmos, and the row goes last', async () => {
+  await t.test('a purge clears the index before Cosmos, and the row goes last', async () => {
     // A request that dies part way must leave the row, so a retried DELETE finds the chunks again.
     const order = [];
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => { order.push('chunk index'); return 2; });
@@ -937,13 +937,13 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     t.mock.method(documents, 'deleteById', async () => { order.push('row'); return true; });
 
     const res = mockRes();
-    await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+    await documentController.deleteDocument(PURGE, res);
 
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(order, ['chunk index', 'document index', 'chunks', 'row']);
   });
 
-  await t.test('with search unconfigured, a failed index removal does not fail the delete', async () => {
+  await t.test('with search unconfigured, a failed index removal does not fail the purge', async () => {
     // Pins the path with search unconfigured: nothing is indexed, so the row goes and the
     // response reports 0. Configured: test/controllers/nosql/document-delete-kept.test.js.
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
@@ -952,7 +952,7 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     t.mock.method(documents, 'deleteById', async () => true);
 
     const res = mockRes();
-    await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+    await documentController.deleteDocument(PURGE, res);
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.removedFromSearch, 0);
   });

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * DELETE /documents/:id when the purge keeps the row: a retryable 503, the row untouched, and a
+ * DELETE /documents/:id?purge=true when the purge keeps the row: a retryable 503, the row untouched, and a
  * failure audit row, because some search-index entries may already be gone by then.
  */
 
@@ -23,6 +23,8 @@ const documentController = require('../../../src/controllers/nosql/document');
 const { logger } = require('../../../src/utils/logger');
 const { mockRes } = require('../../helpers/mock-res');
 
+const PURGE = { params: { id: 'd1' }, query: { purge: 'true' }, user: { realm_access: { roles: ['sysadmin'] } } };
+
 let rows = [];
 audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
 
@@ -37,7 +39,7 @@ test('with search configured, a failed index removal keeps the row and answers 5
   t.mock.method(logger, 'error', () => {});
 
   const res = mockRes();
-  await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+  await documentController.deleteDocument(PURGE, res);
 
   assert.strictEqual(res.statusCode, 503);
   assert.strictEqual(deleteById.mock.callCount(), 0,
@@ -60,7 +62,7 @@ test('a delete whose chunks are not all removed', async (t) => {
     t.mock.method(logger, 'error', () => {});
 
     const res = mockRes();
-    await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+    await documentController.deleteDocument(PURGE, res);
     await audit.flush();
 
     assert.strictEqual(res.statusCode, 503);

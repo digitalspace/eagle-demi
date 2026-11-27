@@ -289,7 +289,7 @@ fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
 (`applicableRegulation`, `featuredDocuments`).
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch.
-A surplus document is deleted through the helper `DELETE /documents/:id` uses, so its chunks and
+A surplus document is deleted through the helper `DELETE /documents/:id?purge=true` uses, so its chunks and
 search-index entries go with it. A surplus project is never removed, since one missing from the
 public feed may only be unpublished.
 

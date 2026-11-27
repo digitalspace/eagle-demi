@@ -322,7 +322,7 @@ test('access gate coverage', async (t) => {
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is deleted and replaced by a wider one.
     // Non-literal statuses (resolveDownload, headDownload) are outside the scan; pinned below.
-    assert.strictEqual(emissions.length, 49,
+    assert.strictEqual(emissions.length, 55,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
