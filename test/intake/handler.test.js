@@ -9,10 +9,14 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 
 const { applyScanResult } = require('../../src/intake/handler');
 const aiSearch = require('../../src/search/ai-search');
+const audit = require('../../src/utils/audit');
 const documents = require('../../src/repositories/documents');
+const extraction = require('../../src/extraction/enqueue');
+const syncOut = require('../../src/sync-out');
 const { readForLevel, systemAccess } = require('../../src/helpers/access-sql');
 const { setIntakeEnv, fakeStore, fakeAccount, fakeNrs, recordLogs } = require('./fakes');
 
@@ -52,6 +56,12 @@ function setup(t, row = pendingRow(), projects = fakeProjects()) {
 /** Apply `result` to the row as the store holds it now. */
 const apply = (result, deps) => applyScanResult({ ...deps.store.rows.get(DOC) }, scan(result), deps);
 
+/** Apply `result` to the row as the pending listing returns it: no source or publish columns. */
+function applyListed(result, deps) {
+  const { id, projectId, createdAt, requestedRead, s3Key, fileExt } = deps.store.rows.get(DOC);
+  return applyScanResult({ id, projectId, createdAt, requestedRead, s3Key, fileExt }, scan(result), deps);
+}
+
 const scannedLines = logs => logs.info.filter(l => l.message === 'intake scanned');
 
 test('No threats found: the file goes to the object store under <project>/<hex>.<ext>', async (t) => {
@@ -84,25 +94,143 @@ test('No threats found puts the stored row, not the pending listing, in the docu
   t.mock.method(documents, 'readForWrite', async id => ({ ...deps.store.rows.get(id) }));
   t.mock.method(aiSearch, 'config', () => ({ configured: true }));
   const sent = t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length);
-  const { id, projectId, createdAt, requestedRead, s3Key, fileExt } = deps.store.rows.get(DOC);
 
-  await applyScanResult({ id, projectId, createdAt, requestedRead, s3Key, fileExt }, scan('No threats found'), deps);
+  await applyListed('No threats found', deps);
 
   assert.deepStrictEqual(sent.mock.calls.map(c => c.arguments[1].map(row => [row.id, row.displayName, row.read])),
     [[[DOC, 'Survey', readForLevel(3)]]]);
 });
 
-test('No threats found publishes a public request under a public project', async (t) => {
+test('No threats found never publishes on a requested read list alone', async (t) => {
   const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(4) }));
 
   await apply('No threats found', deps);
 
   const row = store.rows.get(DOC);
   assert.strictEqual(row.scanStatus, 'clean');
-  assert.deepStrictEqual(row.read, readForLevel(4));
-  assert.ok(row.read.includes('public'));
-  assert.strictEqual(row.isPublished, true);
+  assert.deepStrictEqual(row.read, readForLevel(3));
+  assert.strictEqual(row.isPublished, false);
 });
+
+/** Stand-in for the repository publish: the store row takes level 4's read list. */
+function fakeSetPublished(t, store) {
+  return t.mock.method(documents, 'setPublished', async (id, _projectId, level) => {
+    Object.assign(store.rows.get(id), { read: readForLevel(level), isPublished: level === 4 });
+    return store.rows.get(id);
+  });
+}
+
+test('No threats found sends the re-read clean row, after settle, to sync-out and extraction', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), documentSource: 'PROJECT' }));
+  const seen = [];
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, opts) => {
+    seen.push(['sync-out', row, opts, store.rows.get(DOC).scanStatus]);
+    return [];
+  });
+  t.mock.method(extraction, 'enqueueExtraction', async (row, reason) => {
+    seen.push(['extraction', row, reason, store.rows.get(DOC).scanStatus]);
+    return true;
+  });
+
+  await applyListed('No threats found', deps);
+
+  assert.deepStrictEqual(seen.map(([step, row, arg, stored]) => [step, row.documentSource, row.scanStatus, arg, stored]), [
+    ['sync-out', 'PROJECT', 'clean', { kind: 'document' }, 'clean'],
+    ['extraction', 'PROJECT', 'clean', 'intake', 'clean']
+  ]);
+});
+
+test('an enqueue that throws after release leaves the row clean', async (t) => {
+  const { store, deps } = setup(t);
+  t.mock.method(syncOut, 'enqueueQuietly', async () => { throw new Error('queue down'); });
+  t.mock.method(extraction, 'enqueueExtraction', async () => { throw new Error('queue down'); });
+
+  const outcome = await apply('No threats found', deps);
+
+  assert.strictEqual(outcome, 'clean');
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'clean');
+});
+
+test('No threats found stores the file size, content type and SHA-256 of the copied bytes', async (t) => {
+  const { store, deps } = setup(t);
+
+  await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.fileSize, BYTES.length);
+  assert.strictEqual(row.mimeType, 'application/pdf');
+  assert.strictEqual(row.uploadSha256, crypto.createHash('sha256').update(BYTES).digest('hex'));
+});
+
+test('publishOnRelease on a public project ends at level 4 with one system audit row naming the requester', async (t) => {
+  const { store, deps } = setup(t, pendingRow({
+    requestedRead: readForLevel(3), publishOnRelease: true, publishRequestedBy: 'staff-1'
+  }));
+  const publishes = fakeSetPublished(t, store);
+  const audits = t.mock.method(audit, 'auditEvent', () => {});
+
+  await applyListed('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.scanStatus, 'clean');
+  assert.deepStrictEqual(row.read, readForLevel(4));
+  assert.strictEqual(publishes.mock.callCount(), 1);
+  assert.deepStrictEqual(audits.mock.calls.map(c => [c.arguments[0], c.arguments[1].action,
+    c.arguments[1].targetId, c.arguments[1].detail.requestedBy, c.arguments[1].detail.reason]),
+  [[null, 'record.widen', DOC, 'staff-1', 'publish on upload']]);
+});
+
+test('publishOnRelease on a staff-only project stays at the capped level and says why', async (t) => {
+  const staffOnly = fakeProjects({ 'proj-1': { id: 'proj-1', read: readForLevel(3) } });
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), publishOnRelease: true }), staffOnly);
+  const publishes = fakeSetPublished(t, store);
+
+  await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.deepStrictEqual(row.read, readForLevel(3));
+  assert.strictEqual(row.isPublished, false);
+  assert.strictEqual(row.publishRefused, 'project-not-public');
+  assert.strictEqual(publishes.mock.callCount(), 0);
+});
+
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
+
+/** An Update image upload whose bytes are PNG, named with `fileExt`; `blob` overrides the stored blob. */
+function setupImage(t, fileExt, blob = {}) {
+  const ctx = setup(t, pendingRow({ documentSource: 'UPDATE', fileExt }));
+  ctx.account.containers.incoming.set(DOC, { bytes: PNG, etag: ETAG, contentType: 'image/png', ...blob });
+  return ctx;
+}
+
+test('an Update image with PNG bytes and a .png name releases from a listed row without its source', async (t) => {
+  const { store, nrs, deps } = setupImage(t, 'png');
+
+  await applyListed('No threats found', deps);
+
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'clean');
+  assert.strictEqual(nrs.objects.size, 1);
+});
+
+const NOT_AN_IMAGE = [
+  ['PNG bytes but a .jpg name', 'jpg', {}],
+  ['PNG bytes over 10 MB', 'png', { size: 10 * 1024 * 1024 + 1 }],
+  ['PNG bytes stored as image/jpeg', 'png', { contentType: 'image/jpeg' }]
+];
+
+for (const [label, fileExt, blob] of NOT_AN_IMAGE) {
+  test(`an Update image with ${label} is rejected not-an-image`, async (t) => {
+    const { store, nrs, account, deps } = setupImage(t, fileExt, blob);
+
+    await applyListed('No threats found', deps);
+
+    const row = store.rows.get(DOC);
+    assert.strictEqual(row.scanStatus, 'rejected');
+    assert.strictEqual(row.scanRejectReason, 'not-an-image');
+    assert.strictEqual(nrs.objects.size, 0);
+    assert.ok(account.containers.quarantine.has(DOC));
+  });
+}
 
 test('No threats found caps the requested read list at the project as it is now', async (t) => {
   // Linked at staff while the project was staff; the project narrowed to team before the scan.

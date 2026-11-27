@@ -67,7 +67,7 @@ function fakeStore(rows) {
 }
 
 /**
- * The intake account: `incoming` seeded with `{ id: { bytes, etag, contentType, lastModified, tags } }`.
+ * The intake account: `incoming` seeded with `{ id: { bytes, size?, etag, contentType, lastModified, tags } }`.
  * Set `denyTags` to a set of ids, or true for all, to answer their tag reads with 403.
  */
 function fakeAccount(incoming = {}) {
@@ -77,7 +77,7 @@ function fakeAccount(incoming = {}) {
     async statObject(key) {
       const blob = containers.incoming.get(key);
       return blob ? {
-        size: blob.bytes.length, etag: blob.etag, contentType: blob.contentType || null,
+        size: blob.size ?? blob.bytes.length, etag: blob.etag, contentType: blob.contentType || null,
         lastModified: blob.lastModified || null
       } : null;
     },
@@ -91,6 +91,9 @@ function fakeAccount(incoming = {}) {
       return blob ? { ...blob.tags } : null;
     },
     async getObjectStream(key) { return Readable.from([containers.incoming.get(key).bytes]); },
+    async getRangeStream(key, offset, length) {
+      return Readable.from([containers.incoming.get(key).bytes.subarray(offset, offset + length)]);
+    },
     async copyObject(src, dest, { destContainer } = {}) {
       containers[destContainer || 'incoming'].set(dest, containers.incoming.get(src));
       return {};

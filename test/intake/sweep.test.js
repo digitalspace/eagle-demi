@@ -208,6 +208,19 @@ test('missing blob past link + 5 min is rejected no-upload in the result pass', 
   assert.strictEqual(logs.info.find(l => l.message === 'intake sweep').meta.stale, 0);
 });
 
+test('an untagged blob over 2 GiB is quarantined and rejected too-large on the first pass', async (t) => {
+  const { store, account, logs, deps } = setup(t, [recent('a')], { a: { ...BLOB, size: 2147483649 } });
+
+  await sweep(deps, NOW);
+
+  const settled = store.rows.get('a');
+  assert.strictEqual(settled.scanStatus, 'rejected');
+  assert.strictEqual(settled.scanRejectReason, 'too-large');
+  assert.strictEqual(settled.scannedAt, null);
+  assert.ok(account.containers.quarantine.has('a'));
+  assert.strictEqual(results(logs).rejected, 1);
+});
+
 test('"No threats found" releases', async (t) => {
   const blob = tagged('No threats found');
   const { store, account, nrs, deps } = setup(t, [recent('a')], { a: blob });
