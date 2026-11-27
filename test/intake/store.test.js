@@ -92,3 +92,22 @@ test('listStalePending asks for pending rows created before the cutoff', async (
   assert.deepStrictEqual(params, { '@pending': 'pending', '@cutoff': '2026-10-14T12:00:00.000Z' });
   assert.match(spec.query, /c\.scanStatus = @pending AND c\.createdAt < @cutoff/);
 });
+
+test('listForProject reads one partition for the given statuses since the given time, newest first', async (t) => {
+  let call;
+  t.mock.method(cosmos, 'query', async (...args) => { call = args; return { items: [ROW] }; });
+
+  const rows = await store.listForProject('proj-1', ['pending', 'rejected'], '2026-10-28T00:00:00.000Z');
+
+  assert.deepStrictEqual(rows, [ROW]);
+  const [container, spec, options] = call;
+  assert.strictEqual(container, 'documents');
+  assert.deepStrictEqual(options, { partitionKey: 'proj-1' });
+  const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+  assert.deepStrictEqual(params, {
+    '@projectId': 'proj-1', '@statuses': ['pending', 'rejected'], '@since': '2026-10-28T00:00:00.000Z'
+  });
+  assert.match(spec.query,
+    /WHERE c\.projectId = @projectId AND ARRAY_CONTAINS\(@statuses, c\.scanStatus\) AND c\.createdAt >= @since/);
+  assert.match(spec.query, /ORDER BY c\.createdAt DESC$/);
+});
