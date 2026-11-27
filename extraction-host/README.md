@@ -19,7 +19,7 @@ The header is `X-Api-Key`. The API chunks the markdown and copies `read[]` from 
 | `ingest.py` | The host's second phase: posts the finished markdown from `out/` to the API |
 | `job.py` | One job execution: one message off the `extract` queue, one document, posted directly |
 | `Dockerfile`, `requirements-job.txt` | The CPU job image. Models are fetched at build time. |
-| `test_poolfix.py`, `test_job.py` | Regression checks for the process pool and for the job's message outcomes |
+| `test_poolfix.py`, `test_job.py`, `test_ingest.py` | Regression checks for the process pool, the job's message outcomes and ingest's retry limit |
 | `parity_check.py`, `fixtures/` | Converts a digital PDF, a scan and a `.docx` through the host's threads and through the job and compares the markdown byte for byte |
 | `systemd/` | The three host units as deployed: `gpu-extractor`, `gpu-ingest`, `doc-ocr-service` |
 
@@ -71,7 +71,7 @@ Page batches are converted separately, and their page lists concatenate in order
 ```bash
 python3 worker.py --selfcheck                          # prints "selfcheck ok"; no network, GPU or docling
 DEMI_ADMIN_KEY=x WORK_DIR=<scratch dir> python3 test_poolfix.py
-pytest extraction-host/                                # test_job.py, API and queue faked
+pytest extraction-host/                                # test_job.py and test_ingest.py, API and queue faked
 OCR_DEVICE=cpu python3 parity_check.py                 # needs docling; prints "parity ok"
 ```
 

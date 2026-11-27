@@ -23,7 +23,7 @@ POISON_AT = 3
 
 def convert(path, ext, pool, converter, doc_id):
     """Route and convert like the host: (markdown, route, forced, tiled). A runner fault raises."""
-    which, md = "ocr", None
+    which, md, rerouted = "ocr", None, None
     if not core.ocr_only(ext):
         try:
             which, md, info = pool.submit(core.pdfium_job, str(path), ext).result()
@@ -35,12 +35,22 @@ def convert(path, ext, pool, converter, doc_id):
             return md, "ocr", forced, tiled
         if info.get("note"):
             log.info("%s: %s, routing to OCR", doc_id, info["note"])
-        if which == "text" and core.is_low_yield_text(md, path.stat().st_size):
+        if which == "text" and core.is_low_yield_text(md, path.stat().st_size, ext):
             log.info("low yield %s, re-routing to OCR", doc_id)
-            which = "ocr"
+            which, rerouted = "ocr", md
     if which == "text":
         return md, "text", False, False
-    md, forced, tiled = core.convert_ocr(converter(), path, ext, pool, doc_id)
+    conv = converter()
+    try:
+        md, forced, tiled = core.convert_ocr(conv, path, ext, pool, doc_id)
+    except Exception as e:                                        # noqa: BLE001
+        if core.is_runner_fault(e) or not core.text_beats_ocr(rerouted, None):
+            raise
+        log.warning("OCR failed on %s after a re-route, keeping the text result: %s", doc_id, e)
+        return rerouted, "text", False, False
+    if core.text_beats_ocr(rerouted, md):
+        log.info("OCR found less on %s, keeping the text result", doc_id)
+        return rerouted, "text", False, False
     return md, "ocr", forced, tiled
 
 

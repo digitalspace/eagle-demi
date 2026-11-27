@@ -70,7 +70,7 @@ jobs:
 
       # API, queue and pool are faked, so docling is not installed here.
       - name: Run extraction job tests
-        run: python3 -m pytest extraction-host/test_job.py
+        run: python3 -m pytest extraction-host/test_job.py extraction-host/test_ingest.py
 
   test-frontend:
     name: Test & Build Frontend

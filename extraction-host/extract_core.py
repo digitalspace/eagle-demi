@@ -286,9 +286,17 @@ def extract_text(path, ext):
         doc.close()
 
 
-def is_low_yield_text(md, size):
-    """The probe said text but a substantial file came back near-empty: the probe was wrong."""
-    return real_chars(md) < LOW_YIELD_CHARS and size > LOW_YIELD_MIN_BYTES
+def is_low_yield_text(md, size, ext):
+    """The probe said text but the result is near-empty: the probe was wrong, so OCR it."""
+    real = real_chars(md)
+    # A whitespace-only text layer passes the probe at any size; a .txt is its own content.
+    return ((ext == "pdf" and real < TEXTLESS_CHARS)
+            or (real < LOW_YIELD_CHARS and size > LOW_YIELD_MIN_BYTES))
+
+
+def text_beats_ocr(text_md, ocr_md):
+    """Keep a re-routed text result when OCR found fewer real characters; ocr_md None = OCR raised."""
+    return text_md is not None and real_chars(text_md) > real_chars(ocr_md or "")
 
 
 def build_converter(force_ocr=False):

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Host extraction run: document -> markdown on local disk; ingest.py posts it later.
 
-Writing to disk decouples a days-long GPU run from API restarts. The work list is snapshotted to
-worklist.json; a document is done once a .md or .err exists in out/, sent/ or dead/.
+Disk decouples a days-long GPU run from API restarts. A .md or .err in out/, sent/ or dead/ = done.
 """
 
 import json
@@ -18,7 +17,7 @@ import extract_core
 from extract_core import (
     API, TILE_GRID, UNSUPPORTED_EXTS, SourceMissing, api_get, build_converter, convert_ocr,
     decide, download, is_low_yield_text, is_runner_fault, log, new_pool, ocr_only, pdfium_job,
-    provenance, real_chars, recycle_converter, stop, worklist_rows,
+    provenance, real_chars, recycle_converter, stop, text_beats_ocr, worklist_rows,
 )
 
 # A missing key fails here, not as a 401 an hour in; --selfcheck needs no network.
@@ -66,8 +65,7 @@ def record(**row):
 def build_worklist():
     """Snapshot every unextracted document once, then work purely from disk.
 
-    Paged with the continuation token rather than re-reading page 1: nothing flips
-    contentExtracted during phase 1 any more, so the result set is stable while we walk it.
+    Paged by continuation token: nothing flips contentExtracted during phase 1, so the set is stable.
     """
     if WORKLIST.exists():
         docs = json.loads(WORKLIST.read_text())
@@ -105,10 +103,7 @@ def build_worklist():
 def already_done(doc_id):
     """Has this document already been converted, anywhere in the pipeline?
 
-    ingest.py MOVES a file out of out/ into sent/ once Azure has it, so checking only out/ made
-    every ingested document look unconverted: 4,635 conversions for 1,732 documents, 1,064 of them
-    posted twice, and a run that could never finish because the work kept coming back. Conversion
-    is the expensive half, so this check has to see the whole pipeline, not just the inbox.
+    ingest.py moves a posted file out of out/, so checking out/ alone would convert it again.
     """
     return any((d / f"{doc_id}{ext}").exists()
                for d in (OUT, SENT, DEAD)
@@ -170,37 +165,23 @@ def finish(doc_id, md, path, route_name, t0, forced=False, info=None, tiled=Fals
 
 
 def fail(doc_id, reason, route_name=None):
-    """The DOCUMENT is at fault — docling read it and could not convert it. Writing a .err is what
-    makes that permanent: ingest.py posts it, the API marks the document extracted-with-error, and
-    it leaves the work list for good. Only call this when retrying could not possibly help."""
+    """The DOCUMENT is at fault. The .err is permanent: the API marks it extracted-with-error.
+    Only call this when retrying could not possibly help."""
     (OUT / f"{doc_id}.err").write_text(reason[:2000])
     bump("failed")
     record(id=doc_id, stage="convert", route=route_name, error=reason[:300])
 
 
 def missing(doc_id, reason):
-    """The SOURCE is at fault — there are no bytes to read. Writes no .err, like defer(), so the
-    document stays in the work list and a later run picks it up once the file exists.
-
-    Recording this as an extraction error claims docling read the document and could not convert
-    it, which is false, and removes it from the work list for good. That is what happened to 5,445
-    documents on 2026-08-02: the dev object store is a partial copy of prod, every miss was written
-    as a .err, and the API marked all of them extracted-with-error holding zero chunks.
-
-    No streak and no circuit breaker, unlike defer(): thousands of these means the object store is
-    populated differently from Mongo, which is a thing to go fix, not a reason to abandon the
-    50,000 documents whose files are present."""
+    """The SOURCE is at fault. No .err, which would mark it extracted-with-error for good; it stays listed.
+    No streak, unlike defer(): many misses mean the object store differs from Mongo, not a bad runner."""
     bump("missing")
     record(id=doc_id, stage="download", missing=reason[:300])
 
 
 def defer(doc_id, reason, route_name=None):
-    """THIS PROCESS is at fault. Writes no .err, so the document keeps no record at all and the
-    next run picks it up again — already_done() only counts a .md or .err on disk.
-
-    Deliberately not a retry-in-place: whatever broke the pool or the CUDA context usually breaks
-    the next document too, so the useful behaviour is to leave the work undone and let a rerun,
-    after the operator has looked at it, do it properly."""
+    """THIS PROCESS is at fault. No .err, so the next run picks the document up again.
+    Not retried in place: what broke the pool or CUDA context usually breaks the next document too."""
     bump("deferred")
     record(id=doc_id, stage="convert", route=route_name, deferred=reason[:300])
     with _clock:
@@ -255,19 +236,20 @@ def pdf_worker():
         if info.get("note"):
             log(f"  {doc_id}: {info['note']} — routing to OCR")
 
+        rerouted = None
         if which == "text":
             size = path.stat().st_size
-            if is_low_yield_text(md, size):
+            if is_low_yield_text(md, size, doc["ext"]):
                 log(f"  low yield {doc_id} ({real_chars(md)} real chars from {size // 1024} KB)"
                     " — re-routing to OCR")
                 bump("rerouted")
-                which = "ocr"
+                which, rerouted = "ocr", md
 
         if which == "ocr":
             bump("ocr")
             # Recorded so the OCR share can be traced to a threshold.
             record(id=doc_id, stage="probe", route="ocr", bytes=path.stat().st_size, **info)
-            to_ocr.put((doc, path))
+            to_ocr.put(({**doc, "rerouted_text": rerouted}, path))
             continue
 
         bump("text")
@@ -287,17 +269,22 @@ def ocr_worker():
             conv = recycle_converter(conv)
         doc, path = item
         doc_id = doc["id"]
+        rerouted = doc.get("rerouted_text")
         t0 = time.time()
         big = path.stat().st_size >= BIG_DOC_BYTES
         if big:
             _big_doc.acquire()
         try:
             md, forced, tiled = convert_ocr(conv, path, doc["ext"], _pool, doc_id)
-            if forced:
-                bump("forced")
-            if tiled:
-                bump("tiled")
-            finish(doc_id, md, path, "ocr", t0, forced=forced, tiled=tiled)
+            if text_beats_ocr(rerouted, md):
+                log(f"  OCR found less on {doc_id} ({real_chars(md)} real chars) — keeping the text result")
+                finish(doc_id, rerouted, path, "text", t0)
+            else:
+                if forced:
+                    bump("forced")
+                if tiled:
+                    bump("tiled")
+                finish(doc_id, md, path, "ocr", t0, forced=forced, tiled=tiled)
         except Exception as e:                                    # noqa: BLE001
             # Classify first: a broken pool raises on every later document, and recording each as
             # failed would drop good documents for good.
@@ -307,6 +294,9 @@ def ocr_worker():
                 ensure_pool()
                 # A faulted CUDA context poisons every later conversion in this thread.
                 conv = recycle_converter(conv)
+            elif text_beats_ocr(rerouted, None):
+                log(f"  convert failed {doc_id}: {e} — keeping the text result")
+                finish(doc_id, rerouted, path, "text", t0)
             else:
                 log(f"  convert failed {doc_id}: {e}")
                 fail(doc_id, f"docling failed: {e}", "ocr")
@@ -326,9 +316,8 @@ def feeder(docs):
         if already_done(doc_id):
             bump("skipped")
             continue
-        # Recorded without a download: nothing on this box can read these, so spending bandwidth
-        # on them only to fail is pure waste. ingest.py posts the .err so the API marks them
-        # extracted-with-error and they leave the work list for good.
+        # Recorded without a download: nothing here reads these. ingest.py posts the .err, so the
+        # API marks them extracted-with-error and they leave the work list.
         if doc["ext"] in UNSUPPORTED_EXTS:
             fail(doc_id, f"unsupported format: {doc['ext']}", "unsupported")
             bump("unsupported")
@@ -342,8 +331,7 @@ def feeder(docs):
 
 
 def selfcheck():
-    """The routing decision and the work-list filter can be wrong without failing loudly, so they
-    are the pieces with a check."""
+    """decide() and the work-list filter fail silently when wrong, so they are what gets a check."""
     big, small = 10 * 1024 * 1024, 1000
     assert decide([2000] * 20, big) == "text", "a digital document must not go to the GPU"
     assert decide([0] * 20, big) == "ocr", "a scan must go to OCR"
@@ -400,9 +388,7 @@ def main():
         last = 0
         while not finished.is_set():
             finished.wait(60)
-            # counts["missing"] belongs in done: it is a settled outcome for this run, and leaving
-            # it out froze `remaining` and made the ETA meaningless once 5,445 documents had no
-            # fetchable file.
+            # A missing source is settled for this run; leaving it out of done freezes `remaining`.
             done = counts["ok"] + counts["failed"] + counts["missing"]
             if done != last:
                 rate = done / max(time.time() - started, 1)
@@ -417,9 +403,8 @@ def main():
 
     threading.Thread(target=monitor, name="monitor", daemon=True).start()
 
-    # Shutdown order matters and is the reason no sentinel is broadcast up front: a pdf worker can
-    # hand a document to the OCR queue, so the OCR pool must not be told to stop until every pdf
-    # worker has exited. Each stage is closed only once the stage that feeds it is done.
+    # A pdf worker can hand a document to the OCR queue, so each stage closes only after the stage
+    # feeding it has exited; no sentinel goes out up front.
     for t in downloaders:
         t.join()
     for _ in pdfers:
@@ -430,9 +415,8 @@ def main():
         to_ocr.put(None)
     for t in ocrers:
         t.join()
-    # After the OCR workers, not before: they submit split_pdf into the same pool, so shutting it
-    # down at the end of the pdf stage killed the last document with "cannot schedule new futures
-    # after shutdown".
+    # After the OCR workers: they submit split_pdf into this pool, and a closed pool fails with
+    # "cannot schedule new futures after shutdown".
     _pool.shutdown(wait=True)
     finished.set()
 

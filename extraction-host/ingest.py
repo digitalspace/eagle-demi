@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host phase 2: post out/*.md and .err to the API, then move them to sent/ (or dead/ on a 4xx).
+"""Host phase 2: post out/*.md and .err, then move them to sent/, or dead/ on a 4xx or repeated failure.
 
 Re-posting is a no-op, so a rerun is a valid recovery. --resend replays everything.
 """
@@ -25,8 +25,10 @@ LEDGER = BASE / "ingest.jsonl"
 UPLOADERS = int(os.environ.get("UPLOADERS", "4"))
 LIMIT = int(os.environ.get("INGEST_LIMIT", "0")) or None
 RESEND = "--resend" in sys.argv
+MAX_RUN_FAILURES = int(os.environ.get("MAX_RUN_FAILURES", "3"))
 
 counts = {"ok": 0, "failed": 0, "chunks": 0, "errors_recorded": 0}
+failures = {}
 _lock = threading.Lock()
 _llock = threading.Lock()
 
@@ -36,6 +38,34 @@ def record(**row):
     with _llock:
         with LEDGER.open("a") as f:
             f.write(json.dumps(row) + "\n")
+
+
+def is_retryable_failure(row):
+    """A 4xx row carries `status`, a success `chunks`; only the retryable branch writes neither."""
+    return "error" in row and "status" not in row and "chunks" not in row and not row.get("dead")
+
+
+def load_failure_counts():
+    """Failed runs in a row per document, from the ledger; any other row for the id resets it."""
+    fails = {}
+    if not LEDGER.exists():
+        return fails
+    with LEDGER.open() as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            doc_id = row.get("id")
+            if doc_id:
+                fails[doc_id] = fails.get(doc_id, 0) + 1 if is_retryable_failure(row) else 0
+    return fails
+
+
+def to_dead(path, doc_id, reason, **row):
+    log(f"  {doc_id}: moved to dead/ — {reason}")
+    record(id=doc_id, dead=True, reason=reason, **row)
+    park(path, DEAD)
 
 
 def park(path, dest):
@@ -79,8 +109,8 @@ def uploader():
                 with _lock:
                     counts["failed"] += 1
                 log(f"  {doc_id}: HTTP {r.status_code} {r.text[:120]}")
-                record(id=doc_id, status=r.status_code, error=r.text[:200])
-                park(path, DEAD)
+                to_dead(path, doc_id, f"HTTP {r.status_code} is final, not retried",
+                        status=r.status_code, error=r.text[:200])
             else:
                 res = r.json()
                 with _lock:
@@ -91,11 +121,17 @@ def uploader():
                 record(id=doc_id, chunks=res.get("chunks", 0), recorded_error=is_error)
                 park(path, SENT)
         except Exception as e:                                    # noqa: BLE001
-            # Left in out/ deliberately: this is the retryable class, so a rerun picks it up.
+            # Retryable, so it stays in out/, but a document that fails every run is not posted for ever.
             with _lock:
                 counts["failed"] += 1
-            log(f"  {doc_id} failed: {e}")
-            record(id=doc_id, error=str(e)[:200])
+                failures[doc_id] = n = failures.get(doc_id, 0) + 1
+            log(f"  {doc_id} failed (run {n} of {MAX_RUN_FAILURES}): {e}")
+            record(id=doc_id, error=str(e)[:200], failures=n)
+            if n >= MAX_RUN_FAILURES:
+                try:
+                    to_dead(path, doc_id, f"{n} failed runs in a row")
+                except OSError as move_err:
+                    log(f"  {doc_id}: could not move to dead/ ({move_err})")
 
 
 def main():
@@ -120,6 +156,7 @@ def main():
         log("nothing to ingest — out/ is empty")
         return 0
 
+    failures.update(load_failure_counts())
     log(f"ingesting {len(files)} files to {API} with {UPLOADERS} uploaders")
     started = time.time()
     for f in files:
@@ -156,7 +193,8 @@ def main():
     if counts["ok"]:
         log(f"  {counts['chunks'] / counts['ok']:.1f} chunks/document")
     if counts["failed"]:
-        log("  failures stay in out/ — rerun to retry them")
+        log(f"  retryable failures stay in out/ until {MAX_RUN_FAILURES} failed runs; "
+            "the rest are in dead/")
     return 0
 
 
