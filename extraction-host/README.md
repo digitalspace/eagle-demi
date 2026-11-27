@@ -34,7 +34,7 @@ DEMI queues `{documentId, projectId, reason, enqueuedAt}` on the `extract` queue
 | Case | What the job does with the message | What it posts |
 |---|---|---|
 | Row extracted, deleted, an `UPDATE` image, or gone | Deletes it | Nothing |
-| Source file answers 404 | Deletes it; the backlog sweep queues the row again after 7 days | Nothing |
+| Source file answers 404 | Deletes it; the next catch-up run of `src/scripts/extraction-backlog.js` at least 7 days later queues the row again | Nothing |
 | Unsupported format, failed download or failed conversion | Deletes it | `{error}`, which is permanent |
 | Converted | Deletes it | `{markdown, extraction}`, NDJSON at 4 MB or more |
 | Runner fault (broken pool, out of memory) | Leaves it to reappear after 7800 s | Nothing |

@@ -24,7 +24,7 @@ app.setup({ enableHttpStream: true });
 module.exports = {
   reconcileEagle, reconcileEngage, syncTrackTeams, syncTrackProjects, syncNrpti, bulkDownloadWorker,
   cleanupBulkDownloads, restampChunksWorker, searchDefinitionsWorker, syncOutWorker,
-  announceUpdates, edgeBan, intakeScanSweep, extractionBacklogSweep
+  announceUpdates, edgeBan, intakeScanSweep
 };
 
 // A recycle loses the audit buffer (its flush timer is unref()'d); appTerminate, graceful only,
@@ -167,15 +167,6 @@ if (require('../src/config').intake.storageAccount) {
   });
 }
 
-// Empty EXTRACTION_QUEUE: no timer here, and src/extraction/enqueue.js sends nothing.
-if (require('../src/config').extraction.queue) {
-  app.timer('extractionBacklogSweep', {
-    schedule: require('../src/config').extraction.sweepSchedule,
-    runOnStartup: false,
-    handler: extractionBacklogSweep
-  });
-}
-
 // Read from host.json, which the queue extension obeys; a copy here would drift.
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
 
@@ -223,16 +214,6 @@ async function intakeScanSweep() {
     await require('../src/intake/sweep').sweep();
   } catch (err) {
     logger.error('[intake] sweep run failed', { error: err.message, stack: err.stack });
-  }
-}
-
-// Swallows the failure as the intake sweep does: the next run is the retry.
-async function extractionBacklogSweep() {
-  const { logger } = require('../src/utils/logger');
-  try {
-    await require('../src/extraction/backlog').sweep();
-  } catch (err) {
-    logger.error('[extraction] backlog sweep failed', { error: err.message, stack: err.stack });
   }
 }
 

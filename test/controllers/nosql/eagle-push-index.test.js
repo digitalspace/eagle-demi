@@ -68,7 +68,7 @@ test('a repeat push with the same file queues nothing more; a new file queues ag
 
   await push(eagleDocument());
   await push(eagleDocument({ displayName: 'Renamed' }));
-  assert.strictEqual(sent.length, 1, 'an unchanged file waits for the backlog sweep');
+  assert.strictEqual(sent.length, 1, 'an unchanged file is not queued again');
 
   await push(eagleDocument({ internalURL: 'docs/application-v2.pdf' }));
   assert.strictEqual(sent.length, 2);

@@ -4,7 +4,7 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const queueClient = require('../../src/jobs/queue-client');
 
 const QUEUE = 'extract';
-const EXTRACTION_VARS = ['EXTRACTION_QUEUE', 'EXTRACTION_SWEEP_MAX', 'EXTRACTION_SWEEP_SCHEDULE'];
+const EXTRACTION_VARS = ['EXTRACTION_QUEUE'];
 
 /** Set the EXTRACTION_* settings for one test; anything not named is cleared. Restored after. */
 function setExtractionEnv(t, values = { EXTRACTION_QUEUE: QUEUE }) {
@@ -21,8 +21,11 @@ function setExtractionEnv(t, values = { EXTRACTION_QUEUE: QUEUE }) {
   });
 }
 
-/** Messages sent, parsed, and the stamps patched, per document id. `failSend` makes every send throw. */
-function fakeQueueAndStore(t, { failSend = false, failStamp = false } = {}) {
+/**
+ * Messages sent, parsed, and the stamps patched, per document id. `failSend` makes every send throw,
+ * `failSendFor` only the send for that document id.
+ */
+function fakeQueueAndStore(t, { failSend = false, failSendFor = null, failStamp = false } = {}) {
   const sent = [];
   const queues = [];
   const stamps = new Map();
@@ -30,8 +33,9 @@ function fakeQueueAndStore(t, { failSend = false, failStamp = false } = {}) {
     queues.push(name);
     return {
       async sendMessage(body) {
-        if (failSend) throw new Error('queue down');
-        sent.push(JSON.parse(body));
+        const message = JSON.parse(body);
+        if (failSend || message.documentId === failSendFor) throw new Error('queue down');
+        sent.push(message);
       }
     };
   });

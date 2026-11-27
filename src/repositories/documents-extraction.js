@@ -16,7 +16,7 @@ const EXTRACTION_BACKLOG_FIELDS = [
 ];
 
 /**
- * Each filter mirrors an enqueue skip rule, so a skipped row cannot hold a slot every day. `_ts`:
+ * Each filter mirrors an enqueue skip rule, so a skipped row cannot hold a slot in every run. `_ts`:
  * ORDER BY drops rows lacking the field, and `_ts` is always present and indexed.
  */
 async function listExtractionBacklog({ queuedBefore, max }) {
@@ -41,7 +41,7 @@ async function listExtractionBacklog({ queuedBefore, max }) {
   return fetchAll(CONTAINER, spec);
 }
 
-/** Stamp when the row was last sent to the extraction queue; the backlog sweep waits a week on it. */
+/** Stamp when the row was last sent to the extraction queue; src/scripts/extraction-backlog.js waits a week on it. */
 async function markExtractionQueued(id, projectId, queuedAt) {
   const partitionKey = partitionKeyFor(projectId);
   if (partitionKey === undefined) throw new TypeError(`[documents] ${id}: markExtractionQueued needs one projectId`);
