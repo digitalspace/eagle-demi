@@ -199,6 +199,17 @@ describe('WorkplanRecord phases', () => {
     expect(notes.getByText('Dates conflict: 10 days between Early Engagement and Process Planning; phases should follow with no gap')).toBeInTheDocument();
     expect(notes.getByText('Dates conflict: Readiness Decision starts 4 days before Process Planning ends')).toBeInTheDocument();
   });
+
+  it('takes a phase starting on the day the one before ends as following on, with no dates conflict', async () => {
+    const shared = [
+      phaseOf('Early Engagement', '2020-01-01', '2020-01-31', { order: 1, isCompleted: true }),
+      phaseOf('Process Planning', '2020-01-31', '2020-03-31', { order: 2, isCompleted: true }),
+    ];
+    renderAt('/workplans/950?act=2018', [workOf(shared)]);
+
+    await screen.findByRole('heading', { level: 1, name: 'Sample Zeta Mine' });
+    expect(screen.queryByText(/^Dates conflict: Process Planning starts/)).toBeNull();
+  });
 });
 
 describe('WorkplanRecord time limit changes', () => {

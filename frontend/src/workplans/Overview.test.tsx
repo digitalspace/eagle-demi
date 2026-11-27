@@ -182,6 +182,13 @@ describe('Overview Assigned to and Team', () => {
     expect(screen.getByText('1 sheet work has no one assigned in Track and is hidden by these filters.')).toBeInTheDocument();
   });
 
+  it('keeps offering a person named in the address who is on no work, so the select shows who filters the rows', () => {
+    renderOverview(STAFFED, '/workplans?who=Staff%20Nine');
+
+    expect(screen.getByRole('combobox', { name: 'Assigned to' })).toHaveDisplayValue('Staff Nine');
+    expect(screen.queryAllByRole('link', { name: /^Open / })).toEqual([]);
+  });
+
   it('keeps the hidden sheet works note in one live region, so a filter change is announced', async () => {
     const user = renderOverview(STAFFED, '/workplans?team=Team%20A');
     const note = screen.getByText('1 sheet work has no one assigned in Track and is hidden by these filters.');

@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { ME, myName } from './assigned';
+import { ME, myName, whoName } from './assigned';
 
 export interface People {
   names: string[];
@@ -15,7 +15,7 @@ export function AssignedFields({ who, team, people, change }: { who: string; tea
   const noteId = useId();
   const me = myName();
   const whoLabel = who === ME ? `Me${me ? ` (${me})` : ''}` : who || 'Anyone';
-  const narrowed = Boolean(who || team) && people.unassigned > 0;
+  const narrowed = Boolean(whoName(who) || team) && people.unassigned > 0;
   return (
     <>
       <div className="wp-ov-fld wp-ov-fld--pick">

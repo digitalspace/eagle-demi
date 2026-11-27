@@ -26,10 +26,12 @@ describe('assignedOk', () => {
     expect(assignedOk(lead, '', 'Infrastructure')).toBe(true);
     expect(assignedOk(lead, '', 'Mining and Energy')).toBe(false);
   });
-  it('reads Me as the signed-in reader, and matches nothing when unknown', () => {
-    expect(assignedOk(lead, ME, '')).toBe(false);
+  it('filters nothing for Me while no signed-in name is known, as the select then reads Anyone', () => {
+    expect([assignedOk(lead, ME, ''), assignedOk(sheet, ME, '')]).toEqual([true, true]);
+  });
+  it('reads Me as the signed-in reader once the name is known', () => {
     (window as { demiMe?: string }).demiMe = 'Staff One';
-    expect(assignedOk(lead, ME, '')).toBe(true);
+    expect([assignedOk(lead, ME, ''), assignedOk(sheet, ME, '')]).toEqual([true, false]);
   });
 });
 

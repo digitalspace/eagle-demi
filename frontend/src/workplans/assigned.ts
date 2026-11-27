@@ -13,8 +13,8 @@ export const whoName = (who: string) => (who === ME ? myName() : who || null);
 
 /** True when `work` passes the Assigned to and Team filters. */
 export function assignedOk(work: WorkplanRow, who: string, team: string): boolean {
+  // Me with no signed-in name known filters nothing: the select has no Me option then and reads Anyone.
   const name = whoName(who);
-  if (who && !name) return false;
   if (name && !isOn(work, name)) return false;
   if (team && work.team !== team) return false;
   return true;
