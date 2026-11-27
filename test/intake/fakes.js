@@ -90,9 +90,14 @@ function fakeAccount(incoming = {}) {
       const blob = containers.incoming.get(key);
       return blob ? { ...blob.tags } : null;
     },
-    async getObjectStream(key) { return Readable.from([containers.incoming.get(key).bytes]); },
-    async getRangeStream(key, offset, length) {
-      return Readable.from([containers.incoming.get(key).bytes.subarray(offset, offset + length)]);
+    async getRangeStream(key, offset, length, { ifMatch } = {}) {
+      const blob = containers.incoming.get(key);
+      if (ifMatch && ifMatch.replace(/"/g, '') !== String(blob.etag).replace(/"/g, '')) {
+        throw Object.assign(new Error('The condition specified using HTTP conditional header(s) is not met.'), {
+          statusCode: 412, code: 'ConditionNotMet'
+        });
+      }
+      return Readable.from([blob.bytes.subarray(offset, offset + length)]);
     },
     async copyObject(src, dest, { destContainer } = {}) {
       containers[destContainer || 'incoming'].set(dest, containers.incoming.get(src));
