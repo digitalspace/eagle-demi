@@ -3600,6 +3600,39 @@ paths:
                   description: >-
                     The `read[]` the document takes once clean, capped at the project's level.
                     Defaults to level 1 (team). Cannot seal (level 0) or publish (level 4).
+                fileSize:
+                  type: integer
+                  minimum: 0
+                  maximum: 2147483648
+                  description: >-
+                    Size of the file in bytes. The scan cannot check files over 2 GiB. With
+                    `fields.documentSource` `UPDATE` the cap is 10 MB.
+                publishOnRelease:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Publish (level 4) when the scan clears the file, if the project is public.
+                    Otherwise the document is released at its capped level and `publishRefused` is set.
+                fields:
+                  type: object
+                  additionalProperties: false
+                  description: >-
+                    Document metadata stored on the row. Any other key answers 400, and so does a key
+                    the caller may not write. Server-set fields (`id`, `projectId`, `read`,
+                    `scanStatus` and the like) cannot be sent here.
+                  properties:
+                    documentFileName: { type: string, maxLength: 255, description: Defaults to `fileName`. }
+                    displayName: { type: string, maxLength: 255, description: Defaults to `fileName`. }
+                    documentSource: { type: string, enum: [PROJECT, PROJECT-NOTIFICATION, COMMENT, UPDATE] }
+                    milestoneId: { type: string, nullable: true, description: List id; its label is stored as `milestone`. }
+                    typeId: { type: string, nullable: true, description: List id; its label is stored as `type`. }
+                    documentAuthorTypeId: { type: string, nullable: true, description: List id; its label is stored as `documentAuthorType`. }
+                    projectPhaseId: { type: string, nullable: true, description: List id; its label is stored as `projectPhase`. }
+                    dateUploaded: { type: string, format: date-time, nullable: true }
+                    datePosted: { type: string, format: date-time, nullable: true }
+                    description: { type: string }
+                    legislation: { type: integer, nullable: true, example: 2018 }
+                    documentAuthor: { type: string }
       responses:
         '201':
           description: Row created and upload link issued.
@@ -3612,13 +3645,54 @@ paths:
                   uploadUrl: { type: string, description: Write-only link for this one file. }
                   expiresAt: { type: string, format: date-time }
         '400':
-          description: An unknown body parameter, a missing field, or a `requestedRead` that seals or publishes.
+          description: >-
+            An unknown body parameter or `fields` key, a missing or malformed field, a file too large,
+            or a `requestedRead` that seals or publishes.
         '401':
           description: Unauthorized.
         '403':
           description: The credential is read-only.
         '404':
           description: The project does not exist or is not visible to this caller.
+        '503':
+          description: Document intake is not enabled in this environment.
+    get:
+      summary: List a project's pending and rejected intake uploads
+      description: >-
+        Answers the project's uploads still waiting for the scan and those rejected in the last 30
+        days, newest first. An upload is listed only when the caller could read it once released.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The uploads; `[]` for a project the caller cannot read.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    displayName: { type: string }
+                    scanStatus: { type: string, enum: [pending, rejected] }
+                    scanRejectReason: { type: string, nullable: true }
+                    publishRefused: { type: string, nullable: true }
+                    createdAt: { type: string, format: date-time }
+                    scannedAt: { type: string, format: date-time, nullable: true }
+        '400':
+          description: '`projectId` is missing, or an unknown query parameter was sent.'
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The credential has no write role.
         '503':
           description: Document intake is not enabled in this environment.
 

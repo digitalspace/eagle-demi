@@ -147,6 +147,8 @@ const routes = [
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
   // Answers a write-only link to the scanned intake account; the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
+  // Lists rows past the ACL, so it takes a write role; each row is then checked against requestedRead.
+  { method: 'get', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').listUploads },
   { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },
   { method: 'put', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().updateDocument },
   { method: 'put', path: '/documents/:id/level', guards: [authMiddleware, requireWrite], load: () => documentController().setLevel },

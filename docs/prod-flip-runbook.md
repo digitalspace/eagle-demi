@@ -52,7 +52,13 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
 ## After a change
 
 Watch for 1 h: the App Insights 5xx rate on `demi-api-fc-prod` and the `demi-search-availability-prod`
-webtest. Run the ACL probe against prod explicitly (the script defaults to test):
+webtest.
+
+The ACL probe (`src/scripts/probe-acl.js`) plants its rows through document intake, so it runs
+only where intake is deployed (`INTAKE_STORAGE_ACCOUNT` set). Intake is off on prod: there
+the probe stops at its first row with `intake is off here` and checks nothing, so it gives no prod
+result. Once intake is deployed on prod, run the probe against prod explicitly (the script defaults
+to test):
 
 ```
 DEMI_API_BASE=https://demi-api-fc-prod.azurewebsites.net ADMIN_API_KEY=<ADMIN_API_KEY from secret demi-app-secrets in 6cdc9e-prod> \
