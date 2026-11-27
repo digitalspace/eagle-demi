@@ -25,6 +25,23 @@ test('settle patches the row in its partition, guarded on scanStatus pending', a
   assert.match(condition, /c\.scanStatus = 'pending'/);
 });
 
+test('markPublishRefused sets only publishRefused, guarded on a released row', async (t) => {
+  let call;
+  t.mock.method(cosmos, 'patch', async (...args) => { call = args; return {}; });
+
+  assert.strictEqual(await store.markPublishRefused(ROW, 'project-not-public'), true);
+  const [container, id, partition, ops, condition] = call;
+  assert.deepStrictEqual([container, id, partition], ['documents', 'doc-1', 'proj-1']);
+  assert.deepStrictEqual(ops, [{ op: 'set', path: '/publishRefused', value: 'project-not-public' }]);
+  assert.match(condition, /c\.scanStatus = 'clean'/);
+});
+
+test('markPublishRefused reports false on a row that is not released (412)', async (t) => {
+  t.mock.method(cosmos, 'patch', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
+
+  assert.strictEqual(await store.markPublishRefused(ROW, 'project-not-public'), false);
+});
+
 test('settle reports false when the row is no longer pending (412)', async (t) => {
   t.mock.method(cosmos, 'patch', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
 
@@ -91,4 +108,24 @@ test('listStalePending asks for pending rows created before the cutoff', async (
   const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
   assert.deepStrictEqual(params, { '@pending': 'pending', '@cutoff': '2026-10-14T12:00:00.000Z' });
   assert.match(spec.query, /c\.scanStatus = @pending AND c\.createdAt < @cutoff/);
+});
+
+test('listForProject reads one partition for the given statuses since the given time, newest first', async (t) => {
+  let call;
+  t.mock.method(cosmos, 'query', async (...args) => { call = args; return { items: [ROW] }; });
+
+  const rows = await store.listForProject('proj-1', ['pending', 'rejected'], '2026-10-28T00:00:00.000Z');
+
+  assert.deepStrictEqual(rows, [ROW]);
+  const [container, spec, options] = call;
+  assert.strictEqual(container, 'documents');
+  assert.deepStrictEqual(options, { partitionKey: 'proj-1' });
+  const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+  assert.deepStrictEqual(params, {
+    '@projectId': 'proj-1', '@statuses': ['pending', 'rejected'], '@since': '2026-10-28T00:00:00.000Z'
+  });
+  assert.match(spec.query,
+    /WHERE c\.projectId = @projectId AND ARRAY_CONTAINS\(@statuses, c\.scanStatus\) AND c\.createdAt >= @since/);
+  assert.match(spec.query, /ORDER BY c\.createdAt DESC$/);
+  assert.match(spec.query, /c\.publishOnRelease,/);
 });

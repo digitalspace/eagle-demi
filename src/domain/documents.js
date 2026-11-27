@@ -3,7 +3,7 @@
 const documents = require('../repositories/documents');
 const chunks = require('../repositories/chunks');
 const restampChunks = require('../jobs/restamp-chunks');
-const { systemAccess, readForLevel, capRead } = require('../helpers/access-sql');
+const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
 const { isStalePush, stampPush } = require('./eagle-push');
 const { logger } = require('../utils/logger');
@@ -11,17 +11,6 @@ const config = require('../config');
 
 // One line per worker, not per push — see propagateParentFields.
 let warnedNoRestampTarget = false;
-
-/**
- * A new document's ACL: level 1 (docs/rbac-architecture.md §1), capped at the parent's level.
- * EVERY document write path must go through this.
- */
-function resolveDocumentAcl(parentProject) {
-  const read = capRead(readForLevel(1), parentProject.read);
-
-  // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
-  return { published: read.includes('public'), read };
-}
 
 /**
  * The flagged row for a write that moves a chunk parent field, or null when nothing moved. The flag
@@ -174,7 +163,6 @@ function badParentFieldTypes(changes) {
 }
 
 module.exports = {
-  resolveDocumentAcl,
   stampParentFieldsPending,
   upsertGuarded,
   propagateParentFields,

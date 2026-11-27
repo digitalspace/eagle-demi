@@ -322,7 +322,7 @@ test('access gate coverage', async (t) => {
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is deleted and replaced by a wider one.
     // Non-literal statuses (resolveDownload, headDownload) are outside the scan; pinned below.
-    assert.strictEqual(emissions.length, 50,
+    assert.strictEqual(emissions.length, 48,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
@@ -370,6 +370,13 @@ test('access gate coverage', async (t) => {
     assert.ok(failed, 'downloadFailed is gone — re-check what a failed download answers with');
     assert.deepStrictEqual(failed[1].match(/body: \{[^}]*\}/g),
       ["body: { error: 'Failed to generate download link.' }"]);
+    // setLevel sends takedownRefusal's pair with a non-literal status, so its answers are pinned too.
+    const refusal = /function takedownRefusal\([^)]*\) \{([\s\S]*?)\n\}/.exec(code(controller));
+    assert.ok(refusal, 'takedownRefusal is gone — re-check what a refused takedown answers with');
+    assert.deepStrictEqual(refusal[1].match(/\[\d{3}, [^\]]*\]/g), [
+      "[403, 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.']",
+      "[400, 'Pulling a document back from level 4 requires a non-empty reason.']"
+    ], 'takedownRefusal answers with something other than its two error strings');
   });
 
   await t.test('every /me route in the router is on the list above', () => {

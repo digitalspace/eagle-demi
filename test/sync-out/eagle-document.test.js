@@ -66,7 +66,7 @@ function demiRow(overrides = {}) {
   };
 }
 
-/** A row as `createDocument` writes it: no Eagle id, `fileExt`, `documentFileName` or `syncVersion`. */
+/** A native row with no Eagle id, `fileExt`, `documentFileName` or `syncVersion`. */
 const nativeRow = (overrides = {}) => ({
   id: ROW_ID,
   projectId: '1234',
@@ -129,7 +129,7 @@ const acceptEchoed = store => (body) => {
 const message = (overrides = {}) =>
   ({ kind: DOCUMENT, consumer: 'eagle', id: ROW_ID, projectId: '1234', attempt: 1, ...overrides });
 const lastAttempt = () => syncOut.run(message({ attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS, maxAttempts: MAX_ATTEMPTS });
-const GET = `GET /document/${EAGLE_ID}`;
+const GET = `GET /document/${EAGLE_ID}?fields=isFeatured`;
 const PUT = `PUT /document/${EAGLE_ID}`;
 const PUBLISH = `PUT /document/${EAGLE_ID}/publish`;
 const UNPUBLISH = `PUT /document/${EAGLE_ID}/unpublish`;
@@ -438,7 +438,7 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(result, { status: 'sent', eagleId: row.eagleId });
   });
 
-  await t.test('a createDocument row POSTs its name and type from displayName and s3Key, and nothing Eagle sets itself',
+  await t.test('a row with no fileExt or documentFileName POSTs its name and type from displayName and s3Key, and nothing Eagle sets itself',
     async (tt) => {
       useEnv(tt, NATIVE_ENV);
       const store = wireStore(tt, nativeRow());
@@ -486,7 +486,7 @@ test('sync-out of documents to Eagle', async (t) => {
       const result = await consumer.send(store.row, { update: store.update });
 
       const id = store.row.eagleId;
-      assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}`], 'no unpublish');
+      assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}?fields=isFeatured`], 'no unpublish');
       assert.strictEqual(store.row.syncOut.eagle.status, 'sent');
       assert.deepStrictEqual(result, { status: 'sent', eagleId: id });
     });
@@ -502,7 +502,7 @@ test('sync-out of documents to Eagle', async (t) => {
     await assert.rejects(consumer.send(store.row, { update: store.update }), /HTTP 404/);
 
     const id = store.row.eagleId;
-    assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}`], 'no publish');
+    assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}?fields=isFeatured`], 'no publish');
     assert.strictEqual(store.row.syncOut.eagle.status, 'failed');
   });
 

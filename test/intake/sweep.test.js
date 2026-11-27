@@ -11,6 +11,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { sweep } = require('../../src/intake/sweep');
+const notifications = require('../../src/repositories/notifications');
+const projects = require('../../src/repositories/projects');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const { setIntakeEnv, fakeStore, fakeAccount, fakeNrs, recordLogs } = require('./fakes');
 
@@ -40,8 +42,9 @@ function setup(t, rows, incoming, env) {
   const account = fakeAccount(incoming);
   const nrs = fakeNrs();
   const logs = recordLogs(t);
-  const projects = { getById: async (_access, id) => ({ id, read: readForLevel(4) }) };
-  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs, projects } };
+  t.mock.method(projects, 'getById', async (_access, id) => ({ id, read: readForLevel(4) }));
+  t.mock.method(notifications, 'getById', async () => null);
+  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs } };
 }
 
 test('a pending upload just past 6 hours is quarantined and rejected as timeout', async (t) => {
@@ -206,6 +209,19 @@ test('missing blob past link + 5 min is rejected no-upload in the result pass', 
   assert.strictEqual(store.rows.get('a').scanRejectReason, 'no-upload');
   assert.strictEqual(results(logs).noUpload, 1);
   assert.strictEqual(logs.info.find(l => l.message === 'intake sweep').meta.stale, 0);
+});
+
+test('an untagged blob over 2 GiB is quarantined and rejected too-large on the first pass', async (t) => {
+  const { store, account, logs, deps } = setup(t, [recent('a')], { a: { ...BLOB, size: 2147483649 } });
+
+  await sweep(deps, NOW);
+
+  const settled = store.rows.get('a');
+  assert.strictEqual(settled.scanStatus, 'rejected');
+  assert.strictEqual(settled.scanRejectReason, 'too-large');
+  assert.strictEqual(settled.scannedAt, null);
+  assert.ok(account.containers.quarantine.has('a'));
+  assert.strictEqual(results(logs).rejected, 1);
 });
 
 test('"No threats found" releases', async (t) => {

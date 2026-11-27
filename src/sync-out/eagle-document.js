@@ -9,12 +9,13 @@ const settings = require('../config').syncOut;
 const { logger } = require('../utils/logger');
 const documents = require('../repositories/documents');
 const projects = require('../repositories/projects');
+const notifications = require('../repositories/notifications');
 const { ownedOutsideEagle } = require('../ownership/document');
 const { isNativeProject, isMintedNative } = require('../merge/project');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { DOCUMENT } = require('./kinds');
 const {
-  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
+  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic, refsFor
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -60,22 +61,36 @@ const owned = row => Boolean(row && ownedOutsideEagle(row) && documents.isScanCl
 /** No Eagle id, or a minted one whose create never recorded a send: Eagle may hold nothing under it. */
 const needsCreate = row => !row.eagleId || (isMintedNative(row) && !Number.isInteger(row.syncOut?.eagle?.sentVersion));
 
-/** A row DEMI owns that Eagle has not deleted; a row Eagle may not hold yet is wanted only while the native switch is on. */
-const wants = row => owned(row) && (!needsCreate(row) || settings.eagle.nativeEnabled);
+const isDeleted = row => row.isDeleted === true;
+
+/** A deleted row is never created, but one holding a minted id may have a copy from a create that landed unrecorded. */
+const narrowOnly = row => isDeleted(row) && needsCreate(row) && Boolean(row.eagleId);
+
+/** A row DEMI owns that Eagle has not deleted; one Eagle may not hold yet is created only while the native switch is on, never deleted. */
+const wants = row => owned(row) &&
+  (!needsCreate(row) || narrowOnly(row) || (settings.eagle.nativeEnabled && !isDeleted(row)));
+
+/** The level and feature state Eagle's copy should hold: a deleted row is neither public nor featured. */
+const targetOf = row => ({
+  published: !isDeleted(row) && isPublic(row.read),
+  // DEMI's featured limit counts no deleted row, so Eagle's must not either.
+  featured: !isDeleted(row) && row.isFeatured === true
+});
 
 /**
- * Take the row's send claim: `{ claim, published }` with the level last sent, `{ missing: true }`,
+ * Take the row's send claim: `{ claim, last }` with the state last sent, `{ missing: true }`,
  * or throws while another delivery holds one.
  */
 async function claimSend(row, update) {
   const claim = crypto.randomUUID();
   let held = false;
-  let published;
+  let last;
   const result = await update((current) => {
     const entry = current.syncOut && current.syncOut[NAME];
     held = claimHeld(entry, Date.now());
     if (held) return null;
-    published = entry && entry.published;
+    // Sync-out creates Eagle records unfeatured and records each feature it makes, so a send without one left none.
+    if (typeof entry?.published === 'boolean') last = { published: entry.published, featured: entry.featured === true };
     // `creating` is the only status claimHeld and the engine's inFlight treat as a live claim.
     return {
       ...current,
@@ -84,22 +99,52 @@ async function claimSend(row, update) {
   });
   if (result.status === 'missing') return { missing: true };
   if (held) throw new Error(`another delivery is sending document ${row.id} to Eagle`);
-  return { claim, published };
+  return { claim, last };
 }
 
-const noDocument = (row, eagleId = row.eagleId) => new Error(`Eagle has no document ${eagleId} stored on row ${row.id}`);
+const NO_DOCUMENT = 'NO_EAGLE_DOCUMENT';
+const noDocument = (row, eagleId = row.eagleId) =>
+  Object.assign(new Error(`Eagle has no document ${eagleId} stored on row ${row.id}`), { code: NO_DOCUMENT });
 
-/** Whether Eagle's copy is public now; asked only when neither an echo nor a send has shown the level. */
-async function eaglePublished(s, row, eagleId, logFields) {
-  const target = pathOf(eagleId);
+const pathOf = eagleId => `/document/${encodeURIComponent(eagleId)}`;
+
+/** Eagle's copy as `{ published, featured }`, from the echo's raw copy, else `last` sent, else one GET. */
+async function eagleState(s, row, eagleId, stored, last, logFields) {
+  const copy = stored?.sources?.eagle;
+  // eagle-api's push carries the whole saved record, where `isFeatured` defaults to false.
+  if (copy && Array.isArray(copy.read)) return { published: isPublic(copy.read), featured: copy.isFeatured === true };
+  if (last) return last;
+  const target = `${pathOf(eagleId)}?fields=isFeatured`;
   const res = await call(s, 'GET', target, null, logFields);
   if (!res.ok) throw failure('GET', target, res);
   const [doc] = Array.isArray(res.body) ? res.body : [];
   if (!doc) throw noDocument(row, eagleId);
-  return isPublic(doc.read);
+  return { published: isPublic(doc.read), featured: doc.isFeatured === true };
 }
 
-const pathOf = eagleId => `/document/${encodeURIComponent(eagleId)}`;
+/** Feature or unfeature Eagle's copy. eagle-api answers 403 when its project already holds its featured limit. */
+async function setFeatured(s, eagleId, featured, logFields) {
+  const target = `${pathOf(eagleId)}/${featured ? 'feature' : 'unfeature'}`;
+  const res = await call(s, 'PUT', target, null, logFields);
+  if (featured && res.status === 403) {
+    const limit = res.body?.limit;
+    logger.error(`[sync-out eagle] Eagle did not feature document ${eagleId}: its project holds eagle-api's limit` +
+      `${limit === undefined ? '' : ` of ${limit}`} featured documents`, { ...logFields, limit });
+  }
+  if (!res.ok) throw failure('PUT', target, res);
+}
+
+/** The state a send left, for the claim record. Unfeatured reads as absent, so false is written only over a true. */
+const sentState = (target, last) =>
+  ({ published: target.published, ...(target.featured || last?.featured ? { featured: target.featured } : {}) });
+
+/** Move Eagle's level, then its feature state, to `target` where `before` differs. */
+async function moveState(s, eagleId, before, target, logFields) {
+  // eagle-api's unpublish marks the document Rejected, so it is called only when the level moved.
+  if (before.published !== target.published) await setPublished(s, pathOf(eagleId), target.published, logFields);
+  // Asked again, eagle-api counts the document itself against the limit and answers 403.
+  if (before.featured !== target.featured) await setFeatured(s, eagleId, target.featured, logFields);
+}
 
 /** PUT the row's fields; false when Eagle has no document under the id. */
 const put = async (s, eagleId, row, logFields) => putRecord(s, pathOf(eagleId), bodyFor(row), logFields);
@@ -122,6 +167,18 @@ const storedBodyFor = (row, project) => ({
  */
 async function readyParentEagleId(row, logFields) {
   const fields = { ...logFields, parentId: row.projectId };
+  // A notification parent wins over a project, as on intake (parentOf), and resolves as an Update's does.
+  const notification = await notifications.readForWrite(String(row.projectId));
+  if (notification) {
+    const { ref, waiting } = refsFor(DOCUMENT, row, fields);
+    const eagleId = ref('notification', row.projectId, notification);
+    const waits = waiting();
+    if (waits.length) {
+      logger.warn(`[sync-out eagle] document ${row.id} waits: ${waits.join('; ')}`, { ...fields, waiting: waits });
+      throw new Error(`parent notification ${row.projectId} of document ${row.id} not yet in Eagle`);
+    }
+    return eagleId;
+  }
   const parent = await projects.readForWrite(row.projectId);
   const out = parent?.syncOut?.eagle;
   if (parent && !parent.eagleId && !isNativeProject(parent)) {
@@ -135,13 +192,10 @@ async function readyParentEagleId(row, logFields) {
   return String(parent.eagleId);
 }
 
-/** Move a just-created record to the row's level, from the echo's `read`, else Eagle's own answer. */
-async function levelAfterCreate(s, row, eagleId, logFields) {
+/** Move a just-created record to the row's level and feature state, from the echo, else Eagle's own answer. */
+async function stateAfterCreate(s, row, eagleId, logFields) {
   const stored = await documents.readForWrite(row.id, row.projectId);
-  const eagleRead = stored?.sources?.eagle?.read;
-  const before = Array.isArray(eagleRead) ? isPublic(eagleRead) : await eaglePublished(s, row, eagleId, logFields);
-  const published = isPublic(row.read);
-  if (before !== published) await setPublished(s, pathOf(eagleId), published, logFields);
+  await moveState(s, eagleId, await eagleState(s, row, eagleId, stored, null, logFields), targetOf(row), logFields);
 }
 
 /** POST a row Eagle does not hold yet under a minted id; eagle-api points the record at DEMI's stored object. */
@@ -168,7 +222,7 @@ async function create(s, row, update) {
     }),
     twinOf: async eagleId => Boolean(await documents.readForWrite(eagleId, row.projectId)),
     // A new record is staff-only, but after a 409 it holds whatever level an earlier attempt left.
-    afterCreate: (eagleId, fields) => levelAfterCreate(s, row, eagleId, fields)
+    afterCreate: (eagleId, fields) => stateAfterCreate(s, row, eagleId, fields)
   });
 }
 
@@ -176,9 +230,11 @@ async function create(s, row, update) {
 async function send(row, { update }) {
   if (!owned(row)) return { status: 'skipped' };
   const s = requireSettings({ milestone: false });
-  if (needsCreate(row)) return create(s, row, update);
+  const narrowing = narrowOnly(row);
+  if (needsCreate(row) && !narrowing) return isDeleted(row) ? { status: 'skipped' } : create(s, row, update);
   const eagleId = String(row.eagleId);
-  const published = isPublic(row.read);
+  const target = targetOf(row);
+  const { published } = target;
   const logFields = { rowId: row.id, eagleId, kind: DOCUMENT };
 
   const claimed = await claimSend(row, update);
@@ -186,19 +242,20 @@ async function send(row, { update }) {
   const { claim } = claimed;
   let changed;
   try {
-    const eagleRead = row.sources?.eagle?.read;
-    let before;
-    if (Array.isArray(eagleRead)) before = eagleRead.includes('public');
-    else if (typeof claimed.published === 'boolean') before = claimed.published;
-    else before = await eaglePublished(s, row, eagleId, logFields);
-    changed = published !== before;
+    const before = await eagleState(s, row, eagleId, row, claimed.last, logFields);
+    changed = published !== before.published;
     if (!await put(s, eagleId, row, logFields)) throw noDocument(row);
     // A PUT slower than the lease may have lost the claim; the new holder sends the newer state.
     await refreshClaim(row, update, claim);
-    // eagle-api's unpublish marks the document Rejected, so it is called only when the level moved.
-    if (changed) await setPublished(s, pathOf(eagleId), published, logFields);
-    await endClaim(update, claim, 'sent', null, { published });
+    await moveState(s, eagleId, before, target, logFields);
+    await endClaim(update, claim, 'sent', null, sentState(target, claimed.last));
   } catch (err) {
+    if (narrowing && err.code === NO_DOCUMENT) {
+      // Held, not skipped: a skip records the version as sent, and a row restored later would then never be created.
+      logger.info(`[sync-out eagle] deleted document ${row.id}: Eagle holds nothing under ${eagleId}, nothing to narrow`, logFields);
+      await endClaim(update, claim, 'held');
+      return { status: 'held' };
+    }
     logger.error(`[sync-out eagle] document ${row.id} not sent to Eagle ${eagleId}: ${err.message}`,
       { ...logFields, error: err.message });
     await endClaim(update, claim, 'failed').catch(releaseErr => logger.error('[sync-out eagle] claim not released',

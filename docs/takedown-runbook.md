@@ -5,7 +5,8 @@ ordinary narrow through `PUT /:id/level` and stops at step 1.
 
 ## 1. Narrow the record
 
-As `sysadmin` — no other role may pull a record back off level 4.
+As `sysadmin` for a project. A document also takes `staff` with a non-empty `reason`, through
+`PUT /api/documents/:id/level` only; every other role gets 403.
 
 ```
 PUT /api/projects/:id/level     { "level": 2, "reason": "personal information published in error" }
@@ -28,8 +29,9 @@ Step 1 leaves the row in the index under a narrowed ACL. Removing it outright is
 plus `deleteChunksForDocument` in `src/search/ai-search.js`; nothing runs them on a schedule,
 because AI Search indexers are a `_ts` high-water mark and never see a delete.
 
-`src/helpers/purge.js` calls them, behind `DELETE /api/documents/:id` and the seed's `--reconcile`.
-It deletes the Cosmos record too, so use it only when the record must not exist.
+`src/helpers/purge.js` calls them, behind `DELETE /api/documents/:id?purge=true` (sysadmin only)
+and the seed's `--reconcile`. It deletes the Cosmos record too, so use it only when the record must
+not exist. A plain `DELETE /api/documents/:id` only flags the document and narrows it to staff.
 
 With search configured, a failed index delete keeps the record and the DELETE answers 503, so a retry
 can finish. While search is unreachable the DELETE keeps answering 503, so narrow access first

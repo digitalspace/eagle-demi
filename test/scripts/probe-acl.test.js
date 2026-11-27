@@ -76,3 +76,97 @@ test('listSees', async (t) => {
     assert.strictEqual(await listSees(null, 'proj-1', ['doc-1']), 'HTTP 401');
   });
 });
+
+test('plant and cleanup', async (t) => {
+  const saved = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = 'probe-test-admin';
+  delete require.cache[SCRIPT];
+  const { plant, deletePlanted } = require(SCRIPT);
+  t.after(() => {
+    if (saved === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = saved;
+    delete require.cache[SCRIPT];
+  });
+
+  /** Intake as the live API answers it: each upload reads `pending` `pendingPolls` times, then `settled`. */
+  function stubIntake(ctx, pendingPolls, settled = 'clean') {
+    const calls = [];
+    const polls = new Map();
+    let next = 0;
+    const reply = (status, json) => ({ status, text: async () => (json ? JSON.stringify(json) : '') });
+    ctx.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+      const parsed = new URL(url);
+      const json = init.headers['Content-Type'] === 'application/json';
+      calls.push({ method: init.method, host: parsed.host, path: parsed.pathname, headers: init.headers,
+        body: json ? JSON.parse(init.body) : init.body });
+      if (parsed.host === 'intake.example') return reply(201);
+      if (parsed.pathname === '/api/intake/uploads') {
+        next += 1;
+        return reply(201, { documentId: `doc-${next}`, uploadUrl: `https://intake.example/incoming/doc-${next}?sig=x` });
+      }
+      const status = /^\/api\/intake\/uploads\/(.+)$/.exec(parsed.pathname);
+      if (status) {
+        const seen = (polls.get(status[1]) || 0) + 1;
+        polls.set(status[1], seen);
+        calls[calls.length - 1].scanStatus = seen > pendingPolls ? settled : 'pending';
+        return reply(200, { scanStatus: calls[calls.length - 1].scanStatus, scanRejectReason: 'infected' });
+      }
+      return reply(200, {});
+    });
+    return calls;
+  }
+
+  const rows = [
+    { projectId: 'proj-a', label: 'hidden', publish: false },
+    { projectId: 'proj-a', label: 'control', publish: true }
+  ];
+
+  await t.test('uploads through intake, waits for clean, then raises only the public row', async (ctx) => {
+    const calls = stubIntake(ctx, 1);
+    const created = [];
+
+    const ids = await plant(rows, { term: 'zz', created, waitMs: 1000, pollMs: 1 });
+
+    assert.deepStrictEqual(ids, ['doc-1', 'doc-2']);
+    assert.deepStrictEqual(created.map(c => [c.id, c.clean]), [['doc-1', true], ['doc-2', true]]);
+    const creates = calls.filter(c => c.path === '/api/intake/uploads');
+    assert.deepStrictEqual(creates.map(c => c.body.projectId), ['proj-a', 'proj-a']);
+    const uploads = calls.filter(c => c.host === 'intake.example');
+    assert.deepStrictEqual(uploads.map(c => c.method), ['PUT', 'PUT']);
+    assert.ok(uploads.every(c => !('X-Api-Key' in c.headers)), 'the upload link must not carry the admin key');
+    const raises = calls.filter(c => c.path.endsWith('/level'));
+    assert.deepStrictEqual(raises.map(c => [c.method, c.path, c.body.level, c.body.confirm]),
+      [['PUT', '/api/documents/doc-2/level', 4, true]]);
+    // The live API refuses to raise a row that has not cleared its scan.
+    const before = calls.slice(0, calls.indexOf(raises[0])).filter(c => c.path === '/api/intake/uploads/doc-2');
+    assert.strictEqual(before.at(-1).scanStatus, 'clean', 'the raise waits until the row reads clean');
+  });
+
+  await t.test('stops with an error when a row never reads clean', async (ctx) => {
+    stubIntake(ctx, Infinity);
+    const created = [];
+
+    await assert.rejects(plant(rows, { term: 'zz', created, waitMs: 5, pollMs: 1 }), /not clean within/);
+    // Cleanup skips them: DELETE cannot reach a row that never cleared its scan.
+    assert.deepStrictEqual(created.map(c => c.clean), [false, false]);
+  });
+
+  await t.test('stops at once with the reason when a scan is rejected', async (ctx) => {
+    stubIntake(ctx, 0, 'rejected');
+
+    await assert.rejects(plant(rows, { term: 'zz', created: [], waitMs: 60000, pollMs: 1 }),
+      /scan rejected hidden: infected/);
+  });
+
+  await t.test('cleanup sends DELETE only for rows that cleared their scan', async (ctx) => {
+    const calls = stubIntake(ctx, 0);
+    ctx.mock.method(console, 'log', () => {});
+
+    await deletePlanted([
+      { id: 'doc-1', projectId: 'proj-a', label: 'hidden', clean: true },
+      { id: 'doc-2', projectId: 'proj-a', label: 'control', clean: false }
+    ]);
+
+    assert.deepStrictEqual(calls.map(c => [c.method, c.path]), [['DELETE', '/api/documents/doc-1']]);
+  });
+});

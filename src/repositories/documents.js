@@ -688,31 +688,28 @@ async function bulkUpsertForProject(projectId, docs) {
  * publication state or anything the seeders wrote.
  */
 async function patchExtraction(id, projectId, fields) {
-  const ops = Object.entries(fields).map(([key, value]) => ({
-    op: 'set',
-    path: `/${key}`,
-    value
-  }));
+  const ops = Object.entries(fields).map(([key, value]) => ({ op: 'set', path: `/${key}`, value }));
   return cosmos.patch(CONTAINER, String(id), String(projectId), ops);
 }
 
-/**
- * Move a document to a ladder level; this, not deletion, hides it. Only level 4 carries `public`,
- * and `isPublished` mirrors `read[]`.
- */
-async function setPublished(id, projectId, level, { levelHeldAt, etag } = {}) {
+/** Move a document to a ladder level; this, not deletion, hides it. `liveOnly`: null for a row flagged deleted. */
+async function setPublished(id, projectId, level, { levelHeldAt, etag, raiseVersion = false, liveOnly = false } = {}) {
   const read = readForLevel(level);
-  // `undefined` leaves the stored hold alone; see `levelHoldAfter`.
+  // `undefined` leaves the stored hold alone; see `levelHoldAfter`. Cosmos `incr` creates a missing field.
   const hold = levelHeldAt === undefined ? [] : [{ op: 'set', path: '/levelHeldAt', value: levelHeldAt }];
+  const version = raiseVersion ? [{ op: 'incr', path: '/syncVersion', value: 1 }] : [];
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
-    ...hold,
+    ...hold, ...version,
     { op: 'set', path: '/isPublished', value: read.includes('public') },
     { op: 'set', path: '/read', value: read },
     // `ownRead` moves with it: this is the document's own ACL, and a stale snapshot would let the
     // next project re-publish resurrect a document an operator unpublished.
     { op: 'set', path: '/ownRead', value: read },
     { op: 'set', path: '/updatedAt', value: new Date().toISOString() }
-  ], undefined, etag);
+  ], liveOnly ? `FROM c WHERE ${NOT_DELETED.clause}` : undefined, etag).catch((err) => {
+    if (liveOnly && !etag && (err.code || err.statusCode) === 412) return null;
+    throw err;
+  });
 }
 
 /**
@@ -765,7 +762,7 @@ const SYNC_PENDING_FIELDS = ['id', 'projectId', 'sourceSystem', 'eagleId', 'sync
 
 /**
  * The sync-out pending hook's list, across partitions: DEMI rows holding a version not yet sent, and rows never
- * sent that are untied or tied to an id sync-out minted. Native writes raise no syncVersion.
+ * sent that are untied or tied to an id sync-out minted. A native create raises no syncVersion.
  */
 async function listSyncPending() {
   const tied = isDefinedAndNotNull('eagleId').clause;
@@ -795,7 +792,7 @@ module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
   SCAN_CLEARED_CLAUSE,
-  isScanCleared,
+  isScanCleared, scanCleared, notUpdateImage, partitionKeyFor,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
   DEMI_OWNED_FIELDS,

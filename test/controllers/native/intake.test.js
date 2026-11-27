@@ -14,8 +14,14 @@ const { withServer } = require('../../helpers/with-server');
 
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
+const cosmos = require('../../../src/db/cosmos-nosql');
 const blobs = require('../../../src/intake/blobs');
 const store = require('../../../src/intake/store');
+const lists = require('../../../src/repositories/lists');
+const intake = require('../../../src/controllers/native/intake');
+const { catalogFor } = require('../../../src/vis/catalog');
+const { mockRes } = require('../../helpers/mock-res');
+const { naturalSortKey } = require('../../../src/helpers/natural-sort');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { requireWrite } = require('../../../src/middleware/require-roles');
@@ -26,22 +32,29 @@ const AUTHED = { 'content-type': 'application/json', 'x-api-key': SUITE_KEY };
 const PROJECT = { id: '207', read: ['staff', 'idir'], region: 'Peace' };
 const SAS_URL = 'https://demiintest.blob.core.windows.net/incoming/x?sig=stub';
 
-/** Intake enabled, the project found, the row and the link captured. */
-function wire(t, { account = 'demiintest', project = PROJECT, stored = null } = {}) {
+/** Intake enabled, the project found, the row and the link captured. `notification` is stored in Cosmos. */
+function wire(t, { account = 'demiintest', project = PROJECT, notification = null, stored = null, listed = [] } = {}) {
   const previous = process.env.INTAKE_STORAGE_ACCOUNT;
   process.env.INTAKE_STORAGE_ACCOUNT = account;
   t.after(() => {
     if (previous === undefined) delete process.env.INTAKE_STORAGE_ACCOUNT;
     else process.env.INTAKE_STORAGE_ACCOUNT = previous;
   });
-  const seen = { rows: [], links: [] };
+  const seen = { rows: [], links: [], listCalls: [] };
   t.mock.method(logger, 'info', () => {});
   t.mock.method(projects, 'getById', async (_access, id) => (project && String(id) === project.id ? project : null));
+  t.mock.method(cosmos, 'readItem', async (container, id) =>
+    (container === 'notifications' && notification && id === notification.id ? notification : null));
   t.mock.method(documents, 'upsert', async (row, opts) => {
     seen.rows.push({ row, opts });
     return row;
   });
   t.mock.method(store, 'findById', async (id) => (stored && stored.id === id ? stored : null));
+  t.mock.method(store, 'listForProject', async (projectId, statuses, since) => {
+    seen.listCalls.push({ projectId, statuses, since });
+    return listed.filter(row => row.projectId === projectId);
+  });
+  t.mock.method(lists, 'listByIds', async (_access, ids) => ids.map(id => ({ id, name: `label ${id}` })));
   t.mock.method(blobs, 'staging', () => ({
     getUploadUrl: async (key, opts) => {
       seen.links.push({ key, opts });
@@ -111,7 +124,8 @@ test('the row is created pending, unreadable, with the fields the scan handler r
   assert.strictEqual(row.projectId, '207');
   assert.strictEqual(row.fileExt, 'pdf');
   assert.strictEqual(row.displayName, 'Report.PDF');
-  assert.strictEqual(row.s3Key, undefined, 'the handler derives the object key on release');
+  assert.strictEqual(row.displayNameSort, naturalSortKey('Report.PDF'), 'the sort key follows the file-name fallback');
+  assert.strictEqual(row.s3Key, undefined,'the handler derives the object key on release');
   assert.ok(!Number.isNaN(Date.parse(row.createdAt)));
   assert.deepStrictEqual(row.requestedRead, ['team'], 'level 1 when none is asked for');
 });
@@ -239,4 +253,336 @@ test('status: 503 when INTAKE_STORAGE_ACCOUNT is empty', async (t) => {
   await withServer(async (call) => {
     assert.strictEqual((await getStatus(call, 'u1')).status, 503);
   });
+});
+
+// Calls the controller directly: the suite key is sysadmin, and these cases need other roles.
+const STAFF = { realm_access: { roles: ['staff'] }, preferred_username: 'staff-user', sub: 's-1' };
+const SYSADMIN = { realm_access: { roles: ['sysadmin'] }, preferred_username: 'admin-user', sub: 'a-1' };
+
+async function createAs(user, body) {
+  const res = mockRes();
+  await intake.createUpload({ user, body, headers: {}, query: {}, params: {} }, res);
+  return res;
+}
+
+const ALL_FIELDS = {
+  documentFileName: 'report-final.pdf',
+  displayName: 'Final Report',
+  documentSource: 'PROJECT',
+  milestoneId: 'm1',
+  typeId: 't1',
+  documentAuthorTypeId: 'a1',
+  projectPhaseId: 'p1',
+  dateUploaded: '2026-11-01T10:00:00Z',
+  datePosted: '2026-11-02T10:00:00.000Z',
+  description: 'The final report.',
+  legislation: 2018,
+  documentAuthor: 'Proponent Ltd'
+};
+
+test('every intake field lands on the pending row, List ids beside their labels', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'Report.PDF', fileSize: 1234, fields: ALL_FIELDS });
+  assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+
+  const { row } = seen.rows[0];
+  assert.strictEqual(row.documentFileName, 'report-final.pdf');
+  assert.strictEqual(row.displayName, 'Final Report');
+  assert.strictEqual(row.displayNameSort, naturalSortKey('Final Report'));
+  assert.strictEqual(row.documentSource, 'PROJECT');
+  assert.deepStrictEqual(
+    [row.milestoneId, row.typeId, row.documentAuthorTypeId, row.projectPhaseId], ['m1', 't1', 'a1', 'p1']);
+  assert.deepStrictEqual(
+    [row.milestone, row.type, row.documentAuthorType, row.projectPhase], ['label m1', 'label t1', 'label a1', 'label p1']);
+  assert.strictEqual(row.dateUploaded, '2026-11-01T10:00:00.000Z');
+  assert.strictEqual(row.datePosted, '2026-11-02T10:00:00.000Z');
+  assert.strictEqual(row.description, 'The final report.');
+  assert.strictEqual(row.legislation, 2018);
+  assert.strictEqual(row.documentAuthor, 'Proponent Ltd');
+  assert.strictEqual(row.fileSize, 1234);
+  assert.strictEqual(row.fileExt, 'pdf');
+});
+
+test('without fields the file name stands in for documentFileName and displayName', async (t) => {
+  const seen = wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'Report.PDF' })).statusCode, 201);
+  assert.strictEqual(seen.rows[0].row.documentFileName, 'Report.PDF');
+  assert.strictEqual(seen.rows[0].row.displayName, 'Report.PDF');
+});
+
+test('a fileSize over 2 GiB is refused and no row is written', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'big.zip', fileSize: 2147483649 });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a fileSize of exactly 2 GiB is admitted', async (t) => {
+  wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'big.zip', fileSize: 2147483648 })).statusCode, 201);
+});
+
+test('an Update image over 10 MB is refused', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, {
+    projectId: '207', fileName: 'photo.jpg', fileSize: 10 * 1024 * 1024 + 1, fields: { documentSource: 'UPDATE' }
+  });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a documentSource outside the four values is refused', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { documentSource: 'EAGLE' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('an unparseable date is refused, not stored as null', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { dateUploaded: 'last Tuesday' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /dateUploaded/);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a null date is stored as null', async (t) => {
+  const seen = wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { datePosted: null } })).statusCode, 201);
+  assert.strictEqual(seen.rows[0].row.datePosted, null);
+});
+
+test('a displayName of 255 characters is admitted and one of 256 is refused', async (t) => {
+  wire(t);
+  const at = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { displayName: 'x'.repeat(255) } });
+  const over = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { displayName: 'x'.repeat(256) } });
+  assert.strictEqual(at.statusCode, 201);
+  assert.strictEqual(over.statusCode, 400);
+});
+
+test('a List id that is not a string is refused', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { milestoneId: 5 } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /milestoneId/);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a fields key staff cannot write is refused, even on the allow-list', async (t) => {
+  const seen = wire(t);
+  const entry = catalogFor('documents').description;
+  const saved = { ...entry };
+  Object.assign(entry, { defaultVis: 1, maxVis: 1 });
+  t.after(() => Object.assign(entry, saved));
+
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', fields: { description: 'x' } });
+  assert.strictEqual(res.statusCode, 400);
+  assert.match(res.body.error, /not writable by this caller: description/);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+const SERVER_SET = {
+  eagleId: 'e1', sourceSystem: 'eagle', contentExtracted: true, isPublished: true, isDeleted: true, id: 'mine',
+  projectId: '999', s3Key: '207/abc.pdf', read: ['public'], requestedRead: ['public'], scanStatus: 'clean'
+};
+
+for (const [role, user] of [['staff', STAFF], ['sysadmin', SYSADMIN]]) {
+  for (const [key, value] of Object.entries(SERVER_SET)) {
+    test(`${key} inside fields is refused for ${role} and no row is written`, async (t) => {
+      const seen = wire(t);
+      const res = await createAs(user, { projectId: '207', fileName: 'a.pdf', fields: { [key]: value } });
+      assert.strictEqual(res.statusCode, 400);
+      assert.match(res.body.error, new RegExp(`not accepted on upload: ${key}$`));
+      assert.strictEqual(seen.rows.length, 0);
+      assert.strictEqual(seen.links.length, 0);
+    });
+  }
+}
+
+const TEAM_STAFF = { ...STAFF, realm_access: { roles: ['staff', 'project:207'] } };
+
+test('publishOnRelease from a caller who may publish is stored with who asked, the row unreadable', async (t) => {
+  const seen = wire(t);
+  const res = await createAs(TEAM_STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 201);
+  const { row } = seen.rows[0];
+  assert.strictEqual(row.publishOnRelease, true);
+  assert.strictEqual(row.publishRequestedBy, 'staff-user');
+  assert.deepStrictEqual(row.read, []);
+  assert.strictEqual(row.isPublished, false);
+  assert.strictEqual(row.scanStatus, 'pending');
+});
+
+test('publishOnRelease from a writer who could not read the released row is 403, with no row or link', async (t) => {
+  const seen = wire(t);
+  // Off the project team, so the level-1 row would be a 404 on PUT /documents/:id/level.
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(seen.rows.length, 0);
+  assert.strictEqual(seen.links.length, 0);
+});
+
+test('the same writer may upload without publishOnRelease', async (t) => {
+  wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'a.pdf' })).statusCode, 201);
+});
+
+test('a registry key with only demi-service-write may publish on release, as on the level route', async (t) => {
+  const seen = wire(t);
+  const key = { preferred_username: 'key:pusher', keyId: 'k1', realm_access: { roles: ['demi-service-write'] } };
+  const res = await createAs(key, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(seen.rows[0].row.publishRequestedBy, 'key:pusher');
+});
+
+test('a scoped registry key may publish only in its own project', async (t) => {
+  const seen = wire(t);
+  const key = { preferred_username: 'key:scoped', keyId: 'k2', realm_access: { roles: ['demi-service-write'] }, projectScope: ['300'] };
+  const res = await createAs(key, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('publishOnRelease that is not a boolean is refused', async (t) => {
+  const seen = wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: 'yes' })).statusCode, 400);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+const LISTED = [
+  { id: 'r1', projectId: '207', requestedRead: readForLevel(2), displayName: 'One', scanStatus: 'pending',
+    scanRejectReason: null, createdAt: '2026-11-27T10:00:00.000Z', s3Key: '207/x.pdf' },
+  { id: 'r2', projectId: '207', requestedRead: readForLevel(2), displayName: 'Two', scanStatus: 'rejected',
+    scanRejectReason: 'malicious', publishOnRelease: true, createdAt: '2026-11-26T10:00:00.000Z',
+    scannedAt: '2026-11-26T10:05:00.000Z' },
+  { id: 'r3', projectId: '207', requestedRead: readForLevel(1), displayName: 'Team only', scanStatus: 'pending',
+    createdAt: '2026-11-27T09:00:00.000Z' },
+  { id: 'o1', projectId: '300', requestedRead: readForLevel(2), displayName: 'Other', scanStatus: 'pending',
+    createdAt: '2026-11-27T10:00:00.000Z' }
+];
+
+async function listAs(user, query) {
+  const res = mockRes();
+  await intake.listUploads({ user, query, headers: {}, params: {} }, res);
+  return res;
+}
+
+test('list: a readable project answers its pending and rejected uploads, asked for 30 days back', async (t) => {
+  const seen = wire(t, { listed: LISTED });
+  const before = Date.now();
+  const res = await listAs(SYSADMIN, { projectId: '207' });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.map(row => row.id), ['r1', 'r2', 'r3']);
+  assert.deepStrictEqual(seen.listCalls[0].statuses, ['pending', 'rejected']);
+  const days = (before - Date.parse(seen.listCalls[0].since)) / (24 * 3600 * 1000);
+  assert.ok(days > 29.99 && days <= 30.01, String(days));
+});
+
+test('list: a project the caller cannot read answers [] without reading uploads', async (t) => {
+  const seen = wire(t, { listed: LISTED });
+  const res = await listAs(SYSADMIN, { projectId: '300' });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body, []);
+  assert.strictEqual(seen.listCalls.length, 0);
+});
+
+test('list: a row requested at level 1 is left out for a caller off the project team', async (t) => {
+  wire(t, { listed: LISTED });
+  const res = await listAs(STAFF, { projectId: '207' });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.map(row => row.id), ['r1', 'r2']);
+});
+
+test('list: a listed upload carries only the seven answered fields', async (t) => {
+  wire(t, { listed: LISTED });
+  const res = await listAs(SYSADMIN, { projectId: '207' });
+  assert.deepStrictEqual(res.body[1], {
+    id: 'r2', displayName: 'Two', scanStatus: 'rejected', scanRejectReason: 'malicious', publishOnRelease: true,
+    createdAt: '2026-11-26T10:00:00.000Z', scannedAt: '2026-11-26T10:05:00.000Z'
+  });
+});
+
+test('list: projectId is required', async (t) => {
+  wire(t, { listed: LISTED });
+  assert.strictEqual((await listAs(SYSADMIN, {})).statusCode, 400);
+});
+
+test('list: an unknown query parameter is refused', async (t) => {
+  wire(t, { listed: LISTED });
+  assert.strictEqual((await listAs(SYSADMIN, { projectId: '207', status: 'clean' })).statusCode, 400);
+});
+
+test('list: 503 when INTAKE_STORAGE_ACCOUNT is empty', async (t) => {
+  wire(t, { account: '', listed: LISTED });
+  assert.strictEqual((await listAs(SYSADMIN, { projectId: '207' })).statusCode, 503);
+});
+
+test('list: the route sits behind authMiddleware and requireWrite', () => {
+  const route = routes.find(r => r.method === 'get' && r.path === '/intake/uploads');
+  assert.deepStrictEqual(route.guards, [authMiddleware, requireWrite]);
+});
+
+test('list: a public-tier token without a write role gets 403', () => {
+  const route = routes.find(r => r.method === 'get' && r.path === '/intake/uploads');
+  const res = { status(code) { this.statusCode = code; return this; }, json() { return this; } };
+  let passed = false;
+
+  route.guards[1]({ user: { identity_provider: 'idir', realm_access: { roles: [] } } }, res, () => { passed = true; });
+
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(passed, false);
+});
+
+test('list: an anonymous caller gets 401 through the route table', async (t) => {
+  wire(t, { listed: LISTED });
+  await withServer(async (call) => {
+    assert.strictEqual((await call('/api/intake/uploads?projectId=207', { headers: {} })).status, 401);
+  });
+});
+
+const NOTIFICATION = { id: '5f9b6a1c2d3e4f5a6b7c8d9e', read: readForLevel(2), region: 'Skeena' };
+const UNDER_NOTIFICATION = { ...PENDING, projectId: NOTIFICATION.id };
+const SCOPED_WRITER = {
+  preferred_username: 'key:scoped', keyId: 'k3', realm_access: { roles: ['demi-service-write'] }, projectScope: ['P1']
+};
+
+async function statusAs(user, id) {
+  const res = mockRes();
+  await intake.getUpload({ user, params: { id }, headers: {}, query: {} }, res);
+  return res;
+}
+
+test('notification parent: create answers 201 with the row under the notification', async (t) => {
+  const seen = wire(t, { project: null, notification: NOTIFICATION });
+  const res = await createAs(STAFF, { projectId: NOTIFICATION.id, fileName: 'a.pdf', requestedRead: ['staff'] });
+  assert.strictEqual(res.statusCode, 201);
+  const { row } = seen.rows[0];
+  assert.strictEqual(row.projectId, NOTIFICATION.id);
+  assert.strictEqual(row.region, 'Skeena');
+  assert.deepStrictEqual(row.requestedRead, ['staff']);
+});
+
+test('notification parent: list answers its pending uploads', async (t) => {
+  wire(t, { project: null, notification: NOTIFICATION, listed: [{ ...LISTED[0], projectId: NOTIFICATION.id }] });
+  const res = await listAs(STAFF, { projectId: NOTIFICATION.id });
+  assert.deepStrictEqual(res.body.map(row => row.id), ['r1']);
+});
+
+test('notification parent: status of a pending upload answers 200', async (t) => {
+  wire(t, { project: null, notification: NOTIFICATION, stored: UNDER_NOTIFICATION });
+  const res = await statusAs(STAFF, 'u1');
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.scanStatus, 'pending');
+});
+
+test('a scoped key gets 404 on create under a public notification outside its scope, and no row', async (t) => {
+  const seen = wire(t, { project: null, notification: { ...NOTIFICATION, read: readForLevel(4) } });
+  const res = await createAs(SCOPED_WRITER, { projectId: NOTIFICATION.id, fileName: 'a.pdf' });
+  assert.strictEqual(res.statusCode, 404);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a scoped key gets 404 on the status of an upload under a notification outside its scope', async (t) => {
+  wire(t, { project: null, notification: { ...NOTIFICATION, read: readForLevel(4) }, stored: UNDER_NOTIFICATION });
+  assert.strictEqual((await statusAs(SCOPED_WRITER, 'u1')).statusCode, 404);
 });

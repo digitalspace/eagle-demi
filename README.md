@@ -289,7 +289,7 @@ fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
 (`applicableRegulation`, `featuredDocuments`).
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch.
-A surplus document is deleted through the helper `DELETE /documents/:id` uses, so its chunks and
+A surplus document is deleted through the helper `DELETE /documents/:id?purge=true` uses, so its chunks and
 search-index entries go with it. A surplus project is never removed, since one missing from the
 public feed may only be unpublished.
 
@@ -1037,14 +1037,8 @@ rewrites every chunk a walk touched. Skipping also means a re-post does not put 
 is in Cosmos but missing from AI Search. The recovery for that is a `chunks-indexer` reset (see the devbox `apply` command
 above), not a re-ingest.
 
-**Nothing inside Azure extracts text today.** `src/extract.js` holds the only in-repo docling client
-and PDF page-batching code; extraction for new projects is deliberately deferred, not cancelled. Do
-not delete it as dead code.
-
-It is a **library, not a worker**. The Mongo-driven loop around those two functions was deleted on
-2026-08-04 along with the `mongodb` dependency it was the last user of. Reviving extraction means
-writing a new driver against Cosmos NoSQL and reusing `splitAndExtract`; it does not mean restoring
-the old one.
+New documents are extracted by the Container Apps job in `extraction-host/` (`job.py`), which
+reads the `extract` queue; see `extraction-host/README.md`.
 
 `extraction-host/` holds the vendored source of the off-platform GPU backfill host. It is Python this
 app never loads, and `scripts/package-api.py` excludes it from the deploy package.

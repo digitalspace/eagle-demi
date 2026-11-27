@@ -8,8 +8,8 @@
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const { moveToQuarantine } = require('./blobs');
-const { applyScanResult } = require('./handler');
-const { UPLOAD_LINK_SECONDS } = require('./decision');
+const { applyScanResult, rejectUnscannable } = require('./handler');
+const { UPLOAD_LINK_SECONDS, MAX_SCAN_BYTES } = require('./decision');
 
 const HOUR_MS = 60 * 60 * 1000;
 const GIB = 1073741824;
@@ -38,8 +38,7 @@ async function logMonthToDate(store, now) {
 
 function defaultDeps() {
   return {
-    store: require('./store'), blobs: require('./blobs'), nrs: require('../storage'),
-    projects: require('../repositories/projects')
+    store: require('./store'), blobs: require('./blobs'), nrs: require('../storage')
   };
 }
 
@@ -79,6 +78,10 @@ async function pollRow(row, deps, summary, now) {
       const linkExpired = now - Date.parse(row.createdAt) >= UPLOAD_GRACE_MS;
       if (linkExpired) await sweepRow(row, deps, summary);
       else summary.notUploaded += 1;
+      return;
+    }
+    if (stat.size > MAX_SCAN_BYTES) {
+      summary[await rejectUnscannable(row, 'too-large', deps)] += 1;
       return;
     }
     const tags = await client.getTags(row.id);

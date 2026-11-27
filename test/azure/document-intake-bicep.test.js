@@ -124,11 +124,149 @@ test('the cap is 5 GB on test and 25 GB on prod', () => {
   assert.match(MAIN, /^\s+capGBPerMonth: intakeCapGBPerMonth$/m);
 });
 
-test('intake is parked on both test and prod', () => {
-  assert.match(TEST_PARAMS, /^param deployDocumentIntake = false$/m);
+test('intake is parked on prod only', () => {
+  assert.match(TEST_PARAMS, /^param deployDocumentIntake = true$/m);
   assert.match(PROD_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(MAIN,
     /^module documentIntake '\.\/modules\/document-intake\.bicep' = if \(deployFoundation && deployDocumentIntake\) \{$/m);
+});
+
+/** A top-level module call's body, up to its closing brace at column 0. */
+function moduleCall(source, symbol) {
+  const start = source.indexOf(`module ${symbol} `);
+  assert.ok(start >= 0, `module ${symbol} is declared`);
+  return source.slice(start, source.indexOf('\n}', start));
+}
+
+const subnet = (name) => '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking' +
+  `/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/${name}`;
+
+// The shared endpoint subnet on test is full; moving the shared param would move five live endpoints.
+test('the intake endpoint has its own subnet and no other endpoint moves', async (t) => {
+  await t.test('test puts the intake endpoint on the privateEndpoint subnet', () => {
+    assert.ok(TEST_PARAMS.includes(`param intakePrivateEndpointSubnetId = '${subnet('privateEndpoint')}'\n`));
+    assert.ok(TEST_PARAMS.includes(`param privateEndpointSubnetId = '${subnet('c4b0a8-test-cond-ext-pe-subnet')}'\n`));
+  });
+
+  await t.test('an empty intake subnet falls back to the shared one', () => {
+    assert.match(moduleCall(MAIN, 'documentIntake'),
+      /^\s+peSubnetId: empty\(intakePrivateEndpointSubnetId\) \? privateEndpointSubnetId : intakePrivateEndpointSubnetId$/m);
+  });
+
+  await t.test('every other endpoint still reads privateEndpointSubnetId', () => {
+    const others = [...MAIN.matchAll(/^\s+peSubnetId: (.+)$/gm)].map((m) => m[1])
+      .filter((v) => !v.includes('intakePrivateEndpointSubnetId'));
+    assert.deepStrictEqual(others, [
+      'privateEndpointSubnetId', 'privateEndpointSubnetId', 'privateEndpointSubnetId', 'privateEndpointSubnetId',
+      "deployFoundryPrivateEndpoint ? privateEndpointSubnetId : ''"
+    ]);
+  });
+});
+
+// eagle-admin PUTs the bytes from its own origin; a missing origin fails in the browser, not the deploy.
+test('intake CORS admits the DEMI frontend and the eagle-admin host', () => {
+  assert.match(moduleCall(MAIN, 'documentIntake'), /^\s+allowedOrigins: union\(frontendHostNames, intakeUploadOrigins\)$/m);
+  assert.match(TEST_PARAMS, /^param intakeUploadOrigins = \[\n\s+'test\.projects\.eao\.gov\.bc\.ca'\n\]$/m);
+  assert.match(PROD_PARAMS, /^param intakeUploadOrigins = \[\]$/m);
+});
+
+// eagle-edge derives the same host from the naming rule for the eagle-admin CSP.
+test('main.bicep outputs the intake blob host from the account name', () => {
+  assert.match(MAIN,
+    /^output intakeBlobHost string = deployDocumentIntake \? '\$\{intakeStorageAccountName\}\.blob\.\$\{environment\(\)\.suffixes\.storage\}' : ''$/m);
+});
+
+test('the extraction queues and setting', async (t) => {
+  await t.test('the API module declares the queue and its poison queue from one param', () => {
+    assert.match(resourceBlock(API_MODULE, 'extractionQueueResource'), /= if \(!empty\(extractionQueue\)\) \{\n\s+parent: queueService\n\s+name: extractionQueue$/m);
+    assert.match(resourceBlock(API_MODULE, 'extractionPoison'), /= if \(!empty\(extractionQueue\)\) \{\n\s+parent: queueService\n\s+name: '\$\{extractionQueue\}-poison'$/m);
+    assert.match(resourceBlock(API_MODULE, 'queueService'), /\|\| !empty\(extractionQueue\)\) \{/);
+  });
+
+  // appSettings is a whole-collection PUT: an undeclared setting is deleted by the next deploy.
+  await t.test('the API app reads the same queue name', () => {
+    assert.match(API_MODULE, /name: 'EXTRACTION_QUEUE'\n\s+value: extractionQueue\n/);
+    assert.match(moduleCall(MAIN, 'apiFunctionFlex'), /^\s+extractionQueue: extractionQueue$/m);
+  });
+
+  await t.test('test names the queue and prod names none', () => {
+    assert.match(TEST_PARAMS, /^param extractionQueue = 'extract'$/m);
+    assert.match(PROD_PARAMS, /^param extractionQueue = ''$/m);
+  });
+});
+
+test('the extraction job module call', async (t) => {
+  const call = moduleCall(MAIN, 'extractionJob');
+
+  // The module grants a role on the secret itself, which fails when the vault lacks it.
+  await t.test('deploys only with the vault key named, a subnet, an image and the queue', () => {
+    assert.match(MAIN, /^var extractionJobApiKeySecretName = 'extraction-job-api-key'$/m);
+    const gate = /^var deployExtractionJobApp = (.+)$/m.exec(MAIN);
+    assert.ok(gate, 'deployExtractionJobApp is declared');
+    for (const part of ['deployExtractionJob', '!empty(apiFlexSubnetId)', '!empty(extractionQueue)', '!empty(extractSubnetId)',
+      '!empty(extractionJobImage)', 'contains(optionalSecretNames, extractionJobApiKeySecretName)']) {
+      assert.ok(gate[1].split(' && ').includes(part), `gate has ${part}`);
+    }
+    assert.match(call, /^module extractionJob '\.\/modules\/extraction-job\.bicep' = if \(deployExtractionJobApp\) \{$/m);
+    assert.match(call, /^\s+apiKeySecretName: extractionJobApiKeySecretName$/m);
+  });
+
+  // Reading the API module's outputs also orders the job after the queues it is granted on.
+  await t.test('works the queues the API module declares, on the API host account', () => {
+    assert.match(call, /^\s+queueAccountName: apiFunctionFlex!\.outputs\.storageAccountName$/m);
+    assert.match(call, /^\s+queueName: extractionQueue$/m);
+    assert.match(call, /^\s+poisonQueueName: '\$\{extractionQueue\}-poison'$/m);
+    assert.match(call, /^\s+demiApiUrl: 'https:\/\/\$\{apiFunctionFlex!\.outputs\.apiFunctionAppHostName\}\/api'$/m);
+    assert.match(call, /^\s+appInsightsConnectionString: appInsightsConnectionString$/m);
+  });
+
+  await t.test('test names the key and the new subnet, and leaves the image and GPU unset', () => {
+    assert.match(TEST_PARAMS, /^\s+'extraction-job-api-key'$/m);
+    assert.match(TEST_PARAMS, /^param deployExtractionJob = bool\(readEnvironmentVariable\('DEPLOY_EXTRACTION_JOB', 'true'\)\)$/m);
+    assert.ok(TEST_PARAMS.includes(`param extractSubnetId = '${subnet('snet-demi-extract-test')}'\n`));
+    assert.match(TEST_PARAMS, /^param extractionJobImage = ''$/m);
+    assert.doesNotMatch(MAIN + TEST_PARAMS, /deployExtractionGpu/);
+  });
+
+  await t.test('prod sets no subnet and no image', () => {
+    assert.match(PROD_PARAMS, /^param extractSubnetId = ''$/m);
+    assert.match(PROD_PARAMS, /^param extractionJobImage = ''$/m);
+    assert.doesNotMatch(PROD_PARAMS, /extraction-job-api-key/);
+  });
+});
+
+test('the extraction budget counts the job resources only', async (t) => {
+  const BUDGET = read('azure/modules/cost-budget.bicep');
+  const budget = resourceBlock(BUDGET, 'costBudget');
+
+  // Without the filter a second budget covers the whole group and alerts on every other resource.
+  await t.test('cost-budget.bicep filters on resource id only when ids are given', () => {
+    assert.match(BUDGET, /^param resourceIds array = \[\]$/m);
+    assert.match(budget, /properties: union\(empty\(resourceIds\) \? \{\} : \{\n\s+filter: \{\n\s+dimensions: \{\n\s+name: 'ResourceId'\n\s+operator: 'In'\n\s+values: resourceIds\n/);
+  });
+
+  // The app reads the whole-group budget by name as BUDGET_NAME.
+  await t.test('the whole-group budget keeps its name and passes no filter', () => {
+    assert.match(BUDGET, /^param name string = ''$/m);
+    assert.match(budget, /^\s+name: empty\(name\) \? budgetName : name$/m);
+    // Four spaces: inside params, not the module's own deployment name.
+    assert.doesNotMatch(moduleCall(MAIN, 'costBudget'), /^ {4}(name|resourceIds):/m);
+  });
+
+  await t.test('the job budget has its own name and lists the environment and every job', () => {
+    const call = moduleCall(MAIN, 'extractionBudget');
+    assert.match(call, /^module extractionBudget '\.\/modules\/cost-budget\.bicep' = if \(deployFoundation && deployExtractionJobApp\) \{$/m);
+    assert.match(call, /^ {4}name: 'demi-extract-budget-\$\{environmentName\}'$/m);
+    assert.match(call, /resourceId\('Microsoft\.App\/managedEnvironments', extractionJob!\.outputs\.extractEnvironmentName\)/);
+    assert.match(call, /map\(extractionJob!\.outputs\.extractJobNames, n => resourceId\('Microsoft\.App\/jobs', n\)\)/);
+    assert.match(call, /^\s+budgetAmount: extractionBudgetAmount$/m);
+    assert.match(call, /^\s+startDate: extractionBudgetStartDate$/m);
+  });
+
+  await t.test('test sets 35 CAD and a pinned start month', () => {
+    assert.match(TEST_PARAMS, /^param extractionBudgetAmount = 35$/m);
+    assert.match(TEST_PARAMS, /^param extractionBudgetStartDate = '\d{4}-\d{2}-01'$/m);
+  });
 });
 
 test('the intake account is keyless and uploads stay private to the account', () => {

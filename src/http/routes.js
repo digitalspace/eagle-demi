@@ -14,7 +14,7 @@ const { credentialsMiddleware } = require('../middleware/credentials');
 const sealedAuth = require('../middleware/sealed-auth');
 
 // Required lazily: the table loads on every cold start, and /health must not pay for the Cosmos
-// client, the search index definitions or pdf-lib.
+// client or the search index definitions.
 const healthController = () => require('../controllers/health');
 const configController = () => require('../controllers/config');
 const gateController = () => require('../controllers/gate');
@@ -145,11 +145,10 @@ const routes = [
   { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocument },
   // ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
-  { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
-  // The dispatcher writes the file part to os.tmpdir() as `req.file`, deleted when the request ends.
-  { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], multipart: true, load: () => documentController().extractDocument },
   // Answers a write-only link to the scanned intake account; the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
+  // Lists rows past the ACL, so it takes a write role; each row is then checked against requestedRead.
+  { method: 'get', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').listUploads },
   { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },
   { method: 'put', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().updateDocument },
   { method: 'put', path: '/documents/:id/level', guards: [authMiddleware, requireWrite], load: () => documentController().setLevel },

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * The request/response shim, on the paths no controller test can see: query parsing, multipart,
+ * The request/response shim, on the paths no controller test can see: query parsing, body limits,
  * the guard chain, redirects. Each case is a shape that would fail silently under a 200.
  */
 
@@ -11,17 +11,14 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { once } = require('node:events');
 const { Readable } = require('node:stream');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { SUITE_KEY } = require('../helpers/suite-key');
 const { HttpRequest, HttpResponse } = require('@azure/functions');
 
 const { dispatch } = require('../../src/http/router');
 const configController = require('../../src/controllers/config');
 const documentController = require('../../src/controllers/nosql/document');
+const intakeController = require('../../src/controllers/native/intake');
 const links = require('../../src/repositories/links');
-const projects = require('../../src/repositories/projects');
 const healthController = require('../../src/controllers/health');
 const searchSchemaController = require('../../src/controllers/search-schema');
 const config = require('../../src/config');
@@ -79,9 +76,9 @@ test('a short link redirects with no-store, never a cached 301', async (t) => {
 
 test('an uncredentialed call to a guarded route is 401 and never reaches the handler', async (t) => {
   let reached = false;
-  t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
   // A 413 here would mean the body was weighed, and so buffered, before the guards ran.
-  const res = await call('/api/documents', {
+  const res = await call('/api/intake/uploads', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'content-length': String(11 * 1024 * 1024) },
     body: { string: '{}' }
@@ -91,139 +88,40 @@ test('an uncredentialed call to a guarded route is 401 and never reaches the han
   assert.strictEqual(reached, false, 'the guard chain must stop before the handler');
 });
 
-async function multipart(fields, file) {
+test('the unscanned upload routes are gone', async () => {
+  // Files enter only through intake, where Defender scans them before anyone can read them.
+  const post = route => call(route, {
+    method: 'POST',
+    headers: { ...AUTHED, 'content-type': 'application/json' },
+    body: { string: '{}' }
+  });
+
+  assert.strictEqual((await post('/api/documents')).status, 404);
+  assert.strictEqual((await post('/api/documents/extract')).status, 404);
+});
+
+test('a multipart body is 415 on every route, after the guards', async (t) => {
+  let reached = false;
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
   const form = new FormData();
-  for (const [name, value] of Object.entries(fields)) form.set(name, value);
-  if (file) form.set('upfile', new File([file], 'plan.pdf', { type: 'application/pdf' }));
+  form.set('upfile', new File([Buffer.from('%PDF-1.4 fake')], 'plan.pdf', { type: 'application/pdf' }));
   const encoded = new Response(form);
-  return { type: encoded.headers.get('content-type'), bytes: new Uint8Array(await encoded.arrayBuffer()) };
-}
-
-/** A fresh os.tmpdir() for one test, so a leftover upload is any file in it. */
-function isolatedTmp(t) {
-  const previous = process.env.TMPDIR;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-'));
-  process.env.TMPDIR = dir;
-  t.after(() => {
-    if (previous === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = previous;
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-  return dir;
-}
-
-test('a multipart upload arrives as req.file and is deleted when the request ends', async (t) => {
-  // The dispatcher writes the part to os.tmpdir(), and the router, not the handler, deletes it.
-  let seen;
-  t.mock.method(documentController, 'extractDocument', (req, res) => {
-    seen = { file: req.file, body: req.body, onDisk: fs.readFileSync(req.file.path, 'utf8') };
-    res.status(202).json({});
-  });
-  const { type, bytes } = await multipart({ project: '207' }, Buffer.from('%PDF-1.4 fake'));
-
-  const res = await call('/api/documents/extract', {
-    method: 'POST',
-    headers: { ...AUTHED, 'content-type': type },
-    body: { bytes }
+  const type = encoded.headers.get('content-type');
+  const bytes = new Uint8Array(await encoded.arrayBuffer());
+  const send = headers => call('/api/intake/uploads', {
+    method: 'POST', headers: { ...headers, 'content-type': type }, body: { bytes }
   });
 
-  assert.strictEqual(res.status, 202);
-  assert.strictEqual(seen.body.project, '207');
-  assert.strictEqual(seen.file.originalname, 'plan.pdf');
-  assert.strictEqual(seen.file.mimetype, 'application/pdf');
-  assert.strictEqual(seen.file.size, 13);
-  assert.strictEqual(seen.onDisk, '%PDF-1.4 fake', 'the handler is handed the uploaded bytes on disk');
-  assert.strictEqual(fs.existsSync(seen.file.path), false, 'the temp file outlives the request');
-});
-
-test('an anonymous multipart POST is 401 and writes nothing to tmpdir', async (t) => {
-  let reached = false;
-  t.mock.method(documentController, 'extractDocument', (req, res) => { reached = true; res.json({}); });
-  t.mock.method(fs.promises, 'writeFile');
-  const { type, bytes } = await multipart({ project: '207' }, Buffer.alloc(64 * 1024, 1));
-  const tmp = isolatedTmp(t);
-
-  for (const route of ['/api/documents/extract', '/api/documents']) {
-    const res = await call(route, { method: 'POST', headers: { 'content-type': type }, body: { bytes } });
-    assert.strictEqual(res.status, 401, route);
-  }
-
+  assert.strictEqual((await send({})).status, 401, 'the guards answer first');
+  assert.strictEqual((await send(AUTHED)).status, 415);
   assert.strictEqual(reached, false);
-  assert.strictEqual(fs.promises.writeFile.mock.callCount(), 0, 'the body was parsed before the guards');
-  assert.deepStrictEqual(fs.readdirSync(tmp), []);
-});
-
-test('a multipart body on a route that takes none is 415, after the guards', async (t) => {
-  let reached = false;
-  t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
-  const { type, bytes } = await multipart({ project: '207' }, Buffer.from('%PDF-1.4 fake'));
-  const tmp = isolatedTmp(t);
-
-  const res = await call('/api/documents', {
-    method: 'POST',
-    headers: { ...AUTHED, 'content-type': type },
-    body: { bytes }
-  });
-
-  assert.strictEqual(res.status, 415);
-  assert.strictEqual(reached, false);
-  assert.deepStrictEqual(fs.readdirSync(tmp), []);
-});
-
-test('a multipart upload over the limit is 413, by header or by counted bytes', async (t) => {
-  let reached = false;
-  t.mock.method(documentController, 'extractDocument', (req, res) => { reached = true; res.json({}); });
-  const tmp = isolatedTmp(t);
-
-  const declared = await call('/api/documents/extract', {
-    method: 'POST',
-    headers: { ...AUTHED, 'content-type': 'multipart/form-data; boundary=x', 'content-length': String(101 * 1024 * 1024) },
-    body: { string: '--x--' }
-  });
-  assert.strictEqual(declared.status, 413);
-
-  // No content-length, as a chunked body arrives: the cap has to hold while streaming.
-  const { type, bytes } = await multipart({ project: '207' }, Buffer.alloc(100 * 1024 * 1024 + 1));
-  const streamed = await call('/api/documents/extract', {
-    method: 'POST',
-    headers: { ...AUTHED, 'content-type': type },
-    body: { bytes }
-  });
-  assert.strictEqual(streamed.status, 413);
-
-  assert.strictEqual(reached, false);
-  assert.deepStrictEqual(fs.readdirSync(tmp), []);
-});
-
-test('an extract the handler refuses or fails leaves no temp file', async (t) => {
-  t.mock.method(logger, 'error', () => {});
-  t.mock.method(projects, 'getById', async () => null);
-  const tmp = isolatedTmp(t);
-  const paths = [];
-  const original = fs.promises.writeFile;
-  t.mock.method(fs.promises, 'writeFile', (file, data) => { paths.push(file); return original(file, data); });
-  const { type, bytes } = await multipart({ project: '207' }, Buffer.from('%PDF-1.4 fake'));
-  const send = () => call('/api/documents/extract', {
-    method: 'POST',
-    headers: { ...AUTHED, 'content-type': type },
-    body: { bytes }
-  });
-
-  assert.strictEqual((await send()).status, 404, 'the real handler refuses an unknown parent project');
-
-  t.mock.method(projects, 'getById', async () => { throw new Error('cosmos down'); });
-  assert.strictEqual((await send()).status, 500);
-
-  assert.strictEqual(paths.length, 2, 'both requests wrote their upload');
-  assert.ok(paths.every((file) => file.startsWith(tmp)));
-  assert.deepStrictEqual(fs.readdirSync(tmp), []);
 });
 
 test('a body over the 10 MB limit is refused before it is parsed', async (t) => {
   let reached = false;
-  t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
 
-  const res = await call('/api/documents', {
+  const res = await call('/api/intake/uploads', {
     method: 'POST',
     headers: { ...AUTHED, 'content-type': 'application/json', 'content-length': String(11 * 1024 * 1024) },
     body: { string: '{}' }
@@ -235,9 +133,9 @@ test('a body over the 10 MB limit is refused before it is parsed', async (t) => 
 
 test('a JSON body with no content-length is cut off at the 10 MB limit', async (t) => {
   let reached = false;
-  t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
 
-  const res = await call('/api/documents', {
+  const res = await call('/api/intake/uploads', {
     method: 'POST',
     headers: { ...AUTHED, 'content-type': 'application/json' },
     body: { string: `"${'a'.repeat(10 * 1024 * 1024)}"` }
@@ -250,11 +148,11 @@ test('a JSON body with no content-length is cut off at the 10 MB limit', async (
 test('a client that drops mid-body is a 400, not a logged 500', async (t) => {
   t.mock.method(logger, 'error', () => {});
   let reached = false;
-  t.mock.method(documentController, 'createDocument', (req, res) => { reached = true; res.json({}); });
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
   // HttpRequest cannot carry a failing stream; dispatch() reads only these four members.
   const request = {
     method: 'POST',
-    url: 'http://127.0.0.1/api/documents',
+    url: 'http://127.0.0.1/api/intake/uploads',
     headers: new Headers({ ...AUTHED, 'content-type': 'application/json' }),
     body: new ReadableStream({ pull: (controller) => controller.error(new Error('socket hang up')) })
   };
@@ -279,13 +177,18 @@ test('a search-service failure thrown to the router answers a fixed message', as
   assert.deepStrictEqual(JSON.parse(res.body), { error: 'The search service could not run this query.' });
 });
 
-test('a malformed JSON body is a 400, not a 500', async () => {
-  const res = await call('/api/documents', {
+test('a malformed JSON body is a 400, not a 500', async (t) => {
+  let reached = false;
+  t.mock.method(intakeController, 'createUpload', (req, res) => { reached = true; res.json({}); });
+
+  const res = await call('/api/intake/uploads', {
     method: 'POST',
     headers: { ...AUTHED, 'content-type': 'application/json' },
     body: { string: '{not json' }
   });
+
   assert.strictEqual(res.status, 400);
+  assert.strictEqual(reached, false);
 });
 
 test('a null-body status is dispatched with no body and no content-length', async () => {
@@ -538,7 +441,7 @@ test('edge gate', async (t) => {
   });
 
   await t.test('APIM plus a valid X-Api-Key is served and reaches auth', async (t) => {
-    t.mock.method(documentController, 'createDocument', (req, res) => res.json({}));
+    t.mock.method(intakeController, 'createUpload', (req, res) => res.json({}));
     t.mock.method(documentController, 'getDocuments', (req, res) => res.json({ user: req.user.preferred_username }));
     const headers = { ...GATEWAY, 'x-api-key': SUITE_KEY };
 
@@ -546,7 +449,7 @@ test('edge gate', async (t) => {
     const read = await call('/api/documents', { headers });
     assert.strictEqual(read.status, 200);
     assert.strictEqual(JSON.parse(read.body).user, 'internal-service');
-    const write = await call('/api/documents', {
+    const write = await call('/api/intake/uploads', {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
       body: { string: '{}' }

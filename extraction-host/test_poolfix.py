@@ -1,8 +1,7 @@
-"""Checks for the runner-fault fix. Every one of these fails if the 2026-07-30 cascade could recur.
+"""Runner-fault, missing-source and tiling checks. Each fails if a fault could drop good documents.
 
-Run: DEMI_ADMIN_KEY=x python3 test_poolfix.py
+Run: DEMI_ADMIN_KEY=x WORK_DIR=<scratch dir> python3 test_poolfix.py
 """
-import multiprocessing
 import os
 import shutil
 import signal
@@ -17,6 +16,7 @@ import requests
 
 sys.argv = ["test"]
 os.environ.setdefault("DEMI_ADMIN_KEY", "test-not-used")
+import extract_core as core  # noqa: E402
 import worker  # noqa: E402
 
 
@@ -50,7 +50,7 @@ def main():
           not worker.is_runner_fault(RuntimeError("unsupported format: msg")))
 
     print("pool rebuild — a broken pool must not disable the text path for the rest of the run")
-    worker._pool = worker.new_pool()
+    worker._pool = core.new_pool(worker.TEXT_WORKERS, worker.POOL_RECYCLE)
     check("healthy pool is not rebuilt", worker.ensure_pool() is False)
     try:
         worker._pool.submit(kill_self).result()
@@ -80,9 +80,7 @@ def main():
     check("stopped at the threshold", worker.stop.is_set())
     worker.stop.clear()
 
-    # 2026-08-02: 5,445 documents were marked extracted-with-error and dropped out of the work list
-    # because the object store had no file for them. An unfetchable file is a third thing, neither
-    # a bad document nor a broken runner, and these checks pin that down.
+    # An unfetchable file is neither a bad document nor a broken runner; it must stay on the work list.
     print("source missing — an unfetchable file is not a document defect")
     # Own directory per fixture. Sharing one output path is how an earlier harness reported three
     # false failures and several false passes at once.
@@ -133,14 +131,14 @@ def main():
         def __exit__(self, *a):
             return False
 
-    real_api_get, real_http = worker.api_get, worker.http
+    real_api_get, real_http = core.api_get, core.http
 
     def attempt(api_code, obj_code):
         """Returns the exception download() raised, with no network touched."""
-        worker.api_get = lambda p, **k: Resp(api_code)
-        worker.http = lambda: types.SimpleNamespace(get=lambda *a, **k: Resp(obj_code))
+        core.api_get = lambda p, **k: Resp(api_code)
+        core.http = lambda: types.SimpleNamespace(get=lambda *a, **k: Resp(obj_code))
         try:
-            worker.download({"id": "probe", "ext": "pdf"})
+            core.download({"id": "probe", "ext": "pdf"}, tempfile.gettempdir())
         except Exception as e:                                    # noqa: BLE001 - that is the check
             return e
         return None
@@ -159,7 +157,7 @@ def main():
         check("the SourceMissing message carries no presigned URL",
               "X-Amz" not in str(attempt(200, 404)))
     finally:
-        worker.api_get, worker.http = real_api_get, real_http
+        core.api_get, core.http = real_api_get, real_http
 
     print("provenance — the field nothing has ever sent")
     ocr = worker.provenance("ocr", forced=True)
@@ -176,9 +174,7 @@ def main():
     check("and named in the engine string", "tiles" in tiled_prov["engine"])
     check("a normal conversion is not marked tiled", ocr["options"]["tiled"] is False)
 
-    # 2026-08-02: 2,039 documents converted to nothing but docling's `<!-- image -->` placeholder.
-    # Every length test in ocr_worker read those as a successful conversion, because the
-    # placeholder is 14 characters of markdown.
+    # A placeholder-only conversion is 14 characters, so a length test reads it as converted.
     print("textless detection — a placeholder is not text")
     check("placeholder-only markdown has no real characters",
           worker.real_chars("<!-- image -->") == 0)
@@ -188,25 +184,24 @@ def main():
     # THE bug this replaced: len() on a placeholder-only file is 14, so it passes any threshold
     # below that and the document is filed as converted.
     check("len() cannot see the difference and real_chars can",
-          len("<!-- image -->") == 14 and worker.real_chars("<!-- image -->") < worker.TEXTLESS_CHARS)
+          len("<!-- image -->") == 14 and worker.real_chars("<!-- image -->") < core.TEXTLESS_CHARS)
     check("a real page is above the threshold",
-          worker.real_chars("Proposed Powerhouse Site. Scale 1:120,000. See Figure 2.") >= worker.TEXTLESS_CHARS)
+          worker.real_chars("Proposed Powerhouse Site. Scale 1:120,000. See Figure 2.") >= core.TEXTLESS_CHARS)
 
     print("tiling — the render stays in the pool, and the seam does not duplicate text")
     tmp = Path(tempfile.mkdtemp(prefix="poolfix-tile-"))
-    real_forced, real_pool = worker.convert_forced, worker._pool
+    real_forced = core.convert_forced
     G = worker.TILE_GRID
     try:
         from PIL import Image
 
-        # tile_job is exercised on REAL files, not through a stand-in. It is the half that touches
-        # pdfium, and a fixture standing in for it is exactly how a parent-process render shipped
-        # and failed 552 documents.
+        # tile_job runs on real files: it is the half that touches pdfium, so a stand-in would hide
+        # a render moving into the parent.
         a, b = tmp / "a", tmp / "b"
         a.mkdir(); b.mkdir()
         png = tmp / "sheet.png"
         Image.new("RGB", (900, 900), "white").save(png)
-        tiles, truncated = worker.tile_job(str(png), "png", str(a), G, 0.06, 6, 60_000_000, 20)
+        tiles, truncated = core.tile_job(str(png), "png", str(a), G, 0.06, 6, 60_000_000, 20)
         check("an image is cut into a full grid of tiles", len(tiles) == G ** 2)
         check("and every tile is written to disk", all(Path(t).exists() for t in tiles))
         check("a single-page image is never truncated", truncated is False)
@@ -216,16 +211,14 @@ def main():
         # The page bound is the cost control: TILE_GRID^2 OCR passes PER PAGE.
         pdf = tmp / "many.pdf"
         pg = Image.new("RGB", (600, 600), "white")
-        pg.save(pdf, save_all=True, append_images=[pg] * (worker.TILE_MAX_PAGES + 4))
-        tiles, truncated = worker.tile_job(str(pdf), "pdf", str(b), G, 0.06, 6, 60_000_000,
-                                           worker.TILE_MAX_PAGES)
-        check("a long PDF stops at TILE_MAX_PAGES", len(tiles) == worker.TILE_MAX_PAGES * G ** 2)
+        pg.save(pdf, save_all=True, append_images=[pg] * (core.TILE_MAX_PAGES + 4))
+        tiles, truncated = core.tile_job(str(pdf), "pdf", str(b), G, 0.06, 6, 60_000_000,
+                                           core.TILE_MAX_PAGES)
+        check("a long PDF stops at TILE_MAX_PAGES", len(tiles) == core.TILE_MAX_PAGES * G ** 2)
         check("and reports the truncation instead of hiding it", truncated is True)
 
-        # THE REGRESSION CHECK. Opening the PDF in the parent corrupts pdfium's global state, which
-        # docling's converter threads share: 552 of 623 documents failed with "PDFium: Data format
-        # error" on 2026-08-02 because convert_tiled rendered inline. The fix IS the pool submit,
-        # so that is the thing asserted — not the output, which looked fine either way.
+        # Rendering in the parent corrupts pdfium state docling shares, and the output looks fine
+        # either way, so the pool submit itself is what is asserted.
         submitted = []
 
         class FakePool:
@@ -233,26 +226,25 @@ def main():
                 submitted.append(fn)
                 class Fut:
                     def result(self_):
-                        return ([str(png)] * (G ** 2), False)
+                        return ([str(tmp / f"p0_{i // G}{i % G}.png") for i in range(G ** 2)], False)
                 return Fut()
 
-        worker._pool = FakePool()
         # Every tile returns the SAME two lines, which is what the overlap really produces. If the
         # join does not dedupe, this comes back G^2 times over.
-        worker.convert_forced = lambda p: "<!-- image -->\nToba Inlet\nScale 1:120,000\n"
-        md = worker.convert_tiled(tmp / "x.pdf", "pdf", "t1")
+        core.convert_forced = lambda p: "<!-- image -->\nToba Inlet\nScale 1:120,000\n"
+        md = core.convert_tiled(tmp / "x.pdf", "pdf", FakePool(), "t1")
         check("the render is submitted to the pool, never run in the parent",
-              submitted == [worker.tile_job])
+              submitted == [core.tile_job])
         check("the placeholder never survives into tiled output", "<!-- image -->" not in md)
         check("text from the tiles is kept", "Toba Inlet" in md and "Scale 1:120,000" in md)
         check("duplicate lines across tiles are dropped once", md.count("Toba Inlet") == 1)
 
         calls = []
-        worker.convert_forced = lambda p: (calls.append(p), "line %d" % len(calls))[1]
-        worker.convert_tiled(tmp / "x.pdf", "pdf", "t2")
+        core.convert_forced = lambda p: (calls.append(p), "line %d" % len(calls))[1]
+        core.convert_tiled(tmp / "x.pdf", "pdf", FakePool(), "t2")
         check("one OCR pass per tile the job returned", len(calls) == G ** 2)
     finally:
-        worker.convert_forced, worker._pool = real_forced, real_pool
+        core.convert_forced = real_forced
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\nall checks passed")

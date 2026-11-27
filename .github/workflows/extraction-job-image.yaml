@@ -1,0 +1,60 @@
+# The job pulls this image by the digest printed at the end, never by tag.
+# Not yet checked: whether the job subnet's firewall lets it pull from ghcr.io.
+
+name: Extraction job image
+
+on:
+  push:
+    tags:
+      - 'extract-v*'
+
+concurrency:
+  group: extraction-job-image-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-push:
+    name: Build and push the extraction job image
+    runs-on: ubuntu-latest
+    # The build installs torch and docling and converts three files to bake the models in.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      # GHCR refuses upper-case names; the label links the package to this repository.
+      - name: Build image
+        id: build
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/extraction-job:${REF_NAME#extract-}"
+          docker build \
+            --label "org.opencontainers.image.source=${SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$image" extraction-host
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Push image and print digest
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker push "$IMAGE"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")"
+          echo "Pinned image: $digest"
+          echo "Pinned image: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"

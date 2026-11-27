@@ -86,6 +86,13 @@ module.exports = {
 
   eaglePushedAt: { defaultVis: 2, maxVis: 2 },
 
+  // Intake bookkeeping, set by the server only; 0/0 also refuses each as a PUT body key.
+  publishOnRelease: { defaultVis: 0, maxVis: 0 },
+  publishRequestedBy: { defaultVis: 0, maxVis: 0 },
+  extractionQueuedAt: { defaultVis: 0, maxVis: 0 },
+  // Why a publish-on-upload stayed unpublished; staff read it to republish by hand.
+  publishRefused: { defaultVis: 2, maxVis: 2 },
+
   // The chunk ingest repeated-failure guard (controllers/nosql/document.js). Operators read them to
   // see why an ingest 409s; they describe the pipeline, not the document, so never public.
   chunkIngestFailures: { defaultVis: 2, maxVis: 2 },

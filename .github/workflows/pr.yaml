@@ -68,6 +68,10 @@ jobs:
       - name: Run PDF title tests
         run: python3 -m pytest pdf-title
 
+      # API, queue and pool are faked, so docling is not installed here.
+      - name: Run extraction job tests
+        run: python3 -m pytest extraction-host/test_job.py
+
   test-frontend:
     name: Test & Build Frontend
     runs-on: ubuntu-latest

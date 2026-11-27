@@ -14,12 +14,28 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Parked on both environments. The test private endpoint subnet `c4b0a8-test-cond-ext-pe-subnet`
-// (10.46.52.32/28) was full on 2026-10-14, so `demi-intake-pe-test` could not be created. To resume,
-// free the subnet or change `privateEndpointSubnetId`, set this to true and run
-// `scripts/deploy-infra.sh test --foundation --live`.
-param deployDocumentIntake = false
+// The shared private endpoint subnet is full, so the intake endpoint goes on `privateEndpoint`
+// (10.46.52.144/28). Created by `scripts/deploy-infra.sh test --foundation --live`.
+param deployDocumentIntake = true
 param intakeCapGBPerMonth = 5
+param intakePrivateEndpointSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/privateEndpoint'
+// eagle-admin uploads from this host PUT straight to the intake account. frontendHostNames joins it.
+param intakeUploadOrigins = [
+  'test.projects.eao.gov.bc.ca'
+]
+
+// ── Extraction job ────────────────────────────────────────────────────────────────────────────
+// snet-demi-extract-test (10.46.52.192/27) needs an NSG, delegation to Microsoft.App/environments
+// and the openshift-public-endpoint route table. The job deploys once the image digest is set and
+// demi-kv-test holds extraction-job-api-key; deploy-infra.sh sets DEPLOY_EXTRACTION_JOB false without it.
+param deployExtractionJob = bool(readEnvironmentVariable('DEPLOY_EXTRACTION_JOB', 'true'))
+param extractionQueue = 'extract'
+param extractSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-demi-extract-test'
+param extractionJobImage = ''
+// 25 USD in the CAD billing currency. A new budget cannot start in a past month: a first deploy
+// after December 2026 sets this to its own month.
+param extractionBudgetAmount = 35
+param extractionBudgetStartDate = '2026-12-01'
 
 // Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on
 // OpenShift TEST has written here through its nr-object-store-credential secret since the Helm
@@ -55,6 +71,8 @@ param optionalSecretNames = [
   'eagle-sync-out-client-secret'
   // The edge ban policy JSON; see the Edge ban timer section below.
   'edge-ban-policy'
+  // The extraction job's own key: principal extraction-job, demi-service-write.
+  'extraction-job-api-key'
 ]
 
 // The namespaces demi-secret-sync-test owns. Both nonprod namespaces, and prod is deliberately not

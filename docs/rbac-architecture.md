@@ -163,11 +163,11 @@ children to a Track-only project's level 2.
 The audit buffer flushes on graceful instance shutdown; a forced kill can drop up to one second of
 buffered rows.
 
-Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is
-incident response — an error or a privacy breach, never a routine correction, which publishes a
-replacement instead. A takedown is not finished when the row narrows: `docs/takedown-runbook.md`
-covers purging the AI Search index, cleaning up chunks, invalidating caches, and the fact that
-copies already outside EPIC are unrecoverable.
+Pulling a record BACK from level 4 is audited as `record.takedown`. `sysadmin` may always do it,
+and `staff` may unpublish a document with a non-empty `reason` through
+`PUT /api/documents/:id/level`, but not through the `/published` alias. A takedown is not finished
+when the row narrows: `docs/takedown-runbook.md` covers purging the AI Search index, cleaning up
+chunks, invalidating caches, and the fact that copies already outside EPIC are unrecoverable.
 
 **Field dials are independent of the record level.** A dial is an integer 1-4 (0 = never),
 clamped to `[0, maxVis]`, invalid → `defaultVis`. The row plane decides who may see a record, so a
@@ -452,7 +452,7 @@ Each item below overrides the corresponding section of the source document.
 - The source document's count of `EAGLE_ONLY_FIELDS` was wrong. The list is in `src/ownership/project.js`; read the entries there, since a count goes stale.
 - `src/helpers/response.js` is not dead: `serverError` is imported by six controllers.
 - `res.json` sites: 108 total, 62 non-error, not about 45.
-- No email-intake upload route exists; the only upload route is `POST /documents/extract`.
+- No email-intake upload route exists; the only upload route is `POST /intake/uploads`.
 - `publicView` has a fifth call site (`src/controllers/nosql/project.js`); in
   `src/controllers/search.js` it filters only the `sources` sub-object of a hand-built row.
 - `ENRICHMENT_SOURCES` is empty in prod, so `sources.wildfire` is a test-only value.
