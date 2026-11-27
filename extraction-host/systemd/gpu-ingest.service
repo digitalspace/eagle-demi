@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/gpu-extractor
 EnvironmentFile=/root/gpu-extractor/gpu-extractor.env
-# After the EnvironmentFile so it wins over any value there.
+# The unit's default; a MAX_RUN_FAILURES in the EnvironmentFile wins over this line.
 Environment=MAX_RUN_FAILURES=3
 ExecStart=/root/gpu-extractor/venv/bin/python /root/gpu-extractor/ingest.py
 # ingest.py drains out/ and exits 0, so "restart always" is the loop: every 5 minutes it picks up
