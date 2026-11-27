@@ -10,7 +10,9 @@ const EXTRACTION_FIELDS = [
   // Page provenance: a re-seed replaces the row, and a dropped flag renders "Passage N" over paged chunks.
   'pageNumbered', 'pageCount',
   // Dropping the failure count lets a document that keeps failing re-enter the GPU queue on every push.
-  'extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt'
+  'extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt',
+  // The backlog sweep's retry clock; dropped, a push re-queues the row the next day.
+  'extractionQueuedAt'
 ];
 
 /**

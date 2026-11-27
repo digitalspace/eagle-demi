@@ -117,8 +117,6 @@ const config = {
 
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),
 
-  batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
-
   // Largest answer ?inline=1 streams to a caller that is not anonymous and edge-stamped; bigger
   // ones get the 302. 0 = no streaming, 302 for all but an edge piece past byte 0 (503).
   downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
@@ -160,7 +158,6 @@ const config = {
   // Empty is off: Azure drops an app setting whose value is '', so unset must mean disabled, not
   // a fallback queue nothing is bound to.
   bulkDownloadsQueue:   process.env.BULK_DOWNLOADS_QUEUE || '',
-  bulkCleanupSchedule:  process.env.BULK_CLEANUP_SCHEDULE || '',
 
   // Empty is off: the re-stamp is skipped, not done inline, unless chunkRestampInline is set.
   chunkRestampQueue:    process.env.CHUNK_RESTAMP_QUEUE || '',
@@ -170,8 +167,6 @@ const config = {
   // Local `func start` only. Opt-in, not a fallback: a deployed walk would block eagle-api's
   // 10-second push. A skipped re-stamp flags the row for backfill-chunk-parent-fields.js.
   chunkRestampInline:   process.env.CHUNK_RESTAMP_INLINE === '1',
-
-  uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
 
   logLevel:              process.env.LOG_LEVEL || 'info',
 
@@ -386,6 +381,11 @@ const config = {
     get capGBPerMonth() { return intFromEnv('INTAKE_CAP_GB_PER_MONTH', 0); },
     // Scanning takes up to 3 hours, so a timeout here is final.
     get pendingTimeoutHours() { return intFromEnv('INTAKE_PENDING_TIMEOUT_HOURS', 6); }
+  },
+  extraction: {
+    get queue() { return envTrim('EXTRACTION_QUEUE'); },
+    get sweepMax() { return intFromEnv('EXTRACTION_SWEEP_MAX', 100); },
+    get sweepSchedule() { return envTrim('EXTRACTION_SWEEP_SCHEDULE') || '0 0 11 * * *'; }
   },
 };
 
