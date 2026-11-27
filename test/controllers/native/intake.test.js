@@ -449,7 +449,8 @@ const LISTED = [
   { id: 'r1', projectId: '207', requestedRead: readForLevel(2), displayName: 'One', scanStatus: 'pending',
     scanRejectReason: null, createdAt: '2026-11-27T10:00:00.000Z', s3Key: '207/x.pdf' },
   { id: 'r2', projectId: '207', requestedRead: readForLevel(2), displayName: 'Two', scanStatus: 'rejected',
-    scanRejectReason: 'malicious', createdAt: '2026-11-26T10:00:00.000Z', scannedAt: '2026-11-26T10:05:00.000Z' },
+    scanRejectReason: 'malicious', publishOnRelease: true, createdAt: '2026-11-26T10:00:00.000Z',
+    scannedAt: '2026-11-26T10:05:00.000Z' },
   { id: 'r3', projectId: '207', requestedRead: readForLevel(1), displayName: 'Team only', scanStatus: 'pending',
     createdAt: '2026-11-27T09:00:00.000Z' },
   { id: 'o1', projectId: '300', requestedRead: readForLevel(2), displayName: 'Other', scanStatus: 'pending',
@@ -492,7 +493,7 @@ test('list: a listed upload carries only the seven answered fields', async (t) =
   wire(t, { listed: LISTED });
   const res = await listAs(SYSADMIN, { projectId: '207' });
   assert.deepStrictEqual(res.body[1], {
-    id: 'r2', displayName: 'Two', scanStatus: 'rejected', scanRejectReason: 'malicious', publishRefused: null,
+    id: 'r2', displayName: 'Two', scanStatus: 'rejected', scanRejectReason: 'malicious', publishOnRelease: true,
     createdAt: '2026-11-26T10:00:00.000Z', scannedAt: '2026-11-26T10:05:00.000Z'
   });
 });

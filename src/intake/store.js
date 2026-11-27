@@ -70,7 +70,7 @@ async function listPending({ pageSize, continuationToken } = {}) {
 async function listForProject(projectId, statuses, since) {
   const { items } = await cosmos.query(documents.CONTAINER, {
     query: `SELECT TOP ${LIST_FOR_PROJECT_MAX} c.id, c.projectId, c.requestedRead, c.displayName, c.scanStatus, ` +
-      'c.scanRejectReason, c.publishRefused, c.createdAt, c.scannedAt FROM c ' +
+      'c.scanRejectReason, c.publishOnRelease, c.createdAt, c.scannedAt FROM c ' +
       'WHERE c.projectId = @projectId AND ARRAY_CONTAINS(@statuses, c.scanStatus) AND c.createdAt >= @since ' +
       'ORDER BY c.createdAt DESC',
     parameters: [
