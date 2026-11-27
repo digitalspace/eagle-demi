@@ -127,4 +127,5 @@ test('listForProject reads one partition for the given statuses since the given 
   assert.match(spec.query,
     /WHERE c\.projectId = @projectId AND ARRAY_CONTAINS\(@statuses, c\.scanStatus\) AND c\.createdAt >= @since/);
   assert.match(spec.query, /ORDER BY c\.createdAt DESC$/);
+  assert.match(spec.query, /c\.publishOnRelease,/);
 });

@@ -259,6 +259,7 @@ function listedUpload(row) {
     displayName: row.displayName,
     scanStatus: row.scanStatus,
     scanRejectReason: row.scanRejectReason || null,
+    publishOnRelease: row.publishOnRelease === true,
     publishRefused: row.publishRefused || null,
     createdAt: row.createdAt,
     scannedAt: row.scannedAt || null

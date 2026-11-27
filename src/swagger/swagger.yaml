@@ -3688,6 +3688,9 @@ paths:
                     displayName: { type: string }
                     scanStatus: { type: string, enum: [pending, rejected] }
                     scanRejectReason: { type: string, nullable: true }
+                    publishOnRelease:
+                      type: boolean
+                      description: The upload asked to be published once its scan clears.
                     publishRefused: { type: string, nullable: true }
                     createdAt: { type: string, format: date-time }
                     scannedAt: { type: string, format: date-time, nullable: true }
