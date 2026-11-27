@@ -3758,7 +3758,7 @@ paths:
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
-          description: Document not found, or deleted in Eagle.
+          description: Document not found, or deleted.
     put:
       summary: Update document
       description: >-
@@ -3793,7 +3793,7 @@ paths:
         '401':
           description: Unauthorized.
         '404':
-          description: Document deleted during the edit.
+          description: Document not found, or deleted (before or during the edit).
         '409':
           description: >-
             The document changed three times while the write was retried; send the edit again.
@@ -3802,7 +3802,12 @@ paths:
             limit }`. Re-sending `isFeatured: true` on a featured document is not refused.
     delete:
       summary: Delete document
-      description: Delete a document and its parsed chunks.
+      description: >-
+        Flags a document DEMI owns as deleted and narrows it to staff (level 2). The row, its
+        chunks and its stored file stay, and sync-out narrows Eagle's copy. Reads answer 404 for it
+        after. A document Eagle owns is deleted through eagle-api, never here. With `purge=true` a
+        sysadmin removes the row, its chunks and its search entries on any document instead
+        (incident response, see `docs/takedown-runbook.md`); the stored file still stays.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -3812,15 +3817,34 @@ paths:
           required: true
           schema:
             type: string
+        - name: purge
+          in: query
+          required: false
+          description: '`true` purges instead of flagging. Sysadmin only.'
+          schema:
+            type: string
+            enum: ['true']
       responses:
         '200':
-          description: Document successfully deleted.
+          description: >-
+            Flagged: `{ message, deleted }`. Purged: also `removedChunks`, `removedChunksFromSearch`,
+            `removedFromSearch` and `storedFileRetained` (always true).
         '401':
           description: Unauthorized.
+        '403':
+          description: '`purge=true` from a caller that is not sysadmin. Nothing is written.'
+        '404':
+          description: Document not found, or already deleted (without `purge`).
+        '409':
+          description: >-
+            Without `purge`: the document is held in Eagle (`Document <id> is held in Eagle; delete
+            it through eagle-api.`), or it changed three times while the flag was retried.
+        '500':
+          description: The row is flagged, but its chunks were not all narrowed to staff.
         '503':
           description: >-
-            Some chunks or search-index entries could not be removed, so the document is kept.
-            Retry the delete after `Retry-After` seconds; the body carries `removedChunks`,
+            Purge only: some chunks or search-index entries could not be removed, so the document
+            is kept. Retry after `Retry-After` seconds; the body carries `removedChunks`,
             `removedFromSearch` and `removedChunksFromSearch`.
 
   /api/documents/pdf-title/pending:
@@ -4519,9 +4543,11 @@ paths:
             pull a document back from level 4. A registry key holding only `demi-service-write`
             can write, but cannot do this.
         '404':
-          description: Document not found.
+          description: Document not found, or deleted (before or during the move).
         '409':
-          description: The document would out-rank its project.
+          description: >-
+            The document would out-rank its parent: its project, or the project notification
+            it was uploaded under.
 
   /api/documents/{id}/chunks:
     post:
