@@ -2187,7 +2187,10 @@ paths:
                               kind:
                                 type: string
                                 enum: [extension, interregnum, suspension, resumption, comment-period, section-13,
-                                  decision, act-transition, other]
+                                  decision, act-transition, submission, other]
+                                description: >-
+                                  `submission` is Track event type 8 and never a sheet milestone. Track types and
+                                  sheet codes with no kind of their own, such as Track types 33 and 37, are `other`.
         '401':
           description: No token, or the credential is rejected.
         '403':

@@ -154,8 +154,9 @@ const INTERRUPTION_KEYS = ['kind', 'typeCode', 'legalSection', 'startDate', 'end
 const MILESTONE_KEYS = ['name', 'code', 'eventType', 'position', 'actualDate', 'anticipatedDate', 'endDate',
   'numberOfDays', 'outcome'];
 
-// Track event type ids: 10 time limit extension, 11 interregnum (Special Extension category), 12 time limit
-// suspension, 38 time limit resumption, 22 comment period, 13-21 the Decision category.
+// Track event type ids: 8 submission, 10 time limit extension, 11 interregnum (Special Extension category),
+// 12 time limit suspension, 38 time limit resumption, 22 comment period, 13-21 the Decision category.
+const SUBMISSION_EVENT_TYPES = [8];
 const EXTENSION_EVENT_TYPES = [10, 11];
 const SUSPENSION_EVENT_TYPES = [12];
 const RESUMPTION_EVENT_TYPES = [38];
@@ -166,7 +167,7 @@ const isDecisionEvent = (milestone) => milestone.eventType >= 13 && milestone.ev
 // Interregnum counts in the extension totals but draws as its own kind, so it overrides the extension entry.
 const TRACK_MILESTONE_KINDS = new Map([[EXTENSION_EVENT_TYPES, 'extension'], [SUSPENSION_EVENT_TYPES, 'suspension'],
   [RESUMPTION_EVENT_TYPES, 'resumption'], [COMMENT_PERIOD_EVENT_TYPES, 'comment-period'],
-  [[INTERREGNUM_EVENT_TYPE], 'interregnum']]
+  [SUBMISSION_EVENT_TYPES, 'submission'], [[INTERREGNUM_EVENT_TYPE], 'interregnum']]
   .flatMap(([types, kind]) => types.map(type => [type, kind])));
 const SHEET_MILESTONE_KINDS = new Map([['comment-period', 'comment-period'], ['order-variation', 'section-13'],
   ['decision', 'decision'], ['act-transition', 'act-transition']]);
