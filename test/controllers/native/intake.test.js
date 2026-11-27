@@ -14,6 +14,7 @@ const { withServer } = require('../../helpers/with-server');
 
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
+const cosmos = require('../../../src/db/cosmos-nosql');
 const blobs = require('../../../src/intake/blobs');
 const store = require('../../../src/intake/store');
 const lists = require('../../../src/repositories/lists');
@@ -31,8 +32,8 @@ const AUTHED = { 'content-type': 'application/json', 'x-api-key': SUITE_KEY };
 const PROJECT = { id: '207', read: ['staff', 'idir'], region: 'Peace' };
 const SAS_URL = 'https://demiintest.blob.core.windows.net/incoming/x?sig=stub';
 
-/** Intake enabled, the project found, the row and the link captured. */
-function wire(t, { account = 'demiintest', project = PROJECT, stored = null, listed = [] } = {}) {
+/** Intake enabled, the project found, the row and the link captured. `notification` is stored in Cosmos. */
+function wire(t, { account = 'demiintest', project = PROJECT, notification = null, stored = null, listed = [] } = {}) {
   const previous = process.env.INTAKE_STORAGE_ACCOUNT;
   process.env.INTAKE_STORAGE_ACCOUNT = account;
   t.after(() => {
@@ -42,6 +43,8 @@ function wire(t, { account = 'demiintest', project = PROJECT, stored = null, lis
   const seen = { rows: [], links: [], listCalls: [] };
   t.mock.method(logger, 'info', () => {});
   t.mock.method(projects, 'getById', async (_access, id) => (project && String(id) === project.id ? project : null));
+  t.mock.method(cosmos, 'readItem', async (container, id) =>
+    (container === 'notifications' && notification && id === notification.id ? notification : null));
   t.mock.method(documents, 'upsert', async (row, opts) => {
     seen.rows.push({ row, opts });
     return row;
@@ -534,4 +537,51 @@ test('list: an anonymous caller gets 401 through the route table', async (t) => 
   await withServer(async (call) => {
     assert.strictEqual((await call('/api/intake/uploads?projectId=207', { headers: {} })).status, 401);
   });
+});
+
+const NOTIFICATION = { id: '5f9b6a1c2d3e4f5a6b7c8d9e', read: readForLevel(2), region: 'Skeena' };
+const UNDER_NOTIFICATION = { ...PENDING, projectId: NOTIFICATION.id };
+const SCOPED_WRITER = {
+  preferred_username: 'key:scoped', keyId: 'k3', realm_access: { roles: ['demi-service-write'] }, projectScope: ['P1']
+};
+
+async function statusAs(user, id) {
+  const res = mockRes();
+  await intake.getUpload({ user, params: { id }, headers: {}, query: {} }, res);
+  return res;
+}
+
+test('notification parent: create answers 201 with the row under the notification', async (t) => {
+  const seen = wire(t, { project: null, notification: NOTIFICATION });
+  const res = await createAs(STAFF, { projectId: NOTIFICATION.id, fileName: 'a.pdf', requestedRead: ['staff'] });
+  assert.strictEqual(res.statusCode, 201);
+  const { row } = seen.rows[0];
+  assert.strictEqual(row.projectId, NOTIFICATION.id);
+  assert.strictEqual(row.region, 'Skeena');
+  assert.deepStrictEqual(row.requestedRead, ['staff']);
+});
+
+test('notification parent: list answers its pending uploads', async (t) => {
+  wire(t, { project: null, notification: NOTIFICATION, listed: [{ ...LISTED[0], projectId: NOTIFICATION.id }] });
+  const res = await listAs(STAFF, { projectId: NOTIFICATION.id });
+  assert.deepStrictEqual(res.body.map(row => row.id), ['r1']);
+});
+
+test('notification parent: status of a pending upload answers 200', async (t) => {
+  wire(t, { project: null, notification: NOTIFICATION, stored: UNDER_NOTIFICATION });
+  const res = await statusAs(STAFF, 'u1');
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.scanStatus, 'pending');
+});
+
+test('a scoped key gets 404 on create under a public notification outside its scope, and no row', async (t) => {
+  const seen = wire(t, { project: null, notification: { ...NOTIFICATION, read: readForLevel(4) } });
+  const res = await createAs(SCOPED_WRITER, { projectId: NOTIFICATION.id, fileName: 'a.pdf' });
+  assert.strictEqual(res.statusCode, 404);
+  assert.strictEqual(seen.rows.length, 0);
+});
+
+test('a scoped key gets 404 on the status of an upload under a notification outside its scope', async (t) => {
+  wire(t, { project: null, notification: { ...NOTIFICATION, read: readForLevel(4) }, stored: UNDER_NOTIFICATION });
+  assert.strictEqual((await statusAs(SCOPED_WRITER, 'u1')).statusCode, 404);
 });

@@ -2,7 +2,7 @@
 
 /**
  * Eagle's `project` ref may name a `ProjectNotification`, not a project; a ref in neither is dropped.
- * A project parent caps its child's `read[]`; a notification does not, it has no project ACL.
+ * On a push only a project parent caps its child's `read[]`; on intake (`parentOf`) either one does.
  */
 
 const projects = require('../repositories/projects');
@@ -27,6 +27,21 @@ function pickParent(project, notification) {
   }
   if (project) return { id: String(project.id), read: project.read, kind: 'project' };
   return null;
+}
+
+/**
+ * The DEMI-id parent `access` may see, `pickParent`'s order. Notifications have no project axis, so
+ * a scoped caller's scope must name the notification id itself.
+ * @returns {Promise<{id: string, read: string[], kind: 'project'|'notification', region: string}|null>}
+ */
+async function parentOf(access, id) {
+  const [project, notificationRow] = await Promise.all([
+    projects.getById(access, id),
+    notifications.getById(access, id)
+  ]);
+  const notification = notificationRow && canRead(notificationRow, access, 'id') ? notificationRow : null;
+  const parent = pickParent(project, notification);
+  return parent && { ...parent, region: (notification || project).region || '' };
 }
 
 /** Reason logged for a ref that is not an Eagle ObjectId; the raw value is never logged. */
@@ -186,6 +201,6 @@ async function admitParent(ref, { childId } = {}) {
 }
 
 module.exports = {
-  admitParent, pickParent, eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode,
+  admitParent, pickParent, parentOf, eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode,
   MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 };
