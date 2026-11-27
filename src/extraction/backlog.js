@@ -24,4 +24,4 @@ async function sweep({ now = new Date() } = {}) {
   return { listed: rows.length, queued };
 }
 
-module.exports = { sweep, REQUEUE_AFTER_MS };
+module.exports = { sweep };
