@@ -220,11 +220,12 @@ test('the extraction job module call', async (t) => {
     assert.match(call, /^\s+appInsightsConnectionString: appInsightsConnectionString$/m);
   });
 
-  await t.test('test names the key and the new subnet, and leaves the image and GPU unset', () => {
+  await t.test('test names the key and the new subnet, pins the image by digest, and leaves GPU unset', () => {
     assert.match(TEST_PARAMS, /^\s+'extraction-job-api-key'$/m);
     assert.match(TEST_PARAMS, /^param deployExtractionJob = bool\(readEnvironmentVariable\('DEPLOY_EXTRACTION_JOB', 'true'\)\)$/m);
     assert.ok(TEST_PARAMS.includes(`param extractSubnetId = '${subnet('snet-demi-extract-test')}'\n`));
-    assert.match(TEST_PARAMS, /^param extractionJobImage = ''$/m);
+    // A tag can move under a deployed job; only a digest names the exact image.
+    assert.match(TEST_PARAMS, /^param extractionJobImage = 'ghcr\.io\/digitalspace\/eagle-demi\/extraction-job@sha256:[0-9a-f]{64}'$/m);
     assert.doesNotMatch(MAIN + TEST_PARAMS, /deployExtractionGpu/);
   });
 
