@@ -5,7 +5,7 @@
  * one such clause zeroes the AND. Errs wide: a wrong entry only costs one prefix expansion.
  */
 const ANALYZER_STOPWORDS = new Set([
-  // Measured on the live index: `searchChunks({ keywords: word, fuzzy: false })` counts 0.
+  // Measured on the live index: a chunk search for the word on `content` alone counts 0.
   'from', 'hers', 'herself', 'himself', 'itself', 'mine', 'myself', 'ours', 'ourselves', 'that',
   'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself',
   // Standard English stop set, inferred from en.microsoft; the Analyze API is 403 to the app.
