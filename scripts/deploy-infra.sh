@@ -19,11 +19,11 @@ set -euo pipefail
 # nothing else re-PUTs those resources. The check below refuses an application-only apply when a
 # foundation module has been edited since the last foundation deployment.
 #
-# Separate from `deploy-azure.sh` on purpose. That script is zipdeploy-and-poll for application
-# code and CI runs it on every push to main. Infrastructure is a different lifecycle, a different
-# blast radius, and a credential CI deliberately does not hold — `demi-cicd-*` has Website
-# Contributor on two App Services and nothing at resource-group scope, so it could not run an ARM
-# deployment even if a job were added. This stays a deliberate, human-initiated command.
+# Separate from the API code deploy (azure-deploy-staging-api.yaml, azure-deploy-prod.yaml) on
+# purpose; a function a new setting turns on registers only at that deploy, so the last step checks.
+# Infrastructure is a different lifecycle, a different blast radius, and a credential CI does not
+# hold — `demi-cicd-*` has Website Contributor on two App Services and nothing at resource-group
+# scope, so it could not run an ARM deployment. This stays a deliberate, human-initiated command.
 #
 # ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────────────────────────
 #
@@ -182,8 +182,8 @@ FOUNDATION_INPUTS=(
 # One step counter rather than hardcoded banners: application mode runs the foundation-currency
 # check, foundation mode does not.
 STEP=0
-TOTAL_STEPS=5
-[ "$DEPLOY_FOUNDATION" = 'true' ] || TOTAL_STEPS=6
+TOTAL_STEPS=6
+[ "$DEPLOY_FOUNDATION" = 'true' ] || TOTAL_STEPS=7
 step() {
   STEP=$((STEP + 1))
   echo -e "${BLUE}[${STEP}/${TOTAL_STEPS}] ${1}${NC}"
@@ -587,6 +587,14 @@ assert_secrets_survived() {
   fi
 }
 
+check_api_functions() {
+  step "Checking the functions the app settings turn on are registered…"
+  if ! "${REPO_ROOT}/scripts/check-api-functions.sh" "$ENVIRONMENT"; then
+    echo -e "${RED}✗ infrastructure is applied, but a function is not registered. Re-run the code deploy named above.${NC}" >&2
+    exit 5
+  fi
+}
+
 LAYER='application layer only'
 [ "$DEPLOY_FOUNDATION" = 'true' ] && LAYER='foundation and application'
 echo -e "${BLUE}DEMI infrastructure → ${ENVIRONMENT} (${RESOURCE_GROUP}) — ${LAYER}${NC}"
@@ -595,4 +603,5 @@ require_secrets
 [ "$DEPLOY_FOUNDATION" = 'true' ] || require_foundation_current
 run_deployment
 assert_secrets_survived
-echo -e "${GREEN}✓ done. App code deploys separately — see scripts/deploy-azure.sh.${NC}"
+check_api_functions
+echo -e "${GREEN}✓ infrastructure done. App code deploys through the API workflow.${NC}"

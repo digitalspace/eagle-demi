@@ -1261,6 +1261,11 @@ FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n "$FND" 
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
 
+Order matters when an infra deploy adds a setting that turns on a function, such as
+`INTAKE_STORAGE_ACCOUNT` for `intakeScanSweep`. The function registers only when the API code
+deploys again. `deploy-infra.sh --live` ends with `scripts/check-api-functions.sh <env>`, which fails
+and names the workflow to re-run when a function is missing.
+
 ### Prod infrastructure
 
 `rg-demi-prod` in `c4b0a8-prod`, from `azure/main.prod.bicepparam`. It deploys no search service —
@@ -1305,9 +1310,9 @@ CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 
 The plain command deploys the application layer only — the Function App, the secret sync, the
 availability test and the devbox. `--foundation` deploys everything, and is required after a change
-to one of the twelve foundation modules under `azure/modules/`: `identity`, `key-vault`,
+to one of the thirteen foundation modules under `azure/modules/`: `identity`, `key-vault`,
 `cosmos-nosql`, `observability`, `audit-logs`, `foundry`, `ai-search`, `search-existing`, `apim`,
-`static-site`, `document-storage`, `cost-budget`.
+`static-site`, `document-storage`, `document-intake`, `cost-budget`.
 
 ```bash
 # foundation and application together

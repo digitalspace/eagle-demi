@@ -59,4 +59,4 @@ function loadIndex(t, name, schedule) {
   return { registered, index: require(INDEX) };
 }
 
-module.exports = { loadIndex };
+module.exports = { loadIndex, SCHEDULE_VARS };
