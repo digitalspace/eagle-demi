@@ -5,6 +5,7 @@ const phaseCatalog = require('./phase-catalog');
 const works = require('../repositories/works');
 const { logger } = require('../utils/logger');
 const { publicWorksOf } = require('../seed/track-mappers');
+const { timeLimitsOf } = require('./works-time-limit');
 const {
   OVERRIDE_MARKER_ID, hiddenByOverride, listOf, overrideShown, sourceOf, validateMarker
 } = require('./work-model');
@@ -153,8 +154,9 @@ const INTERRUPTION_KEYS = ['kind', 'typeCode', 'legalSection', 'startDate', 'end
 const MILESTONE_KEYS = ['name', 'code', 'eventType', 'position', 'actualDate', 'anticipatedDate', 'endDate',
   'numberOfDays', 'outcome'];
 
-// Track event type ids: 10 time limit extension, 11 interregnum (Special Extension category), 12 time limit
-// suspension, 38 time limit resumption, 22 comment period, 13-21 the Decision category.
+// Track event type ids: 8 submission, 10 time limit extension, 11 interregnum (Special Extension category),
+// 12 time limit suspension, 38 time limit resumption, 22 comment period, 13-21 the Decision category.
+const SUBMISSION_EVENT_TYPES = [8];
 const EXTENSION_EVENT_TYPES = [10, 11];
 const SUSPENSION_EVENT_TYPES = [12];
 const RESUMPTION_EVENT_TYPES = [38];
@@ -165,7 +167,7 @@ const isDecisionEvent = (milestone) => milestone.eventType >= 13 && milestone.ev
 // Interregnum counts in the extension totals but draws as its own kind, so it overrides the extension entry.
 const TRACK_MILESTONE_KINDS = new Map([[EXTENSION_EVENT_TYPES, 'extension'], [SUSPENSION_EVENT_TYPES, 'suspension'],
   [RESUMPTION_EVENT_TYPES, 'resumption'], [COMMENT_PERIOD_EVENT_TYPES, 'comment-period'],
-  [[INTERREGNUM_EVENT_TYPE], 'interregnum']]
+  [SUBMISSION_EVENT_TYPES, 'submission'], [[INTERREGNUM_EVENT_TYPE], 'interregnum']]
   .flatMap(([types, kind]) => types.map(type => [type, kind])));
 const SHEET_MILESTONE_KINDS = new Map([['comment-period', 'comment-period'], ['order-variation', 'section-13'],
   ['decision', 'decision'], ['act-transition', 'act-transition']]);
@@ -222,23 +224,25 @@ const sheetPhaseFieldsOf = (phase) => ({
 
 /**
  * `work` in the Workplans shape after `project` (`projectId`, `projectName`, `eagleId`); `doc` is its stored
- * document, read for what the public shape leaves out.
+ * document, read for what the public shape leaves out. `today` (`YYYY-MM-DD`) ends the count of a running phase.
  */
-function workplanOf(project, work, doc) {
+function workplanOf(project, work, doc, today) {
   const track = work.source === 'track';
   const storedByTrackId = new Map(listOf(doc?.phases).map(phase => [phase.trackPhaseId, phase]));
+  const phases = work.phases.map(phase => ({
+    ...pick(phase, PHASE_KEYS),
+    // Track stores the flag as 1.
+    legislated: phase.legislated == null ? null : Boolean(phase.legislated),
+    ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
+    interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
+  }));
+  const timeLimits = timeLimitsOf(work, phases, today);
   return {
     ...project,
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
     ...sheetDocFieldsOf(track ? null : doc),
-    phases: work.phases.map(phase => ({
-      ...pick(phase, PHASE_KEYS),
-      // Track stores the flag as 1.
-      legislated: phase.legislated == null ? null : Boolean(phase.legislated),
-      ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
-      interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
-    })),
+    phases: phases.map((phase, i) => ({ ...phase, timeLimit: timeLimits[i] })),
     milestones: work.milestones.map(milestone => ({ ...pick(milestone, MILESTONE_KEYS), kind: milestoneKindOf(milestone, track) }))
   };
 }
@@ -258,7 +262,7 @@ function outcomeWithTwins(work, workById) {
  * Every shown work, Track and sheet, of each of `rows` in the slim Workplans shape, sorted by `projectId`. Track works
  * the sheet override hides are left out; stored works are not changed. Staff only; reads no WORKS_READ_SOURCES.
  */
-async function workplansOf(rows) {
+async function workplansOf(rows, today) {
   if (!rows.length) return [];
   const catalog = await catalogOf();
   return (await storedAcross(rows)).sort(byProjectId).flatMap(({ row, projectId, stored, marker }) => {
@@ -267,7 +271,7 @@ async function workplansOf(rows) {
     const marked = markedWorksFrom(stored, marker, row, catalog).works;
     const workById = new Map(marked.map(work => [work.workId, work]));
     return marked.filter(work => work.shownAfterFlip)
-      .map(work => workplanOf(project, { ...work, ...outcomeWithTwins(work, workById) }, storedById.get(work.workId)));
+      .map(work => workplanOf(project, { ...work, ...outcomeWithTwins(work, workById) }, storedById.get(work.workId), today));
   });
 }
 

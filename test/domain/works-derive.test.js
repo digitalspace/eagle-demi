@@ -12,7 +12,7 @@ const works = require('../../src/repositories/works');
 const { logger } = require('../../src/utils/logger');
 const { TRACK_ACT_YEAR } = require('../../src/merge/assessment-work');
 const { publicWorksOf } = require('../../src/seed/track-mappers');
-const { deriveInputs, loadWorks, sheetWorksOf, sheetWorksSummaryOf } = require('../../src/domain/works-derive');
+const { deriveInputs, loadWorks, sheetWorksOf, sheetWorksSummaryOf, workplansOf } = require('../../src/domain/works-derive');
 
 test('deriveInputs', async (t) => {
   const stored = [
@@ -305,4 +305,13 @@ test('sheetWorksSummaryOf', async (t) => {
     assert.deepStrictEqual(await sheetWorksSummaryOf([{ id: 'p-track' }, { id: 'p-old' }]),
       [{ projectId: 'p-old', act1996: 0, act2002: 0, hidden: 2, replaces: 0, untilTrack: 0 }]);
   });
+});
+
+test('workplansOf marks a Track type 8 milestone a submission and leaves types 33 and 37 other', async (t) => {
+  const events = [8, 33, 37].map(eventType => ({ eventType, name: `Event ${eventType}`, actualDate: '2024-04-01' }));
+  storeAcross(t, [{ ...assessment, phases: [{ trackPhaseId: 1, startDate: '2020-03-01', milestones: events }] }], []);
+
+  const [work] = await workplansOf([{ id: 'p1' }], '2026-11-27');
+
+  assert.deepStrictEqual(work.milestones.map(m => [m.eventType, m.kind]), [[8, 'submission'], [33, 'other'], [37, 'other']]);
 });
