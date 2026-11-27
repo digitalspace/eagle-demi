@@ -3613,6 +3613,8 @@ paths:
                   description: >-
                     Publish (level 4) when the scan clears the file, if the project is public.
                     Otherwise the document is released at its capped level and `publishRefused` is set.
+                    The caller must be able to read the document at `requestedRead`, as
+                    `PUT /api/documents/{id}/level` requires; else 403.
                 fields:
                   type: object
                   additionalProperties: false
@@ -3651,7 +3653,9 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: The credential is read-only.
+          description: >-
+            The credential is read-only, or it asks for `publishOnRelease` on a document it could
+            not read once released.
         '404':
           description: The project does not exist or is not visible to this caller.
         '503':

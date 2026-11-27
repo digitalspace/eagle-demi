@@ -118,6 +118,14 @@ function refusal(body, access) {
   return requestedReadRefusal(body.requestedRead) || fieldsRefusal(body.fields, access) || fileSizeRefusal(body);
 }
 
+/**
+ * Whether the caller could read the row at `requestedRead`, as GET or PUT /documents/:id/level would
+ * after release. `projectId` is passed because canRead checks it for scoped callers.
+ */
+function readableOnceReleased(projectId, requestedRead, access) {
+  return canRead({ projectId, read: requestedRead }, access);
+}
+
 /** `.PDF` -> `pdf`; empty when the name has no plain extension. */
 function extensionOf(fileName) {
   const ext = path.extname(fileName).slice(1).toLowerCase();
@@ -155,6 +163,13 @@ exports.createUpload = async (req, res) => {
     if (!parentProject) {
       return res.status(404).json({ error: `Parent Project with id ${projectId} not found.` });
     }
+    // Applied on release. Admitted at level 1 when absent, like every other create; never above the project.
+    const requestedRead = capRead(body.requestedRead || readForLevel(1), parentProject.read);
+    const publishOnRelease = body.publishOnRelease === true;
+    // Release publishes without PUT /documents/:id/level, so the caller must pass that route's check now.
+    if (publishOnRelease && !readableOnceReleased(projectId, requestedRead, access)) {
+      return res.status(403).json({ error: 'This caller may not publish this document.' });
+    }
     const fields = await storedFields(body.fields || {}, access);
 
     const id = crypto.randomUUID();
@@ -166,9 +181,6 @@ exports.createUpload = async (req, res) => {
     const fileName = body.fileName.trim();
     const displayName = fields.displayName || fileName;
     const createdAt = new Date(now).toISOString();
-    // Applied on release. Admitted at level 1 when absent, like every other create; never above the project.
-    const requestedRead = capRead(body.requestedRead || readForLevel(1), parentProject.read);
-    const publishOnRelease = body.publishOnRelease === true;
 
     await documents.upsert({
       documentFileName: fileName,
@@ -268,8 +280,7 @@ exports.listUploads = async (req, res) => {
     // Pending rows time out within hours, so one window covers both statuses.
     const since = new Date(Date.now() - REJECTED_SHOWN_DAYS * 24 * 3600 * 1000).toISOString();
     const rows = await store.listForProject(projectId, LIST_STATUSES, since);
-    // Only uploads the caller could read once released; projectId is passed for scoped callers.
-    const readable = rows.filter(row => canRead({ projectId: row.projectId, read: row.requestedRead }, access));
+    const readable = rows.filter(row => readableOnceReleased(row.projectId, row.requestedRead, access));
     return res.status(200).json(readable.map(listedUpload));
   } catch (err) {
     return serverError(res, err, 'intake upload list failed');

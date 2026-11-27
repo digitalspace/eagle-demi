@@ -395,9 +395,11 @@ for (const [role, user] of [['staff', STAFF], ['sysadmin', SYSADMIN]]) {
   }
 }
 
-test('publishOnRelease is stored with who asked, and the row stays unreadable', async (t) => {
+const TEAM_STAFF = { ...STAFF, realm_access: { roles: ['staff', 'project:207'] } };
+
+test('publishOnRelease from a caller who may publish is stored with who asked, the row unreadable', async (t) => {
   const seen = wire(t);
-  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  const res = await createAs(TEAM_STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
   assert.strictEqual(res.statusCode, 201);
   const { row } = seen.rows[0];
   assert.strictEqual(row.publishOnRelease, true);
@@ -405,6 +407,36 @@ test('publishOnRelease is stored with who asked, and the row stays unreadable', 
   assert.deepStrictEqual(row.read, []);
   assert.strictEqual(row.isPublished, false);
   assert.strictEqual(row.scanStatus, 'pending');
+});
+
+test('publishOnRelease from a writer who could not read the released row is 403, with no row or link', async (t) => {
+  const seen = wire(t);
+  // Off the project team, so the level-1 row would be a 404 on PUT /documents/:id/level.
+  const res = await createAs(STAFF, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(seen.rows.length, 0);
+  assert.strictEqual(seen.links.length, 0);
+});
+
+test('the same writer may upload without publishOnRelease', async (t) => {
+  wire(t);
+  assert.strictEqual((await createAs(STAFF, { projectId: '207', fileName: 'a.pdf' })).statusCode, 201);
+});
+
+test('a registry key with only demi-service-write may publish on release, as on the level route', async (t) => {
+  const seen = wire(t);
+  const key = { preferred_username: 'key:pusher', keyId: 'k1', realm_access: { roles: ['demi-service-write'] } };
+  const res = await createAs(key, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(seen.rows[0].row.publishRequestedBy, 'key:pusher');
+});
+
+test('a scoped registry key may publish only in its own project', async (t) => {
+  const seen = wire(t);
+  const key = { preferred_username: 'key:scoped', keyId: 'k2', realm_access: { roles: ['demi-service-write'] }, projectScope: ['300'] };
+  const res = await createAs(key, { projectId: '207', fileName: 'a.pdf', publishOnRelease: true });
+  assert.strictEqual(res.statusCode, 403);
+  assert.strictEqual(seen.rows.length, 0);
 });
 
 test('publishOnRelease that is not a boolean is refused', async (t) => {

@@ -25,6 +25,23 @@ test('settle patches the row in its partition, guarded on scanStatus pending', a
   assert.match(condition, /c\.scanStatus = 'pending'/);
 });
 
+test('markPublishRefused sets only publishRefused, guarded on a released row', async (t) => {
+  let call;
+  t.mock.method(cosmos, 'patch', async (...args) => { call = args; return {}; });
+
+  assert.strictEqual(await store.markPublishRefused(ROW, 'project-not-public'), true);
+  const [container, id, partition, ops, condition] = call;
+  assert.deepStrictEqual([container, id, partition], ['documents', 'doc-1', 'proj-1']);
+  assert.deepStrictEqual(ops, [{ op: 'set', path: '/publishRefused', value: 'project-not-public' }]);
+  assert.match(condition, /c\.scanStatus = 'clean'/);
+});
+
+test('markPublishRefused reports false on a row that is not released (412)', async (t) => {
+  t.mock.method(cosmos, 'patch', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
+
+  assert.strictEqual(await store.markPublishRefused(ROW, 'project-not-public'), false);
+});
+
 test('settle reports false when the row is no longer pending (412)', async (t) => {
   t.mock.method(cosmos, 'patch', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
 
