@@ -25,14 +25,20 @@ test('a phase without a legislated day budget and a start has no time limit', ()
     phase({ numberOfDays: null }), phase({ startDate: null })]), [null, null, null, null]);
 });
 
-test('a sheet phase starting on the end of a legislated phase before it is Day One', () => {
+test('a sheet Referral starting on the Review end is Day Zero and meets a budget ending 45 days later', () => {
   const before = phase({ name: 'Application Review', startDate: '2009-07-05', endDate: '2010-01-01', numberOfDays: 180 });
-  assert.strictEqual(lastLimit(SHEET_2002, [before, phase()]).dayCount, 'one');
+  const limit = lastLimit(SHEET_2002, [before, phase()]);
+  assert.deepStrictEqual([limit.dayCount, limit.countedDays, limit.deadline, limit.overDays], ['zero', 45, '2010-02-15', 0]);
 });
 
 test('a sheet phase starting the day after the phase before it is Day Zero', () => {
   const before = phase({ name: 'Application Review', startDate: '2009-07-05', endDate: '2009-12-31', numberOfDays: 180 });
   assert.strictEqual(lastLimit(SHEET_2002, [before, phase()]).dayCount, 'zero');
+});
+
+test('a Track phase starting on the end of a legislated phase before it is Day One', () => {
+  const before = trackPhase('2024-01-01', '2024-03-31');
+  assert.strictEqual(lastLimit(TRACK, [before, trackPhase('2024-03-31', '2024-05-15')]).dayCount, 'one');
 });
 
 test('a Track phase starting the day after the end of a legislated phase before it is Day One', () => {
@@ -89,10 +95,6 @@ test('a 2002 sheet Evaluation followed by Extra Time has a known end', () => {
   const extra = phase({ name: 'Extra Time', startDate: '2010-02-15', endDate: '2010-06-01', legislated: false });
   const [limit] = limitsOf(SHEET_2002, [evaluation, extra]);
   assert.deepStrictEqual([limit.endKnown, limit.overDays], [true, 15]);
-});
-
-test('an Application Review right after an Evaluation with an unknown end is Day Zero', () => {
-  assert.strictEqual(lastLimit(SHEET_2002, [EVALUATION, REVIEW]).dayCount, 'zero');
 });
 
 test('a finished sheet phase past its budget with an extension is covered and keeps its overrun', () => {
