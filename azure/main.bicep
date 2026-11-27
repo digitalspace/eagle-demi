@@ -214,6 +214,9 @@ param extractSubnetId string = ''
 @description('Extraction job image pinned by digest (ghcr.io/...@sha256:...). Empty deploys no job.')
 param extractionJobImage string = ''
 
+@description('False skips the extraction job and its budget. deploy-infra.sh sets it false when the vault lacks extraction-job-api-key.')
+param deployExtractionJob bool = true
+
 @description('Monthly budget in CAD on the extraction job resources alone.')
 param extractionBudgetAmount int = 35
 
@@ -944,7 +947,7 @@ module pdfTitleWorker './modules/pdf-title-worker.bicep' = if (deployPdfTitleWor
 // 7g. The docling extraction job. Gated on its vault key like the PDF title worker: the job's
 // secret-scoped grant fails on a missing secret. Its queues come from the API module above.
 var extractionJobApiKeySecretName = 'extraction-job-api-key'
-var deployExtractionJobApp = !empty(apiFlexSubnetId) && !empty(extractionQueue) && !empty(extractSubnetId) && !empty(extractionJobImage) && contains(optionalSecretNames, extractionJobApiKeySecretName)
+var deployExtractionJobApp = deployExtractionJob && !empty(apiFlexSubnetId) && !empty(extractionQueue) && !empty(extractSubnetId) && !empty(extractionJobImage) && contains(optionalSecretNames, extractionJobApiKeySecretName)
 
 module extractionJob './modules/extraction-job.bicep' = if (deployExtractionJobApp) {
   name: 'deploy-extraction-job'

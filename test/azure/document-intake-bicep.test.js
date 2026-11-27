@@ -203,7 +203,7 @@ test('the extraction job module call', async (t) => {
     assert.match(MAIN, /^var extractionJobApiKeySecretName = 'extraction-job-api-key'$/m);
     const gate = /^var deployExtractionJobApp = (.+)$/m.exec(MAIN);
     assert.ok(gate, 'deployExtractionJobApp is declared');
-    for (const part of ['!empty(apiFlexSubnetId)', '!empty(extractionQueue)', '!empty(extractSubnetId)',
+    for (const part of ['deployExtractionJob', '!empty(apiFlexSubnetId)', '!empty(extractionQueue)', '!empty(extractSubnetId)',
       '!empty(extractionJobImage)', 'contains(optionalSecretNames, extractionJobApiKeySecretName)']) {
       assert.ok(gate[1].split(' && ').includes(part), `gate has ${part}`);
     }
@@ -222,6 +222,7 @@ test('the extraction job module call', async (t) => {
 
   await t.test('test names the key and the new subnet, and leaves the image and GPU unset', () => {
     assert.match(TEST_PARAMS, /^\s+'extraction-job-api-key'$/m);
+    assert.match(TEST_PARAMS, /^param deployExtractionJob = bool\(readEnvironmentVariable\('DEPLOY_EXTRACTION_JOB', 'true'\)\)$/m);
     assert.ok(TEST_PARAMS.includes(`param extractSubnetId = '${subnet('snet-demi-extract-test')}'\n`));
     assert.match(TEST_PARAMS, /^param extractionJobImage = ''$/m);
     assert.doesNotMatch(MAIN + TEST_PARAMS, /deployExtractionGpu/);
