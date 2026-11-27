@@ -29,7 +29,7 @@
     "lint": "eslint . && node scripts/eslint-size-freeze.cjs --check api",
     "lint:fix": "eslint . --fix",
     "test": "node --test 'test/**/*.test.js'",
-    "test:py": "python3 extraction-host/worker.py --selfcheck && python3 -m pytest pdf-title"
+    "test:py": "python3 extraction-host/worker.py --selfcheck && python3 -m pytest pdf-title && python3 -m pytest extraction-host/test_job.py"
   },
   "engines": {
     "node": ">=24.15.0 <25.0.0"
