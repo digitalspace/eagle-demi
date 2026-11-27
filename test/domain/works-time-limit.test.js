@@ -95,15 +95,15 @@ test('an Application Review right after an Evaluation with an unknown end is Day
   assert.strictEqual(lastLimit(SHEET_2002, [EVALUATION, REVIEW]).dayCount, 'zero');
 });
 
-test('a finished sheet phase past its budget with an extension is covered', () => {
+test('a finished sheet phase past its budget with an extension is covered and keeps its overrun', () => {
   const extended = phase({ extensionDays: 5, interruptions: [{ kind: 'extension', days: 5 }], endDate: '2010-03-01' });
   const limit = lastLimit(SHEET_2002, [extended]);
-  assert.deepStrictEqual([limit.countedDays, limit.allowedDays, limit.overDays, limit.coveredByExtension], [59, 50, 0, true]);
+  assert.deepStrictEqual([limit.countedDays, limit.allowedDays, limit.overDays, limit.coveredByExtension], [59, 50, 9, true]);
 });
 
 test('a finished Track phase past its budget with extension days is covered', () => {
   const limit = lastLimit(TRACK, [trackPhase('2024-04-01', '2024-06-01', { extensionDays: 3 })]);
-  assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [0, true]);
+  assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [13, true]);
 });
 
 test('a finished phase past its budget with no extension is over', () => {
@@ -119,12 +119,57 @@ test('a running phase with an unknown extension day count has unknown allowed da
   assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.countedDays], [null, null, null, 57]);
 });
 
-test('a finished phase with an extension of unknown day count is covered', () => {
+test('a finished phase with an extension of unknown day count is covered with an unknown overrun', () => {
   const limit = lastLimit(SHEET_2002, [phase(UNCOUNTED_EXTENSION)]);
-  assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.coveredByExtension], [null, null, 0, true]);
+  assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.coveredByExtension], [null, null, null, true]);
 });
 
 test('an unknown suspended day count leaves the deadline, counted days and over count unknown', () => {
   const limit = lastLimit(SHEET_2002, [phase({ suspendedDays: null })]);
   assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.countedDays, limit.overDays], [45, null, null, null]);
+});
+
+test('a finished phase that ends before it starts counts no days and has no overrun', () => {
+  const backwards = trackPhase('2026-01-16', '2026-01-06', { isCurrent: true });
+  const limit = lastLimit(TRACK, [backwards]);
+  assert.deepStrictEqual([limit.countedDays, limit.overDays, limit.deadline], [null, null, '2026-03-02']);
+});
+
+test('a finished phase that ends before it starts is not covered by an extension', () => {
+  const limit = lastLimit(SHEET_2002, [phase({ ...UNCOUNTED_EXTENSION, endDate: '2009-12-20' })]);
+  assert.strictEqual(limit.coveredByExtension, false);
+});
+
+const SUSPENDED_TRACK = { ...TRACK, workState: 'SUSPENDED' };
+const heldPhase = (end, numberOfDays) => trackPhase('2026-01-01', end, { numberOfDays, isCompleted: false, isCurrent: true,
+  isSuspended: true, suspendedDate: trackDay('2026-02-01') });
+
+test('a running phase suspended now stops counting at the day its suspension began', () => {
+  assert.strictEqual(lastLimit(SUSPENDED_TRACK, [heldPhase('2026-06-30', 180)]).countedDays, 31);
+});
+
+test('a running phase suspended after its budget ran out is not over while it is held', () => {
+  assert.strictEqual(lastLimit(SUSPENDED_TRACK, [heldPhase('2026-01-21', 20)]).overDays, 0);
+});
+
+test('a running sheet phase stops counting at the start of a suspension covering today', () => {
+  const stop = { kind: 'suspension', startDate: '2026-11-01', endDate: '2026-12-31', days: 60 };
+  const held = phase({ startDate: '2026-10-01', endDate: null, isCompleted: false, suspendedDays: 60, interruptions: [stop] });
+  assert.strictEqual(lastLimit(SHEET_2002, [held]).countedDays, 31);
+});
+
+test('a running phase of a Track work switched off counts no days', () => {
+  const running = trackPhase('2026-10-01', '2026-11-15', { isCompleted: false, isCurrent: true });
+  assert.strictEqual(lastLimit({ ...TRACK, isActive: false }, [running]).countedDays, null);
+});
+
+test('an unfinished Track phase while Track names another phase current counts no days', () => {
+  const other = trackPhase('2026-01-01', '2026-03-01', { isCompleted: false, isCurrent: false });
+  const current = trackPhase('2026-03-02', '2026-04-16', { isCompleted: false, isCurrent: true });
+  assert.strictEqual(limitsOf(TRACK, [other, current])[0].countedDays, null);
+});
+
+test('a finished Track phase past its budget with no extension days is over, not covered', () => {
+  const limit = lastLimit(TRACK, [trackPhase('2024-04-01', '2024-06-01', { extensionDays: 0 })]);
+  assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [16, false]);
 });

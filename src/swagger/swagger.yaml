@@ -2120,14 +2120,16 @@ paths:
                                     nullable: true
                                     description: >-
                                       Days from the start to the end of a finished phase, or to today (Pacific) while it runs, less
-                                      `suspendedDays`, one more on day count `one`. 0 before the phase starts. Null when `suspendedDays` is
-                                      null, or the phase is not finished and not running (its work is closed or Track names another phase).
+                                      `suspendedDays`, one more on day count `one`. A running phase under an open suspension (Track
+                                      `isSuspended`, or a sheet suspension covering today) counts only to the day it began. 0 before the phase
+                                      starts. Null when `suspendedDays` is null, the end is before the start, or the phase is not finished and
+                                      not running (its work is closed or Track names another phase).
                                   overDays:
                                     type: integer
                                     nullable: true
                                     description: >-
-                                      `countedDays` past `allowedDays`, 0 when within it or covered by an extension. Null when either is null
-                                      or the end is not known, except on a finished phase covered by an extension, where it is 0.
+                                      `countedDays` past `allowedDays`, 0 when within it or while the phase is held by an open suspension.
+                                      Covered phases keep their real overrun. Null when either is null or the end is not known.
                                   endKnown:
                                     type: boolean
                                     description: >-
@@ -2136,9 +2138,9 @@ paths:
                                   coveredByExtension:
                                     type: boolean
                                     description: >-
-                                      True on a finished phase with a known end that has an extension (a sheet `extension` interruption, or
-                                      Track `extensionDays` above 0) and is past `allowedDays`, or whose `allowedDays` is null because the
-                                      extension has no day count. Its `overDays` is then 0.
+                                      True on a finished phase with a known end, not before its start, that has an extension (a sheet
+                                      `extension` interruption, or Track `extensionDays` above 0) and is past `allowedDays`, or whose
+                                      `allowedDays` is null because the extension has no day count. `overDays` still gives the overrun.
                         milestones:
                           type: array
                           description: >-

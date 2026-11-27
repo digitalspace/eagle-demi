@@ -29,13 +29,31 @@ function startsOnDayOne(work, phases, i) {
   return start === end || (work.source === 'track' && start === plusDays(end, 1));
 }
 
-/** Days counted to the phase's end, or to today while it runs; 0 before it starts, null when neither is known. */
-function countedDaysOf(work, phase, start, today, offset) {
-  if (phase.suspendedDays == null) return null;
-  if (!phase.isCompleted && start > today) return 0;
-  const running = isRunningWork(work) && phase.isCurrent !== false;
-  const end = phase.isCompleted ? dayOf(phase.endDate) : running && today;
-  return end ? daysBetween(start, end) - phase.suspendedDays + offset : null;
+/**
+ * The open suspension of a running phase, from Track's flag or else a suspension interruption covering today: `since`
+ * the day it began, and `days` the sheet interruption's own days, which `suspendedDays` holds. Null when none is open.
+ */
+function heldOf(work, phase, start, today) {
+  const covering = (phase.interruptions || []).find(stop => {
+    const from = dayOf(stop.startDate);
+    const to = dayOf(stop.endDate);
+    return stop.kind === 'suspension' && from !== null && from <= today && (to === null || to >= today);
+  });
+  const flagged = phase.isSuspended === true;
+  const began = flagged ? (dayOf(phase.suspendedDate) ?? today) : dayOf(covering?.startDate);
+  if (began === null) return null;
+  return { since: start > began ? start : began, days: flagged || work.source === 'track' ? 0 : covering.days ?? 0 };
+}
+
+/** Days counted to the end, or while it runs to today or the start of its open suspension; 0 before it starts. */
+function countOf(work, phase, start, today, offset) {
+  const running = !phase.isCompleted && isRunningWork(work) && phase.isCurrent !== false;
+  const held = running ? heldOf(work, phase, start, today) : null;
+  if (phase.suspendedDays == null) return { countedDays: null, held };
+  if (!phase.isCompleted && start > today) return { countedDays: 0, held };
+  const countTo = phase.isCompleted ? dayOf(phase.endDate) : running && (held?.since ?? today);
+  if (!countTo || countTo < start) return { countedDays: null, held };
+  return { countedDays: daysBetween(start, countTo) - (phase.suspendedDays - (held?.days ?? 0)) + offset, held };
 }
 
 const hasExtensionOf = (work, phase) => (work.source === 'track'
@@ -51,13 +69,15 @@ function timeLimitOf(work, phases, i, today) {
   const { extensionDays, suspendedDays } = phase;
   const allowedDays = extensionDays == null ? null : phase.numberOfDays + extensionDays;
   const deadline = allowedDays == null || suspendedDays == null ? null : plusDays(start, allowedDays + suspendedDays - offset);
-  const countedDays = countedDaysOf(work, phase, start, today, offset);
+  const { countedDays, held } = countOf(work, phase, start, today, offset);
+  const end = dayOf(phase.endDate);
   const endKnown = endKnownOf(work, phases, i);
   const over = countedDays == null || allowedDays == null || !endKnown ? null : countedDays - allowedDays;
-  const finished = Boolean(phase.isCompleted && dayOf(phase.endDate));
+  const finished = Boolean(phase.isCompleted && end && end >= start);
   // A recorded extension covers a finished phase even when its day count is unknown.
   const coveredByExtension = finished && endKnown && (allowedDays == null || over > 0) && hasExtensionOf(work, phase);
-  const overDays = coveredByExtension ? 0 : over == null ? null : Math.max(0, over);
+  // A held phase is never over, as on the Workplans screen.
+  const overDays = over == null ? null : held ? 0 : Math.max(0, over);
   return { dayCount: one ? 'one' : 'zero', allowedDays, deadline, countedDays, overDays, endKnown, coveredByExtension };
 }
 
