@@ -11,14 +11,14 @@ process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('fs');
 const https = require('node:https');
 const { Readable } = require('node:stream');
 
 const audit = require('../../src/utils/audit');
-const storage = require('../../src/storage');
 const documents = require('../../src/repositories/documents');
 const projects = require('../../src/repositories/projects');
+const notifications = require('../../src/repositories/notifications');
+const blobs = require('../../src/intake/blobs');
 const boundaries = require('../../src/repositories/boundaries');
 const chunksRepo = require('../../src/repositories/chunks');
 const apiKeys = require('../../src/repositories/api-keys');
@@ -27,6 +27,7 @@ const aiSearch = require('../../src/search/ai-search');
 const wildfiresRepo = require('../../src/repositories/wildfires');
 const configRepository = require('../../src/repositories/config');
 const documentController = require('../../src/controllers/nosql/document');
+const intakeController = require('../../src/controllers/native/intake');
 const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
 const apiKeyController = require('../../src/controllers/nosql/api-key');
@@ -38,6 +39,7 @@ const wildfireController = require('../../src/controllers/wildfire');
 const configController = require('../../src/controllers/config');
 const projectSummaries = require('../../src/repositories/projectSummaries');
 const projectSummaryController = require('../../src/controllers/project-summary');
+const { useEnv } = require('../helpers/sync-out-eagle');
 
 function mockRes() {
   return {
@@ -113,29 +115,24 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(configRepository.upsertPublic.mock.callCount(), 0);
   });
 
-  await t.test('document upload writes one document.create marked via upload', async () => {
-    // Same action as createDocument by design — the two doors stay one query — so `via` is the
-    // only thing distinguishing them, and it is what this asserts.
-    t.mock.method(projects, 'getById', async () => ({
-      id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true, region: 'skeena'
-    }));
-    t.mock.method(storage, 'putFile', async () => {});
-    t.mock.method(fs.promises, 'unlink', async () => {});
+  await t.test('an intake upload writes one document.create marked via intake', async (tt) => {
+    useEnv(tt, { INTAKE_STORAGE_ACCOUNT: 'demiintest' });
+    t.mock.method(notifications, 'getById', async () => null);
+    t.mock.method(projects, 'getById', async () => ({ id: '207', read: ['staff'], region: 'skeena' }));
     t.mock.method(documents, 'upsert', async (item) => item);
+    t.mock.method(blobs, 'staging', () => ({ getUploadUrl: async () => 'https://demiintest.blob.core.windows.net/incoming/x' }));
 
     const res = mockRes();
-    const written = await rowsFrom(() => documentController.extractDocument({
-      body: { project: '207', displayName: 'Application.pdf' },
-      file: { path: '/tmp/up1', originalname: 'Application.pdf', mimetype: 'application/pdf' },
-      query: {}, params: {}, user: STAFF
+    const written = await rowsFrom(() => intakeController.createUpload({
+      body: { projectId: '207', fileName: 'Application.pdf' }, headers: {}, query: {}, params: {}, user: STAFF
     }, res));
 
-    assert.strictEqual(res.statusCode, 202);
+    assert.strictEqual(res.statusCode, 201);
     assert.strictEqual(written.length, 1);
     assert.strictEqual(written[0].Action, 'document.create');
-    assert.strictEqual(written[0].Detail.via, 'upload');
+    assert.strictEqual(written[0].Detail.via, 'intake');
     assert.strictEqual(written[0].ProjectId, '207');
-    assert.strictEqual(written[0].TargetId, res.body.docId);
+    assert.strictEqual(written[0].TargetId, res.body.documentId);
     assert.strictEqual(written[0].ActorType, 'user');
     assert.strictEqual(written[0].ActorId, 'kc-sub-1');
   });

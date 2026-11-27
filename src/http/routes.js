@@ -14,7 +14,7 @@ const { credentialsMiddleware } = require('../middleware/credentials');
 const sealedAuth = require('../middleware/sealed-auth');
 
 // Required lazily: the table loads on every cold start, and /health must not pay for the Cosmos
-// client, the search index definitions or pdf-lib.
+// client or the search index definitions.
 const healthController = () => require('../controllers/health');
 const configController = () => require('../controllers/config');
 const gateController = () => require('../controllers/gate');

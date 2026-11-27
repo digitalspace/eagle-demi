@@ -66,7 +66,7 @@ function demiRow(overrides = {}) {
   };
 }
 
-/** A row as `createDocument` writes it: no Eagle id, `fileExt`, `documentFileName` or `syncVersion`. */
+/** A native row with no Eagle id, `fileExt`, `documentFileName` or `syncVersion`. */
 const nativeRow = (overrides = {}) => ({
   id: ROW_ID,
   projectId: '1234',
@@ -438,7 +438,7 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(result, { status: 'sent', eagleId: row.eagleId });
   });
 
-  await t.test('a createDocument row POSTs its name and type from displayName and s3Key, and nothing Eagle sets itself',
+  await t.test('a row with no fileExt or documentFileName POSTs its name and type from displayName and s3Key, and nothing Eagle sets itself',
     async (tt) => {
       useEnv(tt, NATIVE_ENV);
       const store = wireStore(tt, nativeRow());

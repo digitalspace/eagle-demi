@@ -305,4 +305,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { listSees, plant };
+module.exports = { listSees, plant, deletePlanted };

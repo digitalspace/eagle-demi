@@ -77,11 +77,11 @@ test('listSees', async (t) => {
   });
 });
 
-test('plant', async (t) => {
+test('plant and cleanup', async (t) => {
   const saved = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = 'probe-test-admin';
   delete require.cache[SCRIPT];
-  const { plant } = require(SCRIPT);
+  const { plant, deletePlanted } = require(SCRIPT);
   t.after(() => {
     if (saved === undefined) delete process.env.ADMIN_API_KEY;
     else process.env.ADMIN_API_KEY = saved;
@@ -156,5 +156,17 @@ test('plant', async (t) => {
 
     await assert.rejects(plant(rows, { term: 'zz', created: [], waitMs: 60000, pollMs: 1 }),
       /scan rejected hidden: infected/);
+  });
+
+  await t.test('cleanup sends DELETE only for rows that cleared their scan', async (ctx) => {
+    const calls = stubIntake(ctx, 0);
+    ctx.mock.method(console, 'log', () => {});
+
+    await deletePlanted([
+      { id: 'doc-1', projectId: 'proj-a', label: 'hidden', clean: true },
+      { id: 'doc-2', projectId: 'proj-a', label: 'control', clean: false }
+    ]);
+
+    assert.deepStrictEqual(calls.map(c => [c.method, c.path]), [['DELETE', '/api/documents/doc-1']]);
   });
 });

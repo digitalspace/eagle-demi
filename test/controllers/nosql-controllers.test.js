@@ -877,37 +877,6 @@ test('nosql project controller', async (t) => {
 test('nosql document controller — ACL cannot out-rank the parent project', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  const { resolveDocumentAcl } = require('../../src/domain/documents');
-
-  await t.test('published parent -> new document still admits at level 1', () => {
-    const acl = resolveDocumentAcl({ read: ['public', 'sysadmin'], isPublished: true });
-    assert.strictEqual(acl.published, false);
-    assert.deepStrictEqual(acl.read, ['team']);
-  });
-
-  await t.test('a level-1 parent caps the document at level 1', () => {
-    const acl = resolveDocumentAcl({ read: ['team'], isPublished: false });
-    assert.deepStrictEqual(acl.read, ['team']);
-  });
-
-  await t.test('a privileged-only parent widens the document past the plain level-1 default', () => {
-    const acl = resolveDocumentAcl({ read: ['sysadmin'] });
-    assert.deepStrictEqual(acl.read, ['sysadmin']);
-  });
-
-  await t.test('a sealed (level 0) parent caps the document below level 1', () => {
-    const acl = resolveDocumentAcl({ read: ['compliance'] });
-    assert.deepStrictEqual(acl.read, ['compliance']);
-    assert.strictEqual(acl.published, false);
-  });
-
-  // `published` is read off the CAPPED read[]. A legacy parent carrying no read[] at all still
-  // caps the document at level 1, so it is never published on creation.
-  await t.test('published mirrors the capped read[], never isPublished', () => {
-    assert.deepStrictEqual(
-      resolveDocumentAcl({ isPublished: true }), { read: ['team'], published: false });
-  });
-
   await t.test('a sysadmin purge removes the record but NEVER the stored file', async () => {
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
@@ -2064,7 +2033,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   });
 });
 
-// `read` and `isPublished` in a PUT body would skip resolveDocumentAcl and the 409 that stops a
+// `read` and `isPublished` in a PUT body would skip the parent ceiling and the 409 that stops a
 // document being published under a private project.
 test('PUT bodies cannot hand-craft an ACL', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

@@ -344,7 +344,7 @@ test('the documents catalog covers every field the seed and the controller write
   });
 
   await t.test('the controller-written fields are catalogued', () => {
-    // createDocument adds the first four; patchExtraction the next two; upsertFromEagle and the
+    // createUpload adds the first four; patchExtraction the next two; upsertFromEagle and the
     // project ACL cascade write `ownRead`.
     for (const key of ['createdAt', 'isDeleted', 'sourceSystem', 'read',
       'extractionMethod', 'extraction', 'ownRead',

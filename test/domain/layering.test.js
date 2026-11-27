@@ -46,7 +46,7 @@ const WRITE_CONTROLLERS = Object.freeze(['controllers/nosql/project.js', 'contro
 /** Write rules moved from WRITE_CONTROLLERS to domain/. One defined there again sits beside `res` once more. */
 const MOVED_RULES = Object.freeze([
   'runCascade', 'cascadeProjectVisibility', 'cascadeOnce', 'markCascadePending', 'clearCascadePending',
-  'visibilityMoved', 'mergeEaglePush', 'keepNativeIdentity', 'resolveDocumentAcl', 'propagateParentFields',
+  'visibilityMoved', 'mergeEaglePush', 'keepNativeIdentity', 'propagateParentFields',
   'patchParentFieldsInline', 'reStampParentFieldDrift', 'stampParentFieldsPending', 'recordIngested',
   'removeOverCapChunks', 'tryRecordIngestFailure'
 ]);
