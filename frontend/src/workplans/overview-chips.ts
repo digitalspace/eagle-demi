@@ -83,6 +83,5 @@ export function rowAria({ name, row, facts, workCount, undated, today }: RowAria
   const years = yearsOf(row);
   const said = (years.length > 1 ? [`Has work under the ${years.join(', ')} Acts`] : []).concat(rowTags(facts, today).map((tag) => tag.say));
   if (undated) said.push(plural(undated, 'phase with no recorded date', 'phases with no recorded date'));
-  const l2 = facts.markOnly ? `${facts.full}. ${facts.markOnly}` : facts.full;
-  return [`Open ${name}, ID ${row.project.projectId}, ${row.year} Act`, l2, status, ...said].join('. ');
+  return [`Open ${name}, ID ${row.project.projectId}, ${row.year} Act`, facts.full, status, ...said].join('. ');
 }

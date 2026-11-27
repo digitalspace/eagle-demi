@@ -60,33 +60,8 @@
   max-width: 100%;
 }
 
-/* Previous and Next wrap as a pair: one row when it fits, else stacked at the same width. */
-.wp-rec .wp-rec-head__pager {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--layout-margin-small);
-  min-width: 0;
-}
-
-/* A project name longer than the phone row wraps inside its button. */
-.wp-rec .wp-rec-head__pager > .wp-btn {
-  flex: 1 1 auto;
-  padding-block: var(--layout-padding-xsmall);
-  white-space: normal;
-}
-
 .wp-rec .wp-rec-title {
   font: var(--typography-bold-h2);
-}
-
-.wp-rec .wp-rec-sum {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
-  font: var(--typography-regular-small-body);
-  color: var(--typography-color-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 /* The Record's "All marks" has no chevron, unlike the Overview's. */
@@ -226,6 +201,8 @@
 }
 
 .wp-rec .wp-rec-dscroll:focus-visible,
+.wp-rec .wp-rec-ltwrap:focus-visible,
+.wp-rec .wp-rec-people:focus-visible,
 .wp-rec .wp-rec-esel:focus-visible {
   outline: 2px solid var(--surface-color-border-active);
   outline-offset: 2px;
@@ -1146,36 +1123,6 @@
   color: var(--typography-color-secondary);
 }
 
-.wp-rec .wp-rec-evkey {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--layout-margin-xsmall) var(--layout-margin-large);
-  font: var(--typography-regular-small-body);
-}
-
-.wp-rec .wp-rec-evkey li {
-  display: flex;
-  align-items: center;
-  gap: var(--layout-margin-xsmall);
-}
-
-.wp-rec .wp-rec-egrid {
-  columns: 2 520px;
-  column-gap: var(--layout-margin-xlarge);
-}
-
-.wp-rec .wp-rec-egrp {
-  break-inside: avoid;
-  display: flex;
-  flex-direction: column;
-  gap: var(--layout-margin-xsmall);
-  padding-top: var(--layout-padding-small);
-}
-
 .wp-rec .wp-rec-emore {
   align-self: flex-start;
 }
@@ -1237,37 +1184,6 @@
   color: var(--typography-color-secondary);
 }
 
-.wp-rec .wp-rec-el {
-  color: var(--typography-color-secondary);
-}
-
-.wp-rec .wp-rec-egap {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  color: var(--typography-color-secondary);
-}
-
-.wp-rec .wp-rec-gbar {
-  flex: none;
-  height: 4px;
-  border-radius: var(--layout-border-radius-small);
-  background: var(--theme-gray-50);
-}
-
-.wp-rec .wp-rec-gbar--key {
-  width: 24px;
-}
-
-.wp-rec .wp-rec-ehid {
-  margin: 0;
-  padding: 2px var(--layout-padding-small);
-  border-top: 1px solid var(--surface-color-border-default);
-  font: var(--typography-regular-small-body);
-  color: var(--typography-color-secondary);
-}
-
 .wp-rec .wp-rec-ecount {
   margin-left: var(--layout-margin-small);
   font: var(--typography-regular-small-body);
@@ -1308,10 +1224,6 @@
     grid-template-columns: 20px minmax(0, 1fr);
   }
 
-  .wp-rec .wp-rec-egap {
-    grid-column: 2;
-  }
-
   .wp-rec .wp-rec-eact {
     padding-left: calc(20px + var(--layout-margin-small) + var(--layout-padding-small));
   }
@@ -1320,5 +1232,222 @@
 @media (prefers-reduced-motion: no-preference) {
   .wp-rec .mk {
     transition: box-shadow 120ms ease-out;
+  }
+}
+
+/* Key facts: label over value, in one row that wraps (draft). */
+.wp-rec .wp-rec-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-large);
+}
+
+.wp-rec .wp-rec-facts__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-small) var(--layout-margin-xlarge);
+  margin: 0;
+}
+
+.wp-rec .wp-rec-facts__list dt {
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec .wp-rec-facts__list dd {
+  margin: 0;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* People: one row per work (draft). */
+.wp-rec .wp-rec-people {
+  overflow-x: auto;
+}
+
+.wp-rec .wp-rec-people__table {
+  border-collapse: collapse;
+  font: var(--typography-regular-small-body);
+  text-align: left;
+}
+
+.wp-rec .wp-rec-people__table :is(th, td) {
+  padding: var(--layout-padding-xsmall) var(--layout-padding-large) var(--layout-padding-xsmall) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  vertical-align: top;
+}
+
+.wp-rec .wp-rec-people__table thead th {
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+  border-bottom-color: var(--surface-color-border-medium);
+}
+
+.wp-rec .wp-rec-people__table tbody th {
+  font-weight: var(--typography-font-weights-bold);
+}
+
+/* Time limit summaries read like the header's key facts: label over value (draft). */
+.wp-rec .wp-rec-lsum {
+  align-items: flex-start;
+  gap: var(--layout-margin-small) var(--layout-margin-xlarge);
+}
+
+.wp-rec .wp-rec-lsum div {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+.wp-rec .wp-rec-lsum dt {
+  font: var(--typography-regular-label);
+}
+
+.wp-rec .wp-rec-facts__list dd.warn {
+  color: var(--typography-color-danger);
+}
+
+/* Draft: Events as one list in date order (Date, Event, Phase), with the later works as their own list beside it. */
+.wp-rec.wp-rec .wp-rec-ecolumns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--layout-margin-large) var(--layout-margin-xlarge);
+  align-items: start;
+}
+
+.wp-rec.wp-rec .wp-rec-ecolumns--two {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+}
+
+.wp-rec.wp-rec .wp-rec-eafter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.wp-rec.wp-rec .wp-rec-esel,
+.wp-rec.wp-rec .wp-rec-ecols {
+  display: grid;
+  grid-template-columns: 180px 18px minmax(0, 1fr) 240px;
+  align-items: center;
+  gap: var(--layout-margin-small) var(--layout-margin-medium);
+  padding: 2px var(--layout-padding-small);
+}
+
+.wp-rec.wp-rec .wp-rec-eafter .wp-rec-esel,
+.wp-rec.wp-rec .wp-rec-eafter .wp-rec-ecols {
+  grid-template-columns: 180px 18px minmax(0, 1fr) 0;
+}
+
+.wp-rec.wp-rec .wp-rec-ecols {
+  padding-top: var(--layout-padding-small);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* A range wraps before "to"; a date too wide for the column breaks rather than run under the glyph. */
+.wp-rec.wp-rec .wp-rec-ed {
+  display: block;
+  min-width: 0;
+  color: var(--typography-color-primary);
+  overflow-wrap: anywhere;
+}
+
+.wp-rec.wp-rec .wp-rec-eph {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  min-width: 0;
+  color: var(--typography-color-secondary);
+}
+
+.wp-rec.wp-rec .wp-rec-eph > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wp-rec.wp-rec .wp-rec-etag {
+  margin-left: var(--layout-margin-small);
+  padding: 0 6px;
+  border: 1px solid var(--surface-color-border-dark);
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.wp-rec.wp-rec .wp-rec-eact {
+  padding-left: calc(180px + 18px + 2 * var(--layout-margin-medium) + var(--layout-padding-small));
+}
+
+.wp-rec.wp-rec .wp-rec-enone {
+  margin: 0;
+  padding: var(--layout-padding-small);
+  border-top: 1px solid var(--surface-color-border-default);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+@media (max-width: 900px) {
+  .wp-rec.wp-rec .wp-rec-ecolumns--two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The phase goes on a second line under the event name, so the header drops its Phase cell. */
+  .wp-rec.wp-rec .wp-rec-esel,
+  .wp-rec.wp-rec .wp-rec-ecols,
+  .wp-rec.wp-rec .wp-rec-eafter .wp-rec-esel,
+  .wp-rec.wp-rec .wp-rec-eafter .wp-rec-ecols {
+    grid-template-columns: 96px 18px minmax(0, 1fr);
+  }
+
+  .wp-rec.wp-rec .wp-rec-esel {
+    row-gap: 0;
+  }
+
+  .wp-rec.wp-rec .wp-rec-ecols > span:nth-child(4) {
+    display: none;
+  }
+
+  .wp-rec.wp-rec .wp-rec-eph {
+    grid-column: 3;
+  }
+
+  .wp-rec.wp-rec .wp-rec-eph:empty {
+    display: none;
+  }
+
+  .wp-rec.wp-rec .wp-rec-eact {
+    padding-left: calc(96px + 18px + 2 * var(--layout-margin-medium) + var(--layout-padding-small));
+  }
+}
+
+/* Phone: the date takes a line of its own across the row, so the name gets the row's width. */
+@media (max-width: 480px) {
+  .wp-rec.wp-rec .wp-rec-esel,
+  .wp-rec.wp-rec .wp-rec-ecols,
+  .wp-rec.wp-rec .wp-rec-eafter .wp-rec-esel,
+  .wp-rec.wp-rec .wp-rec-eafter .wp-rec-ecols {
+    grid-template-columns: 18px minmax(0, 1fr);
+    column-gap: var(--layout-margin-small);
+  }
+
+  .wp-rec.wp-rec :is(.wp-rec-ed, .wp-rec-ecols > span:first-child) {
+    grid-column: 1 / -1;
+  }
+
+  .wp-rec.wp-rec .wp-rec-en {
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+
+  .wp-rec.wp-rec .wp-rec-eph {
+    grid-column: 2;
+  }
+
+  .wp-rec.wp-rec .wp-rec-eact {
+    padding-left: calc(18px + var(--layout-margin-small) + var(--layout-padding-small));
   }
 }

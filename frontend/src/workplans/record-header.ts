@@ -1,7 +1,7 @@
 import type { WorkplanRow } from '../api/sheet-works';
-import { ACT_START, ACT_YEARS, type ActYear } from './chart-facts';
+import { ACT_START, phaseDays } from './chart-facts';
 import { outcomeText } from './chart-words';
-import { plural } from './format';
+import { plural, count } from './format';
 import { dayOf } from './phase-bounds';
 import { dayNo, recordDays, recordStart, yearOf } from './record-axis';
 import type { CertFact, NoteTone, RecordNote, Tag as RecordTag, TagTone } from './record-types';
@@ -47,37 +47,6 @@ export function pickRecord(projects: readonly RecordProject[], projectId: string
   if (!project || !project.works.length) return null;
   if (act == null) return { project, act: actFor(project, null) };
   return { project, act: project.works.some((w) => w.actYear === act) ? act : actOf(project.works[0]) };
-}
-
-/** One project under one Act, in the order Previous and Next walk. */
-export interface RecordEntry {
-  projectId: string;
-  name: string;
-  act: ActYear;
-}
-
-/** Every project-Act pair, Act by Act (2018, 2002, 1996). */
-export const recordList = (projects: readonly RecordProject[]): RecordEntry[] =>
-  ACT_YEARS.flatMap((act) =>
-    projects
-      .filter((p) => p.works.some((w) => w.actYear === act))
-      .map((p) => ({ projectId: p.projectId, name: p.projectName, act })),
-  );
-
-export interface Neighbours {
-  prev: RecordEntry;
-  next: RecordEntry;
-  prevText: string;
-  nextText: string;
-}
-
-/** Previous and Next around the shown record, wrapping at both ends; null when the list is empty. */
-export function neighboursOf(list: readonly RecordEntry[], pick: RecordPick): Neighbours | null {
-  if (!list.length) return null;
-  const at = Math.max(0, list.findIndex((e) => e.projectId === pick.project.projectId && e.act === pick.act));
-  const prev = list[(at - 1 + list.length) % list.length];
-  const next = list[(at + 1) % list.length];
-  return { prev, next, prevText: `Previous: ${prev.name}, ${prev.act} Act`, nextText: `Next: ${next.name}, ${next.act} Act` };
 }
 
 export interface ComboOption {
@@ -233,28 +202,59 @@ function startText(as: WorkplanRow): string | null {
   return notAfter ? `No recorded start date, not after ${notAfter}` : null;
 }
 
-/** The line under the name, and the tag beside it; no tag without an assessment under the Act. */
-export function recordSummary(
-  project: RecordProject,
-  act: number,
-  as: WorkplanRow | null,
-  totals: LimitTotals,
-): { summary: string; tag: RecordTag | null } {
-  const parts = [`Project ${project.projectId}, ${act} Act`];
-  if (!as) return { summary: `${[...parts, 'No assessment under this Act'].join('. ')}.`, tag: null };
+/** The tag beside the name; none without an assessment under the Act. */
+export function recordTag(as: WorkplanRow | null): RecordTag | null {
+  if (!as) return null;
+  return as.transitionOut ? { text: 'Moved', tone: 'grey' } : stateTag(as);
+}
+
+/** "Total Allotted Days per work": legislated limits added up, no extensions; projected = days taken plus days planned. */
+// Force majeure suspensions would add to the total, but the data does not say which suspensions are force majeure.
+export function allottedDays(as: WorkplanRow, today: string): { total: number; projected: number } | null {
+  const legal = as.phases.filter((ph) => ph.legislated && ph.numberOfDays);
+  if (!legal.length) return null;
+  const total = legal.reduce((n, ph) => n + (ph.numberOfDays ?? 0), 0);
+  const projected = legal.reduce((n, ph) => {
+    const days = phaseDays(ph, as, today);
+    const planned = ph.numberOfDays ?? 0;
+    if (!days) return n + planned;
+    return n + (days.current ? Math.max(days.counted, planned) : days.counted);
+  }, 0);
+  return { total, projected };
+}
+
+/**
+ * The work's state in Track's words, then whether Track holds it active when it is still open: "In progress, active".
+ * A finished work says only its state; a sheet work has no active flag of its own.
+ */
+export function workStateText(w: WorkplanRow): string {
+  const state = STATE_TAGS[String(w.workState ?? '').toLowerCase()]?.text ?? w.workState ?? 'Not recorded';
+  if (w.source !== 'track' || w.isActive == null || !/^in.progress$/i.test(w.workState ?? '')) return state;
+  return `${state}, ${w.isActive ? 'active' : 'inactive'}`;
+}
+
+/** The header's key facts, label and value. */
+export function recordFacts(project: RecordProject, act: number, as: WorkplanRow | null, totals: LimitTotals, today: string): { k: string; v: string; warn?: boolean }[] {
+  const out: { k: string; v: string; warn?: boolean }[] = [
+    { k: 'Project', v: project.projectId },
+    { k: 'Act', v: `${act} Act` },
+  ];
+  if (!as) return [...out, { k: 'Assessment', v: 'none under this Act' }];
+  out.push({ k: 'Work state', v: workStateText(as) });
   const start = startText(as);
-  if (start) parts.push(start);
-  if (as.decisionDate) parts.push(`Decision ${dayOf(as.decisionDate)}`);
-  if (as.transitionOut) {
-    parts.push(`Moved to the ${as.transitionOut.toActYear} Act on ${as.transitionOut.date} by transition order, no decision under this Act`);
+  if (start) out.push({ k: /^Continued/.test(start) ? 'Continued' : 'Started', v: start.replace(/^(Started|Continued from the \d{4} Act on) /, '') });
+  if (as.decisionDate) out.push({ k: 'Decision', v: dayOf(as.decisionDate) ?? '' });
+  else if (as.transitionOut) out.push({ k: `Moved to the ${as.transitionOut.toActYear} Act`, v: `${as.transitionOut.date}, no decision under this Act` });
+  else if (as.decisionEventDate) out.push({ k: 'Decision planned', v: dayOf(as.decisionEventDate) ?? '' });
+  if (totals.extended) out.push({ k: 'Extended', v: plural(totals.extended, 'day') });
+  if (totals.suspended) out.push({ k: 'Suspended', v: plural(totals.suspended, 'day') });
+  const allotted = allottedDays(as, today);
+  if (allotted) {
+    out.push({ k: 'Total allotted days', v: plural(allotted.total, 'day') });
+    const over = allotted.projected - allotted.total;
+    out.push({ k: 'Projected', v: `${plural(allotted.projected, 'day')}${over > 0 ? `, ${count(over)} over` : ''}`, warn: over > 0 });
   }
-  if (!as.decisionDate && as.decisionEventDate) parts.push(`Decision planned ${dayOf(as.decisionEventDate)}`);
-  const { extended, suspended } = totals;
-  if (extended || suspended) {
-    parts.push(`Time limit changes in total: ${plural(extended, 'day')} extended, ${plural(suspended, 'day')} suspended`);
-  }
-  const tag: RecordTag = as.transitionOut ? { text: 'Moved', tone: 'grey' } : stateTag(as);
-  return { summary: `${parts.join('. ')}.`, tag };
+  return out;
 }
 
 function assessmentNotes(as: WorkplanRow, act: number): string[] {

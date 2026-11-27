@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { startTransition, useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { ActYear } from './chart-facts';
 import { plotAt, plotPx } from './overview-plot';
 import type { OverviewActData } from './use-overview-acts';
@@ -10,6 +10,9 @@ const BOX_BORDER_PX = 2;
 /** Visible track width before the first measure. */
 const FIRST_TRACK_PX = 1006;
 const RESIZE_SETTLE_MS = 150;
+
+/** A minimized Act keeps its rows, hidden; nothing inside takes a measure, scroll or focus until it opens. */
+export const drawn = (box: HTMLElement) => !box.closest('[hidden]');
 
 /** Where to scroll each Act's timeline box; `centre` holds each Act's centre as a fraction of its axis. */
 export type ScrollTo =
@@ -44,9 +47,10 @@ export function useOverviewScroll(rootRef: RefObject<HTMLElement | null>) {
   const [trackPx, setTrackPx] = useState(FIRST_TRACK_PX);
 
   const measure = useCallback(() => {
-    const box = [...boxes.current.values()][0];
+    const box = [...boxes.current.values()].find(drawn);
     const width = box ? box.clientWidth - NAME_INSET_PX : (rootRef.current?.clientWidth ?? 0) - BOX_BORDER_PX - NAME_INSET_PX;
-    if (width > 0) setTrackPx(Math.round(width));
+    // Every row redraws at a new width; as a transition React draws them in slices, so no frame stalls.
+    if (width > 0) startTransition(() => setTrackPx(Math.round(width)));
   }, [rootRef]);
 
   useEffect(() => {
@@ -85,6 +89,7 @@ export function useOverviewScroll(rootRef: RefObject<HTMLElement | null>) {
   const centres = useCallback(() => {
     const at: Partial<Record<ActYear, number>> = {};
     boxes.current.forEach((box, year) => {
+      if (!drawn(box)) return;
       const track = box.scrollWidth - NAME_INSET_PX;
       if (track > 0) at[year] = plotAt(box.scrollLeft + (box.clientWidth - NAME_INSET_PX) / 2, track);
     });
@@ -95,7 +100,7 @@ export function useOverviewScroll(rootRef: RefObject<HTMLElement | null>) {
   const scroll = useCallback((how: ScrollTo, acts: readonly OverviewActData[], only?: ActYear) => {
     for (const act of acts) {
       const box = boxes.current.get(act.year);
-      if (!box || (only && act.year !== only)) continue;
+      if (!box || !drawn(box) || (only && act.year !== only)) continue;
       const left = leftFor(how, act, box);
       if (left !== null) box.scrollLeft = left;
     }

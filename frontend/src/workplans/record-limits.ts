@@ -111,10 +111,12 @@ export function addExt(r: LimitPart | undefined, x: ExtEvent, mid: string, ctx: 
   const m = x.m;
   const sec = plainWords((/s\.\s?\d+(\(\d+\))?/.exec(String(m.name)) ?? [''])[0]) || 'section not recorded';
   const planned = !m.actualDate && !!m.anticipatedDate;
+  // Proposed rules: an extension's days count once it is granted, that is, once it has an actual date.
+  const counted = x.counted && !planned;
   const when = x.d == null ? 'date not recorded' : `${planned ? 'planned ' : ''}${isoOf(x.d)}`;
   if (x.d != null) {
     ctx.used.add('xpt');
-    const title = `Time limit extension${x.counted ? '' : ', not counted in the time limit'}`;
+    const title = `Time limit extension${counted ? '' : planned ? ', planned, not yet granted' : ', not counted in the time limit'}`;
     const rows = [['Section', sec], ['Date', when], ['Length', `+${plural(x.n, 'day')}`], ['Phase', r.name]] as const;
     (markRow ?? r).marks.push(markOf('xpt', { top: '38px', left: `${f3(ctx.scale.pct(x.d))}%` }, title, rows, mid));
   }
@@ -123,18 +125,18 @@ export function addExt(r: LimitPart | undefined, x: ExtEvent, mid: string, ctx: 
     e: x.d,
     g: 'g xpt',
     cls: 'xpt',
-    kind: 'Extension on one date',
+    kind: 'Extension',
     section: sec,
     from: when,
     to: '',
     n: x.n,
     mid,
     pastTxt: '',
-    note: x.counted ? '' : 'not counted in the time limit',
+    note: counted ? '' : planned ? 'planned, not yet granted: not counted' : 'not counted in the time limit',
     isExt: true,
-    counted: x.counted,
+    counted,
   });
-  if (x.counted) r.sumE += x.n;
+  if (counted) r.sumE += x.n;
 }
 
 /** The red "over a time limit" mark: the last `over` days of the phase. */
@@ -203,14 +205,19 @@ interface PartDays {
 
 /** The part's summary lines: time limit, days counted, extended, suspended, and how far over the limit when it is. */
 function sumOf(r: LimitPart, ph: WorkplanPhase, { len, lim, counted, sus, ext }: PartDays, countedStyle: MarkStyle): LimitSum[] {
+  const legal = !!ph.legislated && lim > 0;
   const sum: LimitSum[] = [
-    { k: lim && !ph.legislated ? 'Planned' : 'Time limit', v: lim ? plural(lim, 'day') : 'none recorded', cls: '', kg: lim ? 'sl' : 'none', kgStyle: {} },
-    { k: 'Days counted', v: plural(counted, 'day') + (sus ? ` of ${count(len)}` : ''), cls: '', kg: 'sc', kgStyle: countedStyle },
+    { k: lim && !ph.legislated ? 'Planned length' : 'Time limit', v: lim ? plural(lim, 'day') : 'none recorded', cls: '', kg: lim ? 'sl' : 'none', kgStyle: {} },
     { k: 'Extended', v: plural(ext, 'day') + (r.noDates ? ', dates not recorded' : ''), cls: '', kg: 'se', kgStyle: {} },
-    { k: 'Suspended', v: plural(sus, 'day'), cls: '', kg: 'ss', kgStyle: {} },
   ];
+  // The numbers the proposed rules give each legislated phase: time allowed, days taken, days left or overage, deadline.
+  if (legal) sum.push({ k: 'Time allowed', v: plural(lim + ext, 'day'), cls: '', kg: 'none', kgStyle: {} });
+  sum.push({ k: 'Suspended', v: plural(sus, 'day'), cls: '', kg: 'ss', kgStyle: {} });
+  sum.push({ k: 'Days taken', v: plural(counted, 'day') + (sus ? ` of ${count(len)}` : ''), cls: '', kg: 'sc', kgStyle: countedStyle });
   const over = r.o?.over ?? 0;
-  if (over > 0) sum.push({ k: 'Over the time limit by', v: plural(over, 'day'), cls: 'warn', kg: 'none', kgStyle: {} });
+  if (over > 0) sum.push({ k: 'Overage', v: plural(over, 'day'), cls: 'warn', kg: 'none', kgStyle: {} });
+  else if (legal && len > 0) sum.push({ k: 'Days left', v: plural(Math.max(0, lim + ext - counted), 'day'), cls: '', kg: 'none', kgStyle: {} });
+  if (legal && r.o?.deadline) sum.push({ k: 'Deadline', v: r.o.deadline, cls: '', kg: 'none', kgStyle: {} });
   return sum;
 }
 
@@ -253,6 +260,8 @@ export function addPart(r: LimitPart, opt: PartOptions): LimitPartView | null {
     phase: ph.name ?? '',
     extDays: String(extOf(ph)),
     total: String(r.sumE),
+    spans: r.lrows.some((x) => !!x.to && x.to !== x.from),
+    onlyExt: r.lrows.every((x) => x.isExt),
     noDatesText: r.noDates ? `${plural(r.noDates, 'day')} extended, dates not recorded` : '',
     rows: r.lrows.map((x) => ({
       g: x.g,
@@ -261,7 +270,8 @@ export function addPart(r: LimitPart, opt: PartOptions): LimitPartView | null {
       note: x.note,
       section: x.section,
       from: x.from,
-      to: x.to || x.from,
+      // A Track extension is recorded on one date: To only for a change that spans dates, such as a suspension.
+      to: x.to && x.to !== x.from ? x.to : '',
       days: String(x.n),
       counted: x.counted === false ? 'false' : 'true',
       ...dbar(x),

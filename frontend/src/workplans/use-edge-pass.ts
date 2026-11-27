@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { plotAt } from './overview-plot';
 import { rangeText } from './overview-rows';
 import type { OverviewActData } from './use-overview-acts';
-import { NAME_INSET_PX } from './use-overview-scroll';
+import { drawn, NAME_INSET_PX } from './use-overview-scroll';
 
 interface View {
   track: number;
@@ -65,7 +65,8 @@ export function useEdgePass(act: OverviewActData, open: boolean) {
     const head = headRef.current;
     const box = rowsRef.current;
     const axis = head?.querySelector<HTMLElement>('.wp-ov-axv') ?? null;
-    if (!box) {
+    // A minimized Act's rows stay drawn but hidden; reading them would lay them all out.
+    if (!box || !drawn(box)) {
       setRange('');
       return;
     }

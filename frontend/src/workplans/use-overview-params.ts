@@ -14,6 +14,10 @@ export interface OverviewParams {
   /** Phase name, or '' for any. */
   phase: string;
   over: boolean;
+  /** Assigned to: '' anyone, '@me', or a staff name. */
+  who: string;
+  /** EAO team name, or '' for any. */
+  team: string;
   zoom: Zoom;
 }
 
@@ -32,6 +36,8 @@ function read(params: URLSearchParams): OverviewParams {
     state: oneOf(params.get('state'), ROW_STATES.map(([key]) => key), DEFAULT_ROW_STATE),
     phase: params.get('phase') ?? '',
     over: params.get('over') === '1',
+    who: params.get('who') ?? '',
+    team: params.get('team') ?? '',
     zoom: oneOf(params.get('zoom'), ZOOMS.map((level) => level.value), DEFAULT_ZOOM),
   };
 }
@@ -48,6 +54,8 @@ function write(params: URLSearchParams, change: Partial<OverviewParams>) {
   if (change.state !== undefined) put('state', change.state, DEFAULT_ROW_STATE);
   if (change.phase !== undefined) put('phase', change.phase);
   if (change.over !== undefined) put('over', change.over ? '1' : '');
+  if (change.who !== undefined) put('who', change.who);
+  if (change.team !== undefined) put('team', change.team);
   if (change.zoom !== undefined) put('zoom', change.zoom, DEFAULT_ZOOM);
 }
 

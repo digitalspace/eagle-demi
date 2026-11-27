@@ -13,13 +13,6 @@ export interface RecordEventsProps {
   hl: RecordHighlight;
 }
 
-const KEY: readonly [glyph: string, label: string][] = [
-  ['g dflag', 'Decision'],
-  ['g dia', 'Milestone'],
-  ['g cp', 'Comment period'],
-  ['g ring', 'Other event'],
-];
-
 const Glyph = ({ g }: { g: string }) => (
   <span className="wp-rec-gbox" aria-hidden="true">
     <span className={g} />
@@ -43,23 +36,23 @@ function Entry({ it, hl }: { it: EventEntry; hl: RecordHighlight }) {
         onBlur={() => hl.onHover(it.id, false)}
         onClick={() => hl.onPick(it.id)}
       >
-        <Glyph g={it.g} />
         <span className="wp-rec-ed">
-          <span>{it.date}</span>
-          {it.dateEnd && (
-            <>
-              <span>{it.dateEnd}</span>
-              <span className="wp-rec-el">{it.len}</span>
-            </>
-          )}
+          {it.date}
+          {it.dateEnd && ` ${it.dateEnd}`}
         </span>
+        <Glyph g={it.g} />
         <span className="wp-rec-en">
           {it.name}
-          {it.countText && <span className="wp-rec-ecount">{it.countText}</span>}
+          {it.tag && <span className="wp-rec-etag">{it.tag}</span>}
+          {(it.countText || it.len) && <span className="wp-rec-ecount">{[it.countText, it.len].filter(Boolean).join(', ')}</span>}
         </span>
-        <span className="wp-rec-egap">
-          <span>{it.gap}</span>
-          <span className="wp-rec-gbar" style={it.gapStyle} />
+        <span className="wp-rec-eph" title={it.phase?.name}>
+          {it.phase && (
+            <>
+              <RowSwatch sw={it.phase.sw} cls={it.phase.swCls} />
+              <span>{it.phase.name}</span>
+            </>
+          )}
         </span>
       </button>
       {picked && it.hasMark && (
@@ -73,27 +66,36 @@ function Entry({ it, hl }: { it: EventEntry; hl: RecordHighlight }) {
   );
 }
 
+/** Column names over a list; the entries' own accessible names say the same, so screen readers skip it. */
+const Cols = ({ phase }: { phase: boolean }) => (
+  <div className="wp-rec-ecols" aria-hidden="true">
+    <span>Date</span>
+    <span />
+    <span>Event</span>
+    <span>{phase ? 'Phase' : ''}</span>
+  </div>
+);
+
 const colourStyle = (colour: string): MarkStyle => ({ '--pc': colour });
 
-function Group({ g, hl, onMore }: { g: EventGroup; hl: RecordHighlight; onMore: () => void }) {
+/** The later works: their own short list beside the assessment's events, since they are works and not its events. */
+function After({ g, hl, onMore }: { g: EventGroup; hl: RecordHighlight; onMore: () => void }) {
   return (
-    <div className="wp-rec-egrp" style={g.colour ? colourStyle(g.colour) : undefined}>
+    <div className="wp-rec-eafter" style={g.colour ? colourStyle(g.colour) : undefined}>
       <h3 className="wp-rec-sthead" id={g.id}>
         <RowSwatch sw={g.sw} cls={g.swCls} />
         {g.name}
       </h3>
+      <Cols phase={false} />
+      <ol className="wp-rec-elist" id={g.listId} aria-labelledby={g.id}>
+        {g.items.map((it) => (
+          <Entry key={it.id} it={it} hl={hl} />
+        ))}
+      </ol>
       {g.more && (
         <button type="button" className="wp-btn wp-btn--secondary wp-rec-emore" aria-expanded={g.more.expanded} aria-controls={g.listId} onClick={onMore}>
           {g.more.text}
         </button>
-      )}
-      {g.hiddenText && <p className="wp-rec-ehid">{g.hiddenText}</p>}
-      {g.items.length > 0 && (
-        <ol className="wp-rec-elist" id={g.listId} aria-labelledby={g.id}>
-          {g.items.map((it) => (
-            <Entry key={it.id} it={it} hl={hl} />
-          ))}
-        </ol>
       )}
     </div>
   );
@@ -114,7 +116,7 @@ function useEventView(events: RecordEventData, recordKey: string) {
   };
 }
 
-/** "Events": filter buttons, a symbol key, and the entries grouped by step; each entry lights its mark on the chart. */
+/** "Events": filter buttons, the entries by date, then the later works; each entry lights its mark on the chart. */
 export function RecordEvents({ events, recordKey, hl }: RecordEventsProps) {
   const { view, pick, toggleAll } = useEventView(events, recordKey);
   if (!view.has) return null;
@@ -127,7 +129,9 @@ export function RecordEvents({ events, recordKey, hl }: RecordEventsProps) {
       <header className="wp-rec-evhead">
         <div className="wp-rec-bhead">
           <h2 id="ev-title">Events</h2>
-          <span className="wp-rec-emeta">{view.countText}</span>
+          <span className="wp-rec-emeta" aria-live="polite">
+            {view.countText}
+          </span>
         </div>
         <div className="wp-rec-evtools">
           {view.hasChips && (
@@ -140,38 +144,33 @@ export function RecordEvents({ events, recordKey, hl }: RecordEventsProps) {
               ))}
             </div>
           )}
-          <ul className="wp-rec-evkey" aria-label="Symbols in this list">
-            {KEY.map(([g, label]) => (
-              <li key={label}>
-                <Glyph g={g} />
-                {label}
-              </li>
-            ))}
-            {view.hasXpt && (
-              <li>
-                <Glyph g="g xpt" />
-                Time limit extension
-              </li>
-            )}
-            <li>
-              <span className="wp-rec-gbar wp-rec-gbar--key" aria-hidden="true" />
-              Grey bar: time since the entry before
-            </li>
-          </ul>
         </div>
       </header>
-      <div className="wp-rec-egrid">
-        {view.groups.map((g) => (
-          <Group
-            key={g.key}
-            g={g}
+      <div className={view.after && view.hasChips ? 'wp-rec-ecolumns wp-rec-ecolumns--two' : 'wp-rec-ecolumns'}>
+        {view.hasChips && (
+          <div className="wp-rec-emain">
+            <Cols phase />
+            {view.rows.length > 0 ? (
+              <ol className="wp-rec-elist" aria-labelledby="ev-title">
+                {view.rows.map((it) => (
+                  <Entry key={it.id} it={it} hl={hl} />
+                ))}
+              </ol>
+            ) : (
+              <p className="wp-rec-enone">No events of this kind.</p>
+            )}
+          </div>
+        )}
+        {view.after && (
+          <After
+            g={view.after}
             hl={hl}
             onMore={() => {
               toggleAll();
               hl.reset();
             }}
           />
-        ))}
+        )}
       </div>
       {view.hasMore && (
         <button type="button" className="wp-btn wp-btn--secondary wp-rec-emore" onClick={() => setCats([...EVENT_CATS])}>

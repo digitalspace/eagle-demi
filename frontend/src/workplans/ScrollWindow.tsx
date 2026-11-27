@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type RefObject } from 'react';
+import { workEndOf, workStartOf } from './chart-facts';
+import { AXIS_W } from './overview-axis';
 import type { OverviewActData } from './use-overview-acts';
 import { EDGE_PX } from './overview-plot';
 import { viewOf } from './use-edge-pass';
@@ -19,6 +21,44 @@ function frameOf(box: HTMLElement): Frame {
   if (!(track > 0) || !(vis > 0)) return { left: 0, width: 1, edge: 0 };
   const width = Math.min(1, vis / track);
   return { left: Math.min(1 - width, Math.max(0, box.scrollLeft / track)), width, edge: EDGE_PX / track };
+}
+
+/** A quarter's bar behind the window: how many of the shown works are active in it, as a share of the busiest quarter. */
+interface Busy {
+  x: number;
+  w: number;
+  h: number;
+}
+
+const nextQuarter = (day: string) => {
+  const [y, m] = day.split('-').map(Number);
+  return m >= 10 ? `${y + 1}-01-01` : `${y}-${String(m + 3).padStart(2, '0')}-01`;
+};
+
+/** Works active per quarter of the axis, among the rows the filters leave; open works count up to today. */
+function busyOf(act: OverviewActData, today: string): Busy[] {
+  const { axis } = act;
+  if (!axis) return [];
+  const spans = act.rows
+    .flatMap((row) => row.cand.works)
+    .flatMap((w) => {
+      const s = workStartOf(w);
+      return s ? [[s, workEndOf(w) ?? today] as const] : [];
+    });
+  const quarters: string[] = [];
+  for (let y = axis.y0; y < axis.y0 + axis.years; y++) for (const m of ['01', '04', '07', '10']) quarters.push(`${y}-${m}-01`);
+  const counts = quarters.map((q) => {
+    const e = nextQuarter(q);
+    return spans.filter(([a, b]) => a < e && b >= q).length;
+  });
+  const most = Math.max(1, ...counts);
+  return quarters.flatMap((q, i) => {
+    if (!counts[i]) return [];
+    const x0 = axis.px(q);
+    const x1 = axis.px(nextQuarter(q));
+    if (x1 <= x0) return [];
+    return [{ x: (x0 / AXIS_W) * 100, w: ((x1 - x0) / AXIS_W) * 100, h: (counts[i] / most) * 100 }];
+  });
 }
 
 const sameFrame = (a: Frame, b: Frame) => a.left === b.left && a.width === b.width && a.edge === b.edge;
@@ -44,7 +84,8 @@ interface Drag {
  * The Act's whole axis with a box over the part in view, always drawn; at the whole range the box covers the strip. The rows box's
  * `scrollLeft` is the one position: the window reads it on every scroll and resize, and drag, click and keys set it.
  */
-export function ScrollWindow({ act, box, valueText }: { act: OverviewActData; box: RefObject<HTMLElement | null>; valueText: string }) {
+export function ScrollWindow({ act, box, valueText, today }: { act: OverviewActData; box: RefObject<HTMLElement | null>; valueText: string; today: string }) {
+  const busy = useMemo(() => busyOf(act, today), [act, today]);
   const [frame, setFrame] = useState<Frame>({ left: 0, width: 1, edge: 0 });
   const drag = useRef<Drag | null>(null);
   const dragged = useRef(false);
@@ -72,7 +113,7 @@ export function ScrollWindow({ act, box, valueText }: { act: OverviewActData; bo
   const whole = frame.width > 0.995;
 
   const years = act.ticks.ticks.filter((tick) => tick.cls === '' && Number(tick.x) > 0);
-  const today = act.ticks.gridHi.find((line) => line.cls === 'today');
+  const todayLine = act.ticks.gridHi.find((line) => line.cls === 'today');
   const slack = 1 - frame.width;
   const now = slack > 0 ? Math.round(Math.min(1, Math.max(0, frame.left / slack)) * 100) : 0;
 
@@ -145,10 +186,13 @@ export function ScrollWindow({ act, box, valueText }: { act: OverviewActData; bo
         onClick={onStripClick}
       >
         <span className="wp-ov-sw-plot" style={{ left: `${(frame.edge * 100).toFixed(3)}%`, right: `${(frame.edge * 100).toFixed(3)}%` }}>
+          {busy.map((b) => (
+            <span key={b.x} className="wp-ov-sw-busy" style={{ left: `${b.x.toFixed(3)}%`, width: `${b.w.toFixed(3)}%`, height: `${b.h.toFixed(1)}%` }} />
+          ))}
           {years.map((tick) => (
             <span key={tick.x} className="wp-ov-sw-year" style={{ left: `${tick.x}%` }} />
           ))}
-          {today && <span className="wp-ov-sw-today" style={{ left: `${today.x}%` }} />}
+          {todayLine && <span className="wp-ov-sw-today" style={{ left: `${todayLine.x}%` }} />}
         </span>
         <span
           className="wp-ov-sw-window"

@@ -20,8 +20,10 @@ export function weekOf(iso: string): string {
   return `Week of ${MONTH_DAY.format(dateOf(iso))}`;
 }
 
+// One formatter: toLocaleString builds a new one per call, which shows when every row redraws.
+const COUNT = new Intl.NumberFormat('en-CA');
 /** "1,234". */
-export const count = (n: number) => n.toLocaleString('en-CA');
+export const count = (n: number) => COUNT.format(n);
 
 /** "1 work", "3 works"; `many` for a word that does not add "s" ("2 entries"). */
 export function plural(n: number, one: string, many = `${one}s`): string {

@@ -112,6 +112,14 @@ export const OVERVIEW_LEGEND: readonly (readonly LegendGroup[])[] = [
       items: [
         { label: 'Today', parts: [{ cls: 'wp-ov-gl wp-ov-gl--today', style: { left: 15 } }] },
         { label: 'Act took effect', parts: [{ cls: 'wp-ov-gl wp-ov-gl--actin', style: { left: 15 } }] },
+        {
+          label: 'Scroll bar: works active each quarter',
+          parts: [
+            { cls: 'wp-ov-sw-busy', style: { left: 6, width: 10, height: 10, bottom: 6 } },
+            { cls: 'wp-ov-sw-busy', style: { left: 17, width: 10, height: 16, bottom: 6 } },
+            { cls: 'wp-ov-sw-busy', style: { left: 28, width: 10, height: 6, bottom: 6 } },
+          ],
+        },
       ],
     },
   ],

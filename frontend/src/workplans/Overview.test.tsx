@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FIXTURE from '../../parity/fixtures/workplans.json';
 import type { WorkplanRow } from '../api/sheet-works';
@@ -25,17 +25,56 @@ const ZETA = workOf(
   { startDate: '2026-01-01', decisionEventDate: '2026-10-01' },
 );
 
-function renderOverview(works: readonly WorkplanRow[]) {
+function renderOverview(works: readonly WorkplanRow[], path = '/workplans') {
   render(
-    <MemoryRouter initialEntries={['/workplans']}>
+    <MemoryRouter initialEntries={[path]}>
       <Overview works={works} today={TODAY} />
+      <SearchProbe />
     </MemoryRouter>,
   );
   return userEvent.setup();
 }
 
+function SearchProbe() {
+  return <output aria-label="Address search">{useLocation().search}</output>;
+}
+
+const addressParams = () => new URLSearchParams(screen.getByRole('status', { name: 'Address search' }).textContent ?? '');
+
+/** ZETA's project, with an amendment of its own. */
+const ZETA_AMENDMENT = workOf([phaseOf('Amendment Review', '2026-04-01', '2026-06-30', { isCompleted: true })], {
+  workId: 'track-950-amd',
+  workTypeCode: 'amendment',
+  workType: 'Amendment',
+  title: 'Sample Zeta Mine - Tailings Amendment',
+  workState: 'COMPLETED',
+  isActive: false,
+});
+
+/** Two staffed Track works on two teams, and a sheet work with no one on it. */
+const STAFFED = [
+  { ...ZETA, team: 'Team A', staff: [{ name: 'Staff One', role: 'Work lead' }] },
+  workOf([phaseOf('Early Engagement', '2026-02-01', null, { isCurrent: true })], {
+    projectId: '951',
+    projectName: 'Sample Eta Dam',
+    workId: 'track-951',
+    title: 'Sample Eta Dam - Assessment',
+    team: 'Team B',
+    staff: [{ name: 'Staff Two', role: 'Responsible EPD' }],
+  }),
+  workOf([phaseOf('Application Review', '2005-01-01', '2005-06-30', { isCompleted: true })], {
+    projectId: '952',
+    projectName: 'Sample Iota Mill',
+    workId: 'sheet-952',
+    source: 'sheet',
+    actYear: 2002,
+    workState: 'completed',
+    isActive: false,
+    title: 'Sample Iota Mill - Assessment (2002)',
+  }),
+];
+
 const rowNames = () => screen.getAllByRole('link', { name: /^Open / }).map((link) => link.getAttribute('title'));
-const marksOf = (year: number) => within(screen.getByRole('region', { name: new RegExp(`^${year} Act timeline`) })).getAllByRole('button');
 
 beforeEach(() => {
   stubResizeObserver();
@@ -98,12 +137,166 @@ describe('Overview', () => {
     expect(screen.queryByRole('heading', { name: 'Markers' })).toBeNull();
   });
 
-  it('tags a row over its limit and past its planned decision', () => {
+  it('tags the assessment over its limit and past its planned decision, on the project line it shares', () => {
     renderOverview([ZETA]);
 
     const row = screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-nc') as HTMLElement;
+    expect(within(row).getByText('Assessment')).toBeInTheDocument();
     expect(within(row).getByText('230 days over limit')).toBeInTheDocument();
     expect(within(row).getByText('Decision overdue')).toBeInTheDocument();
+  });
+
+  it('sorts by Start date first', () => {
+    renderOverview(FIXTURE_WORKS);
+
+    expect(screen.getByRole('combobox', { name: 'Sort by' })).toHaveDisplayValue('Start date');
+  });
+
+  it('says which Act has no dates in the year picked', async () => {
+    const theta = workOf([phaseOf('Application Review', '1998-03-01', '2000-06-30', { isCompleted: true })], {
+      projectId: '953',
+      projectName: 'Sample Theta Road',
+      workId: 'sheet-953',
+      source: 'sheet',
+      actYear: 1996,
+      workState: 'completed',
+      isActive: false,
+      title: 'Sample Theta Road - Assessment (1996)',
+    });
+    const user = renderOverview([ZETA, theta]);
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Go to year' }), '2026');
+
+    const nav = within(screen.getByRole('navigation', { name: 'Navigate the timeline' }));
+    await waitFor(() => expect(nav.getByRole('status')).toHaveTextContent('No dates in 2026 under the 1996 Act (1998 to 2000)'));
+  });
+});
+
+describe('Overview Assigned to and Team', () => {
+  it('opens with the person and team in the address and says how many sheet works they hide', () => {
+    renderOverview(STAFFED, '/workplans?who=Staff%20One&team=Team%20A');
+
+    expect(screen.getByRole('combobox', { name: 'Assigned to' })).toHaveDisplayValue('Staff One');
+    expect(screen.getByRole('combobox', { name: 'Team' })).toHaveDisplayValue('Team A');
+    expect(rowNames()).toEqual(['Sample Zeta Mine']);
+    expect(screen.getByText('1 sheet work has no one assigned in Track and is hidden by these filters.')).toBeInTheDocument();
+  });
+
+  it('says no sheet works are hidden for Me while no signed-in name is known, since Me then filters nothing', () => {
+    renderOverview(STAFFED, '/workplans?who=@me');
+
+    expect(screen.queryByText(/hidden by these filters/)).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Assigned to' })).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('keeps offering a person named in the address who is on no work, so the select shows who filters the rows', () => {
+    renderOverview(STAFFED, '/workplans?who=Staff%20Nine');
+
+    expect(screen.getByRole('combobox', { name: 'Assigned to' })).toHaveDisplayValue('Staff Nine');
+    expect(screen.queryAllByRole('link', { name: /^Open / })).toEqual([]);
+  });
+
+  it('keeps the hidden sheet works note in one live region, so a filter change is announced', async () => {
+    const user = renderOverview(STAFFED, '/workplans?team=Team%20A');
+    const note = screen.getByText('1 sheet work has no one assigned in Track and is hidden by these filters.');
+    expect(note).toHaveAttribute('aria-live', 'polite');
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Team' }), '');
+
+    expect(note).toBeInTheDocument();
+    expect(note).toHaveTextContent('');
+  });
+
+  it('keeps a picked team and person in the address and shows only their works', async () => {
+    const user = renderOverview(STAFFED);
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Team' }), 'Team B');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Assigned to' }), 'Staff Two');
+
+    expect(rowNames()).toEqual(['Sample Eta Dam']);
+    expect([addressParams().get('team'), addressParams().get('who')]).toEqual(['Team B', 'Staff Two']);
+  });
+});
+
+describe('Overview Act title', () => {
+  /** ZETA's project under the 2002 Act too, so each row carries a jump link to the other. */
+  const ZETA_2002 = workOf([phaseOf('Application Review', '2005-01-01', '2005-06-30', { isCompleted: true })], {
+    workId: 'sheet-950-2002',
+    source: 'sheet',
+    actYear: 2002,
+    workState: 'completed',
+    isActive: false,
+    title: 'Sample Zeta Mine - Assessment (2002)',
+  });
+
+  it('minimizes the Act so its rows leave the page, and brings them back on a second press', async () => {
+    const user = renderOverview([ZETA]);
+    const title = screen.getByRole('button', { name: '2018 Act' });
+
+    await user.click(title);
+
+    expect(title).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeNull();
+
+    await user.click(title);
+
+    expect(title).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeInTheDocument();
+  });
+
+  it('opens a minimized Act when a jump link leads into it, then focuses the row there', async () => {
+    const user = renderOverview([ZETA, ZETA_2002]);
+    const title = screen.getByRole('button', { name: '2002 Act' });
+    await user.click(title);
+
+    await user.click(screen.getByRole('link', { name: 'Go to Sample Zeta Mine under the 2002 Act (earlier)' }));
+
+    expect(title).toHaveAttribute('aria-expanded', 'true');
+    const act2002 = screen.getByRole('region', { name: '2002 Act' });
+    expect(within(act2002).getByRole('link', { name: /^Open Sample Zeta Mine/ })).toHaveFocus();
+  });
+});
+
+describe('Overview project line', () => {
+  it('stays on the overview when the line is pressed outside its links', async () => {
+    const user = renderOverview([ZETA]);
+    const line = screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
+
+    await user.click(within(line).getByText('Assessment'));
+
+    expect(screen.getByRole('status', { name: 'Address search' }).textContent).toBe('');
+  });
+});
+
+describe('Overview expand arrow', () => {
+  it('starts minimized to the assessment line, shows the other works on their own lines on press, and minimizes again', async () => {
+    const user = renderOverview([ZETA, ZETA_AMENDMENT]);
+    const workLink = { name: 'Tailings Amendment, Sample Zeta Mine: open the record' };
+    const amendmentMark = { name: /^After certificate: Tailings Amendment\./ };
+    const headLine = () => screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
+    expect(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', workLink)).toBeNull();
+    expect(within(headLine()).queryByRole('button', amendmentMark)).toBeNull();
+    expect(within(headLine()).getByRole('button', { name: /^Phase: Assessment\. Phase Early Engagement\./ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' }));
+
+    expect(screen.getByRole('button', { name: 'Minimize Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'true');
+    const workLine = screen.getByRole('link', workLink).closest('.wp-ov-row') as HTMLElement;
+    expect(within(workLine).getByRole('button', amendmentMark)).toBeInTheDocument();
+    expect(within(headLine()).queryByRole('button', amendmentMark)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Minimize Sample Zeta Mine' }));
+
+    expect(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', workLink)).toBeNull();
+  });
+
+  it('draws no expand button for a project with only its assessment', () => {
+    renderOverview([ZETA]);
+
+    expect(screen.getByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sample Zeta Mine$/ })).toBeNull();
   });
 });
 
@@ -164,9 +357,10 @@ describe('Overview hover', () => {
 });
 
 describe('Overview row keys', () => {
-  it('gives each row one tab stop, which follows the arrow, Home and End keys', async () => {
+  it('gives each line one tab stop, which follows the arrow, Home and End keys', async () => {
     const user = renderOverview([ZETA]);
-    const marks = marksOf(2018);
+    const line = screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
+    const marks = [...line.querySelectorAll<HTMLElement>('.wp-ov-mk')];
     const stops = () => marks.filter((mark) => mark.tabIndex === 0);
     expect(marks.length).toBeGreaterThan(2);
     expect(stops()).toHaveLength(1);

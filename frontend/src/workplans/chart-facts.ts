@@ -26,7 +26,21 @@ export const kindOf = (work: Pick<WorkplanRow, 'workTypeCode'>): WorkKind =>
 export const isOpenWork = (work: Pick<WorkplanRow, 'workState'>) =>
   /^(in-progress|IN_PROGRESS|suspended|SUSPENDED)$/.test(work.workState ?? '');
 
-type ClockWork = Pick<WorkplanRow, 'workState' | 'isActive' | 'source' | 'actYear'>;
+type ClockWork = Pick<WorkplanRow, 'workState' | 'isActive' | 'source' | 'actYear'> & { phases?: readonly WorkplanPhase[] };
+
+/**
+ * Proposed rules, Nov 2026, "Counting days": a non-legislated phase counts from Day One, as does a legislated phase
+ * that follows a legislated one; a legislated phase after a non-legislated one, or first in its work, counts from Day Zero.
+ */
+export function countsFromDayOne(phase: WorkplanPhase, phases: readonly WorkplanPhase[] | undefined): boolean {
+  if (!phase.legislated) return true;
+  const start = dayOf(phase.startDate);
+  const before = (phases ?? [])
+    .filter((p) => p !== phase && start && (dayOf(p.startDate) ?? '9999') < start)
+    .sort((a, b) => ((dayOf(a.startDate) ?? '') < (dayOf(b.startDate) ?? '') ? -1 : 1))
+    .at(-1);
+  return !!before?.legislated;
+}
 
 /** A work in progress that Track switched off: still open, but no phase of it runs to today. */
 export const isInactiveWork = (work: ClockWork) => work.source === 'track' && work.isActive === false && isOpenWork(work);
@@ -71,8 +85,10 @@ export interface PhaseDays {
   start: string;
   /** Today while the phase runs. */
   end: string;
-  /** Calendar days from start to end. */
+  /** Days taken before suspended days come off: start to end, counted the Day Zero or Day One way. */
   length: number;
+  /** True when the start day is day 1. */
+  dayOne: boolean;
   suspended: number;
   extended: number;
   /** Calendar days less suspended days. */
@@ -102,15 +118,24 @@ function interruptionDays(stops: SheetInterruption[], suspension: boolean): numb
     .reduce((sum, stop) => sum + stopDays(stop), 0);
 }
 
-/** Null when the phase has not started by `today`, is neither finished nor running, or ends before it starts. */
-export function phaseDays(phase: WorkplanPhase, work: ClockWork, today: string): PhaseDays | null {
+/** The days a phase counts between, under the same null rules as `phaseDays`. */
+function phaseSpan(phase: WorkplanPhase, work: ClockWork, today: string): Pick<PhaseDays, 'start' | 'end' | 'current'> | null {
   const start = dayOf(phase.startDate);
   if (!start || start > today) return null;
   const current = isOpenWork(work) && !isInactiveWork(work) && isOpenPhase(phase);
   if (!current && !phase.isCompleted) return null;
   const end = current ? today : dayOf(phase.endDate);
   if (!end || end < start) return null;
-  const length = daysBetween(start, end);
+  return { start, end, current };
+}
+
+/** Null when the phase has not started by `today`, is neither finished nor running, or ends before it starts. */
+export function phaseDays(phase: WorkplanPhase, work: ClockWork, today: string): PhaseDays | null {
+  const span = phaseSpan(phase, work, today);
+  if (!span) return null;
+  const { start, end, current } = span;
+  const dayOne = countsFromDayOne(phase, work.phases);
+  const length = daysBetween(start, end) + (dayOne ? 1 : 0);
   const suspended = phase.suspendedDays || interruptionDays(phase.interruptions, true);
   const extended = phase.extensionDays || interruptionDays(phase.interruptions, false);
   const counted = length - suspended;
@@ -121,13 +146,16 @@ export function phaseDays(phase: WorkplanPhase, work: ClockWork, today: string):
     start,
     end,
     length,
+    dayOne,
     suspended,
     extended,
     counted,
     legal,
     limit,
-    over: past > OVER_LIMIT_GRACE_DAYS && !overUnknown(phase, work) ? past : 0,
+    // An overage is counted on legislated phases only; a planned length is a forecast, not a limit.
+    over: legal && past > OVER_LIMIT_GRACE_DAYS && !overUnknown(phase, work) ? past : 0,
     current,
-    limitDate: limit === null ? null : plusDays(start, limit + suspended),
+    // The deadline: start + time allowed + suspended days, minus 1 for a Day One phase.
+    limitDate: limit === null ? null : plusDays(start, limit + suspended - (dayOne ? 1 : 0)),
   };
 }

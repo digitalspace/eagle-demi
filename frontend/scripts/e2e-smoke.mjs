@@ -14,6 +14,7 @@ import {
   routeEnv,
   routeTiles
 } from '../parity/capture.mjs';
+import { checkActs, checkJump, checkResize } from './e2e-workplans.mjs';
 
 // One entry per screen in src/routes.tsx. /projects/901 is the fixture project.
 export const SCREENS = [
@@ -195,98 +196,6 @@ async function checkFit(context, base, entry, width, timeout) {
   return reasons;
 }
 
-const FIXTURE_TODAY = new Date('2026-11-17T12:00:00Z');
-
-/**
- * Reasons a click on a lookahead week bar fails to start that week's section at the top of the agenda (wide),
- * or fails to bring its heading on screen (narrow, where the page scrolls too).
- */
-async function checkJump(context, base, timeout) {
-  const reasons = [];
-  const page = await context.newPage();
-  try {
-    // The fixture's milestones sit in the 90 days after this date; twelve copies of each work make the agenda scroll.
-    await page.clock.setFixedTime(FIXTURE_TODAY);
-    const { works } = JSON.parse(readFileSync(path.join(FIXTURE_DIR, 'workplans.json'), 'utf-8'));
-    const copies = works.flatMap((work) => Array.from({ length: 12 }, (_, i) => ({ ...work, workId: `${work.workId}-${i}` })));
-    await page.route((url) => new URL(url).pathname === '/api/workplans', (route) => route.fulfill({ json: { works: copies } }));
-    const url = new URL('/workplans?view=lookahead', base).toString();
-    const bar = page.getByRole('button', { name: /^Week of Dec 14:/ });
-    const head = page.getByRole('heading', { name: /^Week of Dec 14/ });
-    const load = async () => {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await page.locator('.la-week').first().waitFor({ timeout });
-      if ((await bar.count()) === 0) {
-        throw new Error('no "Week of Dec 14" bar: frontend/parity/fixtures/workplans.json must keep a milestone in the week of 2026-12-14');
-      }
-    };
-
-    await load();
-    await bar.click({ timeout });
-    // The heading is sticky, so measure its section: an overshoot inside the week still moves the section.
-    const gap = await head.evaluate(
-      (h) => h.parentElement.getBoundingClientRect().top - h.closest('.la-agenda').getBoundingClientRect().top
-    );
-    if (Math.abs(gap) > 1) {
-      reasons.push(`wide: week section starts ${Math.round(Math.abs(gap))}px ${gap > 0 ? 'below' : 'above'} the agenda top`);
-    }
-
-    // At 390x500 the agenda starts at the fold and main.app__main scrolls, so only focus can bring the heading into view.
-    await page.setViewportSize({ width: 390, height: 500 });
-    await load();
-    const onScreen = () =>
-      head.evaluate((h) => {
-        const { top, bottom } = h.getBoundingClientRect();
-        return { top: Math.round(top), bottom: Math.round(bottom), fits: top >= 0 && bottom <= innerHeight };
-      });
-    if ((await onScreen()).fits) {
-      reasons.push('narrow: heading is already on screen before the click, so the check proves nothing; shorten the viewport');
-    } else {
-      // click() would scroll the bar into view, which lifts the agenda on screen and hides a focus bug.
-      await bar.dispatchEvent('click');
-      const after = await onScreen();
-      if (!after.fits) reasons.push(`narrow: heading spans y ${after.top} to ${after.bottom}, outside the 500px window`);
-    }
-  } catch (e) {
-    reasons.push(String(e.message ?? e));
-  } finally {
-    await page.close();
-  }
-  return reasons;
-}
-
-const ACT_IDS = ['act-2018', 'act-2002', 'act-1996'];
-
-/** Reasons the Overview fails to draw one open section per Act, newest first, with its jump link, or to fade in a start with no date. */
-async function checkActs(context, base, timeout) {
-  const reasons = [];
-  const page = await context.newPage();
-  try {
-    await page.clock.setFixedTime(FIXTURE_TODAY);
-    await page.goto(new URL('/workplans', base).toString(), { waitUntil: 'domcontentloaded' });
-    await page.locator('section.wp-ov-act').first().waitFor({ timeout });
-    const ids = await page.locator('section.wp-ov-act').evaluateAll((els) => els.map((el) => el.id));
-    if (ids.join() !== ACT_IDS.join()) reasons.push(`Act sections are ${ids.join(', ')}, want ${ACT_IDS.join(', ')}`);
-    const nav = page.getByRole('navigation', { name: 'Navigate the timeline' });
-    const jumps = await nav.getByRole('link', { name: /^\d{4} Act$/ }).allTextContents();
-    if (jumps.join() !== '2018 Act,2002 Act,1996 Act') reasons.push(`Jump to links are ${jumps.join(', ') || 'missing'}, want 2018, 2002, 1996`);
-    for (const year of [2018, 2002, 1996]) {
-      if (!(await page.getByRole('region', { name: new RegExp(`^${year} Act timeline, `) }).isVisible())) reasons.push(`${year} Act timeline is not open`);
-    }
-    // The fixture's 1996 sheet works have phases with an end but no recorded start.
-    const leads = await page.locator('#act-1996 .wp-ov-mk.lead').evaluateAll((els) =>
-      els.map((el) => `${getComputedStyle(el).backgroundImage.startsWith('linear-gradient') ? 'fade' : 'flat'} ${getComputedStyle(el).borderLeftWidth}`)
-    );
-    const kinds = [...new Set(leads)].join(', ');
-    if (kinds !== 'fade 0px') reasons.push(`no-start lead-ins are ${kinds || 'missing'}, want a fade with no left border`);
-  } catch (e) {
-    reasons.push(String(e.message ?? e));
-  } finally {
-    await page.close();
-  }
-  return reasons;
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -332,11 +241,12 @@ async function main() {
   }
   report('/workplans?view=lookahead week bar jumps to its week', await checkJump(context, args.base, args.timeout));
   report('/workplans one Overview section per Act', await checkActs(context, args.base, args.timeout));
+  report('/workplans resize with the 2018 Act minimized', await checkResize(context, args.base, args.timeout));
 
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 acts=1 ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 acts=1 resize=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }

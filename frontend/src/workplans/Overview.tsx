@@ -1,4 +1,6 @@
-import { startTransition, useCallback, useId, useLayoutEffect, useOptimistic, useRef, useState } from 'react';
+import { startTransition, useCallback, useId, useLayoutEffect, useMemo, useOptimistic, useRef, useState } from 'react';
+import { AssignedFields, type People } from './AssignedFields';
+import { peopleOf } from './assigned';
 import { useLocation } from 'react-router';
 import type { WorkplanRow } from '../api/sheet-works';
 import type { ActYear, WorkKind } from './chart-facts';
@@ -13,14 +15,14 @@ import { TimeScale } from './TimeScale';
 import type { Zoom } from './time-scale';
 import { useOverviewActs, type OverviewActData } from './use-overview-acts';
 import { useOverviewParams, type OverviewParams } from './use-overview-params';
-import { useOverviewScroll, type ScrollTo } from './use-overview-scroll';
+import { drawn, useOverviewScroll, type ScrollTo } from './use-overview-scroll';
 import './chart-controls.css';
 import './overview.css';
 
 type Change = (change: Partial<OverviewParams>) => void;
 
 /** A change to these clears the status line; sort and zoom leave it. */
-const FILTER_PARAMS: readonly (keyof OverviewParams)[] = ['q', 'off', 'state', 'phase', 'over'];
+const FILTER_PARAMS: readonly (keyof OverviewParams)[] = ['q', 'off', 'state', 'phase', 'over', 'who', 'team'];
 
 /** What each Act section shares with the page: the one tooltip, its rows box, scrolling, the status line and the params. */
 export interface OverviewShared {
@@ -58,7 +60,7 @@ function SearchBand({ text, sort, change }: { text: string; sort: SortKey; chang
             className="wp-field__input"
             type="search"
             autoComplete="off"
-            placeholder="Project name or ID"
+            placeholder="Project or work name, or ID"
             value={text}
             onChange={(event) => change({ q: event.target.value })}
           />
@@ -86,7 +88,7 @@ function SearchBand({ text, sort, change }: { text: string; sort: SortKey; chang
   );
 }
 
-function FilterBand({ params, counts, change }: { params: OverviewParams; counts: FilterCounts; change: Change }) {
+function FilterBand({ params, counts, change, people }: { params: OverviewParams; counts: FilterCounts; change: Change; people: People }) {
   const kindId = useId();
   const phaseId = useId();
   const onlyId = useId();
@@ -144,6 +146,7 @@ function FilterBand({ params, counts, change }: { params: OverviewParams; counts
           ))}
         </select>
       </div>
+      <AssignedFields who={params.who} team={params.team} people={people} change={change} />
       <div className="wp-ov-fld">
         <span className="wp-ov-tlab" id={onlyId}>
           Show only
@@ -194,7 +197,7 @@ function OverviewNav({ acts, zoom, onZoom, onToday, year, onYear, flash }: NavPr
       </div>
       <span className="wp-ov-vsep" aria-hidden="true" />
       <TimeScale layout="stacked" zoom={zoom} onZoom={onZoom} onToday={onToday} year={{ years, value: year, onChange: onYear }} />
-      <p className="wp-ov-flash" role="status">
+      <p className={flash ? 'wp-ov-flash' : 'wp-ov-flash visually-hidden'} role="status">
         {flash}
       </p>
     </nav>
@@ -214,13 +217,22 @@ const arrivalRow = (state: unknown): RowGoal | null => {
 
 function focusRow(id: string): boolean {
   const link = document.getElementById(id)?.querySelector<HTMLElement>('.wp-ov-nm');
-  if (!link) return false;
+  // A minimized Act keeps its rows, hidden: the caller opens it first.
+  if (!link || !drawn(link)) return false;
   link.scrollIntoView({ block: 'center' });
   link.focus({ preventScroll: true });
+  // Marks the row a jump link or a return from a record lands on; the class restarts when the same row is hit again.
+  const row = document.getElementById(id);
+  if (row) {
+    row.classList.remove('wp-ov-rw--lit');
+    void row.offsetWidth;
+    row.classList.add('wp-ov-rw--lit');
+    window.setTimeout(() => row.classList.remove('wp-ov-rw--lit'), 4000);
+  }
   return true;
 }
 
-const SHOW_EVERY_ROW: Partial<OverviewParams> = { q: '', off: new Set(), state: 'any', phase: '', over: false };
+const SHOW_EVERY_ROW: Partial<OverviewParams> = { q: '', off: new Set(), state: 'any', phase: '', over: false, who: '', team: '' };
 
 /** All works by Act: search and filters, the sticky time scale bar, then one section per Act. */
 export function Overview({ works, today }: { works: readonly WorkplanRow[]; today: string }) {
@@ -228,9 +240,11 @@ export function Overview({ works, today }: { works: readonly WorkplanRow[]; toda
   const { rootRef, tooltip, hitTest, hide, hideSoon } = useMarkTip({ delegate: '.wp-ov-mk' });
   const { trackPx, register, centres, scroll } = useOverviewScroll(rootRef);
   const { acts, counts } = useOverviewActs(works, today, params, trackPx);
+  const people = useMemo(() => peopleOf(works), [works]);
   // Local copy: router updates run in a transition, and a text box bound to one drops keystrokes.
   const [text, setText] = useState(params.q);
   const [flash, setFlash] = useState('');
+  const flashFrame = useRef(0);
   const [year, setYear] = useState('');
   // A first load at a zoom level opens like a zoom from the whole range.
   const pending = useRef<ScrollTo | null>(params.zoom === 'whole' ? null : { to: 'open' });
@@ -273,6 +287,19 @@ export function Overview({ works, today }: { works: readonly WorkplanRow[]; toda
   const onYear = (picked: number | null) => {
     setYear(picked ? String(picked) : '');
     if (!picked) return;
+    // An Act with no dates in the picked year cannot scroll to it: say so, since it stays where its dates are.
+    const out = acts.flatMap((act) => {
+      const { axis } = act;
+      if (!axis || closed.has(act.year) || (picked >= axis.y0 && picked < axis.y0 + axis.years)) return [];
+      return [`${act.year} Act (${axis.y0} to ${axis.y0 + axis.years - 1})`];
+    });
+    // Cleared first, so the same message picked twice is announced again.
+    setFlash('');
+    cancelAnimationFrame(flashFrame.current);
+    if (out.length) {
+      const text = `No dates in ${picked} under the ${out.join(' or the ')}`;
+      flashFrame.current = requestAnimationFrame(() => setFlash(text));
+    }
     const how: ScrollTo = { to: 'year', year: picked };
     if (params.zoom === 'whole') setZoom('5', how);
     else scrollActs(how);
@@ -325,7 +352,7 @@ export function Overview({ works, today }: { works: readonly WorkplanRow[]; toda
       <p className="wp-ov-lead">All works by Act. Select a project to open its record.</p>
       <section className="wp-ov-tools" aria-label="Search and filter">
         <SearchBand text={text} sort={params.sort} change={change} />
-        <FilterBand params={params} counts={counts} change={change} />
+        <FilterBand params={params} counts={counts} change={change} people={people} />
       </section>
       <OverviewNav
         acts={acts}

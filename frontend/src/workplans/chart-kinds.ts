@@ -18,9 +18,9 @@ const pc = (key: ColourKey): MarkStyle => ({ '--pc': PHASE_COLOUR[key] });
 
 const REC_BAR: MarkStyle = { left: 0, width: '32px' };
 const REC_THIN: MarkStyle = { top: '5px', height: '10px' };
-const AT_16: MarkStyle = { left: '16px' };
 const DOT: MarkStyle = { top: '5px', left: '16px' };
 const TICK: MarkStyle = { left: '15px' };
+const DEC: MarkStyle = { left: '10px', top: '4px' };
 
 // Later works take the colour of their own phases, so their swatch shows three.
 const ANY: readonly ColourKey[] = ['pp', 'rev', 'amd'];
@@ -46,17 +46,19 @@ const DEFS = {
     rec: [part('bar planned thin', { ...REC_THIN, ...REC_BAR, ...pc('amd') })],
   },
   point: {
-    label: 'One day or zero length',
-    rec: [part('bar point', { top: '4.5px', left: '16px', ...pc('rev') })],
+    label: 'One-day work or zero-length phase',
+    rec: [part('bar point', { top: '3px', left: '9px', ...pc('rev') })],
   },
   cut: { label: 'Continues past the chart edge', rec: [part('bar cutR', { ...REC_BAR, ...pc('rev') })] },
 
-  evDec: { label: 'Decision', rec: [part('dflag', AT_16)] },
-  decPlan: { label: 'Planned decision', rec: [part('dflag plan', AT_16)] },
+  evDec: { label: 'Decision, go: issued, granted or approved', rec: [part('dflag go', DEC)] },
+  evDecNo: { label: 'Decision, refused or terminated', rec: [part('dflag no', DEC)] },
+  evDecWd: { label: 'Decision, withdrawn', rec: [part('dflag wd', DEC)] },
+  evDecOther: { label: 'Decision, other outcome or none recorded', rec: [part('dflag other', DEC)] },
+  decPlan: { label: 'Planned decision', rec: [part('dflag plan', DEC)] },
   msPassed: {
-    label: 'Planned date passed',
-    // Record draws the "!" head on a decision stem, and alone for a milestone.
-    rec: [part('dflag due', { left: '3px' }), part('msdue', { top: '3px', left: '25px' })],
+    label: 'Planned date passed: decision (circle) or milestone',
+    rec: [part('dflag due', { left: '4px', top: '4px' }), part('msdue', { top: '3px', left: '20px' })],
   },
   ms: { label: 'Milestone', rec: [part('dia', DOT)] },
   msPlan: { label: 'Planned milestone', rec: [part('dia planned', DOT)] },
@@ -70,7 +72,7 @@ const DEFS = {
     label: 'Time limit extended',
     rec: [part('int extension', { top: '7px', left: 0, width: '15px' }), part('int extension', { top: '7px', left: '17px', width: '15px' })],
   },
-  xpt: { label: 'Time limit extended on one date', rec: [part('xpt', { top: '5px', left: '16px' })] },
+  xpt: { label: 'Time limit extension', rec: [part('xpt', { top: '3px', left: '9px' })] },
   olim: { label: 'Over a time limit', rec: [part('olim', { top: '6px', left: '4px', width: '24px' })] },
 
   openStart: {
@@ -81,7 +83,7 @@ const DEFS = {
     label: 'No recorded end date',
     rec: [part('bar openEnd', { left: 0, width: '24px', ...pc('rev') })],
   },
-  reversed: { label: 'Dates conflict: ends before it starts', rec: [part('bar reversed', AT_16)] },
+  reversed: { label: 'Dates conflict: ends before it starts', rec: [part('bar reversed', { top: '3px', left: '9px' })] },
   past: {
     label: 'Dates conflict: runs past its phase end',
     rec: [
@@ -109,7 +111,7 @@ export const KINDS: Readonly<Record<KindId, LegendItem>> = DEFS;
 /** Kinds by legend group, in legend order. */
 export const KIND_GROUPS: readonly { title: string; kinds: readonly KindId[] }[] = [
   { title: 'Bars', kinds: ['step', 'planned', 'cur', 'later', 'laterPlan', 'point', 'cut'] },
-  { title: 'Dates and decisions', kinds: ['evDec', 'decPlan', 'msPassed', 'ms', 'msPlan', 'oth', 'cp', 'dec', 'today'] },
+  { title: 'Dates and decisions', kinds: ['evDec', 'evDecNo', 'evDecWd', 'evDecOther', 'decPlan', 'msPassed', 'ms', 'msPlan', 'oth', 'cp', 'dec', 'today'] },
   { title: 'Time limits', kinds: ['sus', 'ext', 'xpt', 'olim'] },
   { title: 'Data gaps and conflicts', kinds: ['openStart', 'openEnd', 'reversed', 'past'] },
   { title: 'Other Acts', kinds: ['nextAct', 'move', 'moveSame', 'moveGap', 'moveOver'] },

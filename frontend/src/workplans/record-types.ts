@@ -164,6 +164,10 @@ export interface PhaseInfo {
   over: number;
   /** The overrun as the last `over` days of the phase. */
   olim: { a: number; b: number; counted: number; lim: number } | null;
+  /** The day a legislated phase's time allowed runs out; null when it has none or has not started. */
+  deadline: string | null;
+  /** True when the phase counts from Day One. */
+  dayOne: boolean;
 }
 
 /** One row of a phase's table in the Time limit changes block. */
@@ -285,6 +289,10 @@ export interface LimitPartView {
   total: string;
   /** "N days extended, dates not recorded", or ''. */
   noDatesText: string;
+  /** Some change runs over dates (a suspension): the table shows From and To; else one Date column. */
+  spans: boolean;
+  /** Every change is an extension: the Days column reads Days extended. */
+  onlyExt: boolean;
   rows: LimitTableRow[];
 }
 
@@ -297,7 +305,7 @@ export interface CertFact {
 }
 
 /** Event list category: decision, comment period, milestone, other, or after-the-certificate work. */
-export type EventCat = 'dec' | 'cp' | 'ms' | 'oth' | 'aw';
+export type EventCat = 'dec' | 'cp' | 'sub' | 'ms' | 'oth' | 'aw';
 
 /** One entry of the Events block before it is grouped; identical entries merge into one with a count. */
 export interface EventItem {
