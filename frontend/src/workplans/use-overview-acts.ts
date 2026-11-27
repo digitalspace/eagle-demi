@@ -44,7 +44,7 @@ export interface WorkLine {
 
 export interface OverviewRowData {
   cand: Candidate;
-  /** The whole project's drawing: its jump links, and the counts the row's accessible name reads. */
+  /** The whole project's drawing, never shown: its jump links with no assessment, its end for the opening scroll, its aria-label counts. */
   drawing: RowDrawing;
   /** Each work on its own line: the assessment first, then by start date. */
   works: WorkLine[];

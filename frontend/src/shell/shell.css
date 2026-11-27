@@ -26,17 +26,8 @@
   display: none;
 }
 
-/* Animate the rail's collapse/expand (vendor toggles flex-basis + width only, via
-   .app-sidebar[data-open='false']). Desktop only — below SHELL_NARROW_QUERY the rail goes
-   off-canvas instead (.app-sidebar[data-drawer]) and has no width change to animate. */
-@media (min-width: 900px) {
-  .app-sidebar {
-    transition: flex-basis 180ms cubic-bezier(0.2, 0, 0, 1), width 180ms cubic-bezier(0.2, 0, 0, 1);
-  }
-}
-
-/* Vendor already clips .app-sidebar with overflow: hidden; stop link labels wrapping to a second
-   line as the width animates, so they clip cleanly instead of reflowing mid-transition. */
+/* The rail's collapse and expand is instant: animating its width re-lays out the main area on every
+   frame, and a transform would leave a gap or an overlap beside main. Labels stay on one line. */
 .app-sidebar__link {
   white-space: nowrap;
 }

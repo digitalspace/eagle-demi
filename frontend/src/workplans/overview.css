@@ -25,6 +25,18 @@
   padding-bottom: var(--layout-margin-huge);
   /* Line height stays at normal; the app shell's taller one would add height to every line. */
   line-height: var(--typography-line-heights-auto);
+  /* Motion: an Act opening, a project's work lines showing, then hover and focus. */
+  --wp-ov-t-fold: 180ms ease-out;
+  --wp-ov-t-show: 120ms ease-out;
+  --wp-ov-t-ease: 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wp-ov {
+    --wp-ov-t-fold: 0s;
+    --wp-ov-t-show: 0s;
+    --wp-ov-t-ease: 0s;
+  }
 }
 
 /* Browsers give form controls their own font; the page's BC Sans should carry into them. */
@@ -361,18 +373,24 @@
   grid-template-columns: 320px minmax(0, 1fr);
   column-gap: 16px;
   align-items: center;
+  /* The 44 px axis and 44 px scroll window: a minimized Act keeps the open head's height, so its title stays put. */
+  min-height: 88px;
   padding: 0 var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid transparent;
   background: var(--surface-color-background-white);
   border-radius: var(--layout-border-radius-medium) var(--layout-border-radius-medium) 0 0;
+  transition: border-color var(--wp-ov-t-fold);
 }
 
 .wp-ov-shead.wp-ov-shead--on {
-  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-bottom-color: var(--surface-color-border-medium);
 }
 
 /* The title sits in the name column's place, left of the axis and scroll window. */
 .wp-ov-acthead {
   grid-column: 1;
+  display: flex;
+  align-items: center;
   padding: var(--layout-padding-small) 0;
 }
 
@@ -382,6 +400,7 @@
 }
 
 .wp-ov-acthead h2 {
+  display: flex;
   margin: 0;
   font-size: var(--typography-font-size-h4);
   font-weight: var(--typography-font-weights-bold);
@@ -397,6 +416,7 @@
   font-weight: var(--typography-font-weights-bold);
   color: var(--theme-primary-blue);
   border-bottom: var(--layout-border-width-medium) solid var(--theme-primary-gold);
+  transition: color var(--wp-ov-t-ease);
 }
 
 .wp-ov-actbtn:hover {
@@ -410,16 +430,42 @@
 
 .wp-ov-actbtn svg {
   flex: none;
-  transition: transform 0.15s;
+  transition: transform var(--wp-ov-t-fold);
 }
 
 .wp-ov-actbtn[aria-expanded='false'] svg {
   transform: rotate(-90deg);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .wp-ov-actbtn svg {
-    transition: none;
+/* An Act opened by a press fades its scale and rows in at full height: folding every row would re-lay out the page each frame. */
+.wp-ov-fade {
+  animation: wp-ov-fade-in var(--wp-ov-t-fold);
+}
+
+/* A minimized Act keeps its rows laid out but skips drawing them; display: none would drop their layout and cost a full one on reopen. */
+.wp-ov-body[hidden] {
+  display: block;
+  content-visibility: hidden;
+  animation: none;
+}
+
+@keyframes wp-ov-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A project's work lines take their height at once and their content fades in, 4 px down into place. On the name cell and track only:
+   both already stack on their own, so the fade lifts nothing over the grid lines. */
+.wp-ov-fold .wp-ov-nc,
+.wp-ov-fold .wp-ov-tr {
+  animation: wp-ov-drop var(--wp-ov-t-show);
+}
+
+@keyframes wp-ov-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
   }
 }
 
@@ -682,26 +728,38 @@
   position: relative;
 }
 
+/* Between projects a border-medium rule (3:1 on white and light gray) over the last line's gray-30 one; a project's own lines keep gray-30.
+   z-index 6 with the name cells, under the sticky Act head. */
+.wp-ov-rw + .wp-ov-rw::before {
+  content: '';
+  position: absolute;
+  top: calc(-1 * var(--layout-border-width-small));
+  right: 0;
+  left: 0;
+  z-index: 6;
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  pointer-events: none;
+}
+
 .wp-ov-row {
   box-sizing: border-box;
   display: grid;
   grid-template-columns: 320px calc(var(--vis) * var(--span, 1));
   gap: 16px;
   width: 100%;
-  min-height: 72px;
-  padding: var(--layout-padding-xsmall) var(--layout-padding-medium);
+  --wp-ov-py: calc(var(--layout-padding-xsmall) + var(--layout-padding-hair));
+  padding: var(--wp-ov-py) var(--layout-padding-medium);
   border-bottom: var(--layout-border-width-small) solid var(--theme-gray-30);
-  cursor: pointer;
   color: var(--typography-color-primary);
   text-align: left;
   background: var(--surface-color-background-white);
+  transition: background-color var(--wp-ov-t-ease);
 }
 
 .wp-ov-rw:nth-of-type(even) .wp-ov-row {
   background: var(--surface-color-background-light-gray);
 }
 
-.wp-ov-rw .wp-ov-row:hover,
 .wp-ov-row:has(.wp-ov-nm:focus-visible) {
   background: var(--theme-blue-10);
 }
@@ -714,8 +772,10 @@
    It reaches over the row's padding and bottom border too, so no grid line shows between names. */
 
 .wp-ov-nc {
-  --wp-ov-nc-pb: var(--layout-padding-xsmall);
+  --wp-ov-nc-pb: var(--wp-ov-py);
   --wp-ov-nc-bb: var(--layout-border-width-small);
+  /* Where the name and the lines under it start: the arrow's column, then the text. */
+  --wp-ov-ind: 18px;
   position: sticky;
   left: var(--layout-padding-medium);
   z-index: 6;
@@ -724,8 +784,8 @@
   justify-content: flex-start;
   gap: 1px;
   min-width: 0;
-  margin: calc(-1 * var(--layout-padding-xsmall)) 0 calc(-1 * (var(--wp-ov-nc-pb) + var(--wp-ov-nc-bb)));
-  padding: var(--layout-padding-xsmall) 0 var(--wp-ov-nc-pb);
+  margin: calc(-1 * var(--wp-ov-py)) 0 calc(-1 * (var(--wp-ov-nc-pb) + var(--wp-ov-nc-bb)));
+  padding: var(--wp-ov-py) 0 var(--wp-ov-nc-pb);
   border-bottom: var(--wp-ov-nc-bb) solid var(--theme-gray-30);
   background: inherit;
 }
@@ -758,11 +818,17 @@
   z-index: 8;
 }
 
-/* Inline flow, so the ID follows the last word of a name that wraps. */
+/* The arrow's column, then the name in inline flow, so a wrapped name's lines all start past the arrow and the ID follows its last word. */
 .wp-ov-l1 {
-  display: block;
+  display: flex;
+  align-items: flex-start;
   min-width: 0;
   line-height: 1.25;
+}
+
+.wp-ov-l1t {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* On top of main's --wp-ov-bar-h scroll padding: clear of the bar and the Act head. */
@@ -776,6 +842,7 @@
   color: var(--typography-color-link);
   text-decoration: underline;
   text-underline-offset: 2px;
+  transition: color var(--wp-ov-t-ease);
 }
 
 .wp-ov-nm:focus-visible {
@@ -783,7 +850,7 @@
   outline-offset: 0;
 }
 
-.wp-ov-row:hover .wp-ov-nm {
+.wp-ov-nm:hover {
   color: var(--theme-blue-100);
 }
 
@@ -949,6 +1016,7 @@
   /* The title goes above the axis and scroll window, which take the card less its gutters, the width of the track the rows show. */
   .wp-ov-shead {
     grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
   }
 
   .wp-ov-shr {
@@ -966,25 +1034,29 @@
 }
 
 /* One line per work: the project heads its works, each work names itself on the left (draft). */
-.wp-ov-row.wp-ov-row--head:not(.wp-ov-row--shut) {
-  min-height: 0;
-}
-
-/* A 24 px target; the negative margins keep the 20 px footprint the name and `.wp-ov-ind` line up with. */
+/* A 24 px target ending where the name starts; it reaches 6 px into the gutter and 2 px past the name line, top and bottom.
+   Its own layer, so the cell's left strip and the line below do not take clicks at its edges. */
 .wp-ov-exp {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  margin: -2px calc(var(--layout-margin-xsmall) - 2px) -2px -4px;
+  margin: -2px 0 -2px calc(var(--wp-ov-ind) - 24px);
   padding: 0;
   border: 0;
   border-radius: var(--layout-border-radius-small);
   background: transparent;
   color: var(--typography-color-primary);
-  vertical-align: -3px;
   cursor: pointer;
+  transition: background-color var(--wp-ov-t-ease);
+}
+
+.wp-ov-exp svg {
+  transition: transform var(--wp-ov-t-fold);
 }
 
 .wp-ov-exp:hover {
@@ -996,22 +1068,23 @@
   outline-offset: 0;
 }
 
+/* Keeps the arrow's slot on a row with nothing to expand, so names stay aligned. */
+.wp-ov-exp--none {
+  visibility: hidden;
+}
+
 .wp-ov-exp[aria-expanded='false'] svg {
   transform: rotate(-90deg);
 }
 
 /* Lines under the project name start under the name, past the arrow. */
 .wp-ov-ind {
-  padding-left: 22px;
+  padding-left: var(--wp-ov-ind);
 }
 
-.wp-ov-row.wp-ov-row--work {
-  min-height: 0;
-  border-top: var(--layout-border-width-small) solid var(--theme-gray-30);
-}
-
+/* Work lines start where the project name does. */
 .wp-ov-row--work .wp-ov-nc {
-  padding-left: calc(22px + var(--layout-padding-medium));
+  padding-left: var(--wp-ov-ind);
 }
 
 .wp-ov-row--work .wp-ov-ind {
@@ -1033,10 +1106,6 @@
 .wp-ov-wname:focus-visible {
   outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
   outline-offset: 0;
-}
-
-.wp-ov-rw .wp-ov-row--work:hover {
-  background: var(--theme-blue-10);
 }
 
 /* Draft: the row a jump link, or a return from a record, lands on. Gold outline, held 4 s; no other mark uses gold. */

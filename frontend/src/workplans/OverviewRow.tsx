@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type MouseEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import type { ActYear } from './chart-facts';
 import { tipText, type Mark } from './chart-types';
 import { DOC_LINKS } from './overview-links';
@@ -52,26 +52,22 @@ function earliest(marks: readonly Mark[]): number {
 
 /** One project under one Act: the sticky name cell with its lines, then the track with every mark and jump link. */
 export const OverviewRow = memo(function OverviewRow({ year, data, today, from, goRow }: OverviewRowProps) {
-  const navigate = useNavigate();
   const { cand, drawing } = data;
   const { facts, name } = cand;
   const { projectId } = cand.row.project;
   const id = rowId(year, projectId);
 
-  const text = useMemo(
-    () => ({
-      tags: rowTags(facts, today),
-      label: rowAria({ name, row: cand.row, facts, workCount: cand.works.length, undated: drawing.notes.undated, today }),
-    }),
+  const label = useMemo(
+    () => rowAria({ name, row: cand.row, facts, workCount: cand.works.length, undated: drawing.notes.undated, today }),
     [cand, facts, name, today, drawing.notes.undated],
   );
-  const { tags, label } = text;
-  const [open, setOpen] = useState(true);
-  // Open, the assessment shares the project's line; the other works follow, one line each.
-  const head = open ? data.works.find((line) => line.work.workTypeCode === 'assessment') : undefined;
+  // The assessment shares the project's line, open or minimized; the other works follow, one line each, while open.
+  const head = data.works.find((line) => line.work.workTypeCode === 'assessment');
   const rest = head ? data.works.filter((line) => line !== head) : data.works;
+  const hasMore = rest.length > 0;
+  const [open, setOpen] = useState(false);
   const shown = head ? head.drawing : drawing;
-  const headTags = useMemo(() => (head ? rowTags(head.facts, today) : tags), [head, tags, today]);
+  const headTags = useMemo(() => (head ? rowTags(head.facts, today) : []), [head, today]);
   const headStop = useMemo(() => earliest(shown.marks), [shown.marks]);
 
   const to = { pathname: `/workplans/${encodeURIComponent(projectId)}`, search: `?act=${year}` };
@@ -81,41 +77,40 @@ export const OverviewRow = memo(function OverviewRow({ year, data, today, from, 
     goRow(other, projectId);
   };
 
-  // A click anywhere on the row opens the record, as the name link does; controls inside keep their own action.
-  const openRow = (event: MouseEvent<HTMLElement>) => {
-    if (event.target instanceof Element && event.target.closest('a, button')) return;
-    navigate(to, { state });
-  };
-
   return (
     <div className="wp-ov-rw" id={id}>
-      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer shortcut; the name link is the keyboard path */}
-      <div className={open ? 'wp-ov-row wp-ov-row--head' : 'wp-ov-row wp-ov-row--head wp-ov-row--shut'} onClick={openRow}>
+      <div className="wp-ov-row">
         <span className="wp-ov-nc">
           <span className="wp-ov-l1">
-            <button
-              type="button"
-              className="wp-ov-exp"
-              aria-expanded={open}
-              aria-label={`${open ? 'Minimize' : 'Show the works of'} ${name}`}
-              title={open ? 'Minimize to one line' : 'Show each work on its own line'}
-              onClick={() => setOpen(!open)}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 6l4 4 4-4" />
-              </svg>
-            </button>
-            <Link className="wp-ov-nm" to={to} state={state} aria-label={label} title={name}>
-              {name}
-            </Link>
-            <span className="wp-ov-pid">ID {projectId}</span>
+            {hasMore ? (
+              <button
+                type="button"
+                className="wp-ov-exp"
+                aria-expanded={open}
+                aria-label={`${open ? 'Minimize' : 'Show the works of'} ${name}`}
+                title={open ? 'Minimize to one line' : 'Show each work on its own line'}
+                onClick={() => setOpen(!open)}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 6l4 4 4-4" />
+                </svg>
+              </button>
+            ) : (
+              <span className="wp-ov-exp wp-ov-exp--none" aria-hidden="true" />
+            )}
+            <span className="wp-ov-l1t">
+              <Link className="wp-ov-nm" to={to} state={state} aria-label={label} title={name}>
+                {name}
+              </Link>
+              <span className="wp-ov-pid">ID {projectId}</span>
+            </span>
           </span>
-          {head ? <HeadState kind="Assessment" facts={head.facts} /> : !open && <HeadState kind={facts.l2w} facts={facts} />}
-          {(head || !open) && <Tags tags={headTags} />}
+          {head && <HeadState facts={head.facts} />}
+          <Tags tags={headTags} />
         </span>
-        <span className="wp-ov-tr" style={open && !head ? { height: 36 } : { height: shown.notes.h, containIntrinsicSize: `auto ${shown.notes.h ?? 76}px` }}>
+        <span className="wp-ov-tr" style={head ? { height: shown.notes.h, containIntrinsicSize: `auto ${shown.notes.h ?? 76}px` } : { height: 36 }}>
           <span className="wp-ov-trp">
-            {(head || !open) && shown.marks.map((mark, i) => <MarkEl key={i} mark={mark} tabStop={i === headStop} />)}
+            {head && shown.marks.map((mark, i) => <MarkEl key={i} mark={mark} tabStop={i === headStop} />)}
             {shown.jumps.map((jump) => {
               const say = `Go to ${name} under the ${jump.year} Act (${jump.dir === 'prev' ? 'earlier' : 'later'})`;
               return (
@@ -123,7 +118,7 @@ export const OverviewRow = memo(function OverviewRow({ year, data, today, from, 
                   key={jump.dir}
                   className={`wp-ov-jump wp-ov-jump--${jump.dir}`}
                   href={`#${rowId(jump.year, projectId)}`}
-                  style={{ left: `${jump.left}%`, top: open && !head ? 8 : jump.top }}
+                  style={{ left: `${jump.left}%`, top: head ? jump.top : 8 }}
                   aria-label={say}
                   title={say}
                   onClick={(event) => jumpTo(event, jump.year)}
@@ -135,10 +130,13 @@ export const OverviewRow = memo(function OverviewRow({ year, data, today, from, 
           </span>
         </span>
       </div>
-      {open &&
-        rest.map((line) => (
-          <WorkRow key={line.work.workId} line={line} name={name} today={today} to={to} state={state} onOpen={openRow} />
-        ))}
+      {hasMore && open && (
+        <div className="wp-ov-fold">
+          {rest.map((line) => (
+            <WorkRow key={line.work.workId} line={line} name={name} today={today} to={to} state={state} />
+          ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -150,13 +148,12 @@ function workName(title: string | null, project: string, type: string | null): s
   return (t.startsWith(pre) ? t.slice(pre.length) : t).replace(/ - \d{4} Act$/, '') || type || 'Work';
 }
 
-/** Line 2 of the head line: the work type in bold, then where it is now. */
-function HeadState({ kind, facts }: { kind: string; facts: RowFacts }) {
-  if (!kind && !facts.l2) return null;
+/** Line 2 of the head line: "Assessment" in bold, then where it is now. */
+function HeadState({ facts }: { facts: RowFacts }) {
   return (
     <span className="wp-ov-st wp-ov-ind" title={facts.full}>
-      {kind && <span className="wp-ov-wk">{kind}</span>}
-      {kind && facts.l2 && (
+      <span className="wp-ov-wk">Assessment</span>
+      {facts.l2 && (
         <span className="wp-ov-sep" aria-hidden="true">
           {' · '}
         </span>
@@ -186,18 +183,16 @@ interface WorkRowProps {
   today: string;
   to: { pathname: string; search: string };
   state: { from: string; rowId: string };
-  onOpen: (event: MouseEvent<HTMLElement>) => void;
 }
 
 /** One work of the project on its own line: its name as a link to the record, its state and alert tags; its marks on the track. */
-const WorkRow = memo(function WorkRow({ line, name, today, to, state, onOpen }: WorkRowProps) {
+const WorkRow = memo(function WorkRow({ line, name, today, to, state }: WorkRowProps) {
   const { work, facts, drawing } = line;
   const label = workName(work.title, name, work.workType);
   const tags = useMemo(() => rowTags(facts, today), [facts, today]);
   const first = useMemo(() => earliest(drawing.marks), [drawing.marks]);
   return (
-    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer shortcut; the name link is the keyboard path
-    <div className="wp-ov-row wp-ov-row--work" onClick={onOpen}>
+    <div className="wp-ov-row wp-ov-row--work">
       <span className="wp-ov-nc">
         <Link className="wp-ov-wname" to={to} state={state} aria-label={`${label}, ${name}: open the record`}>
           {label}

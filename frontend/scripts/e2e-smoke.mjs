@@ -287,6 +287,66 @@ async function checkActs(context, base, timeout) {
   return reasons;
 }
 
+/**
+ * Each Act's axis labels by section id, once every Act named in `equal` shows those labels and every one in `differ`
+ * shows others. Which labels fit follows the track width the Overview last measured.
+ */
+const axisLabels = (page, timeout, { equal = {}, differ = {} } = {}) =>
+  page
+    .waitForFunction(
+      ({ ids, equal, differ }) => {
+        const got = Object.fromEntries(ids.map((id) => [id, [...document.querySelectorAll(`#${id} .wp-ov-tkl`)].map((el) => el.textContent).join(' | ')]));
+        return Object.keys(equal).every((id) => got[id] === equal[id]) && Object.keys(differ).every((id) => got[id] !== differ[id]) && got;
+      },
+      { ids: ACT_IDS, equal, differ },
+      { timeout }
+    )
+    .then((handle) => handle.jsonValue());
+
+/**
+ * Reasons a window resize with the 2018 Act minimized fails to lay out the other Acts' axes as a fresh load at the
+ * new width does, or the 2018 axis once it reopens. A hidden Act measures 0 px wide, so measuring it would keep the old width.
+ */
+async function checkResize(context, base, timeout) {
+  const [from, to] = [1440, 1100];
+  const reasons = [];
+  const page = await context.newPage();
+  try {
+    await page.clock.setFixedTime(FIXTURE_TODAY);
+    const load = async (width) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(new URL('/workplans', base).toString(), { waitUntil: 'domcontentloaded' });
+      await page.locator('#act-1996 .wp-ov-tkl').first().waitFor({ timeout });
+    };
+    const trackPx = () => page.locator('#act-2002 .wp-ov-tlx').evaluate((box) => box.clientWidth - 368);
+
+    await load(from);
+    const wide = await axisLabels(page, timeout);
+    // A fresh load at the narrow width measures a drawn 2018 box, so it gives the labels the resize must reach.
+    await load(to);
+    const want = await axisLabels(page, timeout, { differ: { 'act-2002': wide['act-2002'] } }).catch(() => {
+      throw new Error(`2002 Act axis labels match at ${from}px and ${to}px, so the check proves nothing; widen the gap`);
+    });
+
+    await load(from);
+    await page.locator('#act-2018').getByRole('button', { name: '2018 Act' }).click({ timeout });
+    await page.getByRole('region', { name: /^2018 Act timeline, / }).waitFor({ state: 'hidden', timeout });
+    await page.setViewportSize({ width: to, height: 900 });
+    const others = { 'act-2002': want['act-2002'], 'act-1996': want['act-1996'] };
+    await axisLabels(page, timeout, { equal: others }).catch(async () =>
+      reasons.push(`2018 Act minimized: after a resize from ${from}px to ${to}px (2002 track ${await trackPx()}px) the 2002 and 1996 axis labels differ from a fresh load at ${to}px`)
+    );
+
+    await page.locator('#act-2018').getByRole('button', { name: '2018 Act' }).click({ timeout });
+    await axisLabels(page, timeout, { equal: want }).catch(() => reasons.push(`2018 Act reopened at ${to}px: its axis labels differ from a fresh load at ${to}px`));
+  } catch (e) {
+    reasons.push(String(e.message ?? e));
+  } finally {
+    await page.close();
+  }
+  return reasons;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -332,11 +392,12 @@ async function main() {
   }
   report('/workplans?view=lookahead week bar jumps to its week', await checkJump(context, args.base, args.timeout));
   report('/workplans one Overview section per Act', await checkActs(context, args.base, args.timeout));
+  report('/workplans resize with the 2018 Act minimized', await checkResize(context, args.base, args.timeout));
 
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
   console.log(
-    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 acts=1 ok=${ok} fail=${fail}`
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} jump=1 acts=1 resize=1 ok=${ok} fail=${fail}`
   );
   process.exit(fail > 0 ? 1 : 0);
 }

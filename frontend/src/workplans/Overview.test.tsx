@@ -211,19 +211,85 @@ describe('Overview Assigned to and Team', () => {
   });
 });
 
+describe('Overview Act title', () => {
+  /** ZETA's project under the 2002 Act too, so each row carries a jump link to the other. */
+  const ZETA_2002 = workOf([phaseOf('Application Review', '2005-01-01', '2005-06-30', { isCompleted: true })], {
+    workId: 'sheet-950-2002',
+    source: 'sheet',
+    actYear: 2002,
+    workState: 'completed',
+    isActive: false,
+    title: 'Sample Zeta Mine - Assessment (2002)',
+  });
+
+  it('minimizes the Act so its rows leave the page, and brings them back on a second press', async () => {
+    const user = renderOverview([ZETA]);
+    const title = screen.getByRole('button', { name: '2018 Act' });
+
+    await user.click(title);
+
+    expect(title).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeNull();
+
+    await user.click(title);
+
+    expect(title).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeInTheDocument();
+  });
+
+  it('opens a minimized Act when a jump link leads into it, then focuses the row there', async () => {
+    const user = renderOverview([ZETA, ZETA_2002]);
+    const title = screen.getByRole('button', { name: '2002 Act' });
+    await user.click(title);
+
+    await user.click(screen.getByRole('link', { name: 'Go to Sample Zeta Mine under the 2002 Act (earlier)' }));
+
+    expect(title).toHaveAttribute('aria-expanded', 'true');
+    const act2002 = screen.getByRole('region', { name: '2002 Act' });
+    expect(within(act2002).getByRole('link', { name: /^Open Sample Zeta Mine/ })).toHaveFocus();
+  });
+});
+
+describe('Overview project line', () => {
+  it('stays on the overview when the line is pressed outside its links', async () => {
+    const user = renderOverview([ZETA]);
+    const line = screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
+
+    await user.click(within(line).getByText('Assessment'));
+
+    expect(screen.getByRole('status', { name: 'Address search' }).textContent).toBe('');
+  });
+});
+
 describe('Overview expand arrow', () => {
-  it('opens each work on its own line, and minimizes the project to one packed line', async () => {
+  it('starts minimized to the assessment line, shows the other works on their own lines on press, and minimizes again', async () => {
     const user = renderOverview([ZETA, ZETA_AMENDMENT]);
     const workLink = { name: 'Tailings Amendment, Sample Zeta Mine: open the record' };
+    const amendmentMark = { name: /^After certificate: Tailings Amendment\./ };
+    const headLine = () => screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
+    expect(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', workLink)).toBeNull();
+    expect(within(headLine()).queryByRole('button', amendmentMark)).toBeNull();
+    expect(within(headLine()).getByRole('button', { name: /^Phase: Assessment\. Phase Early Engagement\./ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' }));
+
     expect(screen.getByRole('button', { name: 'Minimize Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('link', workLink)).toBeInTheDocument();
+    const workLine = screen.getByRole('link', workLink).closest('.wp-ov-row') as HTMLElement;
+    expect(within(workLine).getByRole('button', amendmentMark)).toBeInTheDocument();
+    expect(within(headLine()).queryByRole('button', amendmentMark)).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Minimize Sample Zeta Mine' }));
 
     expect(screen.getByRole('button', { name: 'Show the works of Sample Zeta Mine' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('link', workLink)).toBeNull();
-    const line = screen.getByRole('link', { name: /^Open Sample Zeta Mine/ }).closest('.wp-ov-row') as HTMLElement;
-    expect(within(line).getByRole('button', { name: /^After certificate: Tailings Amendment\./ })).toBeInTheDocument();
+  });
+
+  it('draws no expand button for a project with only its assessment', () => {
+    renderOverview([ZETA]);
+
+    expect(screen.getByRole('link', { name: /^Open Sample Zeta Mine/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sample Zeta Mine$/ })).toBeNull();
   });
 });
 

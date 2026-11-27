@@ -15,7 +15,7 @@ import { TimeScale } from './TimeScale';
 import type { Zoom } from './time-scale';
 import { useOverviewActs, type OverviewActData } from './use-overview-acts';
 import { useOverviewParams, type OverviewParams } from './use-overview-params';
-import { useOverviewScroll, type ScrollTo } from './use-overview-scroll';
+import { drawn, useOverviewScroll, type ScrollTo } from './use-overview-scroll';
 import './chart-controls.css';
 import './overview.css';
 
@@ -217,7 +217,8 @@ const arrivalRow = (state: unknown): RowGoal | null => {
 
 function focusRow(id: string): boolean {
   const link = document.getElementById(id)?.querySelector<HTMLElement>('.wp-ov-nm');
-  if (!link) return false;
+  // A minimized Act keeps its rows, hidden: the caller opens it first.
+  if (!link || !drawn(link)) return false;
   link.scrollIntoView({ block: 'center' });
   link.focus({ preventScroll: true });
   // Marks the row a jump link or a return from a record lands on; the class restarts when the same row is hit again.

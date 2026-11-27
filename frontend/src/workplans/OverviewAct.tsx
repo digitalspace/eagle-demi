@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import type { MarkStyle } from './chart-types';
 import { plural } from './format';
@@ -64,6 +64,8 @@ export function OverviewAct({ act, shared }: { act: OverviewActData; shared: Ove
   const { year } = act;
   const { search } = useLocation();
   const open = !shared.closed.has(year);
+  // Only a press of the title fades the rows in; the first load and a cross-Act jump draw them at once.
+  const [pressed, setPressed] = useState(false);
   const { headRef, rowsRef, range, onRowsScroll, onAxisScroll } = useEdgePass(act, open);
   const goRow = useStable((to: ActYear, projectId: string) => shared.goRow(to, projectId));
   const { register, scroll, params } = shared;
@@ -85,6 +87,7 @@ export function OverviewAct({ act, shared }: { act: OverviewActData; shared: Ove
   }, [open, params.zoom, scroll, year]);
   const toggle = () => {
     reopened.current = !open;
+    setPressed(true);
     shared.tip.hide();
     shared.setOpen(year, !open);
   };
@@ -106,46 +109,45 @@ export function OverviewAct({ act, shared }: { act: OverviewActData; shared: Ove
           </h2>
         </div>
         {open && (
-          <div className="wp-ov-shr">
+          <div className={pressed ? 'wp-ov-shr wp-ov-fade' : 'wp-ov-shr'}>
             <Axis act={act} onScroll={onAxisScroll} />
             <ScrollWindow act={act} box={rowsRef} valueText={range} today={shared.today} />
           </div>
         )}
       </div>
-      {open && (
-        <div id={bodyId}>
-          {act.rows.length === 0 && <p className="wp-ov-empty">{act.emptyText}</p>}
+      {/* Kept drawn while minimized, so reopening skips mounting every row again. */}
+      <div id={bodyId} className={pressed ? 'wp-ov-body wp-ov-fade' : 'wp-ov-body'} hidden={!open}>
+        {act.rows.length === 0 && <p className="wp-ov-empty">{act.emptyText}</p>}
+        <div
+          ref={box}
+          className="wp-ov-tlx"
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region needs a keyboard stop
+          tabIndex={0}
+          role="region"
+          aria-label={`${year} Act timeline, ${plural(act.rows.length, 'row')}. Use the arrow keys to scroll sideways.`}
+          onScroll={onRowsScroll}
+        >
           <div
-            ref={box}
-            className="wp-ov-tlx"
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region needs a keyboard stop
-            tabIndex={0}
-            role="region"
-            aria-label={`${year} Act timeline, ${plural(act.rows.length, 'row')}. Use the arrow keys to scroll sideways.`}
-            onScroll={onRowsScroll}
+            className="wp-ov-rows"
+            style={spanStyle}
+            onMouseMove={(event) => shared.tip.hitTest(event, '.wp-ov-nc')}
+            onMouseLeave={shared.tip.hideSoon}
           >
-            <div
-              className="wp-ov-rows"
-              style={spanStyle}
-              onMouseMove={(event) => shared.tip.hitTest(event, '.wp-ov-nc')}
-              onMouseLeave={shared.tip.hideSoon}
-            >
-              {act.ticks && <Grid lines={act.ticks.grid} />}
-              {act.ticks && <Grid lines={act.ticks.gridHi} hi />}
-              {act.rows.map((data) => (
-                <OverviewRow
-                  key={data.cand.row.project.projectId}
-                  year={year}
-                  data={data}
-                  today={shared.today}
-                  from={search}
-                  goRow={goRow}
-                />
-              ))}
-            </div>
+            {act.ticks && <Grid lines={act.ticks.grid} />}
+            {act.ticks && <Grid lines={act.ticks.gridHi} hi />}
+            {act.rows.map((data) => (
+              <OverviewRow
+                key={data.cand.row.project.projectId}
+                year={year}
+                data={data}
+                today={shared.today}
+                from={search}
+                goRow={goRow}
+              />
+            ))}
           </div>
         </div>
-      )}
+      </div>
     </section>
   );
 }
