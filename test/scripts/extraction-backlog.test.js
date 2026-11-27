@@ -75,6 +75,7 @@ test('--max is required and must be an integer from 1 to 500', async (t) => {
       assert.throws(() => parseArgs(argv), /usage: .*--max <1-500>/);
     });
   }
+  assert.strictEqual(parseArgs(['--max', '1']).max, 1);
   assert.strictEqual(parseArgs(['--max', '500']).max, 500);
 });
 
