@@ -102,14 +102,22 @@ async function copyToStore(client, id, { nrs, key, stat, etag }) {
   return { fileSize: bytes, uploadSha256: hash.digest('hex') };
 }
 
-/** Publish a released row its uploader asked to publish, as `setLevel` does, with a system audit row. */
-async function publish(row, settledRead) {
+/**
+ * Publish a released row its uploader asked to publish, as `setLevel` does, with a system audit row.
+ * A failed publish leaves the row at its capped level with `publishRefused` saying so.
+ */
+async function publish(row, settledRead, store) {
   try {
     await documents.setPublished(row.id, row.projectId, 4,
       { levelHeldAt: documents.levelHoldAfter({ ...row, read: settledRead }, 4, null) });
   } catch (err) {
     logger.error('[intake] publish on release failed; the row stays at its capped level', {
       documentId: row.id, error: err.message, stack: err.stack
+    });
+    await quietly('publish refusal record', row, async () => {
+      if (!(await store.markPublishRefused(row, 'publish-failed'))) {
+        logger.warn('[intake] publish refusal not recorded; the row is no longer released', { documentId: row.id });
+      }
     });
     return;
   }
@@ -194,7 +202,7 @@ async function release(listed, scan, deps) {
     logger.warn('[intake] row settled by another writer while releasing', { documentId: listed.id, key });
     return { outcome: 'raced', sizeBytes: stat.size };
   }
-  if (access.publish) await publish(row, access.fields.read || row.read || []);
+  if (access.publish) await publish(row, access.fields.read || row.read || [], store);
   await client.removeObject(listed.id);
   await afterRelease(await store.findById(listed.id));
   return { outcome: 'clean', sizeBytes: stat.size };

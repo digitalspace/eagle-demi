@@ -195,6 +195,31 @@ test('publishOnRelease on a staff-only project stays at the capped level and say
   assert.strictEqual(publishes.mock.callCount(), 0);
 });
 
+/** The store's refusal record, as the real conditional patch: lands on a released row only. */
+function withMarkPublishRefused(store) {
+  store.markPublishRefused = async (row, reason) => {
+    const stored = store.rows.get(row.id);
+    if (stored.scanStatus !== 'clean') return false;
+    stored.publishRefused = reason;
+    return true;
+  };
+}
+
+test('publishOnRelease whose publish fails stays at the capped level and says why', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), publishOnRelease: true }));
+  withMarkPublishRefused(store);
+  t.mock.method(documents, 'setPublished', async () => { throw new Error('cosmos down'); });
+  const audits = t.mock.method(audit, 'auditEvent', () => {});
+
+  const outcome = await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(outcome, 'clean');
+  assert.deepStrictEqual(row.read, readForLevel(3));
+  assert.strictEqual(row.publishRefused, 'publish-failed');
+  assert.strictEqual(audits.mock.callCount(), 0);
+});
+
 /** Watch every step after a copy: index writes, sync-out and extraction sends. */
 function watchAfterRelease(t, deps) {
   t.mock.method(documents, 'readForWrite', async id => ({ ...deps.store.rows.get(id) }));
