@@ -182,9 +182,11 @@ test('document feature state and delete flag in Eagle', async (t) => {
   const unrecordedCreate = { eagle: { mintedId: EAGLE_ID, status: 'creating', claim: 'lapsed', claimedAt: '2000-01-01T00:00:00Z' } };
 
   await t.test('a deleted row whose create landed unrecorded is unpublished in Eagle, not skipped', async (tt) => {
-    wireRow(tt, sentRow({ isDeleted: true, syncOut: unrecordedCreate, echo: { read: PUBLIC_ACL } }));
+    const row = sentRow({ isDeleted: true, syncOut: unrecordedCreate, echo: { read: PUBLIC_ACL } });
+    wireRow(tt, row);
     const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });
 
+    assert.strictEqual(consumer.wants(row), true);
     await run();
 
     assert.deepStrictEqual(keys(calls), [PUT, UNPUBLISH]);
