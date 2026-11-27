@@ -430,7 +430,7 @@ order takes the live search down for anonymous callers.
    before you reset, and wait until it answers anything other than `inProgress`:
 
    ```bash
-   curl -s "{endpoint}/indexers/{name}/status?api-version=2024-07-01" | jq -r '.executionHistory[0].status'
+   curl -s "{endpoint}/indexers/{name}/status?api-version=2024-07-01" | jq -r '.lastResult.status'
    ```
 
    ```
@@ -456,12 +456,15 @@ order takes the live search down for anonymous callers.
 
    **A 202 means the run STARTED, not that any row moved.** The status document's top-level
    `status` is not a completion signal — it reads `running` the whole time the indexer is enabled
-   on its schedule, reset or no reset. Read `executionHistory[0]` instead (the entry whose
-   `startTime` matches this run) and wait for **its** `status` to reach `success`, then compare
-   `itemsProcessed` there against the index's document count. `lastResult` is the same object as
-   `executionHistory[0]` but the PT5M schedule keeps appending steady-state ticks to the history
-   with `itemsProcessed: 0` — checking the wrong entry, or checking too late, reads like the reset
-   never finished. The projects indexer's run entry reports `393 processed, 0 failed` when it has
+   on its schedule, reset or no reset.
+
+   A running execution is listed only in `lastResult`; `executionHistory` lists finished runs,
+   newest first. Find this run by its `startTime` and wait for **its** `status` to reach `success`,
+   then compare `itemsProcessed` there against the index's document count.
+
+   The PT5M schedule keeps appending steady-state ticks to the history with `itemsProcessed: 0` —
+   checking the wrong entry, or checking too late, reads like the reset never finished. The
+   projects indexer's run entry reports `393 processed, 0 failed` when it has
    done its job (61,587 for documents, measured 2026-09-05; 60,578 at cutover).
 
    A **data-only** change needs none of this: a Cosmos patch moves `_ts`, so the `PT5M` schedule
@@ -656,9 +659,11 @@ writes together, and the indexer reset and wait. The wait itself runs on the dev
 --datasources <name>`; a run stops at 90 minutes in either mode and that indexer run does not.
 
 A brand-new indexer needs no reset — it has no high-water mark to clear — but it does need the
-`Content-Length: 0` header, and the run is read the same way as any other: `executionHistory[0]`,
-not the top-level `status`. The first run reported 2,433 rows for `activities` and 17 for
-`project-notifications`. Deploy the app last.
+`Content-Length: 0` header. Its run shows in `lastResult` while it runs, then in
+`executionHistory`, never in the top-level `status`.
+
+The first run reported 2,433 rows for `activities` and 17 for `project-notifications`. Deploy the
+app last.
 
 The rollout order: deploy the app with the setting empty, PUT the index and data source, run the
 indexer once, then turn it on by adding the parameter to that environment's param file —
