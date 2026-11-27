@@ -1,6 +1,6 @@
 # The extraction job image. docling matches the host so both produce the same markdown.
 --extra-index-url https://download.pytorch.org/whl/cpu
-docling==2.116.0
+docling==2.132.0
 requests==2.34.2
 azure-storage-queue==12.18.1
 azure-identity==1.27.0
