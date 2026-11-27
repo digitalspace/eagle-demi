@@ -350,6 +350,20 @@ test('the description and display name copies are declared and sourced as intend
   }
 });
 
+// A built-in analyzer, because the apply script refuses an `analyzers` change on the serving index
+// and the service takes it offline for one.
+test('the chunk content copy is declared under a built-in analyzer and sourced from content', () => {
+  const chunkIndex = require('../../azure/search/indexes/chunks.json');
+  const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
+
+  const field = chunkIndex.fields.find(f => f.name === 'contentTokens');
+  assert.ok(field, 'the chunks index must declare contentTokens');
+  assert.deepStrictEqual([field.type, field.analyzer, field.searchable, field.retrievable],
+    ['Edm.String', 'standard.lucene', true, false]);
+  assert.strictEqual(projectedColumns(chunkDatasource.container.query).get('contentTokens'), 'content');
+  assert.deepStrictEqual(chunkIndex.analyzers, []);
+});
+
 // `eagle-query` reads these flags from the committed JSON; a wrong flag silently drops the key
 // into `meta.dropped` and serves an unfiltered page.
 test('the fields the search page sorts and filters on carry the flags that make them usable', () => {
