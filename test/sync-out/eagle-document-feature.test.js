@@ -178,6 +178,32 @@ test('document feature state and delete flag in Eagle', async (t) => {
     assert.deepStrictEqual(keys(calls), [PUT, UNPUBLISH]);
   });
 
+  // A create whose POST landed but whose worker died before the send was recorded: minted id, no sentVersion.
+  const unrecordedCreate = { eagle: { mintedId: EAGLE_ID, status: 'creating', claim: 'lapsed', claimedAt: '2000-01-01T00:00:00Z' } };
+
+  await t.test('a deleted row whose create landed unrecorded is unpublished in Eagle, not skipped', async (tt) => {
+    const row = sentRow({ isDeleted: true, syncOut: unrecordedCreate, echo: { read: PUBLIC_ACL } });
+    wireRow(tt, row);
+    const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });
+
+    assert.strictEqual(consumer.wants(row), true);
+    await run();
+
+    assert.deepStrictEqual(keys(calls), [PUT, UNPUBLISH]);
+  });
+
+  await t.test('a deleted row whose minted create never reached Eagle is held unsent, not failed', async (tt) => {
+    const rowOf = wireRow(tt, sentRow({ isDeleted: true, syncOut: unrecordedCreate }));
+    const GET = `GET ${at('?fields=isFeatured')}`;
+    const calls = wireEagle(tt, { [GET]: { body: [] } });
+
+    const result = await run();
+
+    assert.strictEqual(result.status, 'held');
+    assert.deepStrictEqual(keys(calls), [GET]);
+    assert.strictEqual(rowOf().syncOut.eagle.sentVersion, undefined);
+  });
+
   await t.test('a deleted row whose read still holds public is not published', async (tt) => {
     wireRow(tt, sentRow({ isDeleted: true, read: PUBLIC_ACL, echo: { read: STAFF_ACL } }));
     const calls = wireEagle(tt, { [PUT]: {}, [PUBLISH]: {} });
