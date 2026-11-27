@@ -155,6 +155,20 @@ test('document feature state and delete flag in Eagle', async (t) => {
     assert.deepStrictEqual(keys(calls), [POST, `GET ${at('?fields=isFeatured', id)}`, `PUT ${at('/feature', id)}`]);
   });
 
+  await t.test('a document under a notification is created under the notification\'s Eagle id', async (tt) => {
+    const NOTIFICATION_ID = 'n-5f0e4a0c';
+    const NOTIFICATION_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c3';
+    mirrorStore(tt, [
+      { container: 'notifications', id: NOTIFICATION_ID, eagleId: NOTIFICATION_EAGLE_ID },
+      { container: 'documents', ...newRow({ projectId: NOTIFICATION_ID }) }
+    ]);
+    const calls = wireEagle(tt, { [POST]: body => ({ body: { _id: body._id } }), 'GET *': { body: [{ read: STAFF_ACL }] } });
+
+    await syncOut.run({ kind: DOCUMENT, consumer: 'eagle', id: ROW_ID, projectId: NOTIFICATION_ID, attempt: 1 });
+
+    assert.strictEqual(calls.find(c => c.key === POST)?.body.project, NOTIFICATION_EAGLE_ID);
+  });
+
   await t.test('a deleted row Eagle holds as public is unpublished, never deleted, whatever its read says', async (tt) => {
     wireRow(tt, sentRow({ isDeleted: true, read: PUBLIC_ACL, echo: { read: PUBLIC_ACL } }));
     const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });

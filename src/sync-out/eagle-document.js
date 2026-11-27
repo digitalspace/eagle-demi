@@ -9,12 +9,13 @@ const settings = require('../config').syncOut;
 const { logger } = require('../utils/logger');
 const documents = require('../repositories/documents');
 const projects = require('../repositories/projects');
+const notifications = require('../repositories/notifications');
 const { ownedOutsideEagle } = require('../ownership/document');
 const { isNativeProject, isMintedNative } = require('../merge/project');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { DOCUMENT } = require('./kinds');
 const {
-  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
+  requireSettings, putRecord, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic, refsFor
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -160,6 +161,18 @@ const storedBodyFor = (row, project) => ({
  */
 async function readyParentEagleId(row, logFields) {
   const fields = { ...logFields, parentId: row.projectId };
+  // A notification parent wins over a project, as on intake (parentOf), and resolves as an Update's does.
+  const notification = await notifications.readForWrite(String(row.projectId));
+  if (notification) {
+    const { ref, waiting } = refsFor(DOCUMENT, row, fields);
+    const eagleId = ref('notification', row.projectId, notification);
+    const waits = waiting();
+    if (waits.length) {
+      logger.warn(`[sync-out eagle] document ${row.id} waits: ${waits.join('; ')}`, { ...fields, waiting: waits });
+      throw new Error(`parent notification ${row.projectId} of document ${row.id} not yet in Eagle`);
+    }
+    return eagleId;
+  }
   const parent = await projects.readForWrite(row.projectId);
   const out = parent?.syncOut?.eagle;
   if (parent && !parent.eagleId && !isNativeProject(parent)) {
