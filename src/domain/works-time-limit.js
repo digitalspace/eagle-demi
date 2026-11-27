@@ -19,14 +19,14 @@ const isRunningWork = (work) =>
 const endKnownOf = (work, phases, i) => !(work.source === 'sheet' && work.actYear === 2002
   && phases[i].name === 'Evaluation' && phases[i + 1]?.name !== EXTRA_TIME);
 
-/** True when phase `i` starts back to back with a legislated phase before it whose end is known. */
+/** True when phase `i` of a Track work starts on or the day after the end of a legislated phase before it. */
 function startsOnDayOne(work, phases, i) {
   const before = phases[i - 1];
   const end = dayOf(before?.endDate);
-  if (!before?.legislated || !end || !endKnownOf(work, phases, i - 1)) return false;
+  // A sheet phase ends on the next start, so that shared date is the next phase's day zero.
+  if (work.source !== 'track' || !before?.legislated || !end) return false;
   const start = dayOf(phases[i].startDate);
-  // Sheet phases end on the next start; Track starts the next phase the day after the end.
-  return start === end || (work.source === 'track' && start === plusDays(end, 1));
+  return start === end || start === plusDays(end, 1);
 }
 
 /**
