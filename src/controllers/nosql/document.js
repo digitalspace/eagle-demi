@@ -956,7 +956,7 @@ function listLookupFrom(doc, labels) {
 
 const indexFieldsMoved = (from, saved) => JSON.stringify(documentIndexRow(from)) !== JSON.stringify(documentIndexRow(saved));
 
-/** Staff lists page in the index, so a new or changed row goes in now; a new file also goes to extraction. */
+/** Staff lists page in the index, so a new or changed row goes in now; a new row goes to extraction. */
 async function afterPush(from, saved) {
   if (!from || indexFieldsMoved(from, saved)) await indexDocumentsNow([saved]);
   if (!from || from.s3Key !== saved.s3Key) await enqueueExtraction(saved, 'eagle');
