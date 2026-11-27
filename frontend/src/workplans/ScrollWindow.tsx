@@ -28,7 +28,6 @@ interface Busy {
   x: number;
   w: number;
   h: number;
-  say: string;
 }
 
 const nextQuarter = (day: string) => {
@@ -58,7 +57,7 @@ function busyOf(act: OverviewActData, today: string): Busy[] {
     const x0 = axis.px(q);
     const x1 = axis.px(nextQuarter(q));
     if (x1 <= x0) return [];
-    return [{ x: (x0 / AXIS_W) * 100, w: ((x1 - x0) / AXIS_W) * 100, h: (counts[i] / most) * 100, say: `${counts[i]} active from ${q}` }];
+    return [{ x: (x0 / AXIS_W) * 100, w: ((x1 - x0) / AXIS_W) * 100, h: (counts[i] / most) * 100 }];
   });
 }
 

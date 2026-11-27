@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorkplanRow } from '../api/sheet-works';
-import { assignedOk, ME, peopleOf, rolesOf } from './assigned';
+import { assignedOk, ME, peopleOf } from './assigned';
 
 const work = (over: Partial<WorkplanRow>): WorkplanRow => ({ workId: 'w', staff: [], team: null, ...over }) as WorkplanRow;
 const lead = work({ workId: 'a', team: 'Infrastructure', staff: [{ name: 'Staff One', role: 'Work lead' }, { name: 'Staff Two', role: 'Responsible EPD' }] });
@@ -35,9 +35,8 @@ describe('assignedOk', () => {
   });
 });
 
-describe('peopleOf and rolesOf', () => {
+describe('peopleOf', () => {
   it('lists names and teams, and counts works with no one', () => {
     expect(peopleOf([lead, sheet])).toEqual({ names: ['Staff One', 'Staff Two'], teams: ['Infrastructure'], unassigned: 1 });
-    expect(rolesOf(lead, 'Staff Two')).toEqual(['Responsible EPD']);
   });
 });

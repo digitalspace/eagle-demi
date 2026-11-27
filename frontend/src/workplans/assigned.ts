@@ -20,9 +20,6 @@ export function assignedOk(work: WorkplanRow, who: string, team: string): boolea
   return true;
 }
 
-/** The roles `name` holds on `work`, in Track's order. */
-export const rolesOf = (work: WorkplanRow, name: string) => (work.staff ?? []).filter((s) => s.name === name).map((s) => s.role);
-
 /** Everyone and every team named on `works`, sorted, and how many works have no one: sheet works. */
 export function peopleOf(works: readonly WorkplanRow[]) {
   const names = new Set<string>();

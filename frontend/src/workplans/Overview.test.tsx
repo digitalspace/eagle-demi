@@ -182,6 +182,13 @@ describe('Overview Assigned to and Team', () => {
     expect(screen.getByText('1 sheet work has no one assigned in Track and is hidden by these filters.')).toBeInTheDocument();
   });
 
+  it('says no sheet works are hidden for Me while no signed-in name is known, since Me then filters nothing', () => {
+    renderOverview(STAFFED, '/workplans?who=@me');
+
+    expect(screen.queryByText(/hidden by these filters/)).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Assigned to' })).not.toHaveAttribute('aria-describedby');
+  });
+
   it('keeps offering a person named in the address who is on no work, so the select shows who filters the rows', () => {
     renderOverview(STAFFED, '/workplans?who=Staff%20Nine');
 
