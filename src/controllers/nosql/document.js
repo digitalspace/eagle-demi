@@ -46,9 +46,9 @@ const {
   resolveDocumentAcl, upsertGuarded, propagateParentFields, reStampParentFieldDrift, badParentFieldTypes
 } = require('../../domain/documents');
 const {
-  sanitizeExtraction, CAP_REJECTED, REPEATED_REJECTED, INDEX_DELETE_INCOMPLETE, capExceededMessage,
-  recentIngestFailures, tryRecordIngestFailure, logIngestFailure, recordIngested, removeOverCapChunks,
-  parentStampedAt
+  sanitizeExtraction, CAP_REJECTED, REPEATED_REJECTED, capExceededMessage, recentIngestFailures,
+  tryRecordIngestFailure, recordIngested, removeOverCapChunks, parentStampedAt, ingestStreamed,
+  auditIngestFailure, recordOverCap, recordWriteIncomplete, recordIndexDeleteIncomplete, recordBadRequest
 } = require('../../domain/document-ingest');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
@@ -1384,34 +1384,26 @@ const HOLD_WARN_CHARS = 10 * 1024 * 1024;
  */
 const PARENT_FIELD_REFRESH_BATCHES = 25;
 
-/**
- * The 413 both ingest doors answer with once a document has more chunks than the cap. `stored` is
- * appended to the recorded error only, and `fields` rides the same patch.
- */
-async function rejectOverCap(res, document, detail, { stored = '', fields = {} } = {}) {
-  logger.warn(`[Document Controller] ${CAP_REJECTED}`, {
-    documentId: document.id, limit: config.maxChunksPerDocument, ...detail
-  });
-  const message = capExceededMessage();
-  await tryRecordIngestFailure(document, stored ? `${message}; ${stored}` : message, fields);
-  return res.status(413).json({ error: message });
+/** The 413 both ingest doors answer with once a document has more chunks than the cap. */
+async function rejectOverCap(req, res, document, detail, removal) {
+  return res.status(413).json({ error: await recordOverCap(req, document, detail, removal) });
 }
 
-/** A 500 the host will retry: logged for the ingest-failure alert and counted by the guard. */
-async function failIngest(res, document, message) {
-  logIngestFailure(document, message);
-  await tryRecordIngestFailure(document, message);
+/** A 500 the host will retry, counted by the repeated-failure guard. */
+async function failIngest(req, res, document, message) {
+  await recordWriteIncomplete(req, document, message);
   return res.status(500).json({ error: message });
 }
 
-/**
- * A 503 for chunks the search index kept, when Cosmos wrote everything else. Not counted by the
- * guard: an index outage says nothing about the document, and must not lock it out.
- */
-function failIndexDelete(res, document, detail) {
-  const message = `${INDEX_DELETE_INCOMPLETE} (${JSON.stringify(detail)})`;
-  logIngestFailure(document, message);
-  return res.status(503).json({ error: message });
+/** A 503 for chunks the search index kept, not counted by the guard. */
+function failIndexDelete(req, res, document, detail) {
+  return res.status(503).json({ error: recordIndexDeleteIncomplete(req, document, detail) });
+}
+
+/** A 400 after the ingest was taken up, recorded on the document once a stream wrote a batch. */
+async function rejectBadRequest(req, res, document, message, flushedBatches) {
+  await recordBadRequest(req, document, message, flushedBatches);
+  return res.status(400).json({ error: message });
 }
 
 /**
@@ -1556,8 +1548,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const fail = async (status, message) => {
     // Recorded on the document, not just returned: a 500 the host retries is fine, but a silent
     // shortfall that leaves the document looking extracted is the failure mode this guards.
-    if (status >= 500) return failIngest(res, doc, message);
-    return res.status(status).json({ error: message });
+    if (status >= 500) return failIngest(req, res, doc, message);
+    return rejectBadRequest(req, res, doc, message, flushed);
   };
 
   // An over-cap stream's written batches are removed whole: their ids overwrote the previous
@@ -1565,10 +1557,10 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const failWrite = async (message) => {
     if (!message.startsWith(CAP_REJECTED)) return fail(500, message);
     const detail = { streamed: true, flushedBatches: flushed };
-    if (flushed === 0) return rejectOverCap(res, doc, detail);
+    if (flushed === 0) return rejectOverCap(req, res, doc, detail);
     const removal = await removeOverCapChunks(doc);
-    if (removal.indexIncomplete) return failIndexDelete(res, doc, removal);
-    return rejectOverCap(res, doc, detail, removal);
+    if (removal.indexIncomplete) return failIndexDelete(req, res, doc, removal);
+    return rejectOverCap(req, res, doc, detail, removal);
   };
 
   const rl = readline.createInterface({ input: req.stream, crlfDelay: Infinity });
@@ -1632,7 +1624,7 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const surplus = await chunks.deleteSurplus(systemAccess(), doc.id, keepIds,
     { unindex: aiSearch.deleteChunksByIds });
   if (surplus && chunks.onlyIndexKept(surplus)) {
-    return failIndexDelete(res, doc, surplus.statusCounts);
+    return failIndexDelete(req, res, doc, surplus.statusCounts);
   }
   if (surplus && surplus.failed) {
     return fail(500, `surplus chunk delete incomplete: ${surplus.failed} failed ` +
@@ -1685,9 +1677,8 @@ exports.ingestChunks = async (req, res) => {
       return res.status(409).json({ error: 'Images uploaded through the Update form are not extracted' });
     }
 
-    // Only JSON bodies are parsed, so an NDJSON body arrives with its stream unread. `req.is` is
-    // checked first: a bare TypeError here would 500 as if the database failed.
-    streaming = typeof req.is === 'function' && req.is('application/x-ndjson');
+    // Only JSON bodies are parsed, so an NDJSON body arrives with its stream unread.
+    streaming = ingestStreamed(req);
     const { markdown, error, extraction } = (!streaming && req.body) || {};
 
     // A host-reported `error` writes no chunks, so it is always let through to be recorded.
@@ -1737,7 +1728,7 @@ exports.ingestChunks = async (req, res) => {
     }
 
     if (typeof markdown !== 'string') {
-      return res.status(400).json({ error: 'markdown (string) or error (string) is required' });
+      return rejectBadRequest(req, res, doc, 'markdown (string) or error (string) is required');
     }
 
     const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
@@ -1763,7 +1754,7 @@ exports.ingestChunks = async (req, res) => {
     }));
 
     if (items.length > config.maxChunksPerDocument) {
-      return rejectOverCap(res, doc, { chunks: items.length, streamed: false });
+      return rejectOverCap(req, res, doc, { chunks: items.length, streamed: false });
     }
 
     // systemAccess() so no hidden chunk is orphaned. `unindex` drops chunks from the index first;
@@ -1774,12 +1765,12 @@ exports.ingestChunks = async (req, res) => {
     // bulkVerified REPORTS partial failure, it does not throw. Ignored, a document missing text would
     // leave the work list; the 500 makes the host retry it whole.
     if (result && chunks.onlyIndexKept(result)) {
-      return failIndexDelete(res, doc, result.statusCounts);
+      return failIndexDelete(req, res, doc, result.statusCounts);
     }
     if (result && result.failed) {
       const detail = `chunk write incomplete: ${result.failed} of ${items.length} failed ` +
         `(${JSON.stringify(result.statusCounts)})`;
-      return failIngest(res, doc, detail);
+      return failIngest(req, res, doc, detail);
     }
 
     // RU is the variable cost on a serverless account. `ru` includes retries, since a retried
@@ -1812,6 +1803,7 @@ exports.ingestChunks = async (req, res) => {
     // The host retries a thrown fault like any 500, so it counts toward the guard, unless the
     // outcome was already recorded. Generic text: the stored error can be read back.
     if (doc && !ingest.recorded) await tryRecordIngestFailure(doc, 'chunk ingest failed: internal error');
+    auditIngestFailure(req, doc, 'internal', 500, err);
     return serverError(res, err, 'document controller failed');
   } finally {
     if (streaming) await drainRequest(req.stream);
