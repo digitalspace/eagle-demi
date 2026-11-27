@@ -56,9 +56,47 @@ function countOf(work, phase, start, today, offset) {
   return { countedDays: daysBetween(start, countTo) - (phase.suspendedDays - (held?.days ?? 0)) + offset, held };
 }
 
-const hasExtensionOf = (work, phase) => (work.source === 'track'
-  ? phase.extensionDays > 0
-  : (phase.interruptions || []).some(entry => entry.kind === 'extension'));
+/**
+ * The phase's extension orders as `{ date, days, interregnum }`: sheet `extension` interruptions dated by their start,
+ * or Track's `extensionOrders`. Track extension days with no order read as one undated order.
+ */
+function ordersOf(work, phase) {
+  if (work.source !== 'track') {
+    return (phase.interruptions || []).filter(entry => entry.kind === 'extension')
+      .map(entry => ({ date: entry.startDate, days: entry.days ?? null, interregnum: false }));
+  }
+  const orders = phase.extensionOrders || [];
+  return orders.length || !(phase.extensionDays > 0) ? orders : [{ date: null, days: phase.extensionDays, interregnum: false }];
+}
+
+/**
+ * True when an extension order dated on or after the limit at that point covers a phase that ended past it. Earlier
+ * orders, and every interregnum, move the limit by their days. Null when an unknown day count leaves the limit unknown.
+ */
+function coveredByOrderOf(orders, limit, end) {
+  const dated = orders.map(order => ({ ...order, date: dayOf(order.date) })).filter(order => order.date)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let at = limit;
+  for (const order of dated) {
+    if (end <= at) return false;
+    if (!order.interregnum && order.date >= at) return true;
+    if (order.days == null) return null;
+    at = plusDays(at, order.days);
+  }
+  return false;
+}
+
+/** `overDays` and `coveredByExtension` of a phase whose `limit` counts no extension; `judged` when finished with a known end. */
+function coverOf(orders, { judged, limit, end, allowedDays, over, held }) {
+  const byOrder = judged && limit ? coveredByOrderOf(orders, limit, end) : null;
+  const undated = orders.some(order => !dayOf(order.date) && !order.interregnum);
+  // An undated order, or a limit an unknown day count hides, covers any overrun, even an unknown one.
+  const coveredByExtension = byOrder === true || (judged && (byOrder === null || undated)
+    && orders.length > 0 && (allowedDays == null || over > 0));
+  // A held phase is never over, as on the Workplans screen.
+  const overDays = over == null && !byOrder ? null : held || coveredByExtension ? 0 : Math.max(0, over);
+  return { overDays, coveredByExtension };
+}
 
 function timeLimitOf(work, phases, i, today) {
   const phase = phases[i];
@@ -74,10 +112,9 @@ function timeLimitOf(work, phases, i, today) {
   const endKnown = endKnownOf(work, phases, i);
   const over = countedDays == null || allowedDays == null || !endKnown ? null : countedDays - allowedDays;
   const finished = Boolean(phase.isCompleted && end && end >= start);
-  // A recorded extension covers a finished phase even when its day count is unknown.
-  const coveredByExtension = finished && endKnown && (allowedDays == null || over > 0) && hasExtensionOf(work, phase);
-  // A held phase is never over, as on the Workplans screen.
-  const overDays = over == null ? null : held ? 0 : Math.max(0, over);
+  const judged = finished && endKnown;
+  const limit = suspendedDays == null ? null : plusDays(start, phase.numberOfDays + suspendedDays - offset);
+  const { overDays, coveredByExtension } = coverOf(ordersOf(work, phase), { judged, limit, end, allowedDays, over, held });
   return { dayCount: one ? 'one' : 'zero', allowedDays, deadline, countedDays, overDays, endKnown, coveredByExtension };
 }
 

@@ -2129,8 +2129,9 @@ paths:
                                     type: integer
                                     nullable: true
                                     description: >-
-                                      `countedDays` past `allowedDays`, 0 when within it or while the phase is held by an open suspension.
-                                      Covered phases keep their real overrun. Null when either is null or the end is not known.
+                                      `countedDays` past `allowedDays`, 0 when within it, while the phase is held by an open suspension, or
+                                      when `coveredByExtension` is true. Null when either is null or the end is not known, unless an extension
+                                      order dated on or after the limit covers the phase.
                                   endKnown:
                                     type: boolean
                                     description: >-
@@ -2139,9 +2140,15 @@ paths:
                                   coveredByExtension:
                                     type: boolean
                                     description: >-
-                                      True on a finished phase with a known end, not before its start, that has an extension (a sheet
-                                      `extension` interruption, or Track `extensionDays` above 0) and is past `allowedDays`, or whose
-                                      `allowedDays` is null because the extension has no day count. `overDays` still gives the overrun.
+                                      True on a finished phase with a known end, not before its start, that ran past its limit and an
+                                      extension order dated on or after the limit at that point. The limit is the start plus
+                                      `numberOfDays` and `suspendedDays` (one day less on day count `one`); orders, taken in date
+                                      order, each add their days to it while dated before it. An order is a sheet `extension`
+                                      interruption dated by its `startDate`, or a Track extension (event type 10) dated by its actual
+                                      date. A Track interregnum (event type 11) adds its days but never covers. A phase with an undated
+                                      order (a sheet extension with no `startDate`, or Track `extensionDays` with no dated event) is
+                                      covered when past `allowedDays` or when `allowedDays` is null, and so is one whose limit an
+                                      order of unknown day count leaves unknown.
                         milestones:
                           type: array
                           description: >-
