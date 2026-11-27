@@ -48,11 +48,15 @@ const demiRow = (overrides = {}) => ({
   ...overrides
 });
 
-/** Cosmos over `rows` (`{ container, ...row }`): etag-guarded writes, and `set`/`incr` patches that judge the live-only condition. */
+/**
+ * Cosmos over `rows` (`{ container, ...row }`): etag-guarded writes, and `set`/`incr` patches that judge the live-only
+ * condition. `store.race`, when set, runs once just before the next write or patch, as a concurrent writer would.
+ */
 function wireStore(t, rows) {
   const partitionOf = (container, row) => (container === 'documents' ? row.projectId : row.id);
   const key = (container, id, pk) => `${container}|${id}|${pk}`;
-  const store = { rows: new Map(), writes: 0, beforePatch: null };
+  const store = { rows: new Map(), writes: 0, race: null };
+  const race = () => { const run = store.race; store.race = null; if (run) run(); };
   for (const { container, ...row } of rows) store.rows.set(key(container, row.id, partitionOf(container, row)), { ...row, _etag: 'e0' });
   const write = (container, item, etag) => {
     const at = key(container, item.id, partitionOf(container, item));
@@ -63,11 +67,11 @@ function wireStore(t, rows) {
     return structuredClone(store.rows.get(at));
   };
   t.mock.method(cosmos, 'readItem', async (container, id, pk) => structuredClone(store.rows.get(key(container, id, pk)) ?? null));
-  t.mock.method(cosmos, 'upsert', async (container, item, { etag } = {}) => write(container, item, etag));
-  t.mock.method(cosmos, 'replace', async (container, _id, _pk, item, etag) => write(container, item, etag));
+  t.mock.method(cosmos, 'upsert', async (container, item, { etag } = {}) => { race(); return write(container, item, etag); });
+  t.mock.method(cosmos, 'replace', async (container, _id, _pk, item, etag) => { race(); return write(container, item, etag); });
   t.mock.method(cosmos, 'query', async () => ({ items: [] }));
   t.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition) => {
-    if (store.beforePatch) store.beforePatch();
+    race();
     const row = store.rows.get(key(container, id, pk));
     assert.ok(condition === undefined || condition === LIVE_ONLY, `unjudged patch condition ${condition}`);
     if (condition && row.isDeleted === true) throw precondition();
@@ -83,6 +87,12 @@ function wireStore(t, rows) {
   store.doc = () => structuredClone(store.rows.get(key('documents', ROW_ID, '1234')));
   return store;
 }
+
+/** A concurrent delete: flags the stored row and moves its etag, as a landed write does. */
+const flagDeletedUnder = store => () => {
+  const row = store.rows.get(`documents|${ROW_ID}|1234`);
+  Object.assign(row, { isDeleted: true, _etag: 'e-deleted' });
+};
 
 const call = async (handler, req) => {
   const res = mockRes();
@@ -159,9 +169,20 @@ test('DEMI-owned document writes and deletes', async (t) => {
   await t.test('a delete landing between the read and the level patch answers 404 and queues nothing', async (tt) => {
     const store = wireStore(tt, [{ container: 'documents', ...demiRow() }]);
     const queued = wireQueue(tt);
-    store.beforePatch = () => { store.rows.get(`documents|${ROW_ID}|1234`).isDeleted = true; };
+    store.race = flagDeletedUnder(store);
 
     const res = await call('setLevel', { user: STAFF, body: { level: 2, reason: 'withdrawn' } });
+    assert.strictEqual(res.statusCode, 404);
+    assert.strictEqual(store.writes, 0);
+    assert.strictEqual(queued.length, 0);
+  });
+
+  await t.test('a delete landing between the read and the edit answers 404 and queues nothing', async (tt) => {
+    const store = wireStore(tt, [{ container: 'documents', ...demiRow() }]);
+    const queued = wireQueue(tt);
+    store.race = flagDeletedUnder(store);
+
+    const res = await call('updateDocument', { user: STAFF, body: { displayName: 'Final plan' } });
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(store.writes, 0);
     assert.strictEqual(queued.length, 0);
