@@ -129,7 +129,7 @@ const acceptEchoed = store => (body) => {
 const message = (overrides = {}) =>
   ({ kind: DOCUMENT, consumer: 'eagle', id: ROW_ID, projectId: '1234', attempt: 1, ...overrides });
 const lastAttempt = () => syncOut.run(message({ attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS, maxAttempts: MAX_ATTEMPTS });
-const GET = `GET /document/${EAGLE_ID}`;
+const GET = `GET /document/${EAGLE_ID}?fields=isFeatured`;
 const PUT = `PUT /document/${EAGLE_ID}`;
 const PUBLISH = `PUT /document/${EAGLE_ID}/publish`;
 const UNPUBLISH = `PUT /document/${EAGLE_ID}/unpublish`;
@@ -486,7 +486,7 @@ test('sync-out of documents to Eagle', async (t) => {
       const result = await consumer.send(store.row, { update: store.update });
 
       const id = store.row.eagleId;
-      assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}`], 'no unpublish');
+      assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}?fields=isFeatured`], 'no unpublish');
       assert.strictEqual(store.row.syncOut.eagle.status, 'sent');
       assert.deepStrictEqual(result, { status: 'sent', eagleId: id });
     });
@@ -502,7 +502,7 @@ test('sync-out of documents to Eagle', async (t) => {
     await assert.rejects(consumer.send(store.row, { update: store.update }), /HTTP 404/);
 
     const id = store.row.eagleId;
-    assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}`], 'no publish');
+    assert.deepStrictEqual(keys(calls), [POST, `PUT /document/${id}`, `GET /document/${id}?fields=isFeatured`], 'no publish');
     assert.strictEqual(store.row.syncOut.eagle.status, 'failed');
   });
 
