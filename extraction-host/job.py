@@ -77,7 +77,7 @@ def handle(doc_id, pool, converter):
         try:
             path = core.download(doc, Path(td))
         except core.SourceMissing as e:
-            # Nothing posted: the backlog sweep queues it again once the file can exist.
+            # Nothing posted: the next catch-up run of src/scripts/extraction-backlog.js queues it again.
             log.warning("source missing %s: %s", doc_id, e)
             return "missing"
         except Exception as e:                                    # noqa: BLE001

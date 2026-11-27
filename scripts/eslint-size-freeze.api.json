@@ -1,7 +1,7 @@
 {
   "src/ai/federal-source.js": {"complexity":[33],"max-lines":[492],"max-lines-per-function":[163]},
   "src/ai/project-summary.js": {"complexity":[61,22],"max-lines":[1724],"max-lines-per-function":[369]},
-  "src/config.js": {"max-lines":[431]},
+  "src/config.js": {"max-lines":[429]},
   "src/controllers/nosql/api-key.js": {"complexity":[31]},
   "src/controllers/nosql/bulk-download.js": {"complexity":[21],"max-lines-per-function":[187]},
   "src/controllers/nosql/comment-period.js": {"complexity":[23,21]},

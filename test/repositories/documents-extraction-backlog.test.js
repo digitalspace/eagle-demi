@@ -1,6 +1,6 @@
 'use strict';
 
-// documents.listExtractionBacklog: the rows the daily sweep sends to the extraction queue.
+// documents.listExtractionBacklog: the rows src/scripts/extraction-backlog.js sends to the extraction queue.
 
 process.env.NODE_ENV = 'test';
 

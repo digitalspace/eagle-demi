@@ -19,7 +19,8 @@ function skipReason(row) {
 
 /**
  * Queue `row` for the extraction job and stamp `extractionQueuedAt`. Never throws: callers have
- * already written the row, so a failure is logged and the backlog sweep picks the row up later.
+ * already written the row, so a failure is logged and the next catch-up run of
+ * src/scripts/extraction-backlog.js picks the row up.
  *
  * @param {string} reason where the row came from (`intake`, `eagle`, `backlog`), carried in the message
  * @returns {Promise<boolean>} whether a message was sent
@@ -42,7 +43,7 @@ async function enqueueExtraction(row, reason) {
   try {
     await extractionRows.markExtractionQueued(row.id, row.projectId, enqueuedAt);
   } catch (err) {
-    // The message is out; without the stamp the backlog sweep may send it again; a second run writes nothing new.
+    // The message is out; without the stamp the next catch-up run may send it again; a second run writes nothing new.
     logger.warn('[extraction] queued stamp failed', { documentId, error: err.message, stack: err.stack });
   }
   return true;

@@ -1191,7 +1191,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'INTAKE_PENDING_TIMEOUT_HOURS'
           value: empty(intakeStorageAccount) ? '' : '6'
         }
-        // Empty: intake release and Eagle pushes queue no extraction, and no backlog timer runs.
+        // Empty: intake release, Eagle pushes and src/scripts/extraction-backlog.js queue no extraction.
         {
           name: 'EXTRACTION_QUEUE'
           value: extractionQueue

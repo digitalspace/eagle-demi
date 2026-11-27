@@ -11,7 +11,7 @@ const EXTRACTION_FIELDS = [
   'pageNumbered', 'pageCount',
   // Dropping the failure count lets a document that keeps failing re-enter the GPU queue on every push.
   'extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt',
-  // The backlog sweep's retry clock; dropped, a push re-queues the row the next day.
+  // The catch-up run's 7-day wait; dropped, the next run of src/scripts/extraction-backlog.js sends the row again.
   'extractionQueuedAt'
 ];
 

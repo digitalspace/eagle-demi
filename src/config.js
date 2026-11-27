@@ -383,9 +383,7 @@ const config = {
     get pendingTimeoutHours() { return intFromEnv('INTAKE_PENDING_TIMEOUT_HOURS', 6); }
   },
   extraction: {
-    get queue() { return envTrim('EXTRACTION_QUEUE'); },
-    get sweepMax() { return intFromEnv('EXTRACTION_SWEEP_MAX', 100); },
-    get sweepSchedule() { return envTrim('EXTRACTION_SWEEP_SCHEDULE') || '0 0 11 * * *'; }
+    get queue() { return envTrim('EXTRACTION_QUEUE'); }
   },
 };
 
