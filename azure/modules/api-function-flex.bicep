@@ -268,8 +268,8 @@ param syncProjectsSchedule string = ''
 @description('NCRONTAB schedule for the NRPTI sync timer, e.g. `0 30 10 * * *`. Empty registers no timer.')
 param nrptiSyncSchedule string = ''
 
-// Bulk download. Flex drops an app setting deployed as '', so the code reads undefined, not
-// empty: off is the code's default.
+// Bulk download. An app setting deployed as '' stays in the settings list as an empty string;
+// the code treats empty as off.
 @description('Storage queue the bulk-download worker triggers on. Empty registers no worker, which leaves the feature off.')
 param bulkDownloadsQueue string = ''
 
@@ -864,7 +864,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           value: nrptiSyncSchedule
         }
         // api/index.js registers the bulk worker only when set; the host resolves
-        // `%BULK_DOWNLOADS_QUEUE%`. Empty is off (Flex drops it, so the code reads undefined).
+        // `%BULK_DOWNLOADS_QUEUE%`. Empty is off (it stays in the list as '', and the code treats that as off).
         {
           name: 'BULK_DOWNLOADS_QUEUE'
           value: bulkDownloadsQueue
