@@ -576,7 +576,7 @@ resource syncOutPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2
 }
 
 // Documents waiting for docling, one document id per message. The extraction job, not the API
-// host, consumes it, and moves a message to the poison queue after its third try.
+// host, consumes it, and moves a message to the poison queue on its third dequeue.
 resource extractionQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(extractionQueue)) {
   parent: queueService
   name: extractionQueue
