@@ -9,7 +9,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const documents = require('../../../src/repositories/documents');
-const projects = require('../../../src/repositories/projects');
 const documentController = require('../../../src/controllers/nosql/document');
 const syncOut = require('../../../src/sync-out');
 const { mockRes } = require('../../helpers/mock-res');
@@ -165,43 +164,5 @@ test('document field redaction', async (t) => {
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upsert.mock.callCount(), 0);
     assert.strictEqual(enqueue.mock.callCount(), 0);
-  });
-});
-
-
-// A document is admitted at level 1 whatever its parent's level and whatever the body asks for.
-// Widening is `PUT /api/documents/:id/level`.
-test('a written document is admitted at level 1', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  const PUBLISHED_PARENT = { id: '207', read: ['public', 'staff'], isPublished: true };
-
-  async function create(isPublished) {
-    t.mock.method(projects, 'getById', async () => PUBLISHED_PARENT);
-    let saved;
-    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
-
-    await documentController.createDocument({
-      query: {},
-      body: { project: '207', displayName: 'Application Part A', s3Key: 'k.pdf', isPublished }
-    }, mockRes());
-
-    return saved;
-  }
-
-  await t.test('a new document is admitted at level 1', async () => {
-    // The parent is PUBLISHED, so any inherited-publication shortcut fails here.
-    const saved = await create(undefined);
-
-    assert.deepStrictEqual(saved.read, ['team']);
-    assert.strictEqual(saved.isPublished, false);
-  });
-
-  await t.test('a create body cannot publish', async () => {
-    // Ignored, not refused: the key is dropped on the floor.
-    const saved = await create(true);
-
-    assert.deepStrictEqual(saved.read, ['team']);
-    assert.strictEqual(saved.isPublished, false);
   });
 });

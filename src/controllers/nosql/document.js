@@ -1,12 +1,11 @@
 'use strict';
 
 /**
- * Document controller, Cosmos NoSQL. A document can never out-rank its parent project: every
- * write path takes its ACL from resolveDocumentAcl.
+ * Document controller, Cosmos NoSQL. A document never out-ranks its parent project. Uploads enter
+ * through intake (src/controllers/native/intake.js).
  */
 
 const crypto = require('crypto');
-const path = require('path');
 const { finished } = require('stream/promises');
 const { Readable } = require('stream');
 const { once } = require('events');
@@ -43,7 +42,7 @@ const syncOut = require('../../sync-out');
 const { DOCUMENT, nextSyncVersion } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
 const {
-  resolveDocumentAcl, upsertGuarded, propagateParentFields, reStampParentFieldDrift, badParentFieldTypes
+  upsertGuarded, propagateParentFields, reStampParentFieldDrift, badParentFieldTypes
 } = require('../../domain/documents');
 const {
   sanitizeExtraction, CAP_REJECTED, REPEATED_REJECTED, capExceededMessage, recentIngestFailures,
@@ -732,131 +731,6 @@ exports.downloadDocument = async (req, res) => {
   }
 
   return res.status(status).json(body);
-};
-
-exports.createDocument = async (req, res) => {
-  try {
-    const access = resolveAccess(req);
-    // No `isPublished`: a create body cannot publish. Widening is `PUT /api/documents/:id/level`.
-    const { project, displayName, s3Key, region, edrmsRecordNumber, orcsClassification } = req.body;
-
-    if (!project || !displayName || !s3Key) {
-      return res.status(400).json({ error: 'Missing required fields: project, displayName, s3Key' });
-    }
-
-    const parentProject = await projects.getById(access, project);
-    if (!parentProject) {
-      return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
-    }
-
-    const acl = resolveDocumentAcl(parentProject);
-    const now = new Date().toISOString();
-
-    const saved = await documents.upsert({
-      id: crypto.randomUUID(),
-      projectId: String(project),
-      sourceSystem: 'demi',
-      displayName,
-      // Same derived sort key the seed writes; the index cannot compute it. helpers/natural-sort.
-      displayNameSort: naturalSortKey(displayName),
-      s3Key,
-      region: region || parentProject.region || '',
-      edrmsRecordNumber: edrmsRecordNumber || '',
-      orcsClassification: orcsClassification || '',
-      read: acl.read,
-      isPublished: acl.published,
-      isDeleted: false,
-      contentExtracted: false,
-      createdAt: now,
-      updatedAt: now
-    });
-    await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
-    await indexDocumentsNow([saved]);
-
-    auditEvent(req, {
-      action: 'document.create',
-      targetType: 'document',
-      targetId: saved.id,
-      projectId: saved.projectId,
-      detail: { displayName: saved.displayName, s3Key: saved.s3Key, isPublished: saved.isPublished }
-    });
-
-    return res.status(201).json(redactForAccess('documents', saved, access));
-  } catch (err) {
-    return serverError(res, err, 'document controller failed');
-  }
-};
-
-exports.extractDocument = async (req, res) => {
-  try {
-    const access = resolveAccess(req);
-    const file = req.file;
-    const { project, displayName, region, edrmsRecordNumber, orcsClassification } = req.body;
-
-    if (!file) {
-      return res.status(400).json({ error: 'No file uploaded.' });
-    }
-    if (!project) {
-      return res.status(400).json({ error: 'A valid project id is required.' });
-    }
-
-    const parentProject = await projects.getById(access, project);
-    if (!parentProject) {
-      return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
-    }
-
-    const fileExtension = file.originalname.match(/\.([0-9a-z]+$)/i)?.[1] || '';
-    const randomizedName = crypto.randomBytes(16).toString('hex') + (fileExtension ? '.' + fileExtension : '');
-    const objectPath = path.posix.join(project.toString(), randomizedName);
-
-    // Recorded without the storage layer's environment prefix, so the record still works when
-    // copied between environments.
-    await storage.putFile(objectPath, file.path, file.mimetype);
-
-    const acl = resolveDocumentAcl(parentProject);
-    const now = new Date().toISOString();
-    const uploadedDisplayName = displayName || file.originalname;
-
-    const saved = await documents.upsert({
-      id: crypto.randomUUID(),
-      projectId: String(project),
-      sourceSystem: 'demi',
-      displayName: uploadedDisplayName,
-      displayNameSort: naturalSortKey(uploadedDisplayName),
-      s3Key: objectPath,
-      fileExt: (fileExtension || 'pdf').toLowerCase(),
-      region: region || parentProject.region || '',
-      edrmsRecordNumber: edrmsRecordNumber || '',
-      orcsClassification: orcsClassification || '',
-      read: acl.read,
-      isPublished: acl.published,
-      // Explicit defaults: SQL `!= true` does not match a missing field, so the extractor's
-      // filters need these set.
-      isDeleted: false,
-      contentExtracted: false,
-      createdAt: now,
-      updatedAt: now
-    });
-    await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
-    await indexDocumentsNow([saved]);
-
-    // Same action as createDocument, so "who created documents" stays one query; `via` tells
-    // the two doors apart.
-    auditEvent(req, {
-      action: 'document.create',
-      targetType: 'document',
-      targetId: saved.id,
-      projectId: saved.projectId,
-      detail: { displayName: saved.displayName, isPublished: saved.isPublished, via: 'upload' }
-    });
-
-    return res.status(202).json({
-      message: 'File stored. Text extraction runs on the next scheduled extraction pass.',
-      docId: String(saved.id)
-    });
-  } catch (err) {
-    return serverError(res, err, 'document controller failed');
-  }
 };
 
 exports.updateDocument = async (req, res) => {

@@ -124,7 +124,8 @@ test('the row is created pending, unreadable, with the fields the scan handler r
   assert.strictEqual(row.projectId, '207');
   assert.strictEqual(row.fileExt, 'pdf');
   assert.strictEqual(row.displayName, 'Report.PDF');
-  assert.strictEqual(row.s3Key, undefined, 'the handler derives the object key on release');
+  assert.strictEqual(row.displayNameSort, naturalSortKey('Report.PDF'), 'the sort key follows the file-name fallback');
+  assert.strictEqual(row.s3Key, undefined,'the handler derives the object key on release');
   assert.ok(!Number.isNaN(Date.parse(row.createdAt)));
   assert.deepStrictEqual(row.requestedRead, ['team'], 'level 1 when none is asked for');
 });
