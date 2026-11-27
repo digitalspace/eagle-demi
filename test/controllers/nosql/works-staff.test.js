@@ -331,15 +331,28 @@ test('workplans gives every shown work with its project\'s Eagle id, Track rows 
   assert.deepStrictEqual(track.phases, [{
     name: 'Early Engagement', stage: null, order: 2, startDate: '2024-03-01', endDate: '2024-09-01', numberOfDays: 184,
     legislated: true, isCompleted: true, isSuspended: false, suspendedDate: null, undated: null,
-    isCurrent: false, extensionDays: 30, suspendedDays: 0, interruptions: []
+    isCurrent: false, extensionDays: 30, suspendedDays: 0, interruptions: [],
+    timeLimit: { dayCount: 'zero', allowedDays: 214, deadline: '2024-10-01', countedDays: 184, overDays: 0, endKnown: true,
+      coveredByExtension: false }
   }, {
     name: 'Process Planning', stage: null, order: 3, startDate: '2024-09-01', endDate: '2025-01-01', numberOfDays: 122,
     legislated: null, isCompleted: false, isSuspended: true, suspendedDate: '2024-11-01', undated: null,
     isCurrent: true, extensionDays: 0, suspendedDays: 14,
-    interruptions: [{ kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }]
+    interruptions: [{ kind: 'suspension', typeCode: 'S', legalSection: 's.30', startDate: '2024-05-01', endDate: null, days: null }],
+    timeLimit: null
   }]);
   assert.deepStrictEqual(sheet.phases.map(p => [p.isCurrent, p.suspendedDate, p.extensionDays, p.suspendedDays]),
     [[null, null, 30, null]]);
+});
+
+test('workplans counts a running phase to today\'s Pacific day', async (t) => {
+  // 05:00 UTC is still the evening before in Vancouver.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2024-10-01T05:00:00Z') });
+  const running = { trackName: 'Process Planning', startDate: '2024-09-01', endDate: '2024-12-01', numberOfDays: 90, legislated: 1,
+    isCompleted: false, trackPhaseId: 56, interruptions: [], milestones: [] };
+  const { res } = await callSummary(t, STAFF, { handler: getWorkplans, marker: NO_HIDING_MARKER,
+    track: { ...TRACK_WORK, workState: 'IN_PROGRESS', isActive: true, currentWorkPhaseId: 56, phases: [running] } });
+  assert.strictEqual(res.body.works[0].phases[0].timeLimit.countedDays, 29);
 });
 
 test('workplans rows carry each work\'s milestones with a kind', async (t) => {

@@ -5,6 +5,7 @@ const phaseCatalog = require('./phase-catalog');
 const works = require('../repositories/works');
 const { logger } = require('../utils/logger');
 const { publicWorksOf } = require('../seed/track-mappers');
+const { timeLimitsOf } = require('./works-time-limit');
 const {
   OVERRIDE_MARKER_ID, hiddenByOverride, listOf, overrideShown, sourceOf, validateMarker
 } = require('./work-model');
@@ -222,23 +223,25 @@ const sheetPhaseFieldsOf = (phase) => ({
 
 /**
  * `work` in the Workplans shape after `project` (`projectId`, `projectName`, `eagleId`); `doc` is its stored
- * document, read for what the public shape leaves out.
+ * document, read for what the public shape leaves out. `today` (`YYYY-MM-DD`) ends the count of a running phase.
  */
-function workplanOf(project, work, doc) {
+function workplanOf(project, work, doc, today) {
   const track = work.source === 'track';
   const storedByTrackId = new Map(listOf(doc?.phases).map(phase => [phase.trackPhaseId, phase]));
+  const phases = work.phases.map(phase => ({
+    ...pick(phase, PHASE_KEYS),
+    // Track stores the flag as 1.
+    legislated: phase.legislated == null ? null : Boolean(phase.legislated),
+    ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
+    interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
+  }));
+  const timeLimits = timeLimitsOf(work, phases, today);
   return {
     ...project,
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
     ...sheetDocFieldsOf(track ? null : doc),
-    phases: work.phases.map(phase => ({
-      ...pick(phase, PHASE_KEYS),
-      // Track stores the flag as 1.
-      legislated: phase.legislated == null ? null : Boolean(phase.legislated),
-      ...(track ? trackPhaseFieldsOf(phase, doc, storedByTrackId) : sheetPhaseFieldsOf(phase)),
-      interruptions: phase.interruptions.map(entry => pick(entry, INTERRUPTION_KEYS))
-    })),
+    phases: phases.map((phase, i) => ({ ...phase, timeLimit: timeLimits[i] })),
     milestones: work.milestones.map(milestone => ({ ...pick(milestone, MILESTONE_KEYS), kind: milestoneKindOf(milestone, track) }))
   };
 }
@@ -258,7 +261,7 @@ function outcomeWithTwins(work, workById) {
  * Every shown work, Track and sheet, of each of `rows` in the slim Workplans shape, sorted by `projectId`. Track works
  * the sheet override hides are left out; stored works are not changed. Staff only; reads no WORKS_READ_SOURCES.
  */
-async function workplansOf(rows) {
+async function workplansOf(rows, today) {
   if (!rows.length) return [];
   const catalog = await catalogOf();
   return (await storedAcross(rows)).sort(byProjectId).flatMap(({ row, projectId, stored, marker }) => {
@@ -267,7 +270,7 @@ async function workplansOf(rows) {
     const marked = markedWorksFrom(stored, marker, row, catalog).works;
     const workById = new Map(marked.map(work => [work.workId, work]));
     return marked.filter(work => work.shownAfterFlip)
-      .map(work => workplanOf(project, { ...work, ...outcomeWithTwins(work, workById) }, storedById.get(work.workId)));
+      .map(work => workplanOf(project, { ...work, ...outcomeWithTwins(work, workById) }, storedById.get(work.workId), today));
   });
 }
 

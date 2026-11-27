@@ -2090,6 +2090,52 @@ paths:
                                       type: integer
                                       nullable: true
                                       description: End minus start.
+                              timeLimit:
+                                type: object
+                                nullable: true
+                                description: >-
+                                  Time limit facts of a legislated phase, in whole calendar days. Null when the phase is not legislated or
+                                  has no `numberOfDays` or `startDate`.
+                                properties:
+                                  dayCount:
+                                    type: string
+                                    enum: [zero, one]
+                                    description: >-
+                                      `one` when the phase starts back to back with a legislated phase before it whose end is known: on its
+                                      end (sheet) or the day after it (Track). The start day then counts as day 1. Otherwise `zero`.
+                                  allowedDays:
+                                    type: integer
+                                    nullable: true
+                                    description: "`numberOfDays` plus `extensionDays`. Null when `extensionDays` is null."
+                                  deadline:
+                                    type: string
+                                    format: date
+                                    nullable: true
+                                    description: >-
+                                      The start plus `allowedDays` and `suspendedDays`, one day less on day count `one`. Null when either is null.
+                                  countedDays:
+                                    type: integer
+                                    nullable: true
+                                    description: >-
+                                      Days from the start to the end of a finished phase, or to today (Pacific) while it runs, less
+                                      `suspendedDays`, one more on day count `one`. 0 before the phase starts. Null when `suspendedDays` is
+                                      null, or the phase is not finished and not running (its work is closed or Track names another phase).
+                                  overDays:
+                                    type: integer
+                                    nullable: true
+                                    description: >-
+                                      `countedDays` past `allowedDays`, 0 when within it or covered by an extension. Null when either is null
+                                      or the end is not known.
+                                  endKnown:
+                                    type: boolean
+                                    description: >-
+                                      False on a 2002 sheet Evaluation with no Extra Time phase after it: its stored end is the next phase's
+                                      start, which holds proponent time.
+                                  coveredByExtension:
+                                    type: boolean
+                                    description: >-
+                                      True on a finished phase past `allowedDays` that has an extension (a sheet `extension` interruption, or
+                                      Track `extensionDays` above 0); its `overDays` is then 0.
                         milestones:
                           type: array
                           description: >-

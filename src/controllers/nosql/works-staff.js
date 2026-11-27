@@ -11,7 +11,7 @@ const { redactForAccess } = require('../../vis/redact');
 const { inEffect, workRangeOf } = require('../../domain/work-model');
 const { given, listOf } = require('../../domain/work-override');
 const { ID_BATCH, sheetWorksOf, sheetWorksSummaryOf, workplansOf } = require('../../domain/works-derive');
-const { ENTRY_SCHEMAS, SERVER_KEYS, currentInvestment } = require('../../domain/project-staff-fields');
+const { ENTRY_SCHEMAS, SERVER_KEYS, currentInvestment, pacificDay } = require('../../domain/project-staff-fields');
 const { serverError } = require('../../helpers/response');
 
 const STAFF_LEVEL = 2;
@@ -117,7 +117,7 @@ exports.getWorkplans = async (req, res) => {
     const ids = [...new Set((await works.liveProjectIds()).map(String))];
     const rows = [];
     for (let i = 0; i < ids.length; i += ID_BATCH) rows.push(...await projects.listByIds(access, ids.slice(i, i + ID_BATCH)));
-    return res.json({ works: await workplansOf(rows) });
+    return res.json({ works: await workplansOf(rows, pacificDay(new Date().toISOString())) });
   } catch (err) {
     return serverError(res, err, 'workplans read failed');
   }
