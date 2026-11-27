@@ -16,43 +16,28 @@ Sent files move to sent/ so a rerun only does outstanding work. --resend replays
 import json
 import os
 import queue
-import random
-import re
 import sys
 import threading
 import time
 from pathlib import Path
 
-import requests
+import extract_core
+from extract_core import API, error_body, log, post_chunks, post_markdown
 
-API = os.environ.get("DEMI_API", "https://demi-api-dev.azurewebsites.net/api").rstrip("/")
-KEY = os.environ["DEMI_ADMIN_KEY"]
+extract_core.set_key(os.environ["DEMI_ADMIN_KEY"])
 BASE = Path(os.environ.get("WORK_DIR", "/root/gpu-extractor"))
 OUT = BASE / "out"
 SENT = BASE / "sent"
 DEAD = BASE / "dead"
 LEDGER = BASE / "ingest.jsonl"
 
-# Above this, markdown is streamed as NDJSON instead of posted as one JSON body. The API caps
-# `express.json` at 10 MB and cannot raise it — a 63 MB body parses to a 63 MB JS string plus
-# parser buffer on a B1 Basic instance with 1.75 GB and ONE worker. 15 documents in this corpus
-# already exceed the cap (docling renders them as one huge table; the largest is 2,198 lines
-# averaging 28,817 chars) and the roadmap is ~300K documents, so this is a class, not an outlier.
-# Set well under the cap so the switch happens before the cliff, not at it.
-STREAM_MIN_BYTES = int(os.environ.get("STREAM_MIN_BYTES", str(4 * 1024 * 1024)))
-
 UPLOADERS = int(os.environ.get("UPLOADERS", "4"))
 LIMIT = int(os.environ.get("INGEST_LIMIT", "0")) or None
 RESEND = "--resend" in sys.argv
 
-HEADERS = {"X-Api-Key": KEY}
 counts = {"ok": 0, "failed": 0, "chunks": 0, "errors_recorded": 0}
 _lock = threading.Lock()
 _llock = threading.Lock()
-
-
-def log(msg):
-    print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
 def record(**row):
@@ -60,13 +45,6 @@ def record(**row):
     with _llock:
         with LEDGER.open("a") as f:
             f.write(json.dumps(row) + "\n")
-
-
-_local = threading.local()
-def http():
-    if not hasattr(_local, "s"):
-        _local.s = requests.Session()
-    return _local.s
 
 
 def park(path, dest):
@@ -81,55 +59,6 @@ def park(path, dest):
         sidecar.rename(dest / sidecar.name)
 
 
-def ndjson_body(markdown, extraction):
-    """NDJSON for the streaming ingest route: metadata line, then JSON-encoded markdown blocks.
-
-    Split with the SAME `\n{2,}` regex `src/chunker.js` uses, so a document chunks identically
-    whichever route it came through — the API asserts that equivalence in its own tests and this
-    is the other half of it. Blocks are JSON-encoded because a markdown paragraph contains
-    newlines and an NDJSON line cannot.
-
-    RETURNS BYTES, NOT A GENERATOR, and that is load-bearing. A generator makes `requests` use
-    `Transfer-Encoding: chunked`, and **Azure App Service does not forward a chunked request body
-    to the Node worker** — the app sees an EMPTY stream and answers 400, which reads exactly like
-    a malformed payload. Measured 2026-08-03: identical bytes, chunked -> 400 "empty stream",
-    Content-Length -> 200. Materialising costs this box ~60 MB of RAM out of 64 GB.
-
-    This does NOT undo the streaming. Content-Length is metadata; Node still receives the body
-    incrementally off the socket and the API still chunks and flushes as it arrives, so its peak
-    memory is still one batch rather than the whole document. The 1.75 GB side is what mattered.
-    """
-    parts = [json.dumps({"extraction": extraction} if extraction else {})]
-    parts += [json.dumps(b) for b in re.split(r"\n{2,}", markdown) if b.strip()]
-    return ("\n".join(parts) + "\n").encode()
-
-
-def post_chunks(doc_id, body, stream_markdown=None):
-    """POST with retry on 5xx and transport errors — the API cold-starts and restarts on deploy."""
-    last = None
-    for attempt in range(6):
-        try:
-            if stream_markdown is not None:
-                # Longer timeout than the JSON path: these are the biggest documents in the corpus
-                # and the server is chunking and writing to Cosmos as the body arrives.
-                r = http().post(
-                    f"{API}/documents/{doc_id}/chunks",
-                    headers={**HEADERS, "Content-Type": "application/x-ndjson"},
-                    data=ndjson_body(stream_markdown, body.get("extraction")), timeout=900)
-            else:
-                r = http().post(f"{API}/documents/{doc_id}/chunks",
-                                headers=HEADERS, json=body, timeout=300)
-            if r.status_code != 429 and r.status_code < 500:
-                return r
-            last = f"HTTP {r.status_code} {r.text[:120]}"
-        except requests.RequestException as e:
-            last = str(e)
-        delay = min(2 ** attempt, 60) + random.uniform(0, 2)
-        log(f"  retry {doc_id} in {delay:.0f}s ({last})")
-        time.sleep(delay)
-    raise RuntimeError(f"unreachable after retries: {last}")
-
-
 work = queue.Queue()
 
 
@@ -142,26 +71,24 @@ def uploader():
         doc_id = path.stem
         is_error = path.suffix == ".err"
         text = path.read_text()
-        body = {"error": text[:500]} if is_error else {"markdown": text}
+        extraction = None
         # Provenance sidecar written by worker.py. Optional by design: files converted before
         # worker.py emitted it still post, they just carry no `extraction` — which is honest, the
         # path really is unknown for them. The API sanitises this to a fixed whitelist.
         prov = path.with_suffix(".json")
         if prov.exists():
             try:
-                body["extraction"] = json.loads(prov.read_text())
+                extraction = json.loads(prov.read_text())
             except (OSError, ValueError) as e:
                 log(f"  {doc_id}: unreadable provenance sidecar ({e}) — posting without it")
-        # Streaming is chosen by SIZE, not by trying JSON first and falling back: a 413 costs a
-        # full upload of a body the API was never going to accept, and at 300K documents this
-        # class is common enough that paying that twice is not a rare cost.
-        stream_markdown = None
-        if not is_error and len(text.encode()) >= STREAM_MIN_BYTES:
-            stream_markdown = text
-            body.pop("markdown", None)
-            log(f"  {doc_id}: {len(text) // (1024 * 1024)} MB — streaming as NDJSON")
         try:
-            r = post_chunks(doc_id, body, stream_markdown)
+            if is_error:
+                body = error_body(text)
+                if extraction:
+                    body["extraction"] = extraction
+                r = post_chunks(doc_id, body)
+            else:
+                r = post_markdown(doc_id, text, extraction)
             if r.status_code >= 400:
                 # Terminal for this document — 404 (deleted since extraction), 413 (markdown over
                 # the body limit), 400 (malformed). Retrying cannot change any of them, so park the
