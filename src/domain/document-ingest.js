@@ -42,6 +42,8 @@ const CAP_REJECTED = 'chunk ingest rejected: chunk cap exceeded';
 const REPEATED_REJECTED = 'chunk ingest rejected: repeated failures';
 
 const INDEX_DELETE_INCOMPLETE = 'chunk ingest incomplete: search index delete failed, retry';
+// Fixed text: the stored error is served back, and the bad line is host content.
+const STREAM_REFUSED_AFTER_WRITE = 'chunk ingest incomplete: stream refused after a batch was written';
 
 // A successful ingest also clears a failed purge's stamp: the chunks it described were replaced.
 const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null, chunkPurgeFailedAt: null };
@@ -128,6 +130,17 @@ async function recordWriteIncomplete(req, document, message) {
 }
 
 /**
+ * A 400 after the ingest was taken up. Once a stream has written a batch, the document holds new
+ * chunks over the old extraction, so it is recorded and counted like a write shortfall.
+ */
+async function recordBadRequest(req, document, message, flushedBatches) {
+  if (!(flushedBatches > 0)) return auditIngestFailure(req, document, 'bad-request', 400);
+  logIngestFailure(document, `${STREAM_REFUSED_AFTER_WRITE} (${message}; ${flushedBatches} batches written)`);
+  await tryRecordIngestFailure(document, STREAM_REFUSED_AFTER_WRITE);
+  auditIngestFailure(req, document, 'bad-request-partial', 400);
+}
+
+/**
  * A 503 for chunks the search index kept, when Cosmos wrote everything else. Not counted by the
  * guard: an index outage says nothing about the document, and must not lock it out.
  */
@@ -201,6 +214,7 @@ module.exports = {
   sanitizeExtraction,
   CAP_REJECTED,
   REPEATED_REJECTED,
+  STREAM_REFUSED_AFTER_WRITE,
   capExceededMessage,
   recentIngestFailures,
   tryRecordIngestFailure,
@@ -208,6 +222,7 @@ module.exports = {
   auditIngestFailure,
   recordOverCap,
   recordWriteIncomplete,
+  recordBadRequest,
   recordIndexDeleteIncomplete,
   recordIngested,
   removeOverCapChunks,

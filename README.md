@@ -1022,7 +1022,9 @@ Two guards stop a bad document from being retried forever:
   AI Search, and the document is marked not extracted.
 - **Repeated failures (409).** After `CHUNK_INGEST_MAX_FAILURES` failed ingests (default 3) inside
   `CHUNK_INGEST_FAILURE_WINDOW_MS` (default 24 h), further posts are refused without reading the
-  body. Failures include transient ones such as throttling, not only size.
+  body. Failures include transient ones such as throttling, not only size. A stream refused for a
+  bad line after a batch was sent and accepted (even one whose chunks were all unchanged) counts
+  too; its written batches stay until a good re-post replaces them.
 
 To clear the counter after a fix is deployed, re-post the document as a sysadmin with
 `?force=true`; a successful ingest resets it. Or patch `chunkIngestFailures: 0` and
