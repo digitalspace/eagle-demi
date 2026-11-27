@@ -79,8 +79,8 @@ async function pointRead(key, id, projectId) {
 }
 
 /**
- * Plants each `{ projectId, label, publish }` through intake: upload, scan, then a level 4 raise for
- * `publish`, since intake refuses to publish. Each id joins `created` as soon as it exists.
+ * Plants each `{ projectId, label, publish }` through intake, then raises `publish` rows to level 4,
+ * which intake refuses. Each row joins `created` at once; `clean` is set when its scan clears.
  */
 async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN_POLL_MS }) {
   const planted = [];
@@ -91,7 +91,8 @@ async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN
     if (r.status === 503) throw new Error('intake is off here; the probe plants through intake only');
     if (r.status !== 201) throw new Error(`plant ${row.label}: HTTP ${r.status} ${r.text.slice(0, 200)}`);
     const id = String(r.json.documentId);
-    created.push({ id, projectId: row.projectId, label: row.label });
+    const entry = { id, projectId: row.projectId, label: row.label, clean: false };
+    created.push(entry);
     // A SAS link: no API key, and Azure refuses a PUT without the blob type.
     const put = await fetch(r.json.uploadUrl, {
       method: 'PUT',
@@ -99,7 +100,7 @@ async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN
       body: `${term} ${row.label}\n`
     });
     if (put.status !== 201) throw new Error(`upload ${row.label}: HTTP ${put.status}`);
-    planted.push({ ...row, id });
+    planted.push({ ...row, id, entry });
   }
 
   const deadline = Date.now() + waitMs;
@@ -112,7 +113,8 @@ async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN
       if (r.json.scanStatus === 'rejected') {
         throw new Error(`scan rejected ${row.label}: ${r.json.scanRejectReason || 'no reason'}`);
       }
-      if (r.json.scanStatus !== 'clean') still.push(row);
+      if (r.json.scanStatus === 'clean') row.entry.clean = true;
+      else still.push(row);
     }
     waiting = still;
     if (waiting.length === 0) break;
@@ -132,6 +134,20 @@ async function plant(rows, { term, created, waitMs = SCAN_WAIT_MS, pollMs = SCAN
   return planted.map(p => p.id);
 }
 
+async function deletePlanted(created) {
+  for (const doc of created) {
+    // DELETE cannot reach an unscanned row; it has an empty read[] and the intake sweep rejects it.
+    if (!doc.clean) {
+      console.log(`  left ${doc.label} ${doc.id}: never cleared its scan, so no caller can read it`);
+      continue;
+    }
+    const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
+      { key: ADMIN, method: 'DELETE' });
+    // Asserted: two planted rows are public, and test search serves eagle-public.
+    cell(`deleted ${doc.label}`, 200, r.status);
+  }
+}
+
 async function main() {
   // A nonsense term, so a fallback that ignores keywords and returns the corpus head is visible as
   // a non-zero count rather than reading as a working search.
@@ -144,12 +160,7 @@ async function main() {
 
   const cleanup = async () => {
     console.log('\ncleanup');
-    for (const doc of created) {
-      const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
-        { key: ADMIN, method: 'DELETE' });
-      // Asserted: two planted rows are public, and test search serves eagle-public.
-      cell(`deleted ${doc.label}`, 200, r.status);
-    }
+    await deletePlanted(created);
     for (const k of keys) {
       const r = await api(`/api/admin/api-keys/${k.id}`, { key: ADMIN, method: 'DELETE' });
       console.log(`  key ${k.id}: HTTP ${r.status}`);

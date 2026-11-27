@@ -88,8 +88,8 @@ test('plant', async (t) => {
     delete require.cache[SCRIPT];
   });
 
-  /** Intake as the live API answers it: each upload reads `pending` `pendingPolls` times, then `clean`. */
-  function stubIntake(ctx, pendingPolls) {
+  /** Intake as the live API answers it: each upload reads `pending` `pendingPolls` times, then `settled`. */
+  function stubIntake(ctx, pendingPolls, settled = 'clean') {
     const calls = [];
     const polls = new Map();
     let next = 0;
@@ -108,8 +108,8 @@ test('plant', async (t) => {
       if (status) {
         const seen = (polls.get(status[1]) || 0) + 1;
         polls.set(status[1], seen);
-        calls[calls.length - 1].scanStatus = seen > pendingPolls ? 'clean' : 'pending';
-        return reply(200, { scanStatus: calls[calls.length - 1].scanStatus });
+        calls[calls.length - 1].scanStatus = seen > pendingPolls ? settled : 'pending';
+        return reply(200, { scanStatus: calls[calls.length - 1].scanStatus, scanRejectReason: 'infected' });
       }
       return reply(200, {});
     });
@@ -128,7 +128,7 @@ test('plant', async (t) => {
     const ids = await plant(rows, { term: 'zz', created, waitMs: 1000, pollMs: 1 });
 
     assert.deepStrictEqual(ids, ['doc-1', 'doc-2']);
-    assert.deepStrictEqual(created.map(c => c.id), ['doc-1', 'doc-2']);
+    assert.deepStrictEqual(created.map(c => [c.id, c.clean]), [['doc-1', true], ['doc-2', true]]);
     const creates = calls.filter(c => c.path === '/api/intake/uploads');
     assert.deepStrictEqual(creates.map(c => c.body.projectId), ['proj-a', 'proj-a']);
     const uploads = calls.filter(c => c.host === 'intake.example');
@@ -147,6 +147,14 @@ test('plant', async (t) => {
     const created = [];
 
     await assert.rejects(plant(rows, { term: 'zz', created, waitMs: 5, pollMs: 1 }), /not clean within/);
-    assert.strictEqual(created.length, 2, 'both rows stay listed for cleanup');
+    // Cleanup skips them: DELETE cannot reach a row that never cleared its scan.
+    assert.deepStrictEqual(created.map(c => c.clean), [false, false]);
+  });
+
+  await t.test('stops at once with the reason when a scan is rejected', async (ctx) => {
+    stubIntake(ctx, 0, 'rejected');
+
+    await assert.rejects(plant(rows, { term: 'zz', created: [], waitMs: 60000, pollMs: 1 }),
+      /scan rejected hidden: infected/);
   });
 });
