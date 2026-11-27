@@ -6,14 +6,15 @@
  */
 
 const crypto = require('crypto');
-const path = require('path');
 const config = require('../../config');
 const documents = require('../../repositories/documents');
-const projects = require('../../repositories/projects');
 const lists = require('../../repositories/lists');
 const blobs = require('../../intake/blobs');
 const store = require('../../intake/store');
-const { UPLOAD_LINK_SECONDS } = require('../../intake/decision');
+const {
+  UPLOAD_LINK_SECONDS, MAX_SCAN_BYTES, UPDATE_IMAGE_MAX_BYTES, extensionOf
+} = require('../../intake/decision');
+const { parentOf } = require('../../helpers/parent-admit');
 const { resolveAccess, canRead, capRead, readForLevel, levelOfRead } = require('../../helpers/access-sql');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { serverError } = require('../../helpers/response');
@@ -23,10 +24,6 @@ const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
 
 const MAX_FILE_NAME = 255;
-// Defender for Storage skips larger blobs, so they could never be scanned clean.
-const MAX_INTAKE_BYTES = 2 * 1024 ** 3;
-// eagle-api's cap on an Update image (api/helpers/updateImages.js).
-const MAX_UPDATE_IMAGE_BYTES = 10 * 1024 * 1024;
 const BODY_KEYS = new Set(['projectId', 'fileName', 'fileSize', 'requestedRead', 'publishOnRelease', 'fields']);
 const DOCUMENT_SOURCES = Object.freeze(['PROJECT', 'PROJECT-NOTIFICATION', 'COMMENT', documents.UPDATE_SOURCE]);
 
@@ -96,11 +93,11 @@ function fieldsRefusal(fields, access) {
 
 function fileSizeRefusal({ fileSize, fields }) {
   if (fileSize === undefined) return null;
-  if (!Number.isInteger(fileSize) || fileSize < 0 || fileSize > MAX_INTAKE_BYTES) {
-    return `fileSize must be a whole number of bytes, at most ${MAX_INTAKE_BYTES}.`;
+  if (!Number.isInteger(fileSize) || fileSize < 0 || fileSize > MAX_SCAN_BYTES) {
+    return `fileSize must be a whole number of bytes, at most ${MAX_SCAN_BYTES}.`;
   }
-  if (fields && fields.documentSource === documents.UPDATE_SOURCE && fileSize > MAX_UPDATE_IMAGE_BYTES) {
-    return `An Update image is at most ${MAX_UPDATE_IMAGE_BYTES} bytes.`;
+  if (fields && fields.documentSource === documents.UPDATE_SOURCE && fileSize > UPDATE_IMAGE_MAX_BYTES) {
+    return `An Update image is at most ${UPDATE_IMAGE_MAX_BYTES} bytes.`;
   }
   return null;
 }
@@ -126,9 +123,9 @@ function readableOnceReleased(projectId, requestedRead, access) {
   return canRead({ projectId, read: requestedRead }, access);
 }
 
-/** `.PDF` -> `pdf`; empty when the name has no plain extension. */
-function extensionOf(fileName) {
-  const ext = path.extname(fileName).slice(1).toLowerCase();
+/** `.PDF` -> `pdf`; empty unless plain, since it ends the object key. */
+function keyExtension(fileName) {
+  const ext = extensionOf(fileName);
   return /^[a-z0-9]{1,8}$/.test(ext) ? ext : '';
 }
 
@@ -159,12 +156,12 @@ exports.createUpload = async (req, res) => {
     if (refused) return res.status(400).json({ error: refused });
 
     const projectId = body.projectId.trim();
-    const parentProject = await projects.getById(access, projectId);
-    if (!parentProject) {
-      return res.status(404).json({ error: `Parent Project with id ${projectId} not found.` });
+    const parent = await parentOf(access, projectId);
+    if (!parent) {
+      return res.status(404).json({ error: `Parent Project or notification with id ${projectId} not found.` });
     }
-    // Applied on release. Admitted at level 1 when absent, like every other create; never above the project.
-    const requestedRead = capRead(body.requestedRead || readForLevel(1), parentProject.read);
+    // Applied on release. Admitted at level 1 when absent, like every other create; never above the parent.
+    const requestedRead = capRead(body.requestedRead || readForLevel(1), parent.read);
     const publishOnRelease = body.publishOnRelease === true;
     // Release publishes without PUT /documents/:id/level, so the caller must pass that route's check now.
     if (publishOnRelease && !readableOnceReleased(projectId, requestedRead, access)) {
@@ -184,7 +181,7 @@ exports.createUpload = async (req, res) => {
 
     await documents.upsert({
       documentFileName: fileName,
-      region: parentProject.region || '',
+      region: parent.region,
       edrmsRecordNumber: '',
       orcsClassification: '',
       ...fields,
@@ -194,7 +191,7 @@ exports.createUpload = async (req, res) => {
       sourceSystem: 'demi',
       displayName,
       displayNameSort: naturalSortKey(displayName),
-      fileExt: extensionOf(fileName),
+      fileExt: keyExtension(fileName),
       fileSize: body.fileSize === undefined ? null : body.fileSize,
       read: [],
       isPublished: false,
@@ -229,7 +226,7 @@ exports.getUpload = async (req, res) => {
     const id = req.params.id;
     const notFound = () => res.status(404).json({ error: `Upload with id ${id} not found.` });
 
-    // Read past the ACL: a pending or rejected row has an empty read[], so it is gated on its project.
+    // Read past the ACL: a pending or rejected row has an empty read[], so it is gated on its parent.
     const row = await store.findById(id);
     // No scanStatus = an ordinary document: this route must not become a second document read.
     if (!row || typeof row.scanStatus !== 'string') return notFound();
@@ -237,7 +234,7 @@ exports.getUpload = async (req, res) => {
     // A released row has its own read[]: the same check as GET /documents/:id, sealed rows included.
     const visible = Array.isArray(row.read) && row.read.length > 0
       ? canRead(row, access)
-      : Boolean(await projects.getById(access, row.projectId));
+      : Boolean(await parentOf(access, row.projectId));
     if (!visible) return notFound();
 
     return res.status(200).json({
@@ -275,7 +272,7 @@ exports.listUploads = async (req, res) => {
 
     const access = resolveAccess(req);
     const projectId = query.projectId.trim();
-    if (!(await projects.getById(access, projectId))) return res.status(200).json([]);
+    if (!(await parentOf(access, projectId))) return res.status(200).json([]);
 
     // Pending rows time out within hours, so one window covers both statuses.
     const since = new Date(Date.now() - REJECTED_SHOWN_DAYS * 24 * 3600 * 1000).toISOString();
@@ -286,6 +283,3 @@ exports.listUploads = async (req, res) => {
     return serverError(res, err, 'intake upload list failed');
   }
 };
-
-exports.INTAKE_FIELDS = INTAKE_FIELDS;
-exports.MAX_INTAKE_BYTES = MAX_INTAKE_BYTES;

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * A clean upload goes to the object store with its requested `read`, capped at the project's;
+ * A clean upload goes to the object store with its requested `read`, capped at its parent's;
  * any other scan result quarantines the file and rejects the row.
  */
 
@@ -18,30 +18,32 @@ const { decide, extensionOf, isUpdateImage, IMAGE_HEAD_BYTES } = require('./deci
 const { moveToQuarantine } = require('./blobs');
 const { indexDocumentsNow } = require('../search/document-query');
 const { capRead, levelOfRead, readForLevel, systemAccess } = require('../helpers/access-sql');
+const { parentOf } = require('../helpers/parent-admit');
 
 /**
- * Read fields to settle, capped at the project as it is now (it may have narrowed while pending)
- * and below level 4: only `publishOnRelease` on a public project publishes.
+ * Read fields to settle, capped at the parent (project or notification) as it is now, and below
+ * level 4: only `publishOnRelease` under a public parent publishes.
  */
-async function releaseAccess(row, projects) {
+async function releaseAccess(row) {
   const wantsPublish = row.publishOnRelease === true;
   if (!Array.isArray(row.requestedRead) && !wantsPublish) return { fields: {}, publish: false };
-  const project = await projects.getById(systemAccess(), row.projectId);
-  if (!project) {
-    logger.warn('[intake] project not found, released with an empty read list', {
+  const parent = await parentOf(systemAccess(), row.projectId);
+  if (!parent) {
+    logger.warn('[intake] parent not found, released with an empty read list', {
       documentId: row.id, projectId: row.projectId
     });
   }
   const fields = {};
   if (Array.isArray(row.requestedRead)) {
-    // The system read skips a sealed project too; a request already sealed stays sealed.
+    // The system read skips a sealed parent too; a request already sealed stays sealed.
     const sealed = levelOfRead(row.requestedRead) === 0 ? row.requestedRead : [];
-    const capped = project ? capRead(row.requestedRead, project.read) : sealed;
+    const capped = parent ? capRead(row.requestedRead, parent.read) : sealed;
     Object.assign(fields, { read: levelOfRead(capped) === 4 ? readForLevel(3) : capped, isPublished: false });
   }
-  const publicProject = Boolean(project) && levelOfRead(project.read) === 4;
-  if (wantsPublish && !publicProject) fields.publishRefused = 'project-not-public';
-  return { fields, publish: wantsPublish && publicProject };
+  const publicParent = Boolean(parent) && levelOfRead(parent.read) === 4;
+  // 'project-not-public' is the API value for a notification parent too.
+  if (wantsPublish && !publicParent) fields.publishRefused = 'project-not-public';
+  return { fields, publish: wantsPublish && publicParent };
 }
 
 /** The row's own key, else `<projectId>/<32 hex>.<ext>`, the shape the upload controller writes. */
@@ -160,7 +162,7 @@ async function afterRelease(saved) {
 
 /** `listed` is the pending listing's few columns; what the uploader asked for is on the full row. */
 async function release(listed, scan, deps) {
-  const { store, blobs, nrs, projects } = deps;
+  const { store, blobs, nrs } = deps;
   const row = await store.findById(listed.id);
   if (!row) {
     logger.warn('[intake] row gone before release', { documentId: listed.id });
@@ -193,7 +195,7 @@ async function release(listed, scan, deps) {
     });
     return { outcome: 'stale', sizeBytes: stat.size };
   }
-  const access = await releaseAccess(row, projects);
+  const access = await releaseAccess(row);
   const settled = await store.settle(listed, {
     scanStatus: 'clean', scanResult: scan.result, scannedAt: scan.scannedAt, scanSizeBytes: stat.size,
     s3Key: key, ...copied, ...(stat.contentType ? { mimeType: stat.contentType } : {}), ...access.fields

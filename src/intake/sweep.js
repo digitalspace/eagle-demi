@@ -38,8 +38,7 @@ async function logMonthToDate(store, now) {
 
 function defaultDeps() {
   return {
-    store: require('./store'), blobs: require('./blobs'), nrs: require('../storage'),
-    projects: require('../repositories/projects')
+    store: require('./store'), blobs: require('./blobs'), nrs: require('../storage')
   };
 }
 
