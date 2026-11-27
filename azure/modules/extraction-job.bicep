@@ -49,8 +49,8 @@ param logsWorkspaceId string
 @description('Resource id of demi-alerts-<env>')
 param actionGroupId string
 
-@description('Application Insights connection string. Empty leaves the job logging to stdout only.')
-param appInsightsConnectionString string = ''
+@description('Application Insights connection string. Required: the poison alert reads the job\'s traces from it.')
+param appInsightsConnectionString string
 
 var environmentResourceName = 'demi-extract-env-${environmentName}'
 var identityName = 'demi-extract-identity-${environmentName}'
@@ -218,6 +218,8 @@ resource extractJob 'Microsoft.App/jobs@2025-07-01' = [for j in jobs: {
                 accountName: queueAccountName
                 queueName: j.queue
                 queueLength: '1'
+                // The default counts in-flight messages too, which would start empty executions for 2 hours.
+                queueLengthStrategy: 'visibleonly'
               }
               identity: jobIdentity.id
             }
