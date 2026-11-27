@@ -197,13 +197,19 @@ function decisionEventDateOf(doc) {
   return last && !last.actualDate ? last.anticipatedDate ?? null : null;
 }
 
+/** The happened extension and interregnum milestones as `timeLimitsOf` reads them; only an extension can cover a phase. */
+const trackExtensionOrdersOf = (milestones) => milestones
+  .filter(m => EXTENSION_EVENT_TYPES.includes(m.eventType) && m.actualDate)
+  .map(m => ({ date: m.actualDate, days: m.numberOfDays ?? 0, interregnum: m.eventType === INTERREGNUM_EVENT_TYPE }));
+
 function trackPhaseFieldsOf(phase, doc, storedByTrackId) {
   const milestones = listOf(storedByTrackId.get(phase.trackPhaseId)?.milestones);
   const currentId = doc?.currentWorkPhaseId ?? null;
   return {
     isCurrent: currentId === null ? null : phase.trackPhaseId === currentId,
     extensionDays: trackDaysOf(milestones, EXTENSION_EVENT_TYPES),
-    suspendedDays: trackDaysOf(milestones, RESUMPTION_EVENT_TYPES)
+    suspendedDays: trackDaysOf(milestones, RESUMPTION_EVENT_TYPES),
+    extensionOrders: trackExtensionOrdersOf(milestones)
   };
 }
 
@@ -242,7 +248,7 @@ function workplanOf(project, work, doc, today) {
     ...pick(work, WORKPLAN_KEYS),
     decisionEventDate: track ? decisionEventDateOf(doc) : null,
     ...sheetDocFieldsOf(track ? null : doc),
-    phases: phases.map((phase, i) => ({ ...phase, timeLimit: timeLimits[i] })),
+    phases: phases.map(({ extensionOrders: _orders, ...phase }, i) => ({ ...phase, timeLimit: timeLimits[i] })),
     milestones: work.milestones.map(milestone => ({ ...pick(milestone, MILESTONE_KEYS), kind: milestoneKindOf(milestone, track) }))
   };
 }

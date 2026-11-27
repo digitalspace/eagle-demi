@@ -315,3 +315,16 @@ test('workplansOf marks a Track type 8 milestone a submission and leaves types 3
 
   assert.deepStrictEqual(work.milestones.map(m => [m.eventType, m.kind]), [[8, 'submission'], [33, 'other'], [37, 'other']]);
 });
+
+test('workplansOf judges a Track phase\'s extension and interregnum against the limit on their actual dates', async (t) => {
+  // The extension falls before the limit and the interregnum after it, so neither covers; the last has not happened.
+  const events = [[10, '2024-05-01T07:00:00.000Z', 5], [11, '2024-05-25T07:00:00.000Z', 5], [10, null, 40]]
+    .map(([eventType, actualDate, numberOfDays]) => ({ eventType, name: `Event ${eventType}`, actualDate, numberOfDays }));
+  const phase = { trackPhaseId: 1, startDate: '2024-04-01', endDate: '2024-06-01', numberOfDays: 45, legislated: 1,
+    isCompleted: true, milestones: events };
+  storeAcross(t, [{ ...assessment, phases: [phase] }], []);
+
+  const [{ phases: [{ timeLimit }] }] = await workplansOf([{ id: 'p1' }], '2026-11-27');
+
+  assert.deepStrictEqual([timeLimit.allowedDays, timeLimit.overDays, timeLimit.coveredByExtension], [55, 6, false]);
+});
