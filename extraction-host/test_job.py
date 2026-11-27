@@ -155,8 +155,13 @@ def test_unreadable_message_goes_to_poison_at_once(api):
     assert poison.sent == ["not json"]
 
 
+class PyPdfiumDocumentBackend:
+    """Stands in for docling's backend class, so the OCR provenance needs no docling install."""
+
+
 @pytest.mark.parametrize("route", ["text", "ocr"])
 def test_provenance_keys_match_the_host(api, monkeypatch, route):
+    monkeypatch.setattr(core, "pdf_backend", lambda: PyPdfiumDocumentBackend)
     if route == "ocr":
         api.row["fileExt"] = "png"
         monkeypatch.setattr(core, "convert_ocr", lambda *a, **k: ("Scanned text.", False, False))
@@ -166,3 +171,42 @@ def test_provenance_keys_match_the_host(api, monkeypatch, route):
     assert set(sent) == set(host)
     assert set(sent["options"]) == set(host["options"])
     assert sent["path"] == route
+
+
+def test_refused_post_deletes_the_message(api, monkeypatch):
+    monkeypatch.setattr(core, "post_chunks", lambda *a, **k: Resp(413, {}))
+    q = Queue()
+    assert run(q) == "refused"
+    assert q.deleted == [q.msg]
+
+
+def test_low_yield_text_is_rerouted_to_ocr(api, monkeypatch):
+    monkeypatch.setattr(core, "pdf_backend", lambda: PyPdfiumDocumentBackend)
+    monkeypatch.setattr(core, "LOW_YIELD_MIN_BYTES", 0)
+    monkeypatch.setattr(core, "convert_ocr", lambda *a, **k: ("Scanned text.", False, False))
+    assert run(Queue(), Pool(("text", "x", {}))) == "ok"
+    assert api.posts[0]["extraction"]["path"] == "ocr"
+
+
+def test_pdfium_crash_converts_on_a_new_pool(api, monkeypatch):
+    class Crashed:
+        def submit(self, fn, *args):
+            raise BrokenProcessPool("A child process terminated abruptly")
+
+    class Fresh:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    fresh, used = Fresh(), []
+
+    def convert_ocr(conv, path, ext, pool, doc_id):
+        used.append(pool)
+        return "OCR text.", False, False
+    monkeypatch.setattr(core, "pdf_backend", lambda: PyPdfiumDocumentBackend)
+    monkeypatch.setattr(core, "new_pool", lambda n: fresh)
+    monkeypatch.setattr(core, "convert_ocr", convert_ocr)
+    assert run(Queue(), Crashed()) == "ok"
+    assert used == [fresh], "OCR must not run on the pool the crash broke"

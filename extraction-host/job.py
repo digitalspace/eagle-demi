@@ -28,8 +28,11 @@ def convert(path, ext, pool, converter, doc_id):
         try:
             which, md, info = pool.submit(core.pdfium_job, str(path), ext).result()
         except Exception as e:                                    # noqa: BLE001
-            log.warning("pdfium worker died on %s: %s, routing to OCR", doc_id, e)
-            which, info = "ocr", {}
+            # The crash broke this pool, so OCR runs on a new one, as the host's ensure_pool() does.
+            log.warning("pdfium worker died on %s: %s, routing to OCR on a new pool", doc_id, e)
+            with core.new_pool(1) as fresh:
+                md, forced, tiled = core.convert_ocr(converter(), path, ext, fresh, doc_id)
+            return md, "ocr", forced, tiled
         if info.get("note"):
             log.info("%s: %s, routing to OCR", doc_id, info["note"])
         if which == "text" and core.is_low_yield_text(md, path.stat().st_size):
