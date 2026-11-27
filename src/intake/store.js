@@ -8,6 +8,7 @@ const { systemAccess } = require('../helpers/access-sql');
 
 // Only a row still pending may be settled, so two writers racing on one row write once.
 const STILL_PENDING = "FROM c WHERE c.scanStatus = 'pending'";
+const RELEASED = "FROM c WHERE c.scanStatus = 'clean'";
 // Fault stop for the upload list, far past a project's uploads in the listed window.
 const LIST_FOR_PROJECT_MAX = 500;
 
@@ -16,17 +17,27 @@ function findById(id) {
   return documents.getById(systemAccess(), id, undefined, { includeUnscanned: true });
 }
 
-/** Set fields on a row still pending. False when another writer settled it first. */
-async function settle(row, fields) {
-  const ops = Object.entries({ ...fields, updatedAt: new Date().toISOString() })
-    .map(([key, value]) => ({ op: 'set', path: `/${key}`, value }));
+/** Patch `ops` onto the row when `condition` holds; false on a 412 (the condition failed). */
+async function patchWhen(row, ops, condition) {
   try {
-    await cosmos.patch(documents.CONTAINER, String(row.id), String(row.projectId), ops, STILL_PENDING);
+    await cosmos.patch(documents.CONTAINER, String(row.id), String(row.projectId), ops, condition);
     return true;
   } catch (err) {
     if ((err.code || err.statusCode) === 412) return false;
     throw err;
   }
+}
+
+/** Set fields on a row still pending. False when another writer settled it first. */
+function settle(row, fields) {
+  const ops = Object.entries({ ...fields, updatedAt: new Date().toISOString() })
+    .map(([key, value]) => ({ op: 'set', path: `/${key}`, value }));
+  return patchWhen(row, ops, STILL_PENDING);
+}
+
+/** Record why a publish on release was refused, on a released row only. False when not released. */
+function markPublishRefused(row, reason) {
+  return patchWhen(row, [{ op: 'set', path: '/publishRefused', value: String(reason) }], RELEASED);
 }
 
 /** Rows still pending that were created before `cutoff` (ISO string). */
@@ -91,4 +102,4 @@ async function scannedBytesBetween(from, to) {
   return Number(total) || 0;
 }
 
-module.exports = { findById, settle, listPending, listForProject, countPendingAfter, listStalePending, scannedBytesBetween };
+module.exports = { findById, settle, markPublishRefused, listPending, listForProject, countPendingAfter, listStalePending, scannedBytesBetween };
