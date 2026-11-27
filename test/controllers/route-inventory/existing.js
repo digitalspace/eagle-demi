@@ -15,8 +15,6 @@ module.exports = {
   'PUT /projects/:id/restore': { action: 'project.restore' },
   'PATCH /projects/:id/visibility': { action: 'project.reclassify' },
   'POST /documents/pdf-title/sweep': { action: 'pdfTitle.sweep' },
-  'POST /documents': { action: 'document.create' },
-  'POST /documents/extract': { action: 'document.create' },
   'POST /intake/uploads': { action: 'document.create' },
   'PUT /documents/:id': { action: 'document.update' },
   'PUT /documents/:id/level': { action: ['record.widen', 'record.narrow', 'record.takedown'] },

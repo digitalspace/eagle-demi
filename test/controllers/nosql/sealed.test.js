@@ -170,9 +170,9 @@ test('the sealed compartment routes', async (t) => {
     // "Nothing else": every other write route is behind authMiddleware, whose AUTHENTICATED_ROLES
     // excludes `compliance` — so the compartment's holder is not a staff member with extra reach.
     const res = mockRes();
-    const admitted = runGuards(routeFor('post', '/documents').guards, bearerReq(), res);
+    const admitted = runGuards(routeFor('post', '/intake/uploads').guards, bearerReq(), res);
 
-    assert.strictEqual(admitted, false, 'a compliance token reached POST /documents');
+    assert.strictEqual(admitted, false, 'a compliance token reached POST /intake/uploads');
     assert.strictEqual(res.statusCode, 403);
   });
 

@@ -6,9 +6,6 @@
  */
 
 const crypto = require('crypto');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const querystring = require('querystring');
 const { PassThrough, Readable } = require('stream');
 
@@ -23,8 +20,6 @@ const routes = require('./routes');
 
 /** Matches `express.json({ limit: '10mb' })`, the ceiling the ingest routes were sized against. */
 const BODY_LIMIT = 10 * 1024 * 1024;
-/** The Functions host's own request cap; an upload past it never reaches the worker anyway. */
-const MULTIPART_LIMIT = 100 * 1024 * 1024;
 
 /**
  * Null-body statuses. undici rejects any body for these, even '', and the host then serves an empty
@@ -279,26 +274,8 @@ function mediaType(headers) {
   return String(headers['content-type'] || '').split(';')[0].trim().toLowerCase();
 }
 
-/** The last file part lands in os.tmpdir() as `req.file`; dispatch() deletes it when the request ends. */
-async function readMultipart(req, request) {
-  const counted = countedBody(request, req.headers, MULTIPART_LIMIT);
-  // undici answers a malformed body with TypeError; anything else (413, abort, allocation) keeps its own status.
-  const form = await new Response(counted, { headers: { 'content-type': req.headers['content-type'] } }).formData()
-    .catch((err) => { throw err instanceof TypeError ? httpError(400, 'invalid multipart body') : err; });
-  req.body = {};
-  let upload = null;
-  for (const [name, value] of form.entries()) {
-    if (typeof value === 'string') req.body[name] = value;
-    else upload = value;
-  }
-  if (!upload) return;
-  // Set before the write, so a write that fails halfway still leaves dispatch() a path to delete.
-  req.file = { originalname: upload.name, mimetype: upload.type, size: upload.size, path: path.join(os.tmpdir(), crypto.randomUUID()) };
-  await fs.promises.writeFile(req.file.path, upload.stream(), { mode: 0o600, flag: 'wx' });
-}
-
 /** Runs after the guards: none of them reads the body, so a refused caller never makes us buffer one. */
-async function attachBody(req, request, route) {
+async function attachBody(req, request) {
   if (req.method === 'GET' || req.method === 'HEAD') return;
   const type = mediaType(req.headers);
 
@@ -313,10 +290,8 @@ async function attachBody(req, request, route) {
     req.body = querystring.parse(await readBody(request, req.headers));
     return;
   }
-  if (type === 'multipart/form-data') {
-    if (!route.multipart) throw httpError(415, 'multipart bodies are only accepted on the upload route');
-    return readMultipart(req, request);
-  }
+  // Files go to the scanned intake account through POST /intake/uploads, never through this host.
+  if (type === 'multipart/form-data') throw httpError(415, 'multipart bodies are not accepted');
 
   // Everything else is left unread — the NDJSON chunk ingest consumes req.stream itself, which is
   // true streaming rather than the full buffer the old adapter forced on it.
@@ -349,14 +324,6 @@ async function edgeGateReason(req, pathname) {
   if (fromEdge(headers) || headers['x-apim-subscription']) return null;
   if (headers['x-api-key'] === undefined) return 'no-edge';
   return (await isValidApiKey(headers['x-api-key'])) ? null : 'bad-key';
-}
-
-async function removeUpload(file) {
-  try {
-    await fs.promises.unlink(file);
-  } catch (err) {
-    if (err.code !== 'ENOENT') logger.warn('upload temp file not removed', { evt: 'upload-cleanup', file, error: err.message, stack: err.stack });
-  }
 }
 
 /** Guards are the existing `(req, res, next)` middleware, run unchanged. */
@@ -414,7 +381,7 @@ async function dispatch(request, context) {
           req.params = route.params;
           await runGuards(route.guards, req, res);
           if (!res.finished) {
-            await attachBody(req, request, route);
+            await attachBody(req, request);
             await route.load()(req, res);
           }
         }
@@ -428,7 +395,6 @@ async function dispatch(request, context) {
         res.status(status).json({ error: searchReply ? searchReply.error : status >= 500 ? 'Internal Server Error' : err.message });
       }
     } finally {
-      if (req.file) await removeUpload(req.file.path);
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       // A logging failure must never turn a served response into an error.
       try {

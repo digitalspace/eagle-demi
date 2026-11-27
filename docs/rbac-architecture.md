@@ -452,7 +452,7 @@ Each item below overrides the corresponding section of the source document.
 - The source document's count of `EAGLE_ONLY_FIELDS` was wrong. The list is in `src/ownership/project.js`; read the entries there, since a count goes stale.
 - `src/helpers/response.js` is not dead: `serverError` is imported by six controllers.
 - `res.json` sites: 108 total, 62 non-error, not about 45.
-- No email-intake upload route exists; the only upload route is `POST /documents/extract`.
+- No email-intake upload route exists; the only upload route is `POST /intake/uploads`.
 - `publicView` has a fifth call site (`src/controllers/nosql/project.js`); in
   `src/controllers/search.js` it filters only the `sources` sub-object of a hand-built row.
 - `ENRICHMENT_SOURCES` is empty in prod, so `sources.wildfire` is a test-only value.

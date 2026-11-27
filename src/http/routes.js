@@ -145,9 +145,6 @@ const routes = [
   { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocument },
   // ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
-  { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
-  // The dispatcher writes the file part to os.tmpdir() as `req.file`, deleted when the request ends.
-  { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], multipart: true, load: () => documentController().extractDocument },
   // Answers a write-only link to the scanned intake account; the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
   { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },

@@ -3069,26 +3069,6 @@ paths:
             filter on a field the caller cannot see.
         '401':
           description: The Bearer token was rejected.
-    post:
-      summary: Create document
-      description: >-
-        Register a document metadata record. The document is admitted at level 1 (team only),
-        capped at its parent project's level: `isPublished` and `read` in the body are ignored,
-        not refused. Raising a document's level is `PUT /api/documents/{id}/level`.
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DocumentInput'
-      responses:
-        '201':
-          description: Document successfully created.
-        '401':
-          description: Unauthorized.
 
   /api/documents/scan:
     get:
@@ -3585,46 +3565,6 @@ paths:
             `{ "success": false, "error": "Internal server error." }` — the read failed.
         '502':
           description: '`{ "error": "The search service is unavailable." }`'
-
-  /api/documents/extract:
-    post:
-      summary: Upload and extract document
-      description: >-
-        Uploads document file to S3 MinIO and queues/processes text extraction. The new record is
-        admitted at level 1 (team only), like `POST /api/documents`; widen it with
-        `PUT /api/documents/{id}/level`.
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                upfile:
-                  type: string
-                  format: binary
-                project:
-                  type: string
-                displayName:
-                  type: string
-      responses:
-        '202':
-          description: File stored; text extraction runs on the next scheduled extraction pass.
-        '400':
-          description: >-
-            `No file uploaded.`, `A valid project id is required.`, `invalid multipart body`, or
-            `request body aborted` when the client drops mid-upload.
-        '401':
-          description: Unauthorized.
-        '403':
-          description: '`Forbidden. This credential is read-only.`'
-        '404':
-          description: No project with the `project` id.
-        '413':
-          description: '`request entity too large`: the body is over 100 MB. Nothing is stored.'
 
   /api/intake/uploads:
     post:
