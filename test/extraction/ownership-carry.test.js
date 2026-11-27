@@ -1,7 +1,7 @@
 'use strict';
 
-// An Eagle push replaces the row, so the backlog's retry clock must ride along or the sweep re-sends
-// every pushed row the next day.
+// An Eagle push replaces the row, so `extractionQueuedAt` must ride along or the next catch-up run of
+// src/scripts/extraction-backlog.js re-sends a pushed row still waiting in the queue.
 
 process.env.NODE_ENV = 'test';
 
