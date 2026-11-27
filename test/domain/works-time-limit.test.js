@@ -152,6 +152,12 @@ test('a running phase suspended after its budget ran out is not over while it is
   assert.strictEqual(lastLimit(SUSPENDED_TRACK, [heldPhase('2026-01-21', 20)]).overDays, 0);
 });
 
+test('a running phase under a suspension that began before the phase started has counted no days', () => {
+  const held = trackPhase('2026-03-01', '2026-06-30', { isCompleted: false, isCurrent: true, isSuspended: true,
+    suspendedDate: trackDay('2026-02-01') });
+  assert.strictEqual(lastLimit(SUSPENDED_TRACK, [held]).countedDays, 0);
+});
+
 test('a running sheet phase stops counting at the start of a suspension covering today', () => {
   const stop = { kind: 'suspension', startDate: '2026-11-01', endDate: '2026-12-31', days: 60 };
   const held = phase({ startDate: '2026-10-01', endDate: null, isCompleted: false, suspendedDays: 60, interruptions: [stop] });
