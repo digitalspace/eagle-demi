@@ -255,12 +255,13 @@ npm run db:purge-index-only-chunks   # dry run by default; --live --max-delete N
 
 `db:purge-index-only-chunks` deletes `chunks` index rows whose chunk id has no Cosmos row. It reads
 a document's Cosmos ids right before that document's delete, and keeps every row of a document with
-no Cosmos chunk. It never writes to Cosmos, and a dry run deletes nothing.
+no Cosmos chunk unless `--remove-no-live` lists it. It never writes to Cosmos, and a dry run deletes
+nothing.
 
 The run also reports documents marked extracted, not deleted, with no extraction error and no Cosmos
 chunk. With a chunk count above 0 or any index row, the document counts in `extractedNoChunks` and
 gets one `extracted-no-chunks` audit line, so you can re-extract it. With neither, it had no text and
-counts in `textless` only.
+counts in `textless` only, as a listed document with chunk count 0 does once its rows are removed.
 
 | Flag | Effect |
 |---|---|
@@ -268,6 +269,7 @@ counts in `textless` only.
 | `--project ID` | Walks one partition. |
 | `--state FILE` | Saves each walked partition; the same file resumes the walk. Use one file per mode. |
 | `--max-minutes M` | Stops at a partition boundary with exit 1. |
+| `--remove-no-live FILE` | One document id per line, the `--keep-ids` format. Walks only those documents, and deletes their index-only rows even with no Cosmos chunk. Refuses an empty list and `--state`. A finished walk logs listed ids that match no document and returns them in `unmatchedRemoveIds`. It exits 1 when no listed id matches. |
 | `--audit FILE` | NDJSON, one `{documentId, chunkId, key, projectId, pageNumber, action}` line per row. `action` is `would-delete`, `deleted`, `failed`, `kept-no-live` or `cosmos-only`. An `extracted-no-chunks` line is `{documentId, projectId, contentPageCount, indexRows, action}`. Default `/home/demi/chunks-index-only-<date>/<mode>-<time>.ndjson`. |
 
 A re-seed **carries extraction state forward**. A Cosmos upsert replaces the item, so the seeder
