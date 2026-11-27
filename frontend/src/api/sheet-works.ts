@@ -135,6 +135,8 @@ export type MilestoneKind =
   | 'comment-period'
   | 'section-13'
   | 'decision'
+  /** Track's "Submission" event type, as the Track calendar filters by it. */
+  | 'submission'
   | 'interregnum'
   | 'act-transition'
   | 'other';
@@ -145,6 +147,12 @@ export interface WorkplanMilestone extends Omit<SheetMilestone, 'undated'> {
   eventType: number | null;
   position: string | null;
   kind: MilestoneKind;
+}
+
+/** One person on a Track work. `role` is the Track role: "Work lead", "Responsible EPD" or a team role. */
+export interface WorkplanStaff {
+  name: string;
+  role: string;
 }
 
 /** One live work, Track or sheet, as `GET /workplans` sends it. */
@@ -166,6 +174,10 @@ export interface WorkplanRow extends Omit<SheetWork, 'phases' | 'milestones'> {
   /** 'track' when the outcome was taken from the hidden Track copy this work replaces, else null. */
   outcomeFrom?: 'track' | null;
   phases: WorkplanPhase[];
+  /** The work's EAO team in Track; null on a sheet work. Optional until the API sends it. */
+  team?: string | null;
+  /** Who is on the work in Track: the work lead, the responsible EPD and the active team members, each with their role. Empty on a sheet work. */
+  staff?: WorkplanStaff[];
   /** Every phase's milestones in one list. Missing reads as none: an older API leaves it out, and so may hand-built rows. */
   milestones?: WorkplanMilestone[];
 }

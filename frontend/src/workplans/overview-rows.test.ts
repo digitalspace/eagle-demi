@@ -17,10 +17,11 @@ describe('rowFacts', () => {
     expect(facts.tail).toBe('230 days over limit');
   });
 
-  it('tags a planned length as over plan, not over limit', () => {
+  it('says a planned length on the status line and never tags it: an overage is for legislated phases only', () => {
     const facts = rowFacts([workOf([running({ legislated: false })])], TODAY);
 
-    expect(facts.tail).toBe('230 days over plan');
+    expect(facts.l2).toMatch(/^Day \d+ of Process Planning, planned \d+ days$/);
+    expect(facts.tail).toBe('');
     expect(facts.over).toBe(0);
   });
 

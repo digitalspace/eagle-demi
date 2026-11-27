@@ -108,7 +108,7 @@ export function OverviewAct({ act, shared }: { act: OverviewActData; shared: Ove
         {open && (
           <div className="wp-ov-shr">
             <Axis act={act} onScroll={onAxisScroll} />
-            <ScrollWindow act={act} box={rowsRef} valueText={range} />
+            <ScrollWindow act={act} box={rowsRef} valueText={range} today={shared.today} />
           </div>
         )}
       </div>

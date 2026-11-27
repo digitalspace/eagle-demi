@@ -1,3 +1,4 @@
+import { assignedOk } from './assigned';
 import type { WorkplanPhase, WorkplanRow } from '../api/sheet-works';
 import { type ActYear, type PhaseDays, type RowState, type WorkKind, isInactiveWork, isOpenPhase, isOpenWork, kindOf, phaseDays, workDates, workEndOf, workStartOf } from './chart-facts';
 import { humanState, outcomeText } from './chart-words';
@@ -47,8 +48,6 @@ export interface RowFacts {
   open: boolean;
   /** Everything line 2 and the badge say, for the row's accessible name. */
   full: string;
-  /** An overrun only a track mark shows, for the accessible name alone; '' when `full` states it. */
-  markOnly: string;
 }
 
 interface Over {
@@ -89,13 +88,12 @@ function currentOf(work: WorkplanRow, today: string) {
 }
 
 /** Line 2 of a row with work in progress; true when its tag is "over plan". */
-function openFacts(R: RowFacts, said: string[], openWorks: WorkplanRow[], today: string): boolean {
+function openFacts(R: RowFacts, said: string[], openWorks: WorkplanRow[], today: string) {
   const cands = openWorks
     .map((work) => currentOf(work, today))
     .sort((a, b) => b.late - a.late || Number(isInactiveWork(a.work)) - Number(isInactiveWork(b.work)));
   const { work, phase, days } = cands[0];
   const type = work.workType ?? '';
-  let overPlan = false;
   R.more = cands.length - 1;
   R.l2w = type;
   if (!phase) {
@@ -121,13 +119,9 @@ function openFacts(R: RowFacts, said: string[], openWorks: WorkplanRow[], today:
       }
     } else if (days) {
       R.l2 = `Day ${days.length} of ${phase.name}`;
+      // A non-legislated phase has a planned length, not a time limit: it is said, never tagged as an overage.
+      if (days.limit !== null) R.l2 += `, planned ${plural(days.limit, 'day')}`;
       said.push(`${type}, ${phase.name}, day ${days.length}${days.limit !== null ? `, planned ${plural(days.limit, 'day')}` : ''}`);
-      if (days.over) {
-        R.tail = daysOver(days.over, 'plan');
-        R.tailCls = 'err';
-        overPlan = true;
-        said.push(`${phase.name} is ${plural(days.over, 'day')} over its planned length`);
-      }
     } else {
       R.l2 = `${phase.name} since ${start}`;
       said.push(`${type}, ${phase.name}, from ${start}`);
@@ -135,7 +129,6 @@ function openFacts(R: RowFacts, said: string[], openWorks: WorkplanRow[], today:
   }
   const planned = openWorks.filter((w) => !w.decisionDate && w.decisionEventDate).flatMap((w) => dayOf(w.decisionEventDate) ?? []).sort();
   R.next = planned.length ? planned.find((day) => day >= today) || planned[planned.length - 1] : null;
-  return overPlan;
 }
 
 const movedText = (moved: NonNullable<WorkplanRow['transitionOut']>) =>
@@ -165,7 +158,7 @@ export function rowFacts(works: readonly WorkplanRow[], today: string): RowFacts
   const { overs, faults } = oversOf(works, today);
   const R: RowFacts = {
     l2w: '', l2: '', tail: '', tailCls: '', phase: null, over: overs.length ? overs[0].days.over : 0, nOver: overs.length,
-    next: null, more: 0, faults, open: openWorks.length > 0, full: '', markOnly: '',
+    next: null, more: 0, faults, open: openWorks.length > 0, full: '',
   };
   const said: string[] = [];
   const ranOver = () => {
@@ -174,10 +167,8 @@ export function rowFacts(works: readonly WorkplanRow[], today: string): RowFacts
     said.push(ranOverText(overs[0]));
   };
   if (openWorks.length) {
-    const overPlan = openFacts(R, said, openWorks, today);
+    openFacts(R, said, openWorks, today);
     if (!R.tail && overs.length) ranOver();
-    // An "over plan" tag keeps the "over limit" one off; more than one overrun is said below.
-    else if (overPlan && R.nOver === 1) R.markOnly = ranOverText(overs[0]);
     if (R.more) said.push(`${plural(R.more, 'other work')} in progress`);
   } else {
     closedFacts(R, works);
@@ -247,7 +238,7 @@ export const ROW_STATES: readonly [RowState, string][] = [['any', 'All'], ['open
 export type SortKey = 'start' | 'name' | 'phase' | 'over' | 'next' | 'decision' | 'length';
 export const DEFAULT_SORT: SortKey = 'start';
 export const SORTS: readonly [SortKey, string][] = [
-  ['start', 'First date'], ['name', 'Name'], ['phase', 'Current phase'], ['over', 'Days over time limit'],
+  ['start', 'Start date'], ['name', 'Name'], ['phase', 'Current phase'], ['over', 'Days over time limit'],
   ['next', 'Next decision date'], ['decision', 'Decision date'], ['length', 'Longest assessment'],
 ];
 
@@ -277,13 +268,19 @@ function sortKeys(name: string, works: readonly WorkplanRow[], facts: RowFacts, 
   };
 }
 
-/** Search by name or ID and the work type toggles; facts come from the works left. */
-export function candidatesOf(rows: readonly ActRow[], query: string, off: ReadonlySet<WorkKind>, today: string): Candidate[] {
+/** A work's own name or type holds the search text. */
+const workHas = (work: WorkplanRow, q: string) => `${work.title ?? ''} ${work.workType ?? ''}`.toLowerCase().includes(q);
+
+/**
+ * Search by project name or ID, or by work name, and the work type toggles; facts come from the works left.
+ * A project that matches keeps all its works; one found only through a work keeps the works that match.
+ */
+export function candidatesOf(rows: readonly ActRow[], query: string, off: ReadonlySet<WorkKind>, today: string, who = '', team = ''): Candidate[] {
   const q = query.trim().toLowerCase();
   return rows.flatMap((row) => {
     const name = row.project.projectName;
-    if (q && !name.toLowerCase().includes(q) && !row.project.projectId.toLowerCase().includes(q)) return [];
-    const works = row.all.filter((work) => !off.has(kindOf(work)));
+    const whole = !q || name.toLowerCase().includes(q) || row.project.projectId.toLowerCase().includes(q);
+    const works = row.all.filter((work) => (whole || workHas(work, q)) && !off.has(kindOf(work)) && assignedOk(work, who, team));
     if (!works.length) return [];
     const facts = rowFacts(works, today);
     return [{ row, name, works, facts, keys: sortKeys(name, works, facts, today) }];

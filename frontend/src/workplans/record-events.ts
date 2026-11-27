@@ -1,3 +1,4 @@
+import { decisionTone } from './overview-marks';
 import type { WorkplanMilestone, WorkplanRow } from '../api/sheet-works';
 import type { MarkStyle, TipRowInput } from './chart-types';
 import { outcomeText, plainWords } from './chart-words';
@@ -53,6 +54,7 @@ function catOf(m: WorkplanMilestone, d: number | null, as: WorkplanRow): EventCa
   if (m.kind === 'decision') return 'dec';
   if (m.kind === 'comment-period') return 'cp';
   if (m.kind === 'extension' || m.kind === 'section-13') return 'oth';
+  if (m.kind === 'submission') return 'sub';
   if (!isTrack(as)) return 'ms';
   // A Track event within a day of a phase start is that phase's milestone.
   const onStart = as.phases.some((ph) => {
@@ -66,6 +68,7 @@ function kindWord(c: EventCat, m: WorkplanMilestone, planned: boolean): string {
   if (c === 'dec') return 'Decision';
   if (c === 'cp') return 'Comment period';
   if (c === 'ms') return planned ? 'Planned date' : 'Milestone';
+  if (c === 'sub') return planned ? 'Planned submission' : 'Submission';
   return m.kind === 'extension' ? 'Time limit extension' : 'Other event';
 }
 
@@ -91,6 +94,12 @@ interface EventDraw {
   r: StepRow | null;
 }
 
+/** A decision's outcome as the Timeline's decision circle draws it: go, no, wd, or other. */
+const recTone = (outcome: string | null | undefined) => {
+  const t = decisionTone(outcome);
+  return t === 'term' ? 'no' : t;
+};
+
 /** Draws one dated event on its row or the axis; returns its glyph class and whether it has a mark. */
 function drawEvent(x: EventDraw, as: WorkplanRow, ctx: RecordCtx, cpRow: RecordRow, seen: { dec: boolean }) {
   const { pct } = ctx.scale;
@@ -110,9 +119,11 @@ function drawEvent(x: EventDraw, as: WorkplanRow, ctx: RecordCtx, cpRow: RecordR
       return { g: 'g dflag', has: true };
     }
     if (!x.r) return { g: 'g dflag', has: false };
-    ctx.used.add('evDec');
-    x.r.marks.push(markOf('dflag', at, x.name, x.rows, x.id));
-    return { g: 'g dflag', has: true };
+    // A decision event without its own outcome takes the work's when it falls on the work's decision day.
+    const tone = recTone(x.m.outcome ?? (x.d === dayNo(as.decisionDate) ? as.outcome : null));
+    ctx.used.add(tone === 'no' ? 'evDecNo' : tone === 'wd' ? 'evDecWd' : tone === 'go' ? 'evDec' : 'evDecOther');
+    x.r.marks.push(markOf(`dflag ${tone}`, at, x.name, x.rows, x.id));
+    return { g: `g dflag ${tone}`, has: true };
   }
   // Track extensions are drawn by `placeExtensions`, under the phase whose total they make up.
   if (x.m.kind === 'extension' && isTrack(as)) return { g: 'g xpt', has: true };

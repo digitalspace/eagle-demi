@@ -1,7 +1,7 @@
 import { useDeferredValue, useMemo } from 'react';
 import type { WorkplanRow } from '../api/sheet-works';
 import type { Mark, MarkNotes } from './chart-types';
-import { ACT_YEARS, type ActYear, type WorkKind } from './chart-facts';
+import { ACT_YEARS, type ActYear, type WorkKind, workStartOf } from './chart-facts';
 import { AXIS_W, axisOf, axisTicks, type Axis, type AxisTicks } from './overview-axis';
 import { rowActs } from './overview-chips';
 import { layoutRow, type Jump } from './overview-layout';
@@ -11,6 +11,8 @@ import { assessMarks } from './overview-assess';
 import type { MarkAxis } from './overview-marks';
 import {
   actRows,
+  rowFacts,
+  type RowFacts,
   candidatesOf,
   filterCounts,
   passes,
@@ -33,9 +35,19 @@ export interface RowDrawing {
   kpx: number;
 }
 
+/** One work of a row, drawn on its own line with its name on the left. */
+export interface WorkLine {
+  work: WorkplanRow;
+  facts: RowFacts;
+  drawing: RowDrawing;
+}
+
 export interface OverviewRowData {
   cand: Candidate;
+  /** The whole project's drawing: its jump links, and the counts the row's accessible name reads. */
   drawing: RowDrawing;
+  /** Each work on its own line: the assessment first, then by start date. */
+  works: WorkLine[];
 }
 
 /** Everything one Act section draws. */
@@ -111,7 +123,8 @@ export function useOverviewActs(works: readonly WorkplanRow[], today: string, pa
   const offKey = WORK_KINDS.flatMap(([kind]) => (params.off.has(kind) ? [kind] : [])).join(',');
   const off = useMemo(() => new Set<WorkKind>(WORK_KINDS.flatMap(([kind]) => (offKey.split(',').includes(kind) ? [kind] : []))), [offKey]);
 
-  const cands = useMemo(() => base.map((act) => candidatesOf(act.rows, query, off, today)), [base, query, off, today]);
+  const { who, team } = params;
+  const cands = useMemo(() => base.map((act) => candidatesOf(act.rows, query, off, today, who, team)), [base, query, off, today, who, team]);
 
   const { state, phase, over, sort } = params;
   const counts: FilterCounts = useMemo(() => filterCounts(cands.flat(), { state, phase, overOnly: over }), [cands, state, phase, over]);
@@ -138,17 +151,31 @@ export function useOverviewActs(works: readonly WorkplanRow[], today: string, pa
       base.map((act, i): ActRowsResult => {
         const kpx = scales[i].pxPerUnit;
         const rows = passing[i].map((cand) => {
-          const id = `${offKey}|${cand.row.project.projectId}`;
+          const id = `${offKey}|${who}|${team}|${cand.row.project.projectId}`;
           let drawing = act.drawings.get(id);
           if (drawing?.kpx !== kpx) {
             drawing = drawRow(cand, act.markAxis, today, kpx);
             act.drawings.set(id, drawing);
           }
-          return { cand, drawing };
+          const order = (w: WorkplanRow) => (w.workTypeCode === 'assessment' ? '' : (workStartOf(w) ?? '9999'));
+          const works = [...cand.works]
+            .sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0))
+            .map((work): WorkLine => {
+              const wid = `${id}|${work.workId}`;
+              let line = act.drawings.get(wid);
+              if (line?.kpx !== kpx) {
+                // The assessment shares the project's line, so it keeps the links to the project under its other Acts.
+                const own = drawRow({ ...cand, works: [work] }, act.markAxis, today, kpx);
+                line = work.workTypeCode === 'assessment' ? own : { ...own, jumps: [] };
+                act.drawings.set(wid, line);
+              }
+              return { work, facts: rowFacts([work], today), drawing: line };
+            });
+          return { cand, drawing, works };
         });
         return { year: act.year, rows };
       }),
-    [base, passing, scales, offKey, today],
+    [base, passing, scales, offKey, who, team, today],
   );
 
   const acts = useMemo(

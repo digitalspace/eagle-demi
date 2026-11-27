@@ -4,11 +4,10 @@ import { rowId } from './overview-chips';
 import { rangeAt, recordAxis, todayIn, zoomIndex } from './record-axis';
 import {
   actFor,
-  neighboursOf,
-  recordList,
   recordParts,
   recordPath,
-  recordSummary,
+  recordFacts,
+  recordTag,
   type PathStep,
   type RecordNote,
   type RecordPick,
@@ -17,6 +16,7 @@ import {
 import { Chevron, RecordChart, TagView } from './RecordChart';
 import { scrollToMark } from './record-scroll';
 import { RecordEvents } from './RecordEvents';
+import { RecordPeople } from './RecordPeople';
 import { RecordPicker } from './RecordPicker';
 import { RecordTimeLimits } from './RecordTimeLimits';
 import { TimeScale } from './TimeScale';
@@ -101,8 +101,6 @@ export function RecordView({ projects, pick, today }: { projects: readonly Recor
   const recordKey = `${project.projectId}|${act}`;
   const [range, setRange] = useState<{ key: string; text: string } | null>(null);
 
-  const list = useMemo(() => recordList(projects), [projects]);
-  const near = neighboursOf(list, pick);
   const parts = useMemo(() => recordParts(project, act, today), [project, act, today]);
   const axis = useMemo(
     () =>
@@ -126,7 +124,10 @@ export function RecordView({ projects, pick, today }: { projects: readonly Recor
   );
   // Until the chart reports its scroll, the range is read at the left edge with the default width.
   const rangeText = range?.key === recordKey ? range.text : rangeAt(geo, 0);
-  const { summary, tag } = recordSummary(project, act, parts.assessment, model.totals);
+  const tag = recordTag(parts.assessment);
+  const actWorks = project.works.filter((w) => w.actYear === act);
+  const teams = [...new Set(actWorks.map((w) => w.team ?? ''))];
+  const facts = [...recordFacts(project, act, parts.assessment, model.totals, today), ...(teams.length === 1 && teams[0] ? [{ k: 'Team', v: teams[0] }] : [])];
   const path = recordPath(project, parts.partActs, act);
   const notes = model.notes;
 
@@ -151,23 +152,21 @@ export function RecordView({ projects, pick, today }: { projects: readonly Recor
           </Link>
           <div className="wp-rec-head__nav">
             <RecordPicker projects={projects} currentId={project.projectId} onPick={onPick} />
-            {near && (
-              <div className="wp-rec-head__pager">
-                <button type="button" className="wp-btn wp-btn--secondary" onClick={() => go(near.prev.projectId, near.prev.act)}>
-                  {near.prevText}
-                </button>
-                <button type="button" className="wp-btn wp-btn--secondary" onClick={() => go(near.next.projectId, near.next.act)}>
-                  {near.nextText}
-                </button>
-              </div>
-            )}
           </div>
         </div>
         <h1 className="wp-rec-title">{project.projectName}</h1>
-        <p className="wp-rec-sum">
+        <div className="wp-rec-facts">
           {tag && <TagView tag={tag} />}
-          <span>{summary}</span>
-        </p>
+          <dl className="wp-rec-facts__list">
+            {facts.map((f) => (
+              <div key={f.k}>
+                <dt>{f.k}</dt>
+                <dd className={f.warn ? 'warn' : undefined}>{f.v}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+        <RecordPeople works={actWorks} />
         <div className="wp-rec-head__path">
           <ActStepper steps={path} recordKey={recordKey} onPick={(year) => go(project.projectId, year)} />
           {act === 1996 && (

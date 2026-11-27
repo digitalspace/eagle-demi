@@ -1,11 +1,12 @@
 import type { SheetInterruption, WorkplanPhase, WorkplanRow } from '../api/sheet-works';
 import type { MarkStyle, TipRowInput } from './chart-types';
 import { colourOf } from './chart-colours';
-import { phaseDays, type PhaseDays } from './chart-facts';
+import { phaseDays, type PhaseDays, countsFromDayOne } from './chart-facts';
 import { duration, plainWords } from './chart-words';
 import { plural } from './format';
 import { dayNo, isOpenEnded, isoOf } from './record-axis';
 import { olimMark } from './record-limits';
+import { chronological, noteGaps } from './record-order';
 import {
   type AxisMark,
   type CertFact,
@@ -92,6 +93,11 @@ function noteCut(ph: WorkplanPhase, o: SegOptions, ctx: RecordCtx, cont: string)
   addNote(ctx, 'info', `${o.who ? `${o.who}, ` : ''}${ph.name ?? ''}: continues ${cont}`);
 }
 
+/** The bar's look classes: current, a later work's thin bar, the next Act's ghost, Proponent Time. */
+function lookOf(ph: WorkplanPhase, o: SegOptions, cur: boolean): string {
+  return (cur ? ' cur' : '') + (o.later ? ' thin' : '') + (o.ghost ? ' ghostbar' : '') + (/Proponent Time/i.test(ph.name ?? '') ? ' pt' : '');
+}
+
 function barMark(ph: WorkplanPhase, o: SegOptions, ctx: RecordCtx, colour: string, x: number, y: number, kind: BarKind, cur: boolean) {
   const { pct, px } = ctx.scale;
   const l0 = pct(Math.min(x, y));
@@ -110,8 +116,7 @@ function barMark(ph: WorkplanPhase, o: SegOptions, ctx: RecordCtx, colour: strin
   const one = kind === 'point' || kind === 'reversed';
   const minW = kind === 'point' ? 11 : 4;
   const place = one ? { left: `${f3(l)}%` } : spanStyle(l, Math.max(0, r - l), minW);
-  const look = (cur ? ' cur' : '') + (o.later ? ' thin' : '') + (o.ghost ? ' ghostbar' : '');
-  const m = markOf(`bar ${kind}${cut}${look}`, { ...place, '--pc': colour }, o.title, rows, o.id ?? '', o.id ? r : null);
+  const m = markOf(`bar ${kind}${cut}${lookOf(ph, o, cur)}`, { ...place, '--pc': colour }, o.title, rows, o.id ?? '', o.id ? r : null);
   // The phase name goes inside a bar only when it fits at this zoom.
   const name = o.label ?? '';
   if (name && !one && px(r - l) >= name.length * 7.6 + 24) {
@@ -150,12 +155,13 @@ export function segsFor(ph: WorkplanPhase, w: WorkplanRow, o: SegOptions, ctx: R
   return out;
 }
 
-function datesOf(s: number | null, e: number | null) {
+function datesOf(s: number | null, e: number | null, one = 0) {
   if (s != null && e != null) {
     const line2 = `${isoOf(s)} to ${isoOf(e)}`;
     if (e < s) return { line2, len: null, warn: `Dates conflict: ends ${plural(s - e, 'day')} before it starts` };
     if (e === s) return { line2: `${line2}, zero length`, len: null, warn: '' };
-    return { line2: `${line2}, ${duration(e - s)}`, len: e - s, warn: '' };
+    // Counted the Day One way, the start day is day 1.
+    return { line2: `${line2}, ${duration(e - s + one)}`, len: e - s + one, warn: '' };
   }
   if (s != null) return { line2: `${isoOf(s)} to no recorded date`, len: null, warn: '' };
   if (e != null) return { line2: `No recorded date to ${isoOf(e)}`, len: null, warn: '' };
@@ -165,13 +171,13 @@ function datesOf(s: number | null, e: number | null) {
 // Days against a legal limit: suspended days stop the clock, extended days add to the limit.
 function legalLimit(ph: WorkplanPhase, n: number, days: PhaseDays | null) {
   const bits: string[] = [];
-  if (days) bits.push(`${plural(Math.max(0, days.counted), 'day')} counted`);
+  if (days) bits.push(`${plural(Math.max(0, days.counted), 'day')} taken`);
   bits.push(`time limit ${plural(n, 'day')}`);
   if (extOf(ph)) bits.push(`${plural(extOf(ph), 'day')} extended`);
   if (susOf(ph)) bits.push(`${plural(susOf(ph), 'day')} suspended`);
   const text = bits.join(', ');
   const over = days?.over ?? 0;
-  const res = { limText: text[0].toUpperCase() + text.slice(1), run: days?.length ?? null, over, flag: '', olim: null as PhaseInfo['olim'] };
+  const res = { limText: text[0].toUpperCase() + text.slice(1), run: days?.length ?? null, over, flag: '', olim: null as PhaseInfo['olim'], deadline: days?.limitDate ?? null };
   if (days && over > 0) {
     // The overrun is the last N days of the phase (to today while it runs).
     const end = dayNumber(days.end);
@@ -187,8 +193,9 @@ export function phaseInfo(ph: WorkplanPhase, w: WorkplanRow, today: string): Pha
   const e = dayNo(ph.endDate);
   const planned = isTrack(w) && !ph.isCompleted && !ph.isCurrent;
   const current = isTrack(w) && !!ph.isCurrent && !ph.isCompleted;
-  const dates = datesOf(s, e);
-  const o: PhaseInfo = { s, e, ...dates, limText: '', flag: '', pass: '', tag: null, run: null, over: 0, olim: null };
+  const dayOne = countsFromDayOne(ph, w.phases);
+  const dates = datesOf(s, e, dayOne ? 1 : 0);
+  const o: PhaseInfo = { s, e, ...dates, limText: '', flag: '', pass: '', tag: null, run: null, over: 0, olim: null, deadline: null, dayOne };
   const n = ph.numberOfDays;
   // A phase still running counts to today.
   if (n && ph.legislated) Object.assign(o, legalLimit(ph, n, phaseDays(ph, w, today)));
@@ -325,6 +332,9 @@ function datedStep(name: string, si: number, ph: WorkplanPhase, as: WorkplanRow,
   r.marks = segsFor(ph, as, { title: ph.name ?? '', rows: tipRows, label: ph.name ?? '', id }, ctx);
   if (o.olim) r.marks.push(olimMark(o, ph, ctx));
   addInterruptions(r, ph, o, ctx);
+  // Suspended time takes the dots of the Timeline's suspended bar, in this phase's colour.
+  const pc = colourOf(ph.name, as.workTypeCode);
+  for (const m of r.marks) if (/^int suspension\b/.test(m.cls)) m.style = { ...m.style, '--pc': pc };
   return r;
 }
 
@@ -358,12 +368,14 @@ export function assessmentRows(as: WorkplanRow | null, ctx: RecordCtx, opt: Asse
   }
   const phases = as.phases.slice().sort((x, y) => (x.order || 0) - (y.order || 0));
   const known = phases.some((ph) => ph.name === 'Extra Time') ? OLD_STEPS_EXTRA : OLD_STEPS;
-  const steps: { name: string; ph: WorkplanPhase | undefined }[] = isTrack(as)
+  const listed: { name: string; ph: WorkplanPhase | undefined }[] = isTrack(as)
     ? phases.map((ph) => ({ name: ph.name ?? '', ph }))
     : [
         ...known.map((name) => ({ name, ph: phases.find((ph) => ph.name === name) })),
         ...phases.filter((ph) => !known.includes(ph.name ?? '')).map((ph) => ({ name: ph.name ?? '', ph })),
       ];
+  const steps = chronological(listed);
+  if (isTrack(as)) noteGaps(steps, ctx);
   const firstWithPhase = steps.findIndex((x) => x.ph);
   const stepRows = steps.map((stp, si): StepRow => {
     const ph = stp.ph;

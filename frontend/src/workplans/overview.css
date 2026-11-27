@@ -317,7 +317,7 @@
 }
 
 .wp-ov-flash {
-  flex: 1 1 0;
+  flex: 1 0 100%;
   min-width: 0;
   margin: 0;
   text-align: right;
@@ -331,8 +331,16 @@
   align-self: center;
 }
 
-.wp-ov-flash:empty {
-  display: none;
+/* A message gets its own line under the controls; the pinned bar grows by that line, so the Act heads pin below it. */
+@container wp-overview (min-width: 1136px) {
+  .wp-ov-vbar:has(> .wp-ov-flash:not(:empty)) {
+    flex-wrap: wrap;
+    row-gap: var(--layout-margin-xsmall);
+  }
+}
+
+.app__main:has(.wp-ov-vbar > .wp-ov-flash:not(:empty)) {
+  --wp-ov-bar-h: 104px;
 }
 
 /* Act section and its sticky head */
@@ -510,7 +518,7 @@
 /* The strip's edge is border-medium so it reads at 3:1 on the white head; the old gray-40 line did not. */
 .wp-ov-sw-strip {
   position: relative;
-  height: 16px;
+  height: 28px;
   margin: var(--layout-margin-xsmall) 0;
   border-radius: var(--layout-border-radius-small);
   background: var(--theme-gray-20);
@@ -518,11 +526,20 @@
   cursor: pointer;
 }
 
-/* A 24 px tall tap target over the 16 px strip. */
+/* The hit area runs 4 px past the strip's top and bottom, into its margins. */
 .wp-ov-sw-strip::before {
   content: '';
   position: absolute;
   inset: -4px 0;
+}
+
+/* Works active each quarter, as neutral bars from the strip's floor (draft). */
+.wp-ov-sw-busy {
+  position: absolute;
+  bottom: 0;
+  background: var(--theme-gray-60);
+  box-shadow: inset -1px 0 0 var(--theme-gray-20);
+  pointer-events: none;
 }
 
 .wp-ov-sw-year {
@@ -796,43 +813,6 @@
   color: var(--typography-color-secondary);
 }
 
-/* Acts line: "Acts: 2002, 2018", this Act bold, the others links to the same project's row there. */
-.wp-ov-acts {
-  display: block;
-  font: var(--typography-regular-small-body);
-  font-family: inherit;
-  line-height: 1.25;
-  white-space: nowrap;
-}
-
-.wp-ov-actsl {
-  color: var(--typography-color-secondary);
-}
-
-.wp-ov-actn {
-  font-variant-numeric: tabular-nums;
-}
-
-.wp-ov-actn.wp-ov-actn--on {
-  font-weight: var(--typography-font-weights-bold);
-  color: var(--typography-color-primary);
-}
-
-a.wp-ov-actn {
-  color: var(--typography-color-link);
-  text-underline-offset: 2px;
-}
-
-a.wp-ov-actn:hover {
-  color: var(--theme-blue-100);
-}
-
-a.wp-ov-actn:focus-visible {
-  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
-  outline-offset: var(--layout-margin-hair);
-  border-radius: var(--layout-border-radius-small);
-}
-
 /* Alert tags: every one shown, wrapping onto more lines rather than hiding any. */
 .wp-ov-chips {
   display: flex;
@@ -870,34 +850,6 @@ a.wp-ov-actn:focus-visible {
 .wp-ov-chip.wp-ov-chip--err {
   background: var(--support-surface-color-danger);
   border-color: var(--support-border-color-danger);
-}
-
-/* Full name, shown while the name link has keyboard focus. */
-.wp-ov-fulln {
-  display: none;
-  position: absolute;
-  left: 0;
-  top: calc(100% - 4px - var(--wp-ov-nc-pb));
-  z-index: 9;
-  box-sizing: border-box;
-  max-width: min(560px, calc(100% - 32px));
-  padding: var(--layout-padding-xsmall) var(--layout-padding-small);
-  background: var(--surface-color-background-white);
-  border: var(--layout-border-width-small) solid var(--surface-color-border-dark);
-  border-radius: var(--layout-border-radius-medium);
-  box-shadow: var(--surface-shadow-medium);
-  font-size: var(--typography-font-size-small-body);
-  line-height: var(--typography-line-heights-xxdense);
-  white-space: normal;
-  pointer-events: none;
-}
-
-.wp-ov-fulln b {
-  display: block;
-}
-
-.wp-ov-nc:has(.wp-ov-nm:focus-visible) .wp-ov-fulln {
-  display: block;
 }
 
 /* Track */
@@ -1001,5 +953,118 @@ a.wp-ov-actn:focus-visible {
 
   .wp-ov-shr {
     grid-column: 1;
+  }
+}
+
+/* Assigned to and Team: the note on hidden sheet works takes its own line under the filters. */
+.wp-ov-fnote {
+  flex: 1 0 100%;
+  order: 99;
+  margin: 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+/* One line per work: the project heads its works, each work names itself on the left (draft). */
+.wp-ov-row.wp-ov-row--head:not(.wp-ov-row--shut) {
+  min-height: 0;
+}
+
+/* A 24 px target; the negative margins keep the 20 px footprint the name and `.wp-ov-ind` line up with. */
+.wp-ov-exp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -2px calc(var(--layout-margin-xsmall) - 2px) -2px -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--layout-border-radius-small);
+  background: transparent;
+  color: var(--typography-color-primary);
+  vertical-align: -3px;
+  cursor: pointer;
+}
+
+.wp-ov-exp:hover {
+  background: var(--surface-color-secondary-button-hover);
+}
+
+.wp-ov-exp:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 0;
+}
+
+.wp-ov-exp[aria-expanded='false'] svg {
+  transform: rotate(-90deg);
+}
+
+/* Lines under the project name start under the name, past the arrow. */
+.wp-ov-ind {
+  padding-left: 22px;
+}
+
+.wp-ov-row.wp-ov-row--work {
+  min-height: 0;
+  border-top: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.wp-ov-row--work .wp-ov-nc {
+  padding-left: calc(22px + var(--layout-padding-medium));
+}
+
+.wp-ov-row--work .wp-ov-ind {
+  padding-left: 0;
+}
+
+/* 2 px padding taken back by the margins: a 24 px tall target with the text where it was. */
+.wp-ov-wname {
+  display: block;
+  margin-block: -2px;
+  padding-block: 2px;
+  font-size: var(--typography-font-size-body);
+  line-height: 1.25;
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.wp-ov-wname:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-border-active);
+  outline-offset: 0;
+}
+
+.wp-ov-rw .wp-ov-row--work:hover {
+  background: var(--theme-blue-10);
+}
+
+/* Draft: the row a jump link, or a return from a record, lands on. Gold outline, held 4 s; no other mark uses gold. */
+.wp-ov-rw--lit {
+  position: relative;
+}
+
+.wp-ov-rw--lit::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  border: 3px solid var(--theme-gold-100);
+  pointer-events: none;
+  animation: wp-ov-lit 4s ease-out forwards;
+}
+
+.wp-ov-rw.wp-ov-rw--lit .wp-ov-row {
+  background: var(--theme-gold-10);
+}
+
+@keyframes wp-ov-lit {
+  0%,
+  70% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
   }
 }

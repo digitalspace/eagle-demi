@@ -174,7 +174,7 @@
   border-radius: 1px;
 }
 
-/* Extension on one date */
+/* Time limit extension, recorded on one date */
 .wp-rec .xpt {
   box-sizing: border-box;
   width: 10px;
@@ -291,4 +291,212 @@
 
 .wp-rec .tick.mark.mk.hl {
   background: var(--theme-blue-20);
+}
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Draft: the Record draws its marks with the Timeline's look (overview-marks.css), so one symbol means one thing on
+   both pages. Same phase bars, planned, Proponent Time and suspended patterns, over-limit red, decision circles,
+   extension clock, conflict triangle, one-day calendar, missing-date note and no-end arrow.
+   --------------------------------------------------------------------------------------------------------------- */
+
+/* Planned: the same bar, fainter (was a dashed white box). */
+.wp-rec.wp-rec .bar.planned {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--surface-color-border-medium) 55%, var(--surface-color-background-white));
+  background: color-mix(in srgb, var(--pc, var(--theme-gray-50)) 11%, var(--surface-color-background-white));
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--pc, transparent) 45%, var(--surface-color-background-white));
+}
+
+/* Proponent Time: diagonal stripes in the phase colour. */
+.wp-rec.wp-rec .bar.pt {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--pc) 22%, var(--surface-color-background-white)) 0 3px,
+    color-mix(in srgb, var(--pc) 60%, var(--surface-color-background-white)) 3px 5px
+  );
+}
+
+.wp-rec.wp-rec .bar.planned.pt {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--pc) 9%, var(--surface-color-background-white)) 0 3px,
+    color-mix(in srgb, var(--pc) 28%, var(--surface-color-background-white)) 3px 5px
+  );
+}
+
+/* No recorded start: fades in, as on the Timeline (was a grey hatch, the Proponent Time pattern). */
+.wp-rec.wp-rec .bar.openStart {
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  border-left-width: 0;
+  border-radius: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pc, var(--theme-gray-50)) 25%, var(--surface-color-background-white)));
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--pc, var(--theme-gray-50)) 45%, transparent);
+}
+
+/* No recorded end: the Timeline's blue arrow. */
+.wp-rec.wp-rec .bar.openEnd::before {
+  border-left-color: var(--theme-blue-70);
+}
+
+/* Suspended: the Timeline's dots in the phase colour (was a solid dark strip). */
+.wp-rec.wp-rec .int.suspension,
+.wp-rec.wp-rec .g.sus,
+.wp-rec.wp-rec .wp-rec-kg.ss,
+.wp-rec.wp-rec .wp-rec-sbar .ss,
+.wp-rec.wp-rec .wp-rec-dbar.sus {
+  border: var(--layout-border-width-small) solid var(--surface-color-border-medium);
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--pc, var(--theme-gray-70)) 85%, var(--surface-color-background-white)) 1.6px, transparent 2.1px) 0 0 / 6px 6px,
+    radial-gradient(circle, color-mix(in srgb, var(--pc, var(--theme-gray-70)) 85%, var(--surface-color-background-white)) 1.6px, transparent 2.1px) 3px 3px / 6px 6px,
+    color-mix(in srgb, var(--pc, var(--theme-gray-70)) 15%, var(--surface-color-background-white));
+}
+
+/* Over a time limit: the Timeline's red part, with its darker edge. */
+.wp-rec.wp-rec .olim {
+  border-color: color-mix(in srgb, var(--support-border-color-danger) 70%, var(--theme-gray-110));
+}
+
+/* Decisions: the Timeline's 12 px circles (was a black flag on a stem). Tick: go. Cross: refused. Red: withdrawn.
+   Dash: other or none. Clock: planned. Red "!": planned date passed. */
+.wp-rec.wp-rec .dflag {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  margin-top: 1px;
+  border: var(--layout-border-width-small) solid var(--theme-gray-110);
+  border-radius: 50%;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.8 7h6.4' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% no-repeat, var(--theme-gray-110);
+  box-shadow: 0 0 0 1px var(--surface-color-background-white);
+}
+
+.wp-rec.wp-rec .dflag::before {
+  content: none;
+}
+
+.wp-rec.wp-rec .dflag.go {
+  border-color: color-mix(in srgb, var(--support-border-color-success) 70%, var(--theme-gray-110));
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 6.3l2.2 2.2 4.6-4.8' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat, var(--support-border-color-success);
+}
+
+.wp-rec.wp-rec .dflag.no {
+  border-color: color-mix(in srgb, var(--support-border-color-danger) 70%, var(--theme-gray-110));
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.4 3.4l5.2 5.2M8.6 3.4l-5.2 5.2' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% no-repeat, var(--support-border-color-danger);
+}
+
+.wp-rec.wp-rec .dflag.wd {
+  border-color: color-mix(in srgb, var(--support-border-color-danger) 70%, var(--theme-gray-110));
+  background: var(--support-border-color-danger);
+}
+
+.wp-rec.wp-rec .dflag.plan {
+  border-width: 1.5px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 3.6V7l2.3 1.4' fill='none' stroke='%23252423' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat, var(--surface-color-background-white);
+}
+
+.wp-rec.wp-rec .dflag.due {
+  border-width: 1.5px;
+  border-color: var(--support-border-color-danger);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 3.4v4.2' stroke='%23ce3e39' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='7' cy='10.3' r='1.1' fill='%23ce3e39'/%3E%3C/svg%3E") center / 100% no-repeat, var(--surface-color-background-white);
+}
+
+/* Single-date icons, 14 px, as on the Timeline. */
+.wp-rec.wp-rec :is(.xpt, .bar.point, .bar.reversed, .miss) {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  min-width: 0;
+  transform: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: center / contain no-repeat;
+  filter: drop-shadow(0 0 1px var(--surface-color-background-white));
+}
+
+/* Time limit extension: the Timeline's clock (was a blue dot). */
+.wp-rec.wp-rec .xpt.xpt {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='7' cy='7' r='5.6' fill='%232d2d2d' stroke='%232d2d2d' stroke-width='1.4'/%3E%3Cpath d='M7 4v3l2 1.3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* One-day work: the Timeline's calendar (was a diamond, which means a milestone). */
+.wp-rec.wp-rec .bar.point {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='1.5' fill='%23252423' stroke='%23252423' stroke-width='1.2'/%3E%3Cpath d='M4.5 1.2v2.4M9.5 1.2v2.4' stroke='%23252423' stroke-width='1.2' stroke-linecap='round'/%3E%3Cpath d='M1.5 5.2h11' stroke='%23fff' stroke-width='1'/%3E%3Cpath d='M6.2 7.6l1-.8v4' fill='none' stroke='%23fff' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Dates conflict: the Timeline's warning triangle (was a red line). */
+.wp-rec.wp-rec .bar.reversed {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 1.3L13 12.3H1z' fill='%23f8bb47' stroke='%237a5300' stroke-width='1.3' stroke-linejoin='round'/%3E%3Cpath d='M7 5.2v3.3' stroke='%23252423' stroke-width='1.6' stroke-linecap='round'/%3E%3Ccircle cx='7' cy='10.4' r='.9' fill='%23252423'/%3E%3C/svg%3E");
+}
+
+/* No recorded date: the Timeline's missing-date note (was a dashed box). */
+.wp-rec.wp-rec .miss.miss {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='1.5' fill='%235595d9' stroke='%231e5189' stroke-width='1.2'/%3E%3Cpath d='M1.5 5.2h11' stroke='%231e5189' stroke-width='1.2'/%3E%3Cpath d='M4.5 1.2v2.4M9.5 1.2v2.4' stroke='%231e5189' stroke-width='1.2' stroke-linecap='round'/%3E%3Cpath d='M5.6 7.6a1.4 1.4 0 1 1 2 1.3c-.4.2-.6.5-.6.9' fill='none' stroke='%23fff' stroke-width='1.2' stroke-linecap='round'/%3E%3Ccircle cx='7' cy='11.2' r='.6' fill='%23fff'/%3E%3C/svg%3E");
+}
+
+/* A change that runs past its phase end: the conflict triangle at the phase end, over a faint span (was red hatching). */
+.wp-rec.wp-rec .int.past {
+  border: var(--layout-border-width-small) dashed var(--surface-color-border-medium);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 1.3L13 12.3H1z' fill='%23f8bb47' stroke='%237a5300' stroke-width='1.3' stroke-linejoin='round'/%3E%3Cpath d='M7 5.2v3.3' stroke='%23252423' stroke-width='1.6' stroke-linecap='round'/%3E%3Ccircle cx='7' cy='10.4' r='.9' fill='%23252423'/%3E%3C/svg%3E") left center / 12px 12px no-repeat, transparent;
+}
+
+/* Extension over dates (2002 sheet works): the clock at its start over a faint span (was blue hatching). */
+.wp-rec.wp-rec .int.extension {
+  border: var(--layout-border-width-small) dashed var(--surface-color-border-medium);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='7' cy='7' r='5.6' fill='%232d2d2d' stroke='%232d2d2d' stroke-width='1.4'/%3E%3Cpath d='M7 4v3l2 1.3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") left center / 12px 12px no-repeat, transparent;
+}
+
+/* The Change column's glyph for an extension over dates: the same clock. */
+.wp-rec.wp-rec .g.ext {
+  border: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='7' cy='7' r='5.6' fill='%232d2d2d' stroke='%232d2d2d' stroke-width='1.4'/%3E%3Cpath d='M7 4v3l2 1.3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Placement for the circles and icons: centred on their date. */
+.wp-rec.wp-rec .dflag {
+  top: 4px;
+  height: 12px;
+  margin-left: -6px;
+}
+
+.wp-rec.wp-rec :is(.xpt, .bar.point, .bar.reversed) {
+  margin-left: -7px;
+}
+
+.wp-rec.wp-rec .wp-rec-kdraw .dflag {
+  top: 4px;
+  height: 12px;
+}
+
+.wp-rec.wp-rec .wp-rec-gbox .g.dflag {
+  height: 12px;
+  margin: 0 2px;
+}
+
+.wp-rec.wp-rec .wp-rec-gbox :is(.g.xpt, .g.ext) {
+  width: 14px;
+  height: 14px;
+  margin: 0 2px;
+}
+
+/* Room for the 12 px clock on an extension strip: the strip grows round its centre line. */
+.wp-rec.wp-rec .int.extension,
+.wp-rec.wp-rec .int.past {
+  height: 12px;
+  margin-top: -3px;
+  background-size: 12px 12px;
+}
+
+/* Markers on their own lines, as on the Timeline; the row's bars and strips move down below them. */
+.wp-rec.wp-rec .wp-rec-crow :is(.dflag, .dia, .ring, .msdue) {
+  translate: 0 calc(var(--evline, 0) * 16px);
+}
+
+.wp-rec.wp-rec .wp-rec-crow .mk:not(.dflag, .dia, .ring, .msdue) {
+  translate: 0 var(--evshift, 0px);
+}
+
+/* Days extended is an amount, not a date: plain blue, so the hatch is left to Proponent Time (draft). */
+.wp-rec.wp-rec :is(.wp-rec-kg.se, .wp-rec-sbar .se, .wp-rec-dbar.ext) {
+  background: var(--theme-blue-60);
+  border-color: var(--theme-blue-80);
 }

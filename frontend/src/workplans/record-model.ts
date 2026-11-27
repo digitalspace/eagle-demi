@@ -1,3 +1,4 @@
+import { lineEvents } from './record-lines';
 import { flipAxisMarks, todayMark, type RecordGeometry } from './record-axis';
 import { afterRows } from './record-after';
 import type { RecordEvents } from './record-event-list';
@@ -32,7 +33,7 @@ export interface RecordModel {
   /** Sorted, with crowded or edge labels flipped. */
   axisMarks: AxisMark[];
   limits: LimitPartView[];
-  /** For `recordSummary`. */
+  /** For `recordFacts`. */
   totals: LimitTotals;
   events: RecordEvents;
   /** The chart's notes, then the header's, through `noteList`. */
@@ -62,6 +63,7 @@ export function recordModel({ project, act, parts, today, geo, open }: RecordMod
     ctx.axisMarks.push(now.mark);
   }
   for (const r of rows) if (r.type === 'row') r.marks.sort((x, y) => x.left - y.left);
+  for (const r of rows) if (r.type === 'row') lineEvents(r, ctx.scale.px);
   const totals = steps.reduce((t, r) => ({ extended: t.extended + r.sumE, suspended: t.suspended + r.sumS }), { extended: 0, suspended: 0 });
   return {
     rows,

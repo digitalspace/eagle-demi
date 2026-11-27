@@ -22,7 +22,7 @@ const DayCell = ({ days, barCls, barStyle }: Pick<LimitTableRow, 'barCls' | 'bar
   </span>
 );
 
-function LimitRow({ x, hlId, onHover }: { x: LimitTableRow } & Pick<RecordTimeLimitsProps, 'hlId' | 'onHover'>) {
+function LimitRow({ x, spans, hlId, onHover }: { x: LimitTableRow; spans: boolean } & Pick<RecordTimeLimitsProps, 'hlId' | 'onHover'>) {
   const lit = !!x.mid && x.mid === hlId;
   const on = () => x.mid && onHover(x.mid, true);
   const off = () => x.mid && onHover(x.mid, false);
@@ -49,7 +49,7 @@ function LimitRow({ x, hlId, onHover }: { x: LimitTableRow } & Pick<RecordTimeLi
       </td>
       <td>{x.section}</td>
       <td>{x.from}</td>
-      <td>{x.to}</td>
+      {spans && <td>{x.to}</td>}
       <td>
         <DayCell days={Number(x.days)} barCls={x.barCls} barStyle={x.barStyle} />
       </td>
@@ -83,7 +83,8 @@ function LimitPart({ part, hlId, onHover }: { part: LimitPartView } & Pick<Recor
         </dl>
       </div>
       {part.noDatesText && <p className="wp-rec-emeta wp-rec-lnodates">{part.noDatesText}</p>}
-      <div className="wp-rec-ltwrap">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region needs a keyboard stop */}
+      <div className="wp-rec-ltwrap" tabIndex={0} role="region" aria-labelledby={part.id}>
         <table className="wp-rec-lt" aria-labelledby={part.id}>
           <thead>
             <tr>
@@ -94,23 +95,25 @@ function LimitPart({ part, hlId, onHover }: { part: LimitPartView } & Pick<Recor
                 Section
               </th>
               <th scope="col" className="wp-rec-lt__date">
-                From
+                {part.spans ? 'From' : 'Date'}
               </th>
-              <th scope="col" className="wp-rec-lt__date">
-                To
-              </th>
-              <th scope="col">Days</th>
+              {part.spans && (
+                <th scope="col" className="wp-rec-lt__date">
+                  To
+                </th>
+              )}
+              <th scope="col">{part.onlyExt ? 'Days extended' : 'Days'}</th>
             </tr>
           </thead>
           <tbody>
             {part.rows.map((x, i) => (
-              <LimitRow key={`${x.mid}|${i}`} x={x} hlId={hlId} onHover={onHover} />
+              <LimitRow key={`${x.mid}|${i}`} x={x} spans={part.spans} hlId={hlId} onHover={onHover} />
             ))}
           </tbody>
           <tfoot>
             {part.totals.map((t) => (
               <tr key={t.k}>
-                <th scope="row" colSpan={4}>
+                <th scope="row" colSpan={part.spans ? 4 : 3}>
                   {t.k}
                 </th>
                 <td>

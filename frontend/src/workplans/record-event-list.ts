@@ -17,7 +17,7 @@ export interface RecordEvents {
   hasCert: boolean;
 }
 
-export const EVENT_CATS: readonly EventCat[] = ['dec', 'cp', 'ms', 'oth'];
+export const EVENT_CATS: readonly EventCat[] = ['dec', 'cp', 'sub', 'ms', 'oth'];
 
 const totalOf = (xs: readonly RecordEvent[]) => xs.reduce((n, x) => n + x.count, 0);
 
@@ -49,6 +49,10 @@ export interface EventEntry {
   /** Accessible name; starts with the entry's kind. */
   label: string;
   hasMark: boolean;
+  /** "Planned" or "Date passed" for an anticipated date, else ''. */
+  tag: string;
+  /** The phase the entry falls in, for the Phase column; null for comment periods and entries outside the phases. */
+  phase: { name: string; sw: MarkStyle; swCls: string } | null;
 }
 
 export interface EventGroup {
@@ -62,7 +66,7 @@ export interface EventGroup {
   /** Phase colour of the swatch and the entries' glyphs; '' when they have none. */
   colour: string;
   items: EventEntry[];
-  /** "N events, shown with Show all" when the filter hides every entry; the heading stays. */
+  /** "N hidden", beside the heading, when the filter hides every entry; the heading stays. */
   hiddenText: string;
   /** The later works' "Show all N" or "Show the 5 newest" control; null for other groups and up to 5 works. */
   more: { text: string; expanded: boolean } | null;
@@ -73,6 +77,10 @@ export interface EventListView {
   hasChips: boolean;
   chips: EventChip[];
   groups: EventGroup[];
+  /** The assessment's entries under the filter as one list in date order, undated last. */
+  rows: EventEntry[];
+  /** The later works' own list; null when there are none. */
+  after: EventGroup | null;
   hasMore: boolean;
   moreText: string;
   hasXpt: boolean;
@@ -129,9 +137,13 @@ function gapsOf(buckets: readonly Bucket[]): Map<RecordEvent, number | null> {
 
 function entryOf(x: RecordEvent, gapN: number | null, maxGap: number): EventEntry {
   const gap = gapN == null ? '' : ago(gapN);
-  const [date, end] = x.date.split(' to ');
+  // "2025-12-13, planned, date passed": the day or range, then what the tag says.
+  const [when, ...said] = x.date.split(', ');
+  const [date, end] = when.split(' to ');
+  const tag = said.includes('date passed') ? 'Date passed' : said.includes('planned') ? 'Planned' : '';
+  const phase = x.step && x.c !== 'cp' && x.c !== 'aw' ? { name: x.step.name, sw: x.step.sw, swCls: x.step.glyph } : null;
   const countText = x.count > 1 ? plural(x.count, 'entry', 'entries') : '';
-  const label = [x.kind, x.date, x.name, countText, x.len, gap].filter(Boolean).join(', ');
+  const label = [x.kind, x.date, x.name, countText, x.len, phase ? `in ${phase.name}` : '', gap].filter(Boolean).join(', ');
   return {
     id: x.id,
     cls: x.c === 'dec' ? 'dec' : '',
@@ -145,6 +157,8 @@ function entryOf(x: RecordEvent, gapN: number | null, maxGap: number): EventEntr
     gapStyle: { width: `${gapN ? Math.max(3, Math.round((gapN / maxGap) * 140)) : 0}px` },
     label: label + (x.hasMark ? '' : '. Not drawn on the timeline.'),
     hasMark: x.hasMark,
+    tag,
+    phase,
   };
 }
 
@@ -160,6 +174,8 @@ export function eventList(ev: RecordEvents, sel: readonly EventCat[], awAll: boo
     chip('Decisions', ['dec'], cnt('dec'), has('dec')),
     chip('Comment periods', ['cp'], cnt('cp'), has('cp')),
     chip('Milestones', ['ms'], cnt('ms'), has('ms')),
+    // Only where the record has any: sheet works carry no submission events.
+    ...(cnt('sub') ? [chip('Submissions', ['sub'], cnt('sub'), has('sub'))] : []),
   ];
   const picked = ev.items.filter((x) => sel.includes(x.c));
   const shownCount = totalOf(picked);
@@ -172,9 +188,12 @@ export function eventList(ev: RecordEvents, sel: readonly EventCat[], awAll: boo
     const many = b.key === 'after' && n > 5;
     const items = many && !awAll ? b.shown.slice(-5) : b.shown;
     const more = many ? { text: awAll ? 'Show the 5 newest' : `Show all ${count(n)}`, expanded: awAll } : null;
-    const hiddenText = n ? '' : `${plural(totalOf(b.all), 'event')}, shown with Show all`;
+    const hiddenText = n ? '' : `${count(totalOf(b.all))} hidden`;
     return { key: b.key, id, listId: `${id}-list`, name: b.name, sw: b.sw, swCls: b.swCls, colour: b.colour, items: items.map((x) => entryOf(x, gaps.get(x) ?? null, maxGap)), hiddenText, more };
   });
+  const byDay = (x: RecordEvent, y: RecordEvent) => (x.d ?? 1e9) - (y.d ?? 1e9);
+  const rows = [...picked].sort(byDay).map((x) => entryOf(x, null, 1));
+  const after = groups.find((g) => g.key === 'after') ?? null;
   const merged = ev.items.length < total ? `, ${count(ev.items.length)} entries after merging repeats` : '';
   const shown = isAll ? `${plural(total, 'event')}${merged}` : `Showing ${count(shownCount)} of ${count(total)} events`;
   const later = ev.laterWorks ? `, ${plural(ev.laterWorks, 'later work')}` : '';
@@ -183,6 +202,8 @@ export function eventList(ev: RecordEvents, sel: readonly EventCat[], awAll: boo
     hasChips: ev.hasAssessment,
     chips,
     groups,
+    rows,
+    after,
     hasMore: !isAll && total > shownCount,
     moreText: `Show all ${count(total)} events`,
     hasXpt: ev.items.some((x) => x.g === 'g xpt'),
