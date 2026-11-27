@@ -48,7 +48,7 @@ const {
 const {
   sanitizeExtraction, CAP_REJECTED, REPEATED_REJECTED, capExceededMessage, recentIngestFailures,
   tryRecordIngestFailure, recordIngested, removeOverCapChunks, parentStampedAt, ingestStreamed,
-  auditIngestFailure, recordOverCap, recordWriteIncomplete, recordIndexDeleteIncomplete
+  auditIngestFailure, recordOverCap, recordWriteIncomplete, recordIndexDeleteIncomplete, recordBadRequest
 } = require('../../domain/document-ingest');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
@@ -1400,9 +1400,9 @@ function failIndexDelete(req, res, document, detail) {
   return res.status(503).json({ error: recordIndexDeleteIncomplete(req, document, detail) });
 }
 
-/** A 400 after the ingest was taken up: a stream may have flushed batches before the bad line. */
-function rejectBadRequest(req, res, document, message) {
-  auditIngestFailure(req, document, 'bad-request', 400);
+/** A 400 after the ingest was taken up, recorded on the document once a stream wrote a batch. */
+async function rejectBadRequest(req, res, document, message, flushedBatches) {
+  await recordBadRequest(req, document, message, flushedBatches);
   return res.status(400).json({ error: message });
 }
 
@@ -1549,7 +1549,7 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
     // Recorded on the document, not just returned: a 500 the host retries is fine, but a silent
     // shortfall that leaves the document looking extracted is the failure mode this guards.
     if (status >= 500) return failIngest(req, res, doc, message);
-    return rejectBadRequest(req, res, doc, message);
+    return rejectBadRequest(req, res, doc, message, flushed);
   };
 
   // An over-cap stream's written batches are removed whole: their ids overwrote the previous
