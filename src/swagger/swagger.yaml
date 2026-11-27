@@ -2106,7 +2106,9 @@ paths:
                                   allowedDays:
                                     type: integer
                                     nullable: true
-                                    description: "`numberOfDays` plus `extensionDays`. Null when `extensionDays` is null."
+                                    description: >-
+                                      `numberOfDays` plus `extensionDays`. Null when `extensionDays` is null, as when a sheet extension has no
+                                      day count.
                                   deadline:
                                     type: string
                                     format: date
@@ -2125,7 +2127,7 @@ paths:
                                     nullable: true
                                     description: >-
                                       `countedDays` past `allowedDays`, 0 when within it or covered by an extension. Null when either is null
-                                      or the end is not known.
+                                      or the end is not known, except on a finished phase covered by an extension, where it is 0.
                                   endKnown:
                                     type: boolean
                                     description: >-
@@ -2134,8 +2136,9 @@ paths:
                                   coveredByExtension:
                                     type: boolean
                                     description: >-
-                                      True on a finished phase past `allowedDays` that has an extension (a sheet `extension` interruption, or
-                                      Track `extensionDays` above 0); its `overDays` is then 0.
+                                      True on a finished phase with a known end that has an extension (a sheet `extension` interruption, or
+                                      Track `extensionDays` above 0) and is past `allowedDays`, or whose `allowedDays` is null because the
+                                      extension has no day count. Its `overDays` is then 0.
                         milestones:
                           type: array
                           description: >-

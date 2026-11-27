@@ -55,8 +55,9 @@ function timeLimitOf(work, phases, i, today) {
   const endKnown = endKnownOf(work, phases, i);
   const over = countedDays == null || allowedDays == null || !endKnown ? null : countedDays - allowedDays;
   const finished = Boolean(phase.isCompleted && dayOf(phase.endDate));
-  const coveredByExtension = finished && over > 0 && hasExtensionOf(work, phase);
-  const overDays = over == null ? null : Math.max(0, coveredByExtension ? 0 : over);
+  // A recorded extension covers a finished phase even when its day count is unknown.
+  const coveredByExtension = finished && endKnown && (allowedDays == null || over > 0) && hasExtensionOf(work, phase);
+  const overDays = coveredByExtension ? 0 : over == null ? null : Math.max(0, over);
   return { dayCount: one ? 'one' : 'zero', allowedDays, deadline, countedDays, overDays, endKnown, coveredByExtension };
 }
 

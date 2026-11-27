@@ -111,9 +111,17 @@ test('a finished phase past its budget with no extension is over', () => {
   assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [14, false]);
 });
 
-test('an unknown extension day count leaves the allowed days, deadline and over count unknown', () => {
-  const limit = lastLimit(SHEET_2002, [phase({ extensionDays: null, interruptions: [{ kind: 'extension', days: null }] })]);
-  assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.countedDays], [null, null, null, 45]);
+const UNCOUNTED_EXTENSION = { extensionDays: null, interruptions: [{ kind: 'extension', days: null }] };
+
+test('a running phase with an unknown extension day count has unknown allowed days, deadline and over count', () => {
+  const running = phase({ ...UNCOUNTED_EXTENSION, startDate: '2026-10-01', endDate: null, isCompleted: false });
+  const limit = lastLimit(SHEET_2002, [running]);
+  assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.countedDays], [null, null, null, 57]);
+});
+
+test('a finished phase with an extension of unknown day count is covered', () => {
+  const limit = lastLimit(SHEET_2002, [phase(UNCOUNTED_EXTENSION)]);
+  assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.coveredByExtension], [null, null, 0, true]);
 });
 
 test('an unknown suspended day count leaves the deadline, counted days and over count unknown', () => {
