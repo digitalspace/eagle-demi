@@ -16,6 +16,7 @@ const phase = (fields) => ({
 // Track dates arrive as UTC timestamps of Pacific midnight.
 const trackDay = (day) => `${day}T08:00:00.000Z`;
 const trackPhase = (start, end, fields) => phase({ startDate: trackDay(start), endDate: trackDay(end), isCurrent: false, ...fields });
+const trackOrder = (day, days, interregnum = false) => ({ date: trackDay(day), days, interregnum });
 
 const limitsOf = (work, phases, today = TODAY) => timeLimitsOf(work, phases, today);
 const lastLimit = (work, phases, today) => limitsOf(work, phases, today).at(-1);
@@ -52,7 +53,8 @@ test('a phase after one with no legislated budget is Day Zero', () => {
 });
 
 test('the deadline adds the budget, extension and suspended days to the start, one less on Day One', () => {
-  const fields = { numberOfDays: 45, extensionDays: 10, suspendedDays: 5, isCompleted: false };
+  const fields = { numberOfDays: 45, extensionDays: 10, extensionOrders: [trackOrder('2024-05-01', 10)], suspendedDays: 5,
+    isCompleted: false };
   const open = trackPhase('2024-04-01', '2024-05-16', fields);
   assert.deepStrictEqual([lastLimit(TRACK, [open]), lastLimit(TRACK, [trackPhase('2024-01-01', '2024-03-31'), open])]
     .map(limit => [limit.allowedDays, limit.deadline]), [[55, '2024-05-31'], [55, '2024-05-30']]);
@@ -65,7 +67,8 @@ test('a finished phase counts its days to its end less suspended days, one more 
 });
 
 test('a running phase counts its days to today and is over by the days past its budget', () => {
-  const running = trackPhase('2026-10-01', '2026-11-15', { isCompleted: false, isCurrent: true, extensionDays: 10 });
+  const running = trackPhase('2026-10-01', '2026-11-15', { isCompleted: false, isCurrent: true, extensionDays: 10,
+    extensionOrders: [trackOrder('2026-11-01', 10)] });
   assert.deepStrictEqual(lastLimit(TRACK, [running]), {
     dayCount: 'zero', allowedDays: 55, deadline: '2026-11-25', countedDays: 57, overDays: 2, endKnown: true, coveredByExtension: false
   });
@@ -103,11 +106,6 @@ test('a finished sheet phase past its budget with an undated extension is covere
   assert.deepStrictEqual([limit.countedDays, limit.allowedDays, limit.overDays, limit.coveredByExtension], [59, 50, 0, true]);
 });
 
-test('a finished Track phase past its budget with extension days and no dated order is covered and not over', () => {
-  const limit = lastLimit(TRACK, [trackPhase('2024-04-01', '2024-06-01', { extensionDays: 3 })]);
-  assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [0, true]);
-});
-
 const sheetOrder = (startDate, days) => ({ kind: 'extension', startDate, days });
 // The phase ends 14 days past the limit its budget gives before any extension.
 const lateSheet = (order) => phase({ endDate: '2010-03-01', extensionDays: order.days, interruptions: [order] });
@@ -115,6 +113,11 @@ const lateSheet = (order) => phase({ endDate: '2010-03-01', extensionDays: order
 test('a sheet extension dated on the limit day covers a late finish, which then is not over', () => {
   const limit = lastLimit(SHEET_2002, [lateSheet(sheetOrder('2010-02-15', 5))]);
   assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [0, true]);
+});
+
+test('a phase that ends on its limit is not covered by an extension dated that day', () => {
+  const limit = lastLimit(SHEET_2002, [phase({ extensionDays: 5, interruptions: [sheetOrder('2010-02-15', 5)] })]);
+  assert.deepStrictEqual([limit.overDays, limit.coveredByExtension], [0, false]);
 });
 
 test('a sheet extension dated before the limit adds its days and leaves a late finish over', () => {
@@ -132,7 +135,6 @@ test('a sheet extension of unknown days dated after the limit covers a late fini
   assert.deepStrictEqual([limit.allowedDays, limit.deadline, limit.overDays, limit.coveredByExtension], [null, null, 0, true]);
 });
 
-const trackOrder = (day, days, interregnum = false) => ({ date: trackDay(day), days, interregnum });
 const lateTrack = (end, orders) => trackPhase('2024-04-01', end,
   { extensionDays: orders.reduce((sum, order) => sum + order.days, 0), extensionOrders: orders });
 

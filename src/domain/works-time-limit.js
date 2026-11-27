@@ -58,15 +58,14 @@ function countOf(work, phase, start, today, offset) {
 
 /**
  * The phase's extension orders as `{ date, days, interregnum }`: sheet `extension` interruptions dated by their start,
- * or Track's `extensionOrders`. Track extension days with no order read as one undated order.
+ * or Track's `extensionOrders`.
  */
 function ordersOf(work, phase) {
   if (work.source !== 'track') {
     return (phase.interruptions || []).filter(entry => entry.kind === 'extension')
       .map(entry => ({ date: entry.startDate, days: entry.days ?? null, interregnum: false }));
   }
-  const orders = phase.extensionOrders || [];
-  return orders.length || !(phase.extensionDays > 0) ? orders : [{ date: null, days: phase.extensionDays, interregnum: false }];
+  return phase.extensionOrders || [];
 }
 
 /**

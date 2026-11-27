@@ -2146,9 +2146,8 @@ paths:
                                       order, each add their days to it while dated before it. An order is a sheet `extension`
                                       interruption dated by its `startDate`, or a Track extension (event type 10) dated by its actual
                                       date. A Track interregnum (event type 11) adds its days but never covers. A phase with an undated
-                                      order (a sheet extension with no `startDate`, or Track `extensionDays` with no dated event) is
-                                      covered when past `allowedDays` or when `allowedDays` is null, and so is one whose limit an
-                                      order of unknown day count leaves unknown.
+                                      order (a sheet extension with no `startDate`) is covered when past `allowedDays` or when
+                                      `allowedDays` is null, and so is one whose limit an order of unknown day count leaves unknown.
                         milestones:
                           type: array
                           description: >-
