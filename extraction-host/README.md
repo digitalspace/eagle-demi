@@ -45,10 +45,13 @@ Settings:
 | Variable | Value |
 |---|---|
 | `DEMI_API` | The Function host's `/api` base, called directly because a large chunk post outlives the APIM timeout |
-| `DEMI_API_KEY` | The `extraction-job` registry key, from vault secret `extraction-job-api-key` |
+| `DEMI_ADMIN_KEY` | The `extraction-job` registry key, from vault secret `extraction-job-api-key`. Same name as on the host. |
 | `EXTRACTION_QUEUE_ACCOUNT` | Storage account holding the queues |
-| `EXTRACTION_QUEUE` | Queue name, default `extract`; the poison queue is `<name>-poison` |
+| `EXTRACTION_QUEUE` | Queue name, default `extract` |
+| `EXTRACTION_POISON_QUEUE` | Poison queue name, default `<EXTRACTION_QUEUE>-poison` |
+| `EXTRACTION_VISIBILITY_SECONDS` | Visibility timeout of a received message, default 7800; keep it above the replica timeout |
 | `AZURE_CLIENT_ID` | Client id of the job's managed identity, used for the queues |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Sends the job's logs to App Insights, where the poison alert reads `AppTraces` |
 | `OCR_DEVICE` | `cpu` in the image, `cuda` on the host (default). It is named in the provenance engine string. |
 
 The other tuning variables (`MAX_FILE_MB`, `OCR_BATCH_PAGES`, the router and tiling thresholds) live in `extract_core.py` and mean the same on both.

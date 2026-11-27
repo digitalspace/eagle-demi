@@ -17,7 +17,7 @@ import extract_core as core
 log = logging.getLogger("extraction-job")
 
 # Longer than replicaTimeout (7200 s), so a running conversion never sees its message reappear.
-VISIBILITY_SECONDS = 7800
+VISIBILITY_SECONDS = int(os.environ.get("EXTRACTION_VISIBILITY_SECONDS", "7800"))
 POISON_AT = 3
 
 
@@ -118,18 +118,23 @@ def queues_from_env():
 
     url = f"https://{os.environ['EXTRACTION_QUEUE_ACCOUNT']}.queue.core.windows.net"
     name = os.environ.get("EXTRACTION_QUEUE", "extract")
+    poison = os.environ.get("EXTRACTION_POISON_QUEUE", f"{name}-poison")
     credential = ManagedIdentityCredential(client_id=os.environ.get("AZURE_CLIENT_ID"))
     return (QueueClient(url, name, credential=credential),
-            QueueClient(url, f"{name}-poison", credential=credential))
+            QueueClient(url, poison, credential=credential))
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    missing = [n for n in ("DEMI_API", "DEMI_API_KEY", "EXTRACTION_QUEUE_ACCOUNT") if not os.environ.get(n)]
+    if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+        # The poison alert reads AppTraces, so job logs must reach App Insights, not only stdout.
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        configure_azure_monitor(logger_name=log.name)
+    missing = [n for n in ("DEMI_API", "DEMI_ADMIN_KEY", "EXTRACTION_QUEUE_ACCOUNT") if not os.environ.get(n)]
     if missing:
         log.error("not set: %s", ", ".join(missing))
         return 2
-    core.set_key(os.environ["DEMI_API_KEY"])
+    core.set_key(os.environ["DEMI_ADMIN_KEY"])
     queue, poison = queues_from_env()
     pool = core.new_pool(1)
     try:

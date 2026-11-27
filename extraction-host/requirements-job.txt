@@ -4,3 +4,4 @@ docling==2.116.0
 requests==2.34.2
 azure-storage-queue==12.18.1
 azure-identity==1.27.0
+azure-monitor-opentelemetry==1.8.12
