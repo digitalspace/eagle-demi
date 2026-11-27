@@ -795,7 +795,7 @@ module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
   SCAN_CLEARED_CLAUSE,
-  isScanCleared,
+  isScanCleared, scanCleared, notUpdateImage, partitionKeyFor,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
   DEMI_OWNED_FIELDS,
