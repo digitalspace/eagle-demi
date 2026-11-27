@@ -1,0 +1,6 @@
+# Allow-list: keeps venv/, run state and *.env out of the image build context.
+*
+!requirements-job.txt
+!extract_core.py
+!job.py
+!fixtures/scan.pdf
