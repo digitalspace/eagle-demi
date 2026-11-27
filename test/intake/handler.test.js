@@ -230,21 +230,29 @@ test('bytes overwritten after the scan release nothing and leave the row pending
   assert.strictEqual(logs.warn.filter(l => l.message.startsWith('[intake] upload changed after its scan')).length, 1);
 });
 
-test('a condition failure mid-copy, wrapped by the store, still leaves the row pending', async (t) => {
-  const { store, account, deps } = setup(t);
-  const client = account.blobs.staging();
-  client.getRangeStream = async () => Readable.from((async function* () {
+test('a condition failure mid-copy removes the truncated object and leaves the row pending', async (t) => {
+  const { store, nrs, account, deps } = setup(t);
+  const after = watchAfterRelease(t, deps);
+  account.blobs.staging().getRangeStream = async () => Readable.from((async function* () {
     yield BYTES.subarray(0, 4);
     throw Object.assign(new Error('condition not met'), { statusCode: 412 });
   })());
-  deps.nrs = {
-    async putObjectStream(_key, stream) {
-      try { for await (const _part of stream); } catch { throw new Error('upload failed'); }
-    }
-  };
 
   assert.strictEqual(await apply('No threats found', deps), 'stale');
   assert.strictEqual(store.rows.get(DOC).scanStatus, 'pending');
+  assert.strictEqual(nrs.objects.size, 0);
+  assert.deepStrictEqual([after.indexed, after.synced, after.queued].map(m => m.mock.callCount()), [0, 0, 0]);
+});
+
+test('a clean result read without an etag releases nothing, even when the blob has none', async (t) => {
+  const { store, nrs, account, deps } = setup(t);
+  account.containers.incoming.get(DOC).etag = undefined;
+
+  const outcome = await applyScanResult({ ...store.rows.get(DOC) }, scan('No threats found', { eTag: undefined }), deps);
+
+  assert.strictEqual(outcome, 'stale');
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'pending');
+  assert.strictEqual(nrs.objects.size, 0);
 });
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);

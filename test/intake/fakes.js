@@ -5,7 +5,7 @@
  * calls were made.
  */
 
-const { Readable } = require('node:stream');
+const { PassThrough, Readable } = require('node:stream');
 const { logger } = require('../../src/utils/logger');
 
 const ACCOUNT = 'demiintest';
@@ -109,17 +109,25 @@ function fakeAccount(incoming = {}) {
   return account;
 }
 
-/** The object store: what was written, keyed by object key. */
+/**
+ * The object store: what was written, keyed by object key. Reads the body as minio does, by pipe
+ * with no error listener on the body, so a body that errors is uncaught and fails the test.
+ */
 function fakeNrs() {
   const objects = new Map();
   return {
     objects,
     async putObjectStream(key, stream, contentType) {
+      const sink = new PassThrough();
       const parts = [];
-      for await (const part of stream) parts.push(part);
+      await new Promise((resolve, reject) => {
+        stream.pipe(sink).on('error', reject);
+        sink.on('data', part => parts.push(part)).on('end', resolve);
+      });
       objects.set(key, { bytes: Buffer.concat(parts), contentType });
       return key;
-    }
+    },
+    async removeObject(key) { objects.delete(key); }
   };
 }
 

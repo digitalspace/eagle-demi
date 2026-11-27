@@ -67,10 +67,7 @@ async function isUpdateImageBlob(client, row, stat, etag) {
   });
 }
 
-/**
- * Copy the scanned bytes to the object store, hashing and counting them as they pass. Both stores
- * commit only at stream end, so a read that fails its etag condition leaves no object.
- */
+/** Copy the scanned bytes to the object store, hashing and counting them as they pass. */
 async function copyToStore(client, id, { nrs, key, stat, etag }) {
   const hash = crypto.createHash('sha256');
   let bytes = 0;
@@ -86,15 +83,21 @@ async function copyToStore(client, id, { nrs, key, stat, etag }) {
         yield chunk;
       }
     } catch (err) {
+      // minio pipes the body without an error listener, so a throw here is uncaught and its
+      // upload never settles. End short instead; the truncated object is removed below.
       sourceError = err;
-      throw err;
     }
   }
-  try {
-    await nrs.putObjectStream(key, Readable.from(tapped(), { objectMode: false }), stat.contentType || undefined);
-  } catch (err) {
-    // The store may wrap the source's error; the condition failure is the one that matters.
-    throw changedSinceScan(sourceError) ? sourceError : err;
+  await nrs.putObjectStream(key, Readable.from(tapped(), { objectMode: false }), stat.contentType || undefined);
+  if (sourceError) {
+    try {
+      await nrs.removeObject(key);
+    } catch (err) {
+      logger.error('[intake] could not remove a truncated copy; no row names it', {
+        documentId: id, key, error: err.message, stack: err.stack
+      });
+    }
+    throw sourceError;
   }
   return { fileSize: bytes, uploadSha256: hash.digest('hex') };
 }
