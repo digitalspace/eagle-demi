@@ -53,30 +53,52 @@ function objectKeyFor(row) {
 
 const bareEtag = (etag) => String(etag).replace(/"/g, '');
 
+/** A read pinned to the scanned etag found different bytes. */
+const changedSinceScan = err => Boolean(err) && (err.statusCode === 412 || err.code === 'ConditionNotMet');
+
 /** Whether an Update upload's bytes are the image its names say; reads only the first bytes. */
-async function isUpdateImageBlob(client, row, stat) {
+async function isUpdateImageBlob(client, row, stat, etag) {
   if (!(stat.size > 0)) return false;
   const length = Math.min(IMAGE_HEAD_BYTES, stat.size);
-  const stream = await client.getRangeStream(row.id, 0, length, { ifMatch: stat.etag || undefined });
+  const stream = await client.getRangeStream(row.id, 0, length, { ifMatch: etag });
   const extensions = [row.fileExt, extensionOf(row.documentFileName)].filter(Boolean);
   return isUpdateImage({
     head: Buffer.concat(await stream.toArray()), size: stat.size, contentType: stat.contentType, extensions
   });
 }
 
-/** Copy the upload to the object store, hashing and counting the bytes as they pass. */
-async function copyToStore(client, id, nrs, key, contentType) {
+/** Copy the scanned bytes to the object store, hashing and counting them as they pass. */
+async function copyToStore(client, id, { nrs, key, stat, etag }) {
   const hash = crypto.createHash('sha256');
   let bytes = 0;
-  const source = await client.getObjectStream(id);
+  let sourceError = null;
+  const source = stat.size > 0
+    ? await client.getRangeStream(id, 0, stat.size, { ifMatch: etag })
+    : Readable.from([]);
   async function* tapped() {
-    for await (const chunk of source) {
-      hash.update(chunk);
-      bytes += chunk.length;
-      yield chunk;
+    try {
+      for await (const chunk of source) {
+        hash.update(chunk);
+        bytes += chunk.length;
+        yield chunk;
+      }
+    } catch (err) {
+      // minio pipes the body without an error listener, so a throw here is uncaught and its
+      // upload never settles. End short instead; the truncated object is removed below.
+      sourceError = err;
     }
   }
-  await nrs.putObjectStream(key, Readable.from(tapped(), { objectMode: false }), contentType || undefined);
+  await nrs.putObjectStream(key, Readable.from(tapped(), { objectMode: false }), stat.contentType || undefined);
+  if (sourceError) {
+    try {
+      await nrs.removeObject(key);
+    } catch (err) {
+      logger.error('[intake] could not remove a truncated copy; no row names it', {
+        documentId: id, key, error: err.message, stack: err.stack
+      });
+    }
+    throw sourceError;
+  }
   return { fileSize: bytes, uploadSha256: hash.digest('hex') };
 }
 
@@ -143,16 +165,26 @@ async function release(listed, scan, deps) {
     return { outcome: 'missing', sizeBytes: null };
   }
   // The client may overwrite while its upload link lives; the new bytes get their own scan and tag.
-  if (scan.eTag && stat.etag && bareEtag(scan.eTag) !== bareEtag(stat.etag)) {
+  const etag = scan.eTag;
+  if (!etag || (stat.etag && bareEtag(etag) !== bareEtag(stat.etag))) {
     logger.warn('[intake] clean result is for an overwritten upload, ignored', { documentId: listed.id });
     return { outcome: 'stale', sizeBytes: stat.size };
   }
-  if (row.documentSource === documents.UPDATE_SOURCE && !(await isUpdateImageBlob(client, row, stat))) {
-    return reject(listed, scan, 'not-an-image', deps);
-  }
 
   const key = objectKeyFor(row);
-  const copied = await copyToStore(client, listed.id, nrs, key, stat.contentType);
+  let copied;
+  try {
+    if (row.documentSource === documents.UPDATE_SOURCE && !(await isUpdateImageBlob(client, row, stat, etag))) {
+      return reject(listed, scan, 'not-an-image', deps);
+    }
+    copied = await copyToStore(client, listed.id, { nrs, key, stat, etag });
+  } catch (err) {
+    if (!changedSinceScan(err)) throw err;
+    logger.warn('[intake] upload changed after its scan; nothing released, the row stays pending', {
+      documentId: listed.id, key, error: err.message
+    });
+    return { outcome: 'stale', sizeBytes: stat.size };
+  }
   const access = await releaseAccess(row, projects);
   const settled = await store.settle(listed, {
     scanStatus: 'clean', scanResult: scan.result, scannedAt: scan.scannedAt, scanSizeBytes: stat.size,

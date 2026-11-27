@@ -5,7 +5,7 @@
  * calls were made.
  */
 
-const { Readable } = require('node:stream');
+const { PassThrough, Readable } = require('node:stream');
 const { logger } = require('../../src/utils/logger');
 
 const ACCOUNT = 'demiintest';
@@ -90,9 +90,14 @@ function fakeAccount(incoming = {}) {
       const blob = containers.incoming.get(key);
       return blob ? { ...blob.tags } : null;
     },
-    async getObjectStream(key) { return Readable.from([containers.incoming.get(key).bytes]); },
-    async getRangeStream(key, offset, length) {
-      return Readable.from([containers.incoming.get(key).bytes.subarray(offset, offset + length)]);
+    async getRangeStream(key, offset, length, { ifMatch } = {}) {
+      const blob = containers.incoming.get(key);
+      if (ifMatch && ifMatch.replace(/"/g, '') !== String(blob.etag).replace(/"/g, '')) {
+        throw Object.assign(new Error('The condition specified using HTTP conditional header(s) is not met.'), {
+          statusCode: 412, code: 'ConditionNotMet'
+        });
+      }
+      return Readable.from([blob.bytes.subarray(offset, offset + length)]);
     },
     async copyObject(src, dest, { destContainer } = {}) {
       containers[destContainer || 'incoming'].set(dest, containers.incoming.get(src));
@@ -104,17 +109,25 @@ function fakeAccount(incoming = {}) {
   return account;
 }
 
-/** The object store: what was written, keyed by object key. */
+/**
+ * The object store: what was written, keyed by object key. Reads the body as minio does, by pipe
+ * with no error listener on the body, so a body that errors is uncaught and fails the test.
+ */
 function fakeNrs() {
   const objects = new Map();
   return {
     objects,
     async putObjectStream(key, stream, contentType) {
+      const sink = new PassThrough();
       const parts = [];
-      for await (const part of stream) parts.push(part);
+      await new Promise((resolve, reject) => {
+        stream.pipe(sink).on('error', reject);
+        sink.on('data', part => parts.push(part)).on('end', resolve);
+      });
       objects.set(key, { bytes: Buffer.concat(parts), contentType });
       return key;
-    }
+    },
+    async removeObject(key) { objects.delete(key); }
   };
 }
 

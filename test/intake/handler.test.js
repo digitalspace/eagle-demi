@@ -10,6 +10,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
 
 const { applyScanResult } = require('../../src/intake/handler');
 const aiSearch = require('../../src/search/ai-search');
@@ -192,6 +193,66 @@ test('publishOnRelease on a staff-only project stays at the capped level and say
   assert.strictEqual(row.isPublished, false);
   assert.strictEqual(row.publishRefused, 'project-not-public');
   assert.strictEqual(publishes.mock.callCount(), 0);
+});
+
+/** Watch every step after a copy: index writes, sync-out and extraction sends. */
+function watchAfterRelease(t, deps) {
+  t.mock.method(documents, 'readForWrite', async id => ({ ...deps.store.rows.get(id) }));
+  t.mock.method(aiSearch, 'config', () => ({ configured: true }));
+  return {
+    indexed: t.mock.method(aiSearch, 'upsertIndexRows', async (_index, rows) => rows.length),
+    synced: t.mock.method(syncOut, 'enqueueQuietly', async () => []),
+    queued: t.mock.method(extraction, 'enqueueExtraction', async () => true)
+  };
+}
+
+const NEW_BYTES = { bytes: Buffer.from('%PDF-1.7 unscanned overwrite'), etag: '"0x8DCB0000000002"' };
+
+test('bytes overwritten after the scan release nothing and leave the row pending', async (t) => {
+  const { store, nrs, account, logs, deps } = setup(t);
+  const after = watchAfterRelease(t, deps);
+  const client = account.blobs.staging();
+  const stat = client.statObject;
+  // The overwrite lands between the release's stat and its copy.
+  client.statObject = async (key) => {
+    const seen = await stat(key);
+    account.containers.incoming.set(DOC, { ...account.containers.incoming.get(DOC), ...NEW_BYTES });
+    return seen;
+  };
+
+  const outcome = await apply('No threats found', deps);
+
+  assert.strictEqual(outcome, 'stale');
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'pending');
+  assert.strictEqual(nrs.objects.size, 0);
+  assert.ok(account.containers.incoming.has(DOC));
+  assert.deepStrictEqual([after.indexed, after.synced, after.queued].map(m => m.mock.callCount()), [0, 0, 0]);
+  assert.strictEqual(logs.warn.filter(l => l.message.startsWith('[intake] upload changed after its scan')).length, 1);
+});
+
+test('a condition failure mid-copy removes the truncated object and leaves the row pending', async (t) => {
+  const { store, nrs, account, deps } = setup(t);
+  const after = watchAfterRelease(t, deps);
+  account.blobs.staging().getRangeStream = async () => Readable.from((async function* () {
+    yield BYTES.subarray(0, 4);
+    throw Object.assign(new Error('condition not met'), { statusCode: 412 });
+  })());
+
+  assert.strictEqual(await apply('No threats found', deps), 'stale');
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'pending');
+  assert.strictEqual(nrs.objects.size, 0);
+  assert.deepStrictEqual([after.indexed, after.synced, after.queued].map(m => m.mock.callCount()), [0, 0, 0]);
+});
+
+test('a clean result read without an etag releases nothing, even when the blob has none', async (t) => {
+  const { store, nrs, account, deps } = setup(t);
+  account.containers.incoming.get(DOC).etag = undefined;
+
+  const outcome = await applyScanResult({ ...store.rows.get(DOC) }, scan('No threats found', { eTag: undefined }), deps);
+
+  assert.strictEqual(outcome, 'stale');
+  assert.strictEqual(store.rows.get(DOC).scanStatus, 'pending');
+  assert.strictEqual(nrs.objects.size, 0);
 });
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
