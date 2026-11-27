@@ -4579,7 +4579,9 @@ paths:
         '400':
           description: >-
             Neither `markdown` nor `error`, or a malformed NDJSON stream — the offending line is
-            named.
+            named. A stream refused after a batch was sent and accepted (even one whose chunks were
+            all unchanged) is recorded on the document and counts toward the 409 guard; the
+            written batches stay until a good re-post replaces them.
         '401':
           description: Unauthorized.
         '404':

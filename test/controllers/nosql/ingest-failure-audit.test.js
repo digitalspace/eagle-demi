@@ -20,6 +20,8 @@ const audit = require('../../../src/utils/audit');
 const config = require('../../../src/config');
 const documents = require('../../../src/repositories/documents');
 const chunks = require('../../../src/repositories/chunks');
+const aiSearch = require('../../../src/search/ai-search');
+const { STREAM_REFUSED_AFTER_WRITE } = require('../../../src/domain/document-ingest');
 const documentController = require('../../../src/controllers/nosql/document');
 const { logger } = require('../../../src/utils/logger');
 const { mockRes } = require('../../helpers/mock-res');
@@ -39,6 +41,12 @@ async function ingest(req) {
 }
 
 const jsonBody = { body: { markdown: 'z'.repeat(4000) } };
+
+function ndjson(lines) {
+  return {
+    stream: Readable.from(lines.map(line => `${line}\n`)), is: (type) => type === 'application/x-ndjson'
+  };
+}
 
 test('a failed chunk ingest', async (t) => {
   t.beforeEach((t) => {
@@ -126,6 +134,54 @@ test('a failed chunk ingest', async (t) => {
     assert.strictEqual(patch.mock.callCount(), 0);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].Outcome, 'failure');
+    assert.deepStrictEqual(rows[0].Detail, { errorClass: 'bad-request', status: 400, streamed: true });
+  });
+
+  await t.test('a stream refused after a batch was written records the failure on the document', async (t) => {
+    const marker = 'host-block-text-9c2e';
+    t.mock.method(documents, 'getById', async () => ({
+      ...DOC, chunkIngestFailures: 1, chunkIngestFailedAt: new Date().toISOString()
+    }));
+    const patch = t.mock.method(documents, 'patchExtraction', async () => ({}));
+    const upsert = t.mock.method(chunks, 'upsertBatch', async (_a, _id, batch) => ({ succeeded: batch.length, failed: 0 }));
+    const deletes = [
+      t.mock.method(chunks, 'deleteSurplus', async () => ({})),
+      t.mock.method(chunks, 'removeForDocument', async () => ({})),
+      t.mock.method(aiSearch, 'deleteChunksByIds', async () => ({})),
+      t.mock.method(aiSearch, 'deleteChunksForDocument', async () => ({}))
+    ];
+    const pages = Array.from({ length: 260 }, (_, i) => JSON.stringify(`\fPage ${i} ${marker} ${'p'.repeat(1500)}`));
+
+    const res = await ingest(ndjson(['{}', ...pages, 'not json']));
+
+    assert.ok(upsert.mock.callCount() >= 1, 'precondition: a batch was written before the bad line');
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.error, `line ${pages.length + 2} is not valid JSON`);
+    assert.strictEqual(patch.mock.callCount(), 1);
+    const fields = patch.mock.calls[0].arguments[2];
+    assert.strictEqual(fields.contentExtractionError, STREAM_REFUSED_AFTER_WRITE);
+    assert.strictEqual(fields.chunkIngestFailures, 2);
+    assert.strictEqual(typeof fields.chunkIngestFailedAt, 'string');
+    assert.ok(!('contentExtracted' in fields));
+    assert.ok(!JSON.stringify(fields).includes(marker));
+    assert.strictEqual(rows.length, 1);
+    assert.deepStrictEqual(rows[0].Detail, { errorClass: 'bad-request-partial', status: 400, streamed: true });
+    assert.strictEqual(logger.error.mock.callCount(), 1);
+    assert.ok(logger.error.mock.calls[0].arguments[0].startsWith('[Document Controller] Chunk ingest failed:'));
+    assert.deepStrictEqual(deletes.map(d => d.mock.callCount()), [0, 0, 0, 0]);
+  });
+
+  await t.test('a stream refused at a later line before any batch was written records nothing on the document', async (t) => {
+    t.mock.method(documents, 'getById', async () => ({ ...DOC }));
+    const patch = t.mock.method(documents, 'patchExtraction', async () => ({}));
+    const upsert = t.mock.method(chunks, 'upsertBatch', async () => ({ succeeded: 0, failed: 0 }));
+
+    const res = await ingest(ndjson(['{}', JSON.stringify(`\fPage one ${'p'.repeat(200)}`), '{"not":"a string"}']));
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(upsert.mock.callCount(), 0);
+    assert.strictEqual(patch.mock.callCount(), 0);
+    assert.strictEqual(rows.length, 1);
     assert.deepStrictEqual(rows[0].Detail, { errorClass: 'bad-request', status: 400, streamed: true });
   });
 
