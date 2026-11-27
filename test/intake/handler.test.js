@@ -196,10 +196,10 @@ test('publishOnRelease on a staff-only project stays at the capped level and say
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
 
-/** An Update image upload whose bytes are PNG, named with `fileExt`. */
-function setupImage(t, fileExt) {
+/** An Update image upload whose bytes are PNG, named with `fileExt`; `blob` overrides the stored blob. */
+function setupImage(t, fileExt, blob = {}) {
   const ctx = setup(t, pendingRow({ documentSource: 'UPDATE', fileExt }));
-  ctx.account.containers.incoming.set(DOC, { bytes: PNG, etag: ETAG, contentType: 'image/png' });
+  ctx.account.containers.incoming.set(DOC, { bytes: PNG, etag: ETAG, contentType: 'image/png', ...blob });
   return ctx;
 }
 
@@ -212,17 +212,25 @@ test('an Update image with PNG bytes and a .png name releases from a listed row 
   assert.strictEqual(nrs.objects.size, 1);
 });
 
-test('an Update image with PNG bytes but a .jpg name is rejected not-an-image', async (t) => {
-  const { store, nrs, account, deps } = setupImage(t, 'jpg');
+const NOT_AN_IMAGE = [
+  ['PNG bytes but a .jpg name', 'jpg', {}],
+  ['PNG bytes over 10 MB', 'png', { size: 10 * 1024 * 1024 + 1 }],
+  ['PNG bytes stored as image/jpeg', 'png', { contentType: 'image/jpeg' }]
+];
 
-  await applyListed('No threats found', deps);
+for (const [label, fileExt, blob] of NOT_AN_IMAGE) {
+  test(`an Update image with ${label} is rejected not-an-image`, async (t) => {
+    const { store, nrs, account, deps } = setupImage(t, fileExt, blob);
 
-  const row = store.rows.get(DOC);
-  assert.strictEqual(row.scanStatus, 'rejected');
-  assert.strictEqual(row.scanRejectReason, 'not-an-image');
-  assert.strictEqual(nrs.objects.size, 0);
-  assert.ok(account.containers.quarantine.has(DOC));
-});
+    await applyListed('No threats found', deps);
+
+    const row = store.rows.get(DOC);
+    assert.strictEqual(row.scanStatus, 'rejected');
+    assert.strictEqual(row.scanRejectReason, 'not-an-image');
+    assert.strictEqual(nrs.objects.size, 0);
+    assert.ok(account.containers.quarantine.has(DOC));
+  });
+}
 
 test('No threats found caps the requested read list at the project as it is now', async (t) => {
   // Linked at staff while the project was staff; the project narrowed to team before the scan.
