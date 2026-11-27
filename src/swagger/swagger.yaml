@@ -2101,8 +2101,9 @@ paths:
                                     type: string
                                     enum: [zero, one]
                                     description: >-
-                                      `one` when the phase starts back to back with a legislated phase before it whose end is known: on its
-                                      end (sheet) or the day after it (Track). The start day then counts as day 1. Otherwise `zero`.
+                                      `one` when a Track phase starts on the end of a legislated phase before it, or the day after. The start
+                                      day then counts as day 1. Otherwise `zero`: a sheet phase that starts on the end before it counts that
+                                      shared date as day zero.
                                   allowedDays:
                                     type: integer
                                     nullable: true
