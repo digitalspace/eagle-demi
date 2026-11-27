@@ -54,5 +54,5 @@ function isUpdateImage({ head, size, contentType, extensions }) {
 }
 
 module.exports = {
-  decide, extensionOf, isUpdateImage, UPLOAD_LINK_SECONDS, MAX_SCAN_BYTES, IMAGE_HEAD_BYTES
+  decide, extensionOf, isUpdateImage, UPLOAD_LINK_SECONDS, MAX_SCAN_BYTES, UPDATE_IMAGE_MAX_BYTES, IMAGE_HEAD_BYTES
 };

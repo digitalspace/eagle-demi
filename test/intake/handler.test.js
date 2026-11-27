@@ -16,6 +16,8 @@ const { applyScanResult } = require('../../src/intake/handler');
 const aiSearch = require('../../src/search/ai-search');
 const audit = require('../../src/utils/audit');
 const documents = require('../../src/repositories/documents');
+const notifications = require('../../src/repositories/notifications');
+const projects = require('../../src/repositories/projects');
 const extraction = require('../../src/extraction/enqueue');
 const syncOut = require('../../src/sync-out');
 const { readForLevel, systemAccess } = require('../../src/helpers/access-sql');
@@ -34,24 +36,27 @@ function scan(result, extra = {}) {
   return { result, scannedAt: '2026-10-14T18:00:00.000Z', eTag: ETAG, malwareNames: [], ...extra };
 }
 
-/** The project rows a system read answers; `proj-1` is public unless a test says otherwise. */
-function fakeProjects(rows = { 'proj-1': { id: 'proj-1', read: readForLevel(4) } }) {
-  return {
-    getById: async (access, id) => {
-      assert.deepStrictEqual(access, systemAccess());
-      return rows[id] || null;
-    }
+const PUBLIC_PROJECT = { 'proj-1': { id: 'proj-1', read: readForLevel(4) } };
+
+/** The parent rows a system read answers; `proj-1` is a public project unless a test says otherwise. */
+function fakeParents(t, { projectRows = PUBLIC_PROJECT, notificationRows = {} }) {
+  const systemRead = rows => async (access, id) => {
+    assert.deepStrictEqual(access, systemAccess());
+    return rows[id] || null;
   };
+  t.mock.method(projects, 'getById', systemRead(projectRows));
+  t.mock.method(notifications, 'getById', systemRead(notificationRows));
 }
 
 /** Intake configured, one pending row, its upload in `incoming`. */
-function setup(t, row = pendingRow(), projects = fakeProjects()) {
+function setup(t, row = pendingRow(), parents = {}) {
   setIntakeEnv(t);
+  fakeParents(t, parents);
   const store = fakeStore([row]);
   const account = fakeAccount({ [DOC]: { bytes: BYTES, etag: ETAG, contentType: 'application/pdf' } });
   const nrs = fakeNrs();
   const logs = recordLogs(t);
-  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs, projects } };
+  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs } };
 }
 
 /** Apply `result` to the row as the store holds it now. */
@@ -182,7 +187,7 @@ test('publishOnRelease on a public project ends at level 4 with one system audit
 });
 
 test('publishOnRelease on a staff-only project stays at the capped level and says why', async (t) => {
-  const staffOnly = fakeProjects({ 'proj-1': { id: 'proj-1', read: readForLevel(3) } });
+  const staffOnly = { projectRows: { 'proj-1': { id: 'proj-1', read: readForLevel(3) } } };
   const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), publishOnRelease: true }), staffOnly);
   const publishes = fakeSetPublished(t, store);
 
@@ -191,6 +196,47 @@ test('publishOnRelease on a staff-only project stays at the capped level and say
   const row = store.rows.get(DOC);
   assert.deepStrictEqual(row.read, readForLevel(3));
   assert.strictEqual(row.isPublished, false);
+  assert.strictEqual(row.publishRefused, 'project-not-public');
+  assert.strictEqual(publishes.mock.callCount(), 0);
+});
+
+/** `proj-1` is a notification at `read`, and no project carries that id. */
+const underNotification = read => ({ projectRows: {}, notificationRows: { 'proj-1': { id: 'proj-1', read } } });
+
+test('No threats found under a notification takes the requested read list and queues extraction', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(2) }), underNotification(readForLevel(4)));
+  const queued = t.mock.method(extraction, 'enqueueExtraction', async () => true);
+
+  await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.scanStatus, 'clean');
+  assert.deepStrictEqual(row.read, readForLevel(2));
+  assert.deepStrictEqual(queued.mock.calls.map(c => [c.arguments[0].id, c.arguments[1]]), [[DOC, 'intake']]);
+});
+
+test('publishOnRelease under a public notification ends at level 4', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(2), publishOnRelease: true }),
+    underNotification(readForLevel(4)));
+  fakeSetPublished(t, store);
+  t.mock.method(audit, 'auditEvent', () => {});
+
+  await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.deepStrictEqual(row.read, readForLevel(4));
+  assert.strictEqual(row.publishRefused, undefined);
+});
+
+test('publishOnRelease under a staff-only notification stays at the capped level and says why', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3), publishOnRelease: true }),
+    underNotification(readForLevel(2)));
+  const publishes = fakeSetPublished(t, store);
+
+  await apply('No threats found', deps);
+
+  const row = store.rows.get(DOC);
+  assert.deepStrictEqual(row.read, readForLevel(2));
   assert.strictEqual(row.publishRefused, 'project-not-public');
   assert.strictEqual(publishes.mock.callCount(), 0);
 });
@@ -320,7 +366,7 @@ for (const [label, fileExt, blob] of NOT_AN_IMAGE) {
 
 test('No threats found caps the requested read list at the project as it is now', async (t) => {
   // Linked at staff while the project was staff; the project narrowed to team before the scan.
-  const narrowed = fakeProjects({ 'proj-1': { id: 'proj-1', read: readForLevel(1) } });
+  const narrowed = { projectRows: { 'proj-1': { id: 'proj-1', read: readForLevel(1) } } };
   const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3) }), narrowed);
 
   await apply('No threats found', deps);
@@ -332,7 +378,7 @@ test('No threats found caps the requested read list at the project as it is now'
 });
 
 test('No threats found for a project that is gone releases with an empty read list', async (t) => {
-  const { store, logs, deps } = setup(t, pendingRow({ requestedRead: ['public'] }), fakeProjects({}));
+  const { store, logs, deps } = setup(t, pendingRow({ requestedRead: ['public'] }), { projectRows: {} });
 
   await apply('No threats found', deps);
 
@@ -340,13 +386,13 @@ test('No threats found for a project that is gone releases with an empty read li
   assert.strictEqual(row.scanStatus, 'clean');
   assert.deepStrictEqual(row.read, []);
   assert.strictEqual(row.isPublished, false);
-  const gone = logs.warn.filter(l => l.message === '[intake] project not found, released with an empty read list');
+  const gone = logs.warn.filter(l => l.message === '[intake] parent not found, released with an empty read list');
   assert.strictEqual(gone.length, 1);
   assert.strictEqual(gone[0].meta.projectId, 'proj-1');
 });
 
 test('No threats found keeps a sealed request sealed when the system read cannot see the project', async (t) => {
-  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(0) }), fakeProjects({}));
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(0) }), { projectRows: {} });
 
   await apply('No threats found', deps);
 

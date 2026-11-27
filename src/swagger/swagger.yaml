@@ -3589,6 +3589,7 @@ paths:
               properties:
                 projectId:
                   type: string
+                  description: The parent, a project or a project notification id.
                 fileName:
                   type: string
                   maxLength: 255
@@ -3598,7 +3599,7 @@ paths:
                   items:
                     type: string
                   description: >-
-                    The `read[]` the document takes once clean, capped at the project's level.
+                    The `read[]` the document takes once clean, capped at the parent's level.
                     Defaults to level 1 (team). Cannot seal (level 0) or publish (level 4).
                 fileSize:
                   type: integer
@@ -3611,7 +3612,7 @@ paths:
                   type: boolean
                   default: false
                   description: >-
-                    Publish (level 4) when the scan clears the file, if the project is public.
+                    Publish (level 4) when the scan clears the file, if the parent is public.
                     Otherwise the document is released at its capped level and `publishRefused` is set.
                     The caller must be able to read the document at `requestedRead`, as
                     `PUT /api/documents/{id}/level` requires; else 403.
@@ -3657,13 +3658,13 @@ paths:
             The credential is read-only, or it asks for `publishOnRelease` on a document it could
             not read once released.
         '404':
-          description: The project does not exist or is not visible to this caller.
+          description: The parent project or notification does not exist or is not visible to this caller.
         '503':
           description: Document intake is not enabled in this environment.
     get:
-      summary: List a project's pending and rejected intake uploads
+      summary: List a parent's pending and rejected intake uploads
       description: >-
-        Answers the project's uploads still waiting for the scan and those rejected in the last 30
+        Answers the parent project's or notification's uploads still waiting for the scan and those rejected in the last 30
         days, newest first. An upload is listed only when the caller could read it once released.
       security:
         - ApiKeyAuth: []
@@ -3676,7 +3677,7 @@ paths:
             type: string
       responses:
         '200':
-          description: The uploads; `[]` for a project the caller cannot read.
+          description: The uploads; `[]` for a parent the caller cannot read.
           content:
             application/json:
               schema:
@@ -3734,7 +3735,7 @@ paths:
         '401':
           description: Unauthorized.
         '404':
-          description: No intake upload with this id, or its project is not visible to this caller.
+          description: No intake upload with this id, or its parent is not visible to this caller.
         '503':
           description: Document intake is not enabled in this environment.
 
