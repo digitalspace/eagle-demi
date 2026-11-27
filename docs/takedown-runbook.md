@@ -5,7 +5,8 @@ ordinary narrow through `PUT /:id/level` and stops at step 1.
 
 ## 1. Narrow the record
 
-As `sysadmin` — no other role may pull a record back off level 4.
+As `sysadmin` for a project. A document also takes `staff` with a non-empty `reason`, through
+`PUT /api/documents/:id/level` only; every other role gets 403.
 
 ```
 PUT /api/projects/:id/level     { "level": 2, "reason": "personal information published in error" }

@@ -974,6 +974,17 @@ exports.updateDocument = async (req, res) => {
   }
 };
 
+// [status, error] when this caller may not pull a document back from level 4. Staff may, with their
+// own reason; the alias writes one for them, so through it the move stays sysadmin-only.
+function takedownRefusal(req, { roles }, reason) {
+  if (roles.includes('sysadmin')) return null;
+  if (!roles.includes('staff') || req[LEGACY_PUBLISH]) {
+    return [403, 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'];
+  }
+  return String(reason || '').trim() ? null
+    : [400, 'Pulling a document back from level 4 requires a non-empty reason.'];
+}
+
 /**
  * Move a document to a ladder level (docs/rbac-architecture.md §1). The ONLY route that raises a
  * level, and the only way to hide a document from the public: deletion is not for hiding.
@@ -988,35 +999,24 @@ exports.setLevel = async (req, res) => {
         error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.'
       });
     }
-    if (level === 4 && confirm !== true) {
-      return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
-    }
-    if (level === 4 && !String(reason || '').trim()) {
-      return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
-    }
+    if (level === 4 && confirm !== true) return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
+    if (level === 4 && !String(reason || '').trim()) return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
 
     const existing = await documents.getById(access, req.params.id, req.query.project);
-    if (!existing) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
+    if (!existing) return res.status(404).json({ error: 'Document not found' });
 
     const from = levelOfRead(existing.read);
     const parentProject = await projects.getById(access, existing.projectId);
     // A document still cannot out-rank its parent, and an unreadable parent fails closed. Only a
     // widen is checked: an unreachable project must never block hiding a document.
     if (level > from && level > (parentProject ? levelOfRead(parentProject.read) : 1)) {
-      return res.status(409).json({
-        error: 'Cannot raise a document above the level of its project.'
-      });
+      return res.status(409).json({ error: 'Cannot raise a document above the level of its project.' });
     }
 
     // Pulling a record back from public is incident response, not a routine correction.
     const takedown = from === 4 && level < 4;
-    if (takedown && !access.roles.includes('sysadmin')) {
-      return res.status(403).json({
-        error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'
-      });
-    }
+    const refusal = takedown ? takedownRefusal(req, access, reason) : null;
+    if (refusal) return res.status(refusal[0]).json({ error: refusal[1] });
 
     const published = level === 4;
     // DEMI does not keep Eagle's level for a document once it holds one, so only level 4 clears it.

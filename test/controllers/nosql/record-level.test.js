@@ -331,6 +331,96 @@ test('the ladder move routes', async (t) => {
 
     assert.strictEqual(res.statusCode, 403);
   });
+
+  const PUBLIC_DOC = () => ({
+    id: 'd1', projectId: '207', read: ['staff', 'idir', 'public'], isPublished: true
+  });
+
+  await t.test('staff with a reason unpublish a document to level 2', async () => {
+    t.mock.method(documents, 'getById', async () => PUBLIC_DOC());
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(4, ['staff', 'idir', 'public']));
+    t.mock.method(documents, 'setPublished', async () => ({ ...PUBLIC_DOC(), read: ['staff'], isPublished: false }));
+    stubCascade(t);
+    const chunkAcls = [];
+    t.mock.method(chunksRepo, 'setAclForDocument', async (_access, id, acl) => {
+      chunkAcls.push(acl);
+      return { succeeded: 1, failed: 0 };
+    });
+
+    const res = mockRes();
+    await documentController.setLevel({
+      params: { id: 'd1' }, query: {}, body: { level: 2, reason: 'published in error' }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.rowsAtResponse.length, 1);
+    assert.strictEqual(res.rowsAtResponse[0].Action, 'record.takedown');
+    assert.strictEqual(res.rowsAtResponse[0].Detail.reason, 'published in error');
+    assert.deepStrictEqual(chunkAcls, [['staff']]);
+  });
+
+  await t.test('after a staff unpublish, staff still read the document and the public do not', async () => {
+    // The real repository over an in-memory row, so the read answers from what the move wrote.
+    const cosmos = require('../../../src/db/cosmos-nosql');
+    let stored = PUBLIC_DOC();
+    t.mock.method(cosmos, 'readItem', async () => structuredClone(stored));
+    t.mock.method(cosmos, 'patch', async (_c, _id, _pk, operations) => {
+      stored = structuredClone(stored);
+      for (const op of operations) stored[op.path.slice(1)] = op.value;
+      return structuredClone(stored);
+    });
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(4, ['staff', 'idir', 'public']));
+    stubCascade(t);
+
+    const moved = mockRes();
+    await documentController.setLevel({
+      params: { id: 'd1' }, query: { project: '207' },
+      body: { level: 2, reason: 'published in error' }, user: STAFF
+    }, moved);
+    assert.strictEqual(moved.statusCode, 200);
+
+    const staffRead = mockRes();
+    await documentController.getDocument({ params: { id: 'd1' }, query: { project: '207' }, user: STAFF }, staffRead);
+    assert.strictEqual(staffRead.statusCode, 200);
+    assert.strictEqual(staffRead.body.id, 'd1');
+
+    const anonymous = mockRes();
+    await documentController.getDocument({ params: { id: 'd1' }, query: { project: '207' } }, anonymous);
+    assert.strictEqual(anonymous.statusCode, 404);
+  });
+
+  await t.test('a staff unpublish without a reason is 400', async () => {
+    t.mock.method(documents, 'getById', async () => PUBLIC_DOC());
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(4, ['staff', 'idir', 'public']));
+    t.mock.method(documents, 'setPublished', async () => assert.fail('a refused takedown must not write'));
+
+    const blank = mockRes();
+    await documentController.setLevel({
+      params: { id: 'd1' }, query: {}, body: { level: 2, reason: '   ' }, user: STAFF
+    }, blank);
+    const missing = mockRes();
+    await documentController.setLevel({ params: { id: 'd1' }, query: {}, body: { level: 2 }, user: STAFF }, missing);
+
+    assert.strictEqual(blank.statusCode, 400);
+    assert.match(blank.body.error, /non-empty reason/);
+    assert.strictEqual(missing.statusCode, 400);
+    assert.strictEqual(rows.length, 0);
+  });
+
+  await t.test('a machine writer cannot unpublish a document', async () => {
+    t.mock.method(documents, 'getById', async () => PUBLIC_DOC());
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(4, ['staff', 'idir', 'public']));
+    t.mock.method(documents, 'setPublished', async () => assert.fail('a refused takedown must not write'));
+
+    const res = mockRes();
+    await documentController.setLevel({
+      params: { id: 'd1' }, query: {}, body: { level: 2, reason: 'mirror from Eagle' },
+      user: { sub: 'key-1', realm_access: { roles: ['demi-service-write'] } }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 403);
+    assert.strictEqual(rows.length, 0);
+  });
 });
 
 test('a DEMI level move and the hold it leaves for Eagle pushes', async (t) => {
