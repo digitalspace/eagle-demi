@@ -163,11 +163,11 @@ children to a Track-only project's level 2.
 The audit buffer flushes on graceful instance shutdown; a forced kill can drop up to one second of
 buffered rows.
 
-Pulling a record BACK from level 4 is `sysadmin` only and audited as `record.takedown`. Staff may
-also unpublish a document with a non-empty `reason` through `PUT /api/documents/:id/level`, but
-not through the `/published` alias, which writes its own reason. A takedown is not finished when
-the row narrows: `docs/takedown-runbook.md` covers purging the AI Search index, cleaning up chunks, invalidating caches, and the fact that
-copies already outside EPIC are unrecoverable.
+Pulling a record BACK from level 4 is audited as `record.takedown`. `sysadmin` may always do it,
+and `staff` may unpublish a document with a non-empty `reason` through
+`PUT /api/documents/:id/level`, but not through the `/published` alias. A takedown is not finished
+when the row narrows: `docs/takedown-runbook.md` covers purging the AI Search index, cleaning up
+chunks, invalidating caches, and the fact that copies already outside EPIC are unrecoverable.
 
 **Field dials are independent of the record level.** A dial is an integer 1-4 (0 = never),
 clamped to `[0, maxVis]`, invalid → `defaultVis`. The row plane decides who may see a record, so a
