@@ -372,6 +372,10 @@ param syncOutEagleClientSecretUri string = ''
 @description('Eagle milestone id the consumer sends on every comment period write; eagle-api replaces a missing one with a new ObjectId.')
 param eagleEngageMilestone string = ''
 
+// ── Extraction ───────────────────────────────────────────────────────────────
+@description('Storage queue the API sends extraction messages to and the extraction job scales on, e.g. `extract`. Empty sends none and deploys no queue.')
+param extractionQueue string = ''
+
 // ── Document intake ──────────────────────────────────────────────────────────
 // All empty when intake is not deployed; the intake functions register only when these are set.
 @description('Intake staging account name. Empty leaves intake off.')
@@ -512,7 +516,7 @@ resource storageLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@
 
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
 // only one of the features still needs the service.
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue) || !empty(syncOutQueue)) {
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue) || !empty(syncOutQueue) || !empty(extractionQueue)) {
   parent: apiStorage
   name: 'default'
 }
@@ -569,6 +573,18 @@ resource syncOutQueueResource 'Microsoft.Storage/storageAccounts/queueServices/q
 resource syncOutPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(syncOutQueue)) {
   parent: queueService
   name: '${syncOutQueue}-poison'
+}
+
+// Documents waiting for docling, one document id per message. The extraction job, not the API
+// host, consumes it, and moves a message to the poison queue after its third try.
+resource extractionQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(extractionQueue)) {
+  parent: queueService
+  name: extractionQueue
+}
+
+resource extractionPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(extractionQueue)) {
+  parent: queueService
+  name: '${extractionQueue}-poison'
 }
 
 resource blobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -1174,6 +1190,11 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'INTAKE_PENDING_TIMEOUT_HOURS'
           value: empty(intakeStorageAccount) ? '' : '6'
+        }
+        // Empty: intake release and Eagle pushes queue no extraction, and no backlog timer runs.
+        {
+          name: 'EXTRACTION_QUEUE'
+          value: extractionQueue
         }
         {
           name: 'SSO_ISSUER'

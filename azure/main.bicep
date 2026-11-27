@@ -130,7 +130,7 @@ param edgeBanRuleId string = ''
 
 // The template cannot see the vault, so naming a secret here states that it exists. An unnamed one
 // leaves its app setting empty rather than pointing at nothing.
-@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key, edge-ban-policy.')
+@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key, edge-ban-policy, extraction-job-api-key.')
 param optionalSecretNames array = []
 
 // The OpenShift namespaces the secret sync writes to. Empty deploys no sync app — which is what an
@@ -195,6 +195,30 @@ param deployDocumentIntake bool = false
 @description('Defender malware scanning cap on the intake account, GB per month')
 @minValue(1)
 param intakeCapGBPerMonth int = 5
+
+// Its own param because five other modules put their endpoints on privateEndpointSubnetId, and
+// changing that would move them all.
+@description('Subnet for the intake account private endpoint. Empty uses privateEndpointSubnetId.')
+param intakePrivateEndpointSubnetId string = ''
+
+@description('Hostnames (no scheme), besides frontendHostNames, whose browsers PUT uploads straight to the intake account, e.g. the eagle-admin host.')
+param intakeUploadOrigins array = []
+
+// ── Extraction job ──
+@description('Storage queue on the API host account the extraction messages go to, e.g. `extract`. Empty sends none and deploys no job.')
+param extractionQueue string = ''
+
+@description('Subnet of the extraction job environment: a /27 delegated to Microsoft.App/environments with an NSG and the route table to the object store. Empty deploys no job.')
+param extractSubnetId string = ''
+
+@description('Extraction job image pinned by digest (ghcr.io/...@sha256:...). Empty deploys no job.')
+param extractionJobImage string = ''
+
+@description('Monthly budget in CAD on the extraction job resources alone.')
+param extractionBudgetAmount int = 35
+
+@description('Pinned first day of the extraction budget period; same rule as budgetStartDate.')
+param extractionBudgetStartDate string = ''
 
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
@@ -676,8 +700,8 @@ module documentIntake './modules/document-intake.bicep' = if (deployFoundation &
     storageAccountName: intakeStorageAccountName
     apiPrincipalId: identityPrincipalId
     capGBPerMonth: intakeCapGBPerMonth
-    allowedOrigins: frontendHostNames
-    peSubnetId: privateEndpointSubnetId
+    allowedOrigins: union(frontendHostNames, intakeUploadOrigins)
+    peSubnetId: empty(intakePrivateEndpointSubnetId) ? privateEndpointSubnetId : intakePrivateEndpointSubnetId
     logsWorkspaceId: observability!.outputs.workspaceId
     actionGroupId: actionGroupId
   }
@@ -802,6 +826,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     eagleProtectedApiBase: eagleProtectedApiBase
     syncOutEagleClientSecretUri: syncOutEagleClientSecretUri
     eagleEngageMilestone: eagleEngageMilestone
+    extractionQueue: extractionQueue
     reconcileEngageSchedule: reconcileEngageSchedule
     engageApiBase: engageApiBase
     engagePrincipals: engagePrincipals
@@ -916,6 +941,31 @@ module pdfTitleWorker './modules/pdf-title-worker.bicep' = if (deployPdfTitleWor
   }
 }
 
+// 7g. The docling extraction job. Gated on its vault key like the PDF title worker: the job's
+// secret-scoped grant fails on a missing secret. Its queues come from the API module above.
+var extractionJobApiKeySecretName = 'extraction-job-api-key'
+var deployExtractionJobApp = !empty(apiFlexSubnetId) && !empty(extractionQueue) && !empty(extractSubnetId) && !empty(extractionJobImage) && contains(optionalSecretNames, extractionJobApiKeySecretName)
+
+module extractionJob './modules/extraction-job.bicep' = if (deployExtractionJobApp) {
+  name: 'deploy-extraction-job'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    extractSubnetId: extractSubnetId
+    image: extractionJobImage
+    demiApiUrl: 'https://${apiFunctionFlex!.outputs.apiFunctionAppHostName}/api'
+    keyVaultName: vaultName
+    apiKeySecretName: extractionJobApiKeySecretName
+    queueAccountName: apiFunctionFlex!.outputs.storageAccountName
+    queueName: extractionQueue
+    poisonQueueName: '${extractionQueue}-poison'
+    logsWorkspaceId: appLogsWorkspaceId
+    actionGroupId: actionGroupId
+    appInsightsConnectionString: appInsightsConnectionString
+  }
+}
+
 // 7f. The Key Vault secret rotator. Its own Flex app and identity on the API's subnet, so it reaches
 // the vault through the private endpoint; the only app with write on the vault.
 module secretRotator './modules/secret-rotator.bicep' = if (!empty(apiFlexSubnetId)) {
@@ -1019,6 +1069,23 @@ module costBudget './modules/cost-budget.bicep' = if (deployFoundation) {
   }
 }
 
+// 9b. A runaway job alerts long before it moves the whole-group budget above.
+module extractionBudget './modules/cost-budget.bicep' = if (deployFoundation && deployExtractionJobApp) {
+  name: 'deploy-extraction-budget'
+  params: {
+    environmentName: environmentName
+    name: 'demi-extract-budget-${environmentName}'
+    // Lower case, as Cost Management records resource ids.
+    resourceIds: map(concat(
+      [resourceId('Microsoft.App/managedEnvironments', extractionJob!.outputs.extractEnvironmentName)],
+      map(extractionJob!.outputs.extractJobNames, n => resourceId('Microsoft.App/jobs', n))
+    ), id => toLower(id))
+    budgetAmount: extractionBudgetAmount
+    contactEmails: contactEmails
+    startDate: extractionBudgetStartDate
+  }
+}
+
 // Cost Management Reader at this group, the scope GET /admin/cost queries. The name uses the
 // identity's name, not its principal id: a resource name cannot hold a runtime value.
 var costManagementReaderRoleId = '72fafb9e-0641-4937-9268-a91bfd8191a3'
@@ -1049,6 +1116,8 @@ output apimGatewayUrl string = (deployFoundation && deployApim && !empty(apiFlex
 output secretSyncAppName string = (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
 // Empty where the worker is not deployed; the worker's deploy workflow publishes to this name.
 output pdfTitleWorkerAppName string = deployPdfTitleWorkerApp ? pdfTitleWorker!.outputs.pdfTitleWorkerAppName : ''
+// The host eagle-edge lists in the eagle-admin CSP connect-src for the browser upload PUT.
+output intakeBlobHost string = deployDocumentIntake ? '${intakeStorageAccountName}.blob.${environment().suffixes.storage}' : ''
 // eagle-edge grants this principal write on its stampedgesecret rule sets.
 output secretRotatorPrincipalId string = !empty(apiFlexSubnetId) ? secretRotator!.outputs.principalId : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
