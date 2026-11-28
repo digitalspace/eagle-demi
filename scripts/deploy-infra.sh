@@ -4,69 +4,28 @@ set -euo pipefail
 # Bicep infrastructure deployment for DEMI.
 # Usage: ./scripts/deploy-infra.sh [test|prod] [--what-if|--live] [--foundation]
 #
-# WHAT-IF IS THE DEFAULT. Nothing is applied without `--live`, and prod additionally refuses to
-# apply unless CONFIRM_PROD=yes is exported. The old default was the deployment itself, which put
-# the whole-collection appSettings PUT one typo away from every invocation.
+# --what-if (default) applies nothing. --live applies; prod also needs CONFIRM_PROD=yes exported.
 #
-# ── TWO LAYERS, TWO RUNS ──────────────────────────────────────────────────────────────────────
+# Without --foundation only the application layer deploys (function app, devbox, secret sync,
+# availability test). --foundation deploys everything; a foundation module change is applied only
+# by a --foundation run, and an application-only --live run refuses when one changed since the last.
 #
-# Without `--foundation` this deploys the APPLICATION layer only — the function app, the devbox,
-# the secret sync, the availability test — and reads the identity, vault, Cosmos, workspaces,
-# Foundry and search endpoints by name. That is about 45 s of ARM time against about 317 s for the
-# whole template, because everything skipped is a resource that has not changed in months.
+# Secret values are never read or written here: demi-kv-<env> holds them, and the script checks that
+# every secret NAME the app resolves exists. Lengths are printed, never values.
+# Run by hand, not from CI: the CI identity has no resource-group scope.
 #
-# `--foundation` deploys all of it, and a change to any module the foundation owns needs one:
-# nothing else re-PUTs those resources. The check below refuses an application-only apply when a
-# foundation module has been edited since the last foundation deployment.
+# Env: DEVBOX_SSH_PUBLIC_KEY (required when deployDevbox is on; read from OpenShift if unset),
+#      ADMIN_API_KEY (optional; enables the live Key Vault reference probe), OC_CONTEXT (optional).
+# Never test the guards by passing a junk value at a live environment; use --what-if.
 #
-# Separate from `deploy-azure.sh` on purpose. That script is zipdeploy-and-poll for application
-# code and CI runs it on every push to main. Infrastructure is a different lifecycle, a different
-# blast radius, and a credential CI deliberately does not hold — `demi-cicd-*` has Website
-# Contributor on two App Services and nothing at resource-group scope, so it could not run an ARM
-# deployment even if a job were added. This stays a deliberate, human-initiated command.
-#
-# ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────────────────────────
-#
-# `siteConfig.appSettings` in api-function-flex.bicep is a WHOLE-COLLECTION PUT: every setting the
-# template does not supply is deleted from the running app. Some of them are secrets the template
-# cannot derive, so a deploy has to be told them. That made the procedure a multi-command
-# hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
-# break-glass credential with an empty string.
-#
-# `what-if` could not warn about any of it: it masks @secure() values as "*******" in BOTH the
-# before and the after, so a credential being blanked renders as no change at all.
-#
-# ── WHERE THE VALUES LIVE NOW ─────────────────────────────────────────────────────────────────
-#
-# `demi-kv-<env>` is the source of truth for every credential the app resolves by reference:
-# admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key, minio-access-key,
-# minio-secret-key, the two analytics header values APIM stamps, and per environment notify-api-key
-# and edge-secret. NOTHING here reads or writes those values. They are set once by hand from the
-# devbox (`az keyvault secret set`), so an infrastructure deploy cannot blank one — the template
-# has no parameter to blank. What this script does instead is check, before deploying, that the
-# vault holds every NAME the app will ask for; a missing name is an app setting that silently never
-# resolves.
-#
-# One guard remains for what is still a parameter — the devbox public key, which is not a
-# credential. The .bicepparam file calls readEnvironmentVariable with NO fallback, so a missing
-# export fails the build rather than deploying an empty string.
-#
-# ── SECRETS ───────────────────────────────────────────────────────────────────────────────────
-#
-# Lengths are printed, values never — and secret VALUES never leave the vault. The devbox check
-# below lists NAMES only, because run-command output comes back to this terminal.
-#
-# ── TESTING THIS SCRIPT ───────────────────────────────────────────────────────────────────────
-#
-# Use `--what-if`, or an environment you are willing to lose. NEVER exercise the guard by passing a
-# junk value at a live environment: on 2026-08-13 an `ADMIN_API_KEY=" "` abort-path test was let
-# through by a `[ -z ]` check, ran a real deployment, and destroyed two live credentials that had
-# no other copy. The guard is stricter now; the habit still matters more than the guard.
+# Exit codes: 0 done (or what-if shown); 1 vault read or deployment failed;
+#   2 bad argument or prod not confirmed; 3 precondition refused (missing secret name or devbox key,
+#   stale foundation); 4 a credential was lost or the app was left stopped;
+#   5 infrastructure applied but a function the app settings turn on is not registered.
 
 ENVIRONMENT='test'
 MODE='--what-if'
-# Set ONLY by --foundation, never inherited from the caller's environment: the flag on the command
-# line is the whole record of which layer a run deployed.
+# Set only by --foundation, never inherited from the environment.
 DEPLOY_FOUNDATION='false'
 export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -76,8 +35,6 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# The environment is positional and optional; the flags are order-independent after it, so
-# `test --foundation --live` and `test --live --foundation` are the same command.
 if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then
   ENVIRONMENT="$1"
   shift
@@ -97,7 +54,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 # The bicepparam reads this with readEnvironmentVariable: `az` refuses a second --parameters beside
-# a .bicepparam file, so an environment variable is the only way to pass the switch through.
+# a .bicepparam file, so an environment variable is the only way to pass the switch.
 export DEPLOY_FOUNDATION
 
 # Set only by require_vault_secrets, never inherited: false when the vault lacks this key.
@@ -113,29 +70,20 @@ if ! demi_azure_env "$ENVIRONMENT"; then
 fi
 case "$ENVIRONMENT" in
   test)
-    # Direct azurewebsites.net access is platform-403'd since the APIM cutover; probe the gateway.
+    # Direct azurewebsites.net access is 403'd by the platform; probe the gateway.
     APIM_HOST="demi-apim-${ENVIRONMENT}.azure-api.net"
     ;;
   prod)
-    # This box has NO prod write context. The name below is the read-only ServiceAccount context
-    # for this workspace, used here only to read the devbox public key out of 6cdc9e-prod. Export
-    # it by hand to override.
+    # No prod write context on this box: this read-only ServiceAccount context only reads the
+    # devbox public key from 6cdc9e-prod. Export OC_CONTEXT to override.
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
     ;;
 esac
 
-# One name per environment because prod's is not "epic-prod" — there is no prod write context on
-# this machine, only the read-only ServiceAccount one set above.
 OC_CONTEXT="${OC_CONTEXT:-epic-${ENVIRONMENT}}"
 
-# The object-store credentials are no longer read here. Prod's authoritative copy is still the
-# platform team's `nr-object-store-credential` in 6cdc9e-prod (user_account / password), but it is
-# copied into demi-kv-prod as minio-access-key / minio-secret-key once, and the app resolves the
-# vault. Non-prod used to read `eagle-api-minio-keys`, an eagle-api secret DEMI had no claim on;
-# nothing reads it here now either.
-
-# The applied-in-prod guard. Deliberately an environment variable rather than a prompt: it survives
-# a terminal with no TTY, and it cannot be answered by a stray keystroke.
+# Deliberately an environment variable rather than a prompt: it survives a terminal with no TTY, and
+# a stray keystroke cannot answer it.
 if [ "$ENVIRONMENT" = 'prod' ] && [ "$MODE" = '--live' ] && [ "${CONFIRM_PROD:-}" != 'yes' ]; then
   echo -e "${RED}✗ refusing to apply to prod. Export CONFIRM_PROD=yes if that is what you mean.${NC}" >&2
   exit 2
@@ -143,10 +91,8 @@ fi
 
 PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
 
-# The app this deployment writes: the Flex app is the only API app in every environment.
 API_APP="demi-api-fc-${ENVIRONMENT}"
-# The vault the app resolves its credentials from, and the only machine that can read it: policy
-# denies public network access, so every caller has to sit inside the VNet.
+# Policy denies public network access to the vault, so only a machine inside the VNet can read it.
 VAULT="demi-kv-${ENVIRONMENT}"
 DEVBOX="demi-devbox-${ENVIRONMENT}"
 KEY_VAULT_MODULE="${REPO_ROOT}/azure/modules/key-vault.bicep"
@@ -170,58 +116,40 @@ FOUNDATION_MODULES=(
   azure/modules/cost-budget.bicep
 )
 
-# The foundation's other inputs: main.bicep holds the module calls, gates and lookups, and the param
-# files hold the values fed to them. A change here can be foundation-only, application-only, or
-# both, so require_foundation_current can only warn about these — never refuse.
+# Inputs that may affect either layer, so require_foundation_current only warns about them and
+# never refuses.
 FOUNDATION_INPUTS=(
   azure/main.bicep
   azure/main.test.bicepparam
   azure/main.prod.bicepparam
 )
 
-# One step counter rather than hardcoded banners: application mode runs the foundation-currency
-# check, foundation mode does not.
+# Application mode has one more step: the foundation-currency check.
 STEP=0
-TOTAL_STEPS=5
-[ "$DEPLOY_FOUNDATION" = 'true' ] || TOTAL_STEPS=6
+TOTAL_STEPS=6
+[ "$DEPLOY_FOUNDATION" = 'true' ] || TOTAL_STEPS=7
 step() {
   STEP=$((STEP + 1))
   echo -e "${BLUE}[${STEP}/${TOTAL_STEPS}] ${1}${NC}"
 }
 
-# Read one key out of an OpenShift secret. One caller is left: the devbox PUBLIC key, which is not
-# a credential. Every credential this template used to carry now comes from the vault instead.
-#
-# Never point this at the app's own settings. An earlier version round-tripped ADMIN_API_KEY and
-# DOCLING_API_KEY out of the live app settings, which sounds idempotent and is actually a loop: a
-# deploy that reads the app's own settings will happily feed a corrupted value straight back into
-# it, and there is then nothing left to recover from. That is not hypothetical — on 2026-08-13 a
-# bad value reached the app that way and both credentials were permanently lost, because ARM does
-# not retain @secure() parameters either.
-#
-# `|| true` so a missing secret is reported by the length check below with a useful message, rather
-# than killing the script under `set -e` with an oc error.
+# Never point this at the app's own settings: a corrupted value would be fed straight back in, and
+# ARM keeps no copy of @secure() parameters to recover from.
 os_secret() {
   [ -n "$1" ] || return 0
   oc --context "$OC_CONTEXT" get secret "$1" -n "6cdc9e-${ENVIRONMENT}" \
     -o "jsonpath={.data.${2}}" 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
-# The names the app will resolve from the vault, read out of the templates rather than repeated
-# here: the required set is the `requiredSecretNames` var in key-vault.bicep, the per-environment
-# additions are `optionalSecretNames` in the param file. Both stop at the first `]`, so a `= []`
-# on one line yields nothing instead of eating the rest of the file.
+# Names come from `requiredSecretNames` (key-vault.bicep) and `optionalSecretNames` (param file).
+# Both stop at the first `]`, so a one-line `= []` yields nothing instead of eating the file.
 expected_secret_names() {
   awk '/^var requiredSecretNames *= *\[/{f=1} f{print; if (/\]/) exit}' "$KEY_VAULT_MODULE"
   awk '/^param optionalSecretNames *= *\[/{f=1} f{print; if (/\]/) exit}' "$PARAM_FILE"
 }
 
-# NAMES only, never values. run-command hands its output back to this terminal, and a secret in a
-# terminal is a secret in a scrollback buffer.
-#
-# Runs in --what-if mode too: it is the gate, not a convenience, and a name that is missing is
-# missing whether or not this run applies anything. It does start the devbox, which is deallocated
-# between sessions.
+# NAMES only: run-command output comes back to this terminal. Runs in --what-if too, since a missing
+# name is missing either way; it starts the devbox, which is deallocated between sessions.
 require_vault_secrets() {
   step "Checking ${VAULT} holds the names the app resolves…"
 
@@ -236,8 +164,7 @@ require_vault_secrets() {
     exit 3
   fi
 
-  # The devbox and the vault do not have to share the deployment's resource group, so the VM's
-  # group is read from the VM rather than assumed.
+  # The devbox may sit in a different resource group than the deployment, so read it from the VM.
   local vm_rg
   vm_rg=$(az resource list -n "$DEVBOX" --resource-type Microsoft.Compute/virtualMachines \
     --subscription "$SUBSCRIPTION" --query '[0].resourceGroup' -o tsv --only-show-errors 2>/dev/null || true)
@@ -252,8 +179,7 @@ require_vault_secrets() {
   az vm start --subscription "$SUBSCRIPTION" -g "$vm_rg" -n "$DEVBOX" -o none
 
   local listed status bad_line
-  # `if var=$(cmd)` rather than a bare assignment: under `set -e` a bare `listed=$(cmd)` that fails
-  # would abort the script before `status=$?` ever ran, which is the same swallow this replaces.
+  # `if var=$(cmd)`: under `set -e` a failing bare `listed=$(cmd)` aborts before `status=$?` runs.
   if listed=$(az vm run-command invoke --subscription "$SUBSCRIPTION" -g "$vm_rg" -n "$DEVBOX" \
     --command-id RunShellScript --only-show-errors \
     --scripts "sudo -u demi /usr/local/bin/demi-run 'az keyvault secret list --vault-name ${VAULT} --query \"[].name\" -o tsv'" \
@@ -263,9 +189,8 @@ require_vault_secrets() {
     status=$?
   fi
 
-  # A failed read must never be read as an empty vault: an owner with no line into the VNet gets
-  # ForbiddenByConnection, not an empty list, and that has to be reported as a broken check, not as
-  # every secret missing.
+  # A failed read is not an empty vault: with no line into the VNet the result is
+  # ForbiddenByConnection, so report a broken check, not every secret missing.
   bad_line=$(grep -m1 -E 'ForbiddenByConnection|AuthorizationFailed|ERROR' <<<"$listed" || true)
   if [ "$status" -ne 0 ] || [ -n "$bad_line" ]; then
     echo -e "${RED}  ✗ reading ${VAULT} from ${DEVBOX} failed${NC}" >&2
@@ -311,13 +236,8 @@ EOF
   fi
 }
 
-# `${VAR:-…}` and not a bare assignment, deliberately: an already-exported value always wins. That
-# is what makes a FRESH environment work, where the OpenShift secret does not exist yet and the
-# operator supplies the value instead.
-#
-# ONE parameter is left to source. Every credential the app reads now comes from the vault, checked
-# by name in step 1; what remains is the devbox PUBLIC key, which the param file reads with no
-# fallback, so a missing one fails the bicep build with BCP427 rather than deploying a blank.
+# `${VAR:-…}`: an already-exported value wins, so a fresh environment with no OpenShift secret works.
+# The param file reads the key with no fallback, so a missing one fails the build (BCP427).
 require_secrets() {
   step "Sourcing the remaining template parameters…"
 
@@ -329,10 +249,8 @@ require_secrets() {
 
   DEVBOX_SSH_PUBLIC_KEY="${DEVBOX_SSH_PUBLIC_KEY:-$(os_secret demi-app-secrets DEVBOX_SSH_PUBLIC_KEY)}"
 
-  # Trim the ENDS only: the key is `<algorithm> <base64> [comment]`, and stripping every space
-  # hands Compute a one-field string ARM rejects. Trimming first makes " " empty rather than a
-  # one-character value — `[ -z ]` alone passes a single space, which is how a throwaway test value
-  # once reached a real deployment.
+  # Trim the ENDS only: stripping every space breaks `<algorithm> <base64> [comment]`. Trim first so
+  # " " counts as empty; `[ -z ]` alone passes a single space.
   DEVBOX_SSH_PUBLIC_KEY="$(printf '%s' "$DEVBOX_SSH_PUBLIC_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   export DEVBOX_SSH_PUBLIC_KEY
 
@@ -363,11 +281,8 @@ EOF
   echo -e "${GREEN}  ✓ DEVBOX_SSH_PUBLIC_KEY${NC} (${#DEVBOX_SSH_PUBLIC_KEY} chars)"
 }
 
-# An application-only run applies no foundation module, so an edit to one that has never been
-# deployed leaves the environment describing a template it does not match — and nothing later in
-# this script would notice. The last foundation deployment's name carries the commit it ran from,
-# which is the only record of that: `demi-cicd-*` has no resource-group read, so this cannot be a
-# CI check.
+# The last foundation deployment's name carries the commit it ran from, the only record of what the
+# foundation holds; `demi-cicd-*` has no resource-group read, so this cannot be a CI check.
 require_foundation_current() {
   step "Checking the foundation is current…"
 
@@ -380,9 +295,8 @@ require_foundation_current() {
     echo -e "${YELLOW}    what-if only, so this is a warning — --live refuses here. Run --foundation first.${NC}" >&2
   }
 
-  # `az` is handed the working tree (-f azure/main.bicep), so an uncommitted or untracked edit is
-  # applied by a --foundation run and dropped by an application one, exactly like a committed edit.
-  # git log cannot see either, which is what git status is here for.
+  # `az` deploys the working tree, so uncommitted or untracked edits apply in a --foundation run and
+  # are dropped by an application one; git log cannot see them, git status can.
   local dirty inputs_dirty inputs_changed=''
   dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_MODULES[@]}" 2>/dev/null || true)
   inputs_dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_INPUTS[@]}" 2>/dev/null || true)
@@ -444,8 +358,8 @@ require_foundation_current() {
   echo -e "${GREEN}  ✓ no foundation module changed since ${last}${NC}"
 }
 
-# The layer is in the deployment NAME, not only in its parameters: require_foundation_current below
-# reads the name back to find which commit the foundation was last deployed from.
+# The layer is in the deployment NAME: require_foundation_current reads it back to find which
+# commit the foundation was last deployed from.
 run_deployment() {
   local prefix='infra-app-'
   [ "$DEPLOY_FOUNDATION" = 'true' ] && prefix='infra-fnd-'
@@ -464,9 +378,8 @@ run_deployment() {
   az deployment group create -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
     -f "${REPO_ROOT}/azure/main.bicep" -p "$PARAM_FILE" -n "$name" --no-wait --only-show-errors
 
-  # Poll the record rather than trusting the CLI's exit code, for the same reason deploy-azure.sh
-  # does: --no-wait returns as soon as ARM accepts the request, which is not the same fact as the
-  # deployment succeeding.
+  # Poll the record, not the CLI exit code: --no-wait returns once ARM accepts the request, which
+  # says nothing about the deployment succeeding.
   step "Waiting…"
   local state
   if ! az deployment group wait -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
@@ -485,9 +398,7 @@ run_deployment() {
   echo -e "${GREEN}✓ deployment ${name}: Succeeded${NC}"
 }
 
-# The check the whole script is for. Everything above it is convenience; this is the part that
-# catches the failure that started all of this — a deploy that reports success while having
-# emptied a credential.
+# Catches a deploy that reports success while having emptied a credential.
 assert_secrets_survived() {
   step "Verifying live app settings…"
   local failed=0 len value
@@ -503,11 +414,8 @@ assert_secrets_survived() {
     echo -e "${GREEN}  ✓ EAGLE_API_BASE${NC} (${len} chars)"
   fi
 
-  # The credential settings are not length-checked: each one is the literal
-  # `@Microsoft.KeyVault(SecretUri=...)` reference (~70 chars) whether or not it resolves, so a
-  # length check passes on a dead reference. Assert the SHAPE instead — that catches a template
-  # regression writing a literal or a blank back over one — and prove that a reference actually
-  # resolves with the live ADMIN_API_KEY probe below, which is the only check that can.
+  # Check the SHAPE, not the length: an unresolved `@Microsoft.KeyVault(SecretUri=...)` reference is
+  # ~70 chars too. Only the live ADMIN_API_KEY probe below proves a reference resolves.
   for name in ADMIN_API_KEY DOCLING_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY TRACK_CLIENT_SECRET KEYCLOAK_ADMIN_CLIENT_SECRET; do
     value=$(az webapp config appsettings list -n "$API_APP" -g "$RESOURCE_GROUP" \
       --subscription "$SUBSCRIPTION" --only-show-errors \
@@ -521,12 +429,8 @@ assert_secrets_survived() {
     esac
   done
 
-  # ADMIN_API_KEY stands in for all of them in the probe: they resolve through the same identity
-  # over the same private endpoint, so one 200 says the whole set resolved.
-  #
-  # The value is no longer sourced for you — it lives in the vault and nothing here reads it. Export
-  # ADMIN_API_KEY by hand to run the probe. Without it the deploy still succeeds and the reference
-  # is still unverified, which is worth saying out loud rather than passing silently.
+  # ADMIN_API_KEY stands in for all of them (same identity, same private endpoint): one 200 means the
+  # set resolved. Export it by hand to run the probe; without it the reference stays unverified.
   if [ -z "${ADMIN_API_KEY:-}" ]; then
     echo -e "${YELLOW}  ADMIN_API_KEY not exported — skipping the live probe.${NC}"
     echo -e "${YELLOW}    Nothing has checked that the Key Vault reference resolves. Read the value${NC}"
@@ -553,7 +457,7 @@ assert_secrets_survived() {
   done
   if [ "$code" = '401' ]; then
     # A worker that started mid-deploy keeps the unresolved @Microsoft.KeyVault literal even after
-    # the platform reports the reference Resolved; only a stop/start re-reads it (seen 2026-08-28).
+    # the platform reports the reference Resolved; only a stop/start re-reads it.
     echo -e "${YELLOW}  ADMIN_API_KEY probe 401 — stop/start ${API_APP} to re-read the Key Vault reference${NC}"
     if az functionapp stop -g "$RESOURCE_GROUP" -n "$API_APP" --subscription "$SUBSCRIPTION" -o none; then
       # Between stop and start the app is down; an interrupt here must still start it.
@@ -587,6 +491,14 @@ assert_secrets_survived() {
   fi
 }
 
+check_api_functions() {
+  step "Checking the functions the app settings turn on are registered…"
+  if ! "${REPO_ROOT}/scripts/check-api-functions.sh" "$ENVIRONMENT"; then
+    echo -e "${RED}✗ infrastructure is applied, but a function is not registered. Re-run the code deploy named above.${NC}" >&2
+    exit 5
+  fi
+}
+
 LAYER='application layer only'
 [ "$DEPLOY_FOUNDATION" = 'true' ] && LAYER='foundation and application'
 echo -e "${BLUE}DEMI infrastructure → ${ENVIRONMENT} (${RESOURCE_GROUP}) — ${LAYER}${NC}"
@@ -595,4 +507,5 @@ require_secrets
 [ "$DEPLOY_FOUNDATION" = 'true' ] || require_foundation_current
 run_deployment
 assert_secrets_survived
-echo -e "${GREEN}✓ done. App code deploys separately — see scripts/deploy-azure.sh.${NC}"
+check_api_functions
+echo -e "${GREEN}✓ infrastructure done. App code deploys through the API workflow.${NC}"
