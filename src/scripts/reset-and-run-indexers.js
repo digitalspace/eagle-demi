@@ -40,9 +40,12 @@ function executionsOf(body) {
   return list.some((e) => startedAt(e) === startedAt(latest)) ? list : [latest, ...list];
 }
 
-const resetStampOf = (list) => list
-  .filter((e) => e && e.status === 'reset')
-  .reduce((max, e) => (startedAt(e) > max ? startedAt(e) : max), -Infinity);
+const newestStart = (list) => list.reduce((max, e) => (startedAt(e) > max ? startedAt(e) : max), -Infinity);
+
+const resetStampOf = (list) => newestStart(list.filter((e) => e && e.status === 'reset'));
+
+// History is newest first.
+const oldest = (runs) => runs[runs.length - 1] || {};
 
 const afterReset = (e, resetAt, stamp) => {
   const t = startedAt(e);
@@ -51,22 +54,26 @@ const afterReset = (e, resetAt, stamp) => {
   return Number.isFinite(stamp) && t >= resetAt - RESET_SKEW_MS && t > stamp;
 };
 
-// The asked-for run is the first to start after the reset, not executionHistory[0]: a scheduled tick
-// on top of it carries a tracking state. History is newest first, so take the last match.
-function pickRun(list, resetAt, pinnedStart) {
+// The asked-for run is the oldest after the reset, not a tick on top of it. Its running and finished
+// copies can differ in startTime; one execution runs at a time, so no match takes the oldest too.
+function pickRun(list, resetAt, pin) {
   const runs = runsOnly(list);
-  if (pinnedStart !== null) return runs.find((e) => startedAt(e) === pinnedStart) || {};
-  if (!resetAt) return runs[0] || {};
+  const pinned = pin && runs.find((e) => startedAt(e) === pin.start);
+  if (pinned) return pinned;
+  if (!resetAt) return pin ? oldest(runs.filter((e) => startedAt(e) > pin.after)) : runs[0] || {};
   const stamp = resetStampOf(list);
-  const after = runs.filter((e) => afterReset(e, resetAt, stamp));
-  return after[after.length - 1] || {};
+  return oldest(runs.filter((e) => afterReset(e, resetAt, stamp)));
 }
 
 // Watch pins the first run it sees in progress, so a tick after it is not reported in its place.
 // A drain pins nothing: it waits until no execution runs, however many ticks that takes.
-function pinFor(e, resetAt, stamp, pinnedStart, drain) {
-  if (drain || pinnedStart !== null || !afterReset(e, resetAt, stamp)) return pinnedStart;
-  return resetAt || e.status === 'inProgress' ? startedAt(e) : null;
+function pinFor(e, list, resetAt, pin, drain, onPin) {
+  if (drain || pin || !afterReset(e, resetAt, resetStampOf(list))) return pin;
+  if (!resetAt && e.status !== 'inProgress') return null;
+  onPin(`start=${e.startTime} status=${e.status}`);
+  // Watch's window: the pinned run started after every run that had finished when it was pinned.
+  const after = newestStart(runsOnly(list).filter((r) => r.status !== 'inProgress'));
+  return { start: startedAt(e), after };
 }
 
 /**
@@ -145,7 +152,7 @@ async function resetAndRun(opts) {
   async function waitForRun(name, resetAt, drain) {
     let tick = 0;
     let last;
-    let pinnedStart = null;
+    let pin = null;
     do {
       if (tick > 0) await sleepImpl(pollSleepMs);
       tick += 1;
@@ -154,8 +161,8 @@ async function resetAndRun(opts) {
       // The poll line and the "still running" warning below are about the indexer, so they read the
       // newest execution; only the verdict is pinned to the run that was asked for.
       last = runsOnly(list)[0] || {};
-      const e = pickRun(list, resetAt, pinnedStart);
-      pinnedStart = pinFor(e, resetAt, stamp, pinnedStart, drain);
+      const e = pickRun(list, resetAt, pin);
+      pin = pinFor(e, list, resetAt, pin, drain, (line) => log(`DEMI_PIN ${name} ${line}`));
       // run-command output truncates at 4 KB, so poll lines are thinned.
       if (tick % pollEvery === 0) {
         log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
@@ -193,12 +200,12 @@ async function resetAndRun(opts) {
         }
 
         const reset = await post(name, 'reset');
-        log(`DEMI_RESET ${name} ${reset.status}`);
+        resetAt = now();
+        log(`DEMI_RESET ${name} ${reset.status} resetAt=${new Date(resetAt).toISOString()}`);
         if (reset.status >= 300) {
           log(`DEMI_FAIL ${name} reset ${reset.status}`);
           return 1;
         }
-        resetAt = now();
 
         if (!await drained(name, resetAt)) return 1;
 

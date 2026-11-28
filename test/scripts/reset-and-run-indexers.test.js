@@ -331,6 +331,59 @@ test('reset-and-run-indexers', async (t) => {
       ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared'], r.out);
   });
 
+  // The running copy in lastResult and the finished copy in executionHistory can carry different
+  // start times. The sleeps move the clock, so a run that is never matched ends at the deadline.
+  const clocked = () => {
+    let clock = NOW;
+    return { now: () => clock, sleep: async (ms) => { clock += ms; }, pollSleepMs: 30000 };
+  };
+  const at = (ms) => new Date(NOW + ms).toISOString();
+  const S = 10000;
+  const DELTAS = [1, 3000, -1000];
+  const tick = (ms) => ({
+    status: 'success', startTime: at(ms), itemsProcessed: 0, itemsFailed: 0, initialTrackingState: KEPT
+  });
+
+  await t.test('a reset run is reported when its finished copy carries another start time', async () => {
+    for (const delta of DELTAS) {
+      const copy = { ...FRESH, startTime: at(S + delta) };
+      const later = tick(S + 300000);
+      const svc = service({
+        history: [
+          STALE,
+          STALE,
+          { lastResult: { status: 'inProgress', startTime: at(S), itemsProcessed: 120 }, executionHistory: [STALE] },
+          { lastResult: later, executionHistory: [later, copy, STALE] }
+        ]
+      });
+      const r = await drive(svc, clocked());
+      const why = `delta=${delta}\n${r.out}`;
+      assert.strictEqual(r.code, 0, why);
+      assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_RESULT')),
+        ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared'], why);
+      assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} reset`).length, 1, why);
+      assert.ok(r.lines.includes(`DEMI_RESET documents-indexer 204 resetAt=${at(0)}`), why);
+      assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_PIN')),
+        [`DEMI_PIN documents-indexer start=${at(S)} status=inProgress`], why);
+    }
+  });
+
+  await t.test('watch reports the pinned run when its finished copy carries another start time', async () => {
+    for (const delta of DELTAS) {
+      const copy = { ...FRESH, startTime: at(S + delta) };
+      const later = tick(S + 300000);
+      const running = { lastResult: { status: 'inProgress', startTime: at(S) }, executionHistory: [STALE] };
+      const svc = service({
+        history: [running, running, { lastResult: later, executionHistory: [later, copy, STALE] }]
+      });
+      const r = await drive(svc, { ...clocked(), mode: 'watch' });
+      const why = `delta=${delta}\n${r.out}`;
+      assert.strictEqual(r.code, 0, why);
+      assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_RESULT')),
+        ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared'], why);
+    }
+  });
+
   await t.test('the timeout covers the whole call, not each indexer in turn', async () => {
     // run-command cuts the call off at 90 minutes; a per-indexer deadline lets the call outlive it
     // and the "still running" warning never comes back.
